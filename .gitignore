@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+
+# Logs (root / tooling)
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# npm workspaces — dependencies hoist to repo root
+node_modules/
+
+# Python virtualenv (often created at repo root by run scripts)
+venv/
+.venv/
+env/
+
+# Secrets at repo root (subpackages also ignore via their .gitignore)
+.env
+.env.*
+!.env.example
+
+# IDE (optional)
+.idea/

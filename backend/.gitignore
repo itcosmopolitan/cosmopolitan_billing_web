@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Env & local config
+.env
+.env.*
+!.env.example
+
+# Local SQLite (dev)
+*.db
+*.sqlite
+
+# Test / tools
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Dependencies (npm workspace)
+node_modules/

@@ -1,0 +1,9 @@
+{
+  "name": "retailos-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "uvicorn src.main:app --reload --port 8080",
+    "seed": "python src/seed.py"
+  }
+}

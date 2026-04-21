@@ -1,0 +1,125 @@
+# RetailOS Pro 🏪
+
+**Multi-branch retail billing, POS, inventory, and management platform**  
+Built for Sri Murugan Traders Pvt Ltd — Chennai, Tamil Nadu
+
+---
+
+## ✨ Features
+
+### 🧾 Point of Sale
+- Touch-friendly product grid with category filter and barcode search
+- Live cart with quantity controls, GST calculation, discounts
+- 4 payment modes: Cash, Card, UPI, Credit
+- Hold & resume multiple bills simultaneously  
+- Keyboard shortcuts: `F2` search · `F4` hold · `F8` complete sale
+- **Thermal receipt printing + WhatsApp share**
+
+### 📦 Inventory
+- Multi-branch stock view across all stores + warehouse
+- Low stock alerts, reorder level tracking
+- Stock adjustment with full audit trail (count / damage / theft)
+- Item master: SKU, barcode, HSN, GST rate, cost/selling price, margin %
+
+### ↔ Stock Transfers
+- 4-step workflow: Request → Approve → Dispatch → Receive
+- Auto stock deduction at source, credit at destination
+- Transfer audit trail
+
+### 🛒 Sales & Purchases
+- Invoice + purchase bill register with filters
+- Quotations, credit notes, purchase orders, GRN
+- Record payments (partial/full), track outstanding balances
+
+### 💰 Cash Control
+- Daily petty cash register per branch
+- Day-close reconciliation with variance detection
+
+### 📊 Reports
+- Sales Register · Purchase Register · GST Tax Summary
+- Stock Movement · Branch Comparison · Margin Analysis
+
+### ⚙ Settings & Admin
+- Users & Roles (6 role types), branch management
+- Org profile, tax config, document numbering
+- Full audit trail with risk levels
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js 18+ with npm
+- Python 3.10+
+
+### One-command launch
+
+```bash
+# macOS / Linux
+chmod +x run.sh && ./run.sh
+
+# Windows
+run.bat
+```
+
+Open **http://localhost:3000**  
+API Docs: **http://localhost:8080/api/docs**
+
+---
+
+## 🔐 Demo Accounts
+
+| Name | Email | Password | Role |
+|---|---|---|---|
+| Suresh Anand | suresh@srimurugan.com | admin123 | Super Admin |
+| Kavitha R. | kavitha@srimurugan.com | branch123 | Branch Manager |
+| Arjun M. | arjun@srimurugan.com | cash123 | Cashier |
+| Deepa S. | deepa@srimurugan.com | inv123 | Inventory Mgr |
+
+---
+
+## 🛠 Tech Stack
+
+| | |
+|---|---|
+| Frontend | React 18 + Vite + Tailwind CSS + Zustand |
+| Charts | Recharts |
+| Backend | Python FastAPI + SQLAlchemy (async) |
+| Database | SQLite (swap to PostgreSQL for production) |
+
+---
+
+## 📁 Structure
+
+```
+retailos/
+├── frontend/src/
+│   ├── pages/          # 12 full-featured pages
+│   ├── components/     # UI library + Receipt + Layout
+│   ├── store/          # Zustand (app state + POS cart)
+│   ├── api/            # Axios API client
+│   └── utils/          # Helpers + seed data
+├── backend/src/
+│   ├── main.py         # FastAPI app
+│   ├── models.py       # 15 ORM models
+│   ├── seed.py         # Demo data seeder
+│   └── routes/         # 12 API route files
+├── run.sh              # Mac/Linux launcher
+└── run.bat             # Windows launcher
+```
+
+---
+
+## Re-seed demo data
+
+```bash
+cd backend && python src/seed.py
+```
+
+## Production build
+
+```bash
+cd frontend && npm run build   # → frontend/dist/
+```
+
+MIT License

@@ -1,0 +1,147 @@
+import axios from 'axios'
+import toast from 'react-hot-toast'
+
+// ─── Base client ──────────────────────────────────────────────────────────────
+export const api = axios.create({
+  baseURL: '/api/v1',
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 15_000,
+})
+
+// Request interceptor — attach token
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('retailos_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+// Response interceptor — global error handling
+api.interceptors.response.use(
+  (res) => res.data,
+  (err) => {
+    const msg = err?.response?.data?.detail || err.message || 'Request failed'
+    if (err?.response?.status === 401) {
+      localStorage.removeItem('retailos_token')
+      window.location.href = '/login'
+    } else {
+      toast.error(msg)
+    }
+    return Promise.reject(err)
+  }
+)
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+export const authAPI = {
+  login:  (email, password) => api.post('/auth/login', { email, password }),
+  logout: ()                => api.post('/auth/logout'),
+  me:     ()                => api.get('/auth/me'),
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+export const dashAPI = {
+  kpis:            (branchId) => api.get('/dashboard/kpis',            { params: { branch_id: branchId } }),
+  salesTrend:      (days)     => api.get('/dashboard/sales-trend',      { params: { days } }),
+  topProducts:     (branchId) => api.get('/dashboard/top-products',     { params: { branch_id: branchId } }),
+  branchComparison:()         => api.get('/dashboard/branch-comparison'),
+  alerts:          ()         => api.get('/dashboard/alerts'),
+}
+
+// ─── Items ────────────────────────────────────────────────────────────────────
+export const itemsAPI = {
+  list:    (params) => api.get('/items/',             { params }),
+  get:     (id)     => api.get(`/items/${id}`),
+  create:  (data)   => api.post('/items/', data),
+  update:  (id, data) => api.put(`/items/${id}`, data),
+  adjust:  (data)   => api.post('/items/adjust', data),
+  delete:  (id)     => api.delete(`/items/${id}`),
+}
+
+// ─── Sales ────────────────────────────────────────────────────────────────────
+export const salesAPI = {
+  list:    (params) => api.get('/sales/',             { params }),
+  get:     (id)     => api.get(`/sales/${id}`),
+  create:  (data)   => api.post('/sales/', data),
+  payment: (id, data) => api.post(`/sales/${id}/payment`, data),
+  cancel:  (id)     => api.post(`/sales/${id}/cancel`),
+  returns: ()       => api.get('/sales/returns'),
+  creditPurchases: () => api.get('/sales/credit/purchases'),
+  quotations: {
+    list:    (params) => api.get('/sales/quotations/', { params }),
+    get:     (id)     => api.get(`/sales/quotations/${id}`),
+    create:  (data)   => api.post('/sales/quotations/', data),
+    updateStatus: (id, status) => api.patch(`/sales/quotations/${id}/status`, { status }),
+  },
+}
+
+// ─── Purchases ────────────────────────────────────────────────────────────────
+export const purchasesAPI = {
+  list:    (params) => api.get('/purchases/',         { params }),
+  get:     (id)     => api.get(`/purchases/${id}`),
+  create:  (data)   => api.post('/purchases/', data),
+  payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
+  returns: {
+    list:    (params) => api.get('/purchases/returns/', { params }),
+    get:     (id)     => api.get(`/purchases/returns/${id}`),
+    create:  (data)   => api.post('/purchases/returns/', data),
+    approve: (id)     => api.post(`/purchases/returns/${id}/approve`),
+  }
+}
+
+// ─── Customers ────────────────────────────────────────────────────────────────
+export const customersAPI = {
+  list:   (params) => api.get('/customers/',          { params }),
+  get:    (id)     => api.get(`/customers/${id}`),
+  create: (data)   => api.post('/customers/', data),
+  update: (id, data) => api.put(`/customers/${id}`, data),
+}
+
+// ─── Vendors ──────────────────────────────────────────────────────────────────
+export const vendorsAPI = {
+  list:   (params) => api.get('/vendors/',            { params }),
+  get:    (id)     => api.get(`/vendors/${id}`),
+  create: (data)   => api.post('/vendors/', data),
+  update: (id, data) => api.put(`/vendors/${id}`, data),
+}
+
+// ─── Branches ────────────────────────────────────────────────────────────────
+export const branchesAPI = {
+  list:   ()       => api.get('/branches/'),
+  get:    (id)     => api.get(`/branches/${id}`),
+  create: (data)   => api.post('/branches/', data),
+  update: (id, data) => api.put(`/branches/${id}`, data),
+}
+
+// ─── Transfers ────────────────────────────────────────────────────────────────
+export const transfersAPI = {
+  list:    (params) => api.get('/transfers/',          { params }),
+  get:     (id)     => api.get(`/transfers/${id}`),
+  create:  (data)   => api.post('/transfers/', data),
+  approve: (id)     => api.post(`/transfers/${id}/approve`),
+  receive: (id)     => api.post(`/transfers/${id}/receive`),
+}
+
+// ─── Cash ─────────────────────────────────────────────────────────────────────
+export const cashAPI = {
+  entries: (branchId, date) => api.get(`/cash/${branchId}/entries`, { params: { date } }),
+  summary: (branchId, date) => api.get(`/cash/${branchId}/summary`, { params: { date } }),
+  add:     (branchId, data) => api.post(`/cash/${branchId}/entries`, data),
+  close:   (branchId, data) => api.post(`/cash/${branchId}/close`, data),
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+export const reportsAPI = {
+  salesSummary:    (params) => api.get('/reports/sales-summary',    { params }),
+  purchaseSummary: (params) => api.get('/reports/purchase-summary', { params }),
+  taxSummary:      (params) => api.get('/reports/tax-summary',      { params }),
+  stockMovement:   (params) => api.get('/reports/stock-movement',   { params }),
+  branchCompare:   (params) => api.get('/reports/branch-comparison',{ params }),
+  marginAnalysis:  (params) => api.get('/reports/margin-analysis',  { params }),
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+export const usersAPI = {
+  list:   ()         => api.get('/users/'),
+  create: (data)     => api.post('/users/', data),
+  update: (id, data) => api.patch(`/users/${id}`, data),
+  toggle: (id)       => api.patch(`/users/${id}/toggle`),
+}
