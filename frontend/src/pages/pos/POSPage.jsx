@@ -28,6 +28,36 @@ const mapSeedProductsForBranch = (branchId) =>
 const mapSeedCustomersForBranch = (branchId) =>
   (CUSTOMERS || []).filter((c) => c.active !== false && (!c.branchId || c.branchId === branchId))
 
+const POS_STORAGE_SPLIT = 'pos.leftPaneRatio'
+const POS_STORAGE_LEADING = 'pos.leadingPanel'
+const POS_DRAG_MIME = 'application/x-pos-panel'
+
+function readStoredSplit() {
+  try {
+    const v = Number(localStorage.getItem(POS_STORAGE_SPLIT))
+    if (Number.isFinite(v) && v >= 30 && v <= 70) return v
+  } catch {
+    /* ignore */
+  }
+  return 50
+}
+
+function readStoredLeading() {
+  try {
+    const v = localStorage.getItem(POS_STORAGE_LEADING)
+    if (v === 'cart' || v === 'products') return v
+  } catch {
+    /* ignore */
+  }
+  return 'products'
+}
+
+/** dropSide 'left'|'right', dragged 'products'|'cart' → which panel is on the left */
+function leadingPanelFromDrop(dropSide, dragged) {
+  if (dropSide === 'left') return dragged
+  return dragged === 'products' ? 'cart' : 'products'
+}
+
 export default function POSPage() {
   const [search, setSearch] = useState('')
   const [activeCat, setActiveCat] = useState('all')
@@ -39,8 +69,10 @@ export default function POSPage() {
   const [categories, setCategories] = useState([{ id: 'all', name: 'All', icon: '⊞' }])
   const [loading, setLoading] = useState(true)
   const [completing, setCompleting] = useState(false)
-  const [leftPaneRatio, setLeftPaneRatio] = useState(50)
+  const [leftPaneRatio, setLeftPaneRatio] = useState(readStoredSplit)
+  const [leadingPanel, setLeadingPanel] = useState(readStoredLeading)
   const [isResizing, setIsResizing] = useState(false)
+  const [dragOverSide, setDragOverSide] = useState(null)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
 
@@ -191,6 +223,11 @@ export default function POSPage() {
       const raw = ((e.clientX - rect.left) / rect.width) * 100
       const clamped = Math.max(30, Math.min(70, raw))
       setLeftPaneRatio(clamped)
+      try {
+        localStorage.setItem(POS_STORAGE_SPLIT, String(clamped))
+      } catch {
+        /* ignore */
+      }
     }
 
     const onMouseUp = () => {
@@ -212,6 +249,37 @@ export default function POSPage() {
     }
   }, [isResizing])
 
+  const onPanelDragEnd = () => setDragOverSide(null)
+
+  const panelDropHandlers = (side) => ({
+    onDragOver: (e) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setDragOverSide(side)
+    },
+    onDragLeave: (e) => {
+      const rt = e.relatedTarget
+      if (rt && e.currentTarget.contains(rt)) return
+      setDragOverSide((prev) => (prev === side ? null : prev))
+    },
+    onDrop: (e) => {
+      e.preventDefault()
+      setDragOverSide(null)
+      const dragged = e.dataTransfer.getData(POS_DRAG_MIME) || e.dataTransfer.getData('text/plain')
+      if (dragged !== 'products' && dragged !== 'cart') return
+      setLeadingPanel((prev) => {
+        const next = leadingPanelFromDrop(side, dragged)
+        if (next === prev) return prev
+        try {
+          localStorage.setItem(POS_STORAGE_LEADING, next)
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    },
+  })
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 56px)' }}>
@@ -223,20 +291,41 @@ export default function POSPage() {
     )
   }
 
+  const productsDropSide = leadingPanel === 'products' ? 'left' : 'right'
+  const cartDropSide = leadingPanel === 'products' ? 'right' : 'left'
+
   return (
     <div
       ref={splitRef}
       style={{
         display: 'grid',
         gridTemplateColumns: `${leftPaneRatio}fr 8px ${100 - leftPaneRatio}fr`,
+        gridTemplateRows: 'minmax(0, 1fr)',
         height: 'calc(100vh - 56px)',
         overflow: 'hidden',
         minHeight: 0,
       }}
     >
 
-      {/* LEFT — Product browser */}
-      <div style={{ minWidth: 0, overflow: 'hidden auto', padding: 16, background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Product browser — grid column follows leadingPanel */}
+      <div
+        {...panelDropHandlers(productsDropSide)}
+        style={{
+          gridColumn: leadingPanel === 'products' ? 1 : 3,
+          gridRow: 1,
+          minWidth: 0,
+          minHeight: 0,
+          overflow: 'hidden auto',
+          padding: 16,
+          background: 'var(--bg-base)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          boxShadow: dragOverSide === productsDropSide ? 'inset 0 0 0 2px var(--accent)' : 'none',
+          borderRadius: dragOverSide === productsDropSide ? 6 : 0,
+          transition: 'box-shadow 0.12s ease',
+        }}
+      >
 
         {/* Search + actions bar */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -252,6 +341,11 @@ export default function POSPage() {
             ⏸ Hold
             {heldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{heldBills.length}</span>}
           </button>
+          <PanelDragHandle
+            panel="products"
+            onDragEnd={onPanelDragEnd}
+            title="Drag onto the other column to swap sides"
+          />
         </div>
 
         {/* Category pills */}
@@ -316,9 +410,11 @@ export default function POSPage() {
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize product and cart panels"
+        aria-label="Resize columns. Drag ⋮⋮ on Products or Cart to swap sides."
         onMouseDown={() => setIsResizing(true)}
         style={{
+          gridColumn: 2,
+          gridRow: 1,
           cursor: 'col-resize',
           background: isResizing ? 'var(--accent-bg)' : 'var(--bg-raised)',
           borderLeft: '1px solid var(--border-subtle)',
@@ -339,8 +435,23 @@ export default function POSPage() {
         />
       </div>
 
-      {/* RIGHT — Cart */}
-      <div style={{ minWidth: 0, background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Cart — grid column follows leadingPanel */}
+      <div
+        {...panelDropHandlers(cartDropSide)}
+        style={{
+          gridColumn: leadingPanel === 'products' ? 3 : 1,
+          gridRow: 1,
+          minWidth: 0,
+          minHeight: 0,
+          background: 'var(--bg-surface)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          boxShadow: dragOverSide === cartDropSide ? 'inset 0 0 0 2px var(--accent)' : 'none',
+          borderRadius: dragOverSide === cartDropSide ? 6 : 0,
+          transition: 'box-shadow 0.12s ease',
+        }}
+      >
 
         {/* Cart header */}
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -348,6 +459,11 @@ export default function POSPage() {
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>🧾 Cart</div>
             <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>Line-wise rate, HSN, margin & discounts</div>
           </div>
+          <PanelDragHandle
+            panel="cart"
+            onDragEnd={onPanelDragEnd}
+            title="Drag onto the other column to swap sides"
+          />
           <div style={{ flex: 1 }} />
           <select className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }} value={customer?.id || ''} onChange={(e) => { const c = customers.find((x) => x.id === e.target.value); store.setCustomer(c || null) }}>
             <option value="">Walk-in Customer</option>
@@ -362,7 +478,7 @@ export default function POSPage() {
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
               <div style={{ fontSize: 32, marginBottom: 8 }}>🛒</div>
               <div style={{ fontSize: 13 }}>Cart is empty</div>
-              <div style={{ fontSize: 11.5, marginTop: 4 }}>Click products on the left to add lines</div>
+              <div style={{ fontSize: 11.5, marginTop: 4 }}>Click products in the catalog to add lines</div>
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -510,6 +626,38 @@ export default function POSPage() {
         )}
       </Modal>
 
+    </div>
+  )
+}
+
+function PanelDragHandle({ panel, onDragEnd, title }) {
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(POS_DRAG_MIME, panel)
+        e.dataTransfer.setData('text/plain', panel)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onDragEnd={onDragEnd}
+      title={title}
+      aria-label={title}
+      style={{
+        flexShrink: 0,
+        cursor: 'grab',
+        padding: '6px 7px',
+        borderRadius: 8,
+        border: '1px solid var(--border-default)',
+        background: 'var(--bg-raised)',
+        color: 'var(--text-muted)',
+        fontSize: 11,
+        fontWeight: 700,
+        lineHeight: 1,
+        letterSpacing: -0.5,
+        userSelect: 'none',
+      }}
+    >
+      ⋮⋮
     </div>
   )
 }
