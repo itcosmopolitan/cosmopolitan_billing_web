@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { TAX_RATES, ROLES } from '@/utils/seedData'
 import { roleColors, roleLabels } from '@/utils/helpers'
 import { usersAPI, branchesAPI } from '@/api'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar } from '@/components/ui'
+import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 const TABS = [
   { id: 'org',      label: '🏢 Organisation' },
@@ -19,7 +20,13 @@ export default function SettingsPage() {
   const [tab, setTab]         = useState('org')
   const [showUser, setShowUser] = useState(false)
   const [users, setUsers]     = useState([])
+  const [userTotal, setUserTotal] = useState(0)
+  const [userSkip, setUserSkip] = useState(0)
+  const [userLimit, setUserLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [userListVersion, setUserListVersion] = useState(0)
   const [branches, setBranches] = useState([])
+  const [brSkip, setBrSkip] = useState(0)
+  const [brLimit, setBrLimit] = useState(DEFAULT_PAGE_SIZE)
   const [showBranch, setShowBranch] = useState(false)
   const [userForm, setUserForm] = useState({ name:'', email:'', role:'cashier', branch_id:'', active:true })
   const [branchForm, setBranchForm] = useState({ name:'', code:'', manager:'', phone:'', address:'' })
@@ -33,37 +40,52 @@ export default function SettingsPage() {
   const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role:'cashier', branch_id:'' })
   const peuf = (k,v) => setEditUserForm(f=>({...f,[k]:v}))
 
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const fetchData = async () => {
+  const loadAllBranches = async () => {
     try {
-      setLoading(true)
-      const [usersData, branchesData] = await Promise.all([
-        usersAPI.list().catch(() => []),
-        branchesAPI.list().catch(() => [])
-      ])
-      setUsers(usersData || [])
-      setBranches(branchesData || [])
+      const data = await fetchAllList(branchesAPI.list).catch(() => [])
+      setBranches(data || [])
     } catch (err) {
-      console.error(err)
-      toast.error('Failed to load data')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const fetchBranches = async () => {
-    try {
-      const data = await branchesAPI.list()
-      setBranches(data)
-    } 
-    catch (err) {
       console.error(err)
       toast.error('Failed to load branches')
     }
   }
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        setLoading(true)
+        await loadAllBranches()
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await usersAPI.list({ skip: userSkip, limit: userLimit })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setUsers(items || [])
+          setUserTotal(total)
+        }
+      } catch (err) {
+        console.error(err)
+        if (!cancelled) {
+          setUsers([])
+          setUserTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [userSkip, userLimit, userListVersion])
+
+  const branchPageRows = useMemo(
+    () => branches.slice(brSkip, brSkip + brLimit),
+    [branches, brSkip, brLimit]
+  )
 
   const pbfEdit = (k, v) => {
     setEditBranchForm(prev => ({ ...prev, [k]: v }))
@@ -96,7 +118,9 @@ export default function SettingsPage() {
         branch_id: userForm.branch_id || null
       }
       await usersAPI.create(payload)
-      await fetchData()
+      setUserSkip(0)
+      setUserListVersion((v) => v + 1)
+      await loadAllBranches()
       toast.success('User created successfully')
       setShowUser(false)
       setUserForm({ name:'', email:'', role:'cashier', branch_id:'', active:true })
@@ -109,7 +133,7 @@ export default function SettingsPage() {
   const toggleUser = async (userId) => {
     try {
       await usersAPI.toggle(userId)
-      await fetchData()
+      setUserListVersion((v) => v + 1)
       toast.success('User status updated')
     } catch (err) {
       console.error(err)
@@ -135,7 +159,7 @@ export default function SettingsPage() {
         branch_id: editUserForm.branch_id || null
       }
       await usersAPI.update(editingUser.id, payload)
-      await fetchData()
+      setUserListVersion((v) => v + 1)
       toast.success('User updated successfully')
       setShowEditUser(false)
       setEditingUser(null)
@@ -168,7 +192,7 @@ export default function SettingsPage() {
             // ✅ CLOSE MODAL HERE
             setShowBranch(false)
             // ✅ refresh data
-            fetchBranches()
+            loadAllBranches()
             toast.success('Branch added')
         }
         catch (err) {
@@ -195,7 +219,7 @@ export default function SettingsPage() {
             if (!res.ok) throw new Error("Update failed")
             toast.success("Branch updated")
             setShowEditBranch(false)
-            fetchBranches() // refresh list
+            loadAllBranches() // refresh list
         }
         catch (err) {
             console.error(err)
@@ -262,7 +286,7 @@ export default function SettingsPage() {
             <table className="data-table">
               <thead><tr><th>Branch</th><th>Code</th><th>Manager</th><th>Phone</th><th>Address</th><th>Status</th><th></th></tr></thead>
               <tbody>
-                {branches.map(b=>(
+                {branchPageRows.map(b=>(
                   <tr key={b.id}>
                     <td><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{b.name}</div></td>
                     <td><span className="mono" style={{fontSize:12,color:'var(--accent)'}}>{b.code}</span></td>
@@ -283,6 +307,13 @@ export default function SettingsPage() {
                 ))}
               </tbody>
             </table>
+            <PaginationBar
+              total={branches.length}
+              skip={brSkip}
+              limit={brLimit}
+              onSkipChange={setBrSkip}
+              onLimitChange={setBrLimit}
+            />
           </Card>
           <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
@@ -342,6 +373,13 @@ export default function SettingsPage() {
                   )})}
                 </tbody>
               </table>
+              <PaginationBar
+                total={userTotal}
+                skip={userSkip}
+                limit={userLimit}
+                onSkipChange={setUserSkip}
+                onLimitChange={setUserLimit}
+              />
             </Card>
             <Card title="Roles & Permissions">
               {Object.entries(ROLES).map(([key, r]) => (

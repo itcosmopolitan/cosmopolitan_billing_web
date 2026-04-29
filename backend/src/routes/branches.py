@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from src.database import get_db
 from src.models import Branch, ItemStock
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -19,9 +20,17 @@ class BranchCreate(BaseModel):
     active: bool = True
 
 @router.get("/")
-async def list_branches(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Branch).order_by(Branch.name))
-    return [_b(b) for b in result.scalars().all()]
+async def list_branches(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    total = int((await db.execute(select(func.count(Branch.id)))).scalar() or 0)
+    result = await db.execute(select(Branch).order_by(Branch.name).offset(sk).limit(lim))
+    items = [_b(b) for b in result.scalars().all()]
+    return paged(items, total, sk, lim)
 
 @router.get("/{branch_id}")
 async def get_branch(branch_id: str, db: AsyncSession = Depends(get_db)):

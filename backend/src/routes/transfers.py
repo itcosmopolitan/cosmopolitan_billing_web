@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import StockTransfer, TransferLineItem, ItemStock, Branch
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -30,31 +31,37 @@ async def list_transfers(
     status: Optional[str] = None,
     from_branch: Optional[str] = None,
     to_branch: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
 ):
-    q = select(StockTransfer).order_by(StockTransfer.created_at.desc())
-    if status:      q = q.where(StockTransfer.status == status)
-    if from_branch: q = q.where(StockTransfer.from_branch_id == from_branch)
-    if to_branch:   q = q.where(StockTransfer.to_branch_id == to_branch)
-    result = await db.execute(q)
-    transfers = result.scalars().all()
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    q = select(StockTransfer).options(selectinload(StockTransfer.items)).order_by(StockTransfer.created_at.desc())
+    cq = select(func.count(StockTransfer.id))
+    if status:
+        q = q.where(StockTransfer.status == status)
+        cq = cq.where(StockTransfer.status == status)
+    if from_branch:
+        q = q.where(StockTransfer.from_branch_id == from_branch)
+        cq = cq.where(StockTransfer.from_branch_id == from_branch)
+    if to_branch:
+        q = q.where(StockTransfer.to_branch_id == to_branch)
+        cq = cq.where(StockTransfer.to_branch_id == to_branch)
+    total = int((await db.execute(cq)).scalar() or 0)
+    br_result = await db.execute(select(Branch))
+    branch_map = {b.id: b.name for b in br_result.scalars().all()}
+    result = await db.execute(q.offset(sk).limit(lim))
+    transfers = result.unique().scalars().all()
     out = []
     for t in transfers:
-        lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == t.id))
-        lines = lines_result.scalars().all()
-        
-        # Fetch branch names
-        from_branch_result = await db.execute(select(Branch).where(Branch.id == t.from_branch_id))
-        from_branch = from_branch_result.scalar_one_or_none()
-        to_branch_result = await db.execute(select(Branch).where(Branch.id == t.to_branch_id))
-        to_branch = to_branch_result.scalar_one_or_none()
-        
+        lines = t.items or []
         d = _t_dict(t)
-        d["from_branch_name"] = from_branch.name if from_branch else t.from_branch_id
-        d["to_branch_name"] = to_branch.name if to_branch else t.to_branch_id
-        d["items"] = [{"item_id": l.item_id, "name": l.item_name, "qty": l.qty, } for l in lines]
+        d["from_branch_name"] = branch_map.get(t.from_branch_id, t.from_branch_id)
+        d["to_branch_name"] = branch_map.get(t.to_branch_id, t.to_branch_id)
+        d["items"] = [{"item_id": l.item_id, "name": l.item_name, "qty": l.qty} for l in lines]
         out.append(d)
-    return out
+    return paged(out, total, sk, lim)
 
 @router.post("/", status_code=201)
 async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_db)):

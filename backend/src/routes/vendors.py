@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from src.database import get_db
 from src.models import Vendor
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -28,11 +29,24 @@ class VendorUpdate(BaseModel):
     payment_terms: Optional[str] = None
 
 @router.get("/")
-async def list_vendors(search: Optional[str] = None, db: AsyncSession = Depends(get_db)):
-    q = select(Vendor)
-    if search: q = q.where(Vendor.name.ilike(f"%{search}%"))
-    result = await db.execute(q)
-    return [_v(v) for v in result.scalars().all()]
+async def list_vendors(
+    search: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    q = select(Vendor).order_by(Vendor.name)
+    cq = select(func.count(Vendor.id))
+    if search:
+        term = f"%{search}%"
+        q = q.where(Vendor.name.ilike(term))
+        cq = cq.where(Vendor.name.ilike(term))
+    total = int((await db.execute(cq)).scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
+    items = [_v(v) for v in result.scalars().all()]
+    return paged(items, total, sk, lim)
 
 @router.get("/{vendor_id}")
 async def get_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):

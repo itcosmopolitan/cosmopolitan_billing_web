@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { purchasesAPI, vendorsAPI, branchesAPI, itemsAPI } from '@/api'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, AlertBar } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, AlertBar, PaginationBar } from '@/components/ui'
+import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 const TABS = [
   { id: 'bills',   label: 'Purchase Bills' },
@@ -22,11 +23,19 @@ export default function PurchasesPage() {
   const [showNewReturn, setShowNewReturn] = useState(false)
   const [returnDetail, setReturnDetail] = useState(null)
   const [bills, setBills]       = useState([])
+  const [billTotal, setBillTotal] = useState(0)
+  const [billSkip, setBillSkip] = useState(0)
+  const [billLimit, setBillLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [purchaseSummary, setPurchaseSummary] = useState(null)
   const [returns, setReturns]   = useState([])
+  const [retTotal, setRetTotal] = useState(0)
+  const [retSkip, setRetSkip] = useState(0)
+  const [retLimit, setRetLimit] = useState(DEFAULT_PAGE_SIZE)
   const [vendors, setVendors]   = useState([])
   const [branches, setBranches] = useState([])
   const [items, setItems]       = useState([])
   const [loading, setLoading]   = useState(true)
+  const [listVersion, setListVersion] = useState(0)
   const [payAmt, setPayAmt]     = useState('')
   const [payRef, setPayRef]     = useState('')
 
@@ -38,54 +47,102 @@ export default function PurchasesPage() {
   const patchReturn = (k, v) => setNewReturn((r) => ({ ...r, [k]: v }))
   const patchReturnItem = (i, k, v) => setNewReturn((r) => ({ ...r, items: r.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }))
 
-  // Fetch data on mount
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const fetchData = async () => {
+  const loadMasters = useCallback(async () => {
     try {
-      setLoading(true)
-      const [billsData, vendorsData, branchesData, itemsData, returnsData] = await Promise.all([
-        purchasesAPI.list().catch(() => []),
-        vendorsAPI.list().catch(() => []),
-        branchesAPI.list().catch(() => []),
-        itemsAPI.list().catch(() => []),
-        purchasesAPI.returns.list().catch(() => [])
+      const branchId = 'br-001'
+      const [vendorsData, branchesData, itemsData] = await Promise.all([
+        fetchAllList(vendorsAPI.list).catch(() => []),
+        fetchAllList(branchesAPI.list).catch(() => []),
+        fetchAllList(itemsAPI.list, { branch_id: branchId }).catch(() => []),
       ])
-      setBills(billsData || [])
       setVendors(vendorsData || [])
       setBranches(branchesData || [])
       setItems(itemsData || [])
-      setReturns(returnsData || [])
     } catch (err) {
-      console.error('Failed to fetch purchases:', err)
-      toast.error('Failed to load purchases data')
-    } finally {
-      setLoading(false)
+      console.error('Failed to fetch masters:', err)
     }
-  }
+  }, [])
 
-  const filtered = useMemo(() => {
-    let list = [...bills]
-    if (search) list = list.filter((b) => (b.number || '').toLowerCase().includes(search.toLowerCase()) || (b.vendorName || '').toLowerCase().includes(search.toLowerCase()))
-    if (statusF) list = list.filter((b) => b.status === statusF)
-    if (vendorF) list = list.filter((b) => b.vendorId === vendorF)
-    return list
-  }, [bills, search, statusF, vendorF])
+  useEffect(() => {
+    loadMasters()
+  }, [loadMasters])
+
+  useEffect(() => {
+    setBillSkip(0)
+  }, [search, statusF, vendorF])
+
+  useEffect(() => {
+    if (tab !== 'bills') {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        setLoading(true)
+        const raw = await purchasesAPI.list({
+          skip: billSkip,
+          limit: billLimit,
+          search: search || undefined,
+          status: statusF || undefined,
+          vendor_id: vendorF || undefined,
+        })
+        const { items, total, summary } = unwrapPaged(raw)
+        if (!cancelled) {
+          setBills(items || [])
+          setBillTotal(total)
+          setPurchaseSummary(summary)
+        }
+      } catch (err) {
+        console.error('Failed to fetch purchases:', err)
+        if (!cancelled) {
+          setBills([])
+          setBillTotal(0)
+          setPurchaseSummary(null)
+        }
+        toast.error('Failed to load purchases data')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, billSkip, billLimit, search, statusF, vendorF, listVersion])
+
+  useEffect(() => {
+    if (tab !== 'returns') {
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await purchasesAPI.returns.list({ skip: retSkip, limit: retLimit })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setReturns(items || [])
+          setRetTotal(total)
+        }
+      } catch {
+        if (!cancelled) {
+          setReturns([])
+          setRetTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, retSkip, retLimit, listVersion])
 
   const totals = useMemo(() => ({
-    total:   bills.reduce((s, b) => s + (b.total || 0), 0),
-    paid:    bills.filter((b) => b.status === 'paid').reduce((s, b) => s + (b.total || 0), 0),
-    pending: bills.filter((b) => ['pending','partial'].includes(b.status)).reduce((s, b) => s + ((b.total || 0) - (b.paidAmount || 0)), 0),
-    overdue: bills.filter((b) => b.status === 'overdue').length,
-  }), [bills])
+    total:   purchaseSummary?.amountTotal ?? 0,
+    paid:    purchaseSummary?.collectedPaid ?? 0,
+    pending: purchaseSummary?.pendingBalance ?? 0,
+    overdue: purchaseSummary?.overdueCount ?? 0,
+  }), [purchaseSummary])
 
   const recordPayment = async () => {
     if (!payAmt || Number(payAmt) <= 0) { toast.error('Enter valid amount'); return }
     try {
       await purchasesAPI.payment(showPay.id, { amount: Number(payAmt), mode: 'NEFT', ref: payRef })
-      await fetchData()
+      setListVersion((v) => v + 1)
       toast.success(`Payment of ${fmt(payAmt)} recorded`)
       setShowPay(null)
       setPayAmt('')
@@ -124,7 +181,8 @@ export default function PurchasesPage() {
       }
 
       await purchasesAPI.create(payload)
-      await fetchData()
+      setListVersion((v) => v + 1)
+      loadMasters()
       toast.success('Purchase bill created successfully')
       setShowNewBill(false)
       setNewBill({ vendorId: '', branchId: '', billDate: new Date().toISOString().split('T')[0], dueDate: '', items: [{ itemId: '', qty: '', cost: '' }], discount: 0, notes: '' })
@@ -164,7 +222,7 @@ export default function PurchasesPage() {
       }
 
       await purchasesAPI.returns.create(payload)
-      await fetchData()
+      setListVersion((v) => v + 1)
       toast.success('Vendor return created successfully')
       setShowNewReturn(false)
       setNewReturn({ billId: '', reason: 'Defective', items: [{ itemId: '', name: '', originalQty: '', returnQty: '', cost: '' }], notes: '' })
@@ -177,7 +235,7 @@ export default function PurchasesPage() {
   const approveReturn = async (returnId) => {
     try {
       await purchasesAPI.returns.approve(returnId)
-      await fetchData()
+      setListVersion((v) => v + 1)
       toast.success('Vendor return approved')
     } catch (err) {
       console.error('Failed to approve return:', err)
@@ -193,7 +251,7 @@ export default function PurchasesPage() {
     <div className="page-container">
       <SectionHeader title="Purchase Management" subtitle="Vendor bills, purchase orders, GRN, and payments">
         <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = filtered.map(b => ({
+          const exportData = bills.map(b => ({
             'Bill Number': b.number || b.id,
             'Vendor': b.vendorName || '—',
             'Bill Date': b.date || '—',
@@ -233,11 +291,11 @@ export default function PurchasesPage() {
             </select>
           </div>
           <Card bodyPadding={false}>
-            {filtered.length === 0 ? <EmptyState icon="📋" title="No bills found" /> : (
+            {bills.length === 0 ? <EmptyState icon="📋" title="No bills found" /> : (
               <table className="data-table">
                 <thead><tr><th>Bill #</th><th>Vendor</th><th>Branch</th><th>Date</th><th>Due Date</th><th className="text-right">Total</th><th className="text-right">Paid</th><th className="text-right">Balance</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  {filtered.map((b) => (
+                  {bills.map((b) => (
                     <tr key={b.id}>
                       <td><span className="mono" style={{ color: 'var(--purple)', fontSize: 12 }}>{b.number}</span></td>
                       <td><div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{b.vendorName || 'N/A'}</div></td>
@@ -259,6 +317,14 @@ export default function PurchasesPage() {
                 </tbody>
               </table>
             )}
+            <PaginationBar
+              total={billTotal}
+              skip={billSkip}
+              limit={billLimit}
+              onSkipChange={setBillSkip}
+              onLimitChange={setBillLimit}
+              disabled={loading}
+            />
           </Card>
         </>
       )}
@@ -325,6 +391,13 @@ export default function PurchasesPage() {
                 <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', textAlign: 'center' }}>
                   <button className="btn btn-primary btn-sm" onClick={() => setShowNewReturn(true)}>+ Create Return</button>
                 </div>
+                <PaginationBar
+                  total={retTotal}
+                  skip={retSkip}
+                  limit={retLimit}
+                  onSkipChange={setRetSkip}
+                  onLimitChange={setRetLimit}
+                />
               </>
             )}
           </Card>

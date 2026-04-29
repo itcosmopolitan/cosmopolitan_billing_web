@@ -63,8 +63,8 @@ export const salesAPI = {
   create:  (data)   => api.post('/sales/', data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
-  returns: ()       => api.get('/sales/returns'),
-  creditPurchases: () => api.get('/sales/credit/purchases'),
+  returns: (params) => api.get('/sales/returns', { params }),
+  creditPurchases: (params) => api.get('/sales/credit/purchases', { params }),
   quotations: {
     list:    (params) => api.get('/sales/quotations/', { params }),
     get:     (id)     => api.get(`/sales/quotations/${id}`),
@@ -105,7 +105,7 @@ export const vendorsAPI = {
 
 // ─── Branches ────────────────────────────────────────────────────────────────
 export const branchesAPI = {
-  list:   ()       => api.get('/branches/'),
+  list:   (params) => api.get('/branches/', { params }),
   get:    (id)     => api.get(`/branches/${id}`),
   create: (data)   => api.post('/branches/', data),
   update: (id, data) => api.put(`/branches/${id}`, data),
@@ -140,7 +140,7 @@ export const reportsAPI = {
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 export const usersAPI = {
-  list:   ()         => api.get('/users/'),
+  list:   (params)   => api.get('/users/', { params }),
   create: (data)     => api.post('/users/', data),
   update: (id, data) => api.patch(`/users/${id}`, data),
   toggle: (id)       => api.patch(`/users/${id}/toggle`),

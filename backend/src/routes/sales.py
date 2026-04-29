@@ -3,7 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
 from src.database import get_db
-from src.models import SaleInvoice, SaleLineItem, ItemStock, Quotation, QuotationLineItem, Customer
+from src.models import SaleInvoice, SaleLineItem, ItemStock, Quotation, QuotationLineItem, Customer, InvoiceStatus
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -91,6 +92,82 @@ SAMPLE_RETURNS = [
     }
 ]
 
+
+def _sale_invoice_filters(
+    branch_id: Optional[str],
+    status: Optional[str],
+    customer_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+):
+    conds = []
+    if branch_id:
+        conds.append(SaleInvoice.branch_id == branch_id)
+    if status:
+        try:
+            conds.append(SaleInvoice.status == InvoiceStatus(status))
+        except ValueError:
+            conds.append(SaleInvoice.status == status)
+    if customer_id:
+        conds.append(SaleInvoice.customer_id == customer_id)
+    if date_from:
+        conds.append(SaleInvoice.date >= date_from)
+    if date_to:
+        conds.append(SaleInvoice.date <= date_to)
+    if search:
+        conds.append(
+            or_(
+                SaleInvoice.number.ilike(f"%{search}%"),
+                SaleInvoice.customer_name.ilike(f"%{search}%"),
+            )
+        )
+    return conds
+
+
+async def _sales_list_summary(db: AsyncSession, conds):
+    base = and_(*conds) if conds else True
+    amount_total = float(
+        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(base))).scalar() or 0
+    )
+    collected_paid = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(
+                    and_(base, SaleInvoice.status == InvoiceStatus.paid)
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    credit_pending = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0)).where(
+                    and_(base, SaleInvoice.status == InvoiceStatus.pending)
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    overdue_total = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(
+                    and_(base, SaleInvoice.status == InvoiceStatus.overdue)
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    return {
+        "amountTotal": amount_total,
+        "collectedPaid": collected_paid,
+        "creditPending": credit_pending,
+        "overdueTotal": overdue_total,
+    }
+
+
 # ─── LIST ─────────────────────────────────────────────────────────────────────
 @router.get("/")
 async def list_invoices(
@@ -101,45 +178,60 @@ async def list_invoices(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(SaleInvoice).order_by(SaleInvoice.created_at.desc())
-    if branch_id:   q = q.where(SaleInvoice.branch_id == branch_id)
-    if status:      q = q.where(SaleInvoice.status == status)
-    if customer_id: q = q.where(SaleInvoice.customer_id == customer_id)
-    if date_from:   q = q.where(SaleInvoice.date >= date_from)
-    if date_to:     q = q.where(SaleInvoice.date <= date_to)
-    if search:
-        q = q.where(or_(
-            SaleInvoice.number.ilike(f"%{search}%"),
-            SaleInvoice.customer_name.ilike(f"%{search}%"),
-        ))
-    result = await db.execute(q.offset(skip).limit(limit))
-    invoices = result.scalars().all()
-    out = []
-    for inv in invoices:
-        li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == inv.id))
-        items = li_res.scalars().all()
-        out.append(_inv_dict(inv, items))
-    return out
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to)
+    q = (
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .order_by(SaleInvoice.created_at.desc())
+    )
+    if conds:
+        q = q.where(and_(*conds))
+    count_r = await db.execute(select(func.count(SaleInvoice.id)).where(and_(*conds)) if conds else select(func.count(SaleInvoice.id)))
+    total = int(count_r.scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
+    invoices = result.unique().scalars().all()
+    out = [_inv_dict(inv, inv.line_items) for inv in invoices]
+    summary = await _sales_list_summary(db, conds)
+    return paged(out, total, sk, lim, summary=summary)
 
 # ─── LIST RETURNS ────────────────────────────────────────────────────────────
 @router.get("/returns")
-async def list_returns(db: AsyncSession = Depends(get_db)):
+async def list_returns(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+):
     """List all credit notes / returns"""
-    return SAMPLE_RETURNS
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    data = SAMPLE_RETURNS[sk : sk + lim]
+    return paged(data, len(SAMPLE_RETURNS), sk, lim)
 
 # ─── QUOTATIONS ───────────────────────────────────────────────────────────────
 @router.get("/quotations/")
-async def list_quotations(branch_id: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+async def list_quotations(
+    branch_id: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
     """List all quotations"""
-    q = select(Quotation).options(selectinload(Quotation.line_items))
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    q_count = select(func.count(Quotation.id))
+    q = select(Quotation).options(selectinload(Quotation.line_items)).order_by(Quotation.created_at.desc())
     if branch_id:
         q = q.where(Quotation.branch_id == branch_id)
-    result = await db.execute(q)
+        q_count = q_count.where(Quotation.branch_id == branch_id)
+    total = int((await db.execute(q_count)).scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
-    return [_quote_dict(q, q.line_items) for q in quotations]
+    items_out = [_quote_dict(qt, qt.line_items) for qt in quotations]
+    return paged(items_out, total, sk, lim)
 
 @router.get("/quotations/{quote_id}")
 async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db)):
@@ -223,17 +315,26 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
 
 # ─── LIST CREDIT PURCHASES ───────────────────────────────────────────────────
 @router.get("/credit/purchases")
-async def list_credit_purchases(db: AsyncSession = Depends(get_db)):
+async def list_credit_purchases(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
     """List all invoices purchased on credit (unpaid)"""
-    q = select(SaleInvoice).where(SaleInvoice.payment_mode == "credit")
-    result = await db.execute(q)
-    invoices = result.scalars().all()
-    out = []
-    for inv in invoices:
-        li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == inv.id))
-        items = li_res.scalars().all()
-        out.append(_inv_dict(inv, items))
-    return out
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = [SaleInvoice.payment_mode == "credit"]
+    q = (
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.payment_mode == "credit")
+        .order_by(SaleInvoice.created_at.desc())
+    )
+    total = int((await db.execute(select(func.count(SaleInvoice.id)).where(and_(*conds)))).scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
+    invoices = result.unique().scalars().all()
+    out = [_inv_dict(inv, inv.line_items) for inv in invoices]
+    return paged(out, total, sk, lim)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{invoice_id}")

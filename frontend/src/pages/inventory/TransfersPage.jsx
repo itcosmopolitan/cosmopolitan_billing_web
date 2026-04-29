@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { transfersAPI, branchesAPI, itemsAPI } from '@/api'
 import { fmtDate, fmt } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, KPICard, EmptyState, AlertBar } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, KPICard, EmptyState, AlertBar, PaginationBar } from '@/components/ui'
+import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 const TABS = [
   { id: 'all',      label: 'All Transfers' },
@@ -23,23 +24,20 @@ export default function TransfersPage() {
   const [showNew, setShowNew]   = useState(false)
   const [showDetail, setShowDetail] = useState(null)
   const [transfers, setTransfers] = useState([])
+  const [trSkip, setTrSkip] = useState(0)
+  const [trLimit, setTrLimit] = useState(DEFAULT_PAGE_SIZE)
   const [branches, setBranches] = useState([])
   const [items, setItems]       = useState([])
   const [loading, setLoading]   = useState(true)
   const [newForm, setNewForm]   = useState({ from_branch_id: 'br-001', to_branch_id: 'br-002', priority: 'Normal', notes: '', items: [{ item_id: '', qty: '' }] })
 
-  // Fetch data on mount
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true)
       const [transfersData, branchesData, itemsData] = await Promise.all([
-        transfersAPI.list(),
-        branchesAPI.list().catch(() => []),
-        itemsAPI.list().catch(() => [])
+        fetchAllList(transfersAPI.list),
+        fetchAllList(branchesAPI.list).catch(() => []),
+        fetchAllList(itemsAPI.list, { branch_id: 'br-001' }).catch(() => []),
       ])
       setTransfers(transfersData || [])
       setBranches(branchesData || [])
@@ -51,11 +49,27 @@ export default function TransfersPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  useEffect(() => {
+    setTrSkip(0)
+  }, [tab])
 
   const patchForm = (k, v) => setNewForm((f) => ({ ...f, [k]: v }))
 
-  const filtered = tab === 'all' ? transfers : transfers.filter((t) => t.status === tab)
+  const filtered = useMemo(() => {
+    const base = tab === 'all' ? transfers : transfers.filter((t) => t.status === tab)
+    return base
+  }, [transfers, tab])
+
+  const pageRows = useMemo(
+    () => filtered.slice(trSkip, trSkip + trLimit),
+    [filtered, trSkip, trLimit]
+  )
 
   const approve = async (id) => {
     try {
@@ -126,7 +140,7 @@ export default function TransfersPage() {
         <KPICard label="Pending Approval" value={pending}  color="var(--amber)" icon="⏳" />
         <KPICard label="In Transit"       value={transit}  color="var(--blue)"  icon="🚚" />
         <KPICard label="Received (Apr)"   value={received} color="var(--green)" icon="✅" />
-        <KPICard label="Total"            value={transfers.length} color="var(--accent)" icon="↔" />
+        <KPICard label="Total"            value={transfers.length} color="var(--accent)" icon="↔" sub="all transfers" />
       </div>
 
       {pending > 0 && <AlertBar type="amber" icon="⚠️" style={{ marginBottom: 16 }}>
@@ -150,7 +164,7 @@ export default function TransfersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((t) => (
+                  {pageRows.map((t) => (
                     <tr key={t.id}>
                       <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{t.number || t.ref_number}</span></td>
                       <td>
@@ -177,6 +191,14 @@ export default function TransfersPage() {
                 </tbody>
               </table>
             )}
+            <PaginationBar
+              total={filtered.length}
+              skip={trSkip}
+              limit={trLimit}
+              onSkipChange={setTrSkip}
+              onLimitChange={setTrLimit}
+              disabled={loading}
+            />
           </Card>
         </div>
 

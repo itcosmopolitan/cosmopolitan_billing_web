@@ -290,6 +290,8 @@ export function Tag({ children, color }) {
   )
 }
 
+export { PaginationBar } from './PaginationBar'
+
 // ─── Inline Bar Chart ─────────────────────────────────────────────────────────
 export function BarList({ items, valueFormatter = (v) => v, color = 'var(--accent)' }) {
   const max = Math.max(...items.map((i) => i.value))

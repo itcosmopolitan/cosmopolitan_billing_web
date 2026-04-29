@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
+from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import PurchaseBill, PurchaseLineItem, ItemStock, VendorReturn, ReturnLineItem, Vendor
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -34,6 +36,75 @@ class PaymentIn(BaseModel):
     mode: str = "neft"
     ref: str = ""
 
+
+def _purchase_bill_filters(
+    branch_id: Optional[str],
+    vendor_id: Optional[str],
+    status: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+):
+    conds = []
+    if branch_id:
+        conds.append(PurchaseBill.branch_id == branch_id)
+    if vendor_id:
+        conds.append(PurchaseBill.vendor_id == vendor_id)
+    if status:
+        conds.append(PurchaseBill.status == status)
+    if date_from:
+        conds.append(PurchaseBill.date >= date_from)
+    if date_to:
+        conds.append(PurchaseBill.date <= date_to)
+    if search:
+        conds.append(
+            or_(
+                PurchaseBill.number.ilike(f"%{search}%"),
+                PurchaseBill.vendor_name.ilike(f"%{search}%"),
+            )
+        )
+    return conds
+
+
+async def _purchase_bills_summary(db: AsyncSession, conds):
+    base = and_(*conds) if conds else True
+    amount_total = float(
+        (await db.execute(select(func.coalesce(func.sum(PurchaseBill.total), 0)).where(base))).scalar() or 0
+    )
+    collected_paid = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(PurchaseBill.total), 0)).where(and_(base, PurchaseBill.status == "paid"))
+            )
+        ).scalar()
+        or 0
+    )
+    pending_balance = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0)).where(
+                    and_(base, PurchaseBill.status.in_(["pending", "partial"]))
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    overdue_count = int(
+        (
+            await db.execute(
+                select(func.count(PurchaseBill.id)).where(and_(base, PurchaseBill.status == "overdue"))
+            )
+        ).scalar()
+        or 0
+    )
+    return {
+        "amountTotal": amount_total,
+        "collectedPaid": collected_paid,
+        "pendingBalance": pending_balance,
+        "overdueCount": overdue_count,
+    }
+
+
 # ─── LIST ─────────────────────────────────────────────────────────────────────
 @router.get("/")
 async def list_bills(
@@ -44,28 +115,29 @@ async def list_bills(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(PurchaseBill).order_by(PurchaseBill.created_at.desc())
-    if branch_id: q = q.where(PurchaseBill.branch_id == branch_id)
-    if vendor_id: q = q.where(PurchaseBill.vendor_id == vendor_id)
-    if status:    q = q.where(PurchaseBill.status == status)
-    if date_from: q = q.where(PurchaseBill.date >= date_from)
-    if date_to:   q = q.where(PurchaseBill.date <= date_to)
-    if search:
-        q = q.where(or_(
-            PurchaseBill.number.ilike(f"%{search}%"),
-            PurchaseBill.vendor_name.ilike(f"%{search}%"),
-        ))
-    result = await db.execute(q.offset(skip).limit(limit))
-    bills = result.scalars().all()
-    out = []
-    for b in bills:
-        li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == b.id))
-        items = li_res.scalars().all()
-        out.append(_bill_dict(b, items))
-    return out
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to)
+    q = (
+        select(PurchaseBill)
+        .options(selectinload(PurchaseBill.line_items))
+        .order_by(PurchaseBill.created_at.desc())
+    )
+    if conds:
+        q = q.where(and_(*conds))
+    if conds:
+        count_r = await db.execute(select(func.count(PurchaseBill.id)).where(and_(*conds)))
+    else:
+        count_r = await db.execute(select(func.count(PurchaseBill.id)))
+    total = int(count_r.scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
+    bills = result.unique().scalars().all()
+    out = [_bill_dict(b, b.line_items) for b in bills]
+    summary = await _purchase_bills_summary(db, conds)
+    return paged(out, total, sk, lim, summary=summary)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{bill_id}")
@@ -178,23 +250,38 @@ async def list_returns(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(VendorReturn).order_by(VendorReturn.created_at.desc())
-    if vendor_id: q = q.where(VendorReturn.vendor_id == vendor_id)
-    if branch_id: q = q.where(VendorReturn.branch_id == branch_id)
-    if status:    q = q.where(VendorReturn.status == status)
-    if date_from: q = q.where(VendorReturn.date >= date_from)
-    if date_to:   q = q.where(VendorReturn.date <= date_to)
-    result = await db.execute(q.offset(skip).limit(limit))
-    returns = result.scalars().all()
-    out = []
-    for r in returns:
-        li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == r.id))
-        items = li_res.scalars().all()
-        out.append(_return_dict(r, items))
-    return out
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = []
+    if vendor_id:
+        conds.append(VendorReturn.vendor_id == vendor_id)
+    if branch_id:
+        conds.append(VendorReturn.branch_id == branch_id)
+    if status:
+        conds.append(VendorReturn.status == status)
+    if date_from:
+        conds.append(VendorReturn.date >= date_from)
+    if date_to:
+        conds.append(VendorReturn.date <= date_to)
+    q = (
+        select(VendorReturn)
+        .options(selectinload(VendorReturn.line_items))
+        .order_by(VendorReturn.created_at.desc())
+    )
+    if conds:
+        q = q.where(and_(*conds))
+    if conds:
+        count_r = await db.execute(select(func.count(VendorReturn.id)).where(and_(*conds)))
+    else:
+        count_r = await db.execute(select(func.count(VendorReturn.id)))
+    total = int(count_r.scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
+    returns = result.unique().scalars().all()
+    out = [_return_dict(r, r.line_items) for r in returns]
+    return paged(out, total, sk, lim)
 
 @router.get("/returns/{return_id}")
 async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):

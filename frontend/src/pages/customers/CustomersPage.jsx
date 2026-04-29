@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { customersAPI, branchesAPI } from '@/api'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar } from '@/components/ui'
+import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 export default function CustomersPage() {
   const [search, setSearch]     = useState('')
@@ -10,57 +11,82 @@ export default function CustomersPage() {
   const [showAdd, setShowAdd]   = useState(false)
   const [showDetail, setShowDetail] = useState(null)
   const [customers, setCustomers] = useState([])
+  const [custTotal, setCustTotal] = useState(0)
+  const [custSkip, setCustSkip] = useState(0)
+  const [custLimit, setCustLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [custSummary, setCustSummary] = useState(null)
   const [branches, setBranches] = useState([])
   const [loading, setLoading]   = useState(true)
+  const [listVersion, setListVersion] = useState(0)
   const [form, setForm]         = useState({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id:'', credit_limit:'10000', customer_type:'retail' })
 
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
 
-  useEffect(() => {
-    fetchData()
+  const loadBranches = useCallback(async () => {
+    const raw = await fetchAllList(branchesAPI.list).catch(() => [])
+    setBranches(raw || [])
   }, [])
 
-  const fetchData = async () => {
-    try {
-      setLoading(true)
-      const [customersData, branchesData] = await Promise.all([
-        customersAPI.list().catch(() => []),
-        branchesAPI.list().catch(() => [])
-      ])
-      setCustomers(customersData || [])
-      setBranches(branchesData || [])
-      if (!form.branch_id && branchesData?.length > 0) {
-        pf('branch_id', branchesData[0].id)
-      }
-    } catch (err) {
-      console.error('Failed to fetch data:', err)
-      toast.error('Failed to load data')
-    } finally {
-      setLoading(false)
-    }
-  }
+  useEffect(() => {
+    loadBranches()
+  }, [loadBranches])
 
-  const filtered = useMemo(() => {
-    let list = [...customers].map(c => ({
-      ...c,
-      type: c.customer_type || c.type,
-      gstIn: c.gst_in || c.gstin,
-      branchId: c.branch_id,
-      creditLimit: c.credit_limit,
-      outstanding: c.outstanding || 0,
-      totalPurchases: c.total_purchases || 0,
-    }))
-    if (search) list = list.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone && c.phone.includes(search)) || (c.email && c.email.toLowerCase().includes(search)))
-    if (typeF)  list = list.filter(c => c.type === typeF)
-    return list
-  }, [customers, search, typeF])
+  useEffect(() => {
+    if (branches.length > 0 && !form.branch_id) {
+      setForm((f) => ({ ...f, branch_id: branches[0].id }))
+    }
+  }, [branches, form.branch_id])
+
+  useEffect(() => {
+    setCustSkip(0)
+  }, [search, typeF])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        setLoading(true)
+        const raw = await customersAPI.list({
+          skip: custSkip,
+          limit: custLimit,
+          search: search || undefined,
+          customer_type: typeF || undefined,
+        })
+        const { items, total, summary } = unwrapPaged(raw)
+        if (cancelled) return
+        const mapped = (items || []).map((c) => ({
+          ...c,
+          type: c.customer_type || c.type,
+          gstIn: c.gst_in || c.gstin,
+          branchId: c.branch_id,
+          creditLimit: c.credit_limit,
+          outstanding: c.outstanding || 0,
+          totalPurchases: c.total_purchases || 0,
+        }))
+        setCustomers(mapped)
+        setCustTotal(total)
+        setCustSummary(summary)
+      } catch (err) {
+        console.error('Failed to fetch data:', err)
+        if (!cancelled) {
+          setCustomers([])
+          setCustTotal(0)
+          setCustSummary(null)
+        }
+        toast.error('Failed to load data')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [custSkip, custLimit, search, typeF, listVersion])
 
   const totals = useMemo(() => ({
-    total:       customers.length,
-    outstanding: customers.reduce((s,c) => s + (c.outstanding || 0), 0),
-    overdue:     customers.filter(c => c.outstanding > 0).length,
-    topBuyer:    customers.length > 0 ? customers.reduce((a,c) => (c.total_purchases || 0) > (a.total_purchases || 0) ? c : a, customers[0]) : null,
-  }), [customers])
+    total:       custTotal,
+    outstanding: custSummary?.outstandingTotal ?? 0,
+    overdue:     custSummary?.withBalanceCount ?? 0,
+    topBuyer:    customers.length > 0 ? customers.reduce((a, c) => (c.totalPurchases || 0) > (a.totalPurchases || 0) ? c : a, customers[0]) : null,
+  }), [custTotal, custSummary, customers])
 
   const save = async () => {
     if (!form.name) { toast.error('Customer name required'); return }
@@ -78,8 +104,9 @@ export default function CustomersPage() {
         customer_type: form.customer_type
       }
 
-      const result = await customersAPI.create(payload)
-      await fetchData()
+      await customersAPI.create(payload)
+      setListVersion((v) => v + 1)
+      await loadBranches()
       toast.success('Customer added successfully')
       setShowAdd(false)
       setForm({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id: branches[0]?.id || '', credit_limit:'10000', customer_type:'retail' })
@@ -99,7 +126,7 @@ export default function CustomersPage() {
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
         <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = filtered.map(c => ({
+          const exportData = customers.map(c => ({
             'Name': c.name,
             'Phone': c.phone || '—',
             'Email': c.email || '—',
@@ -133,13 +160,13 @@ export default function CustomersPage() {
       </div>
 
       <Card bodyPadding={false}>
-        {filtered.length === 0 ? <EmptyState icon="👥" title="No customers found" /> : (
+        {customers.length === 0 ? <EmptyState icon="👥" title="No customers found" /> : (
           <table className="data-table">
             <thead>
               <tr><th>Customer</th><th>Contact</th><th>Type</th><th>Branch</th><th className="text-right">Credit Limit</th><th className="text-right">Outstanding</th><th style={{width:100}}>Credit Used</th><th className="text-right">Total Purchases</th><th>Status</th><th></th></tr>
             </thead>
             <tbody>
-              {filtered.map(c => {
+              {customers.map(c => {
                 const pct = creditUsedPct(c)
                 return (
                   <tr key={c.id}>
@@ -173,6 +200,14 @@ export default function CustomersPage() {
             </tbody>
           </table>
         )}
+        <PaginationBar
+          total={custTotal}
+          skip={custSkip}
+          limit={custLimit}
+          onSkipChange={setCustSkip}
+          onLimitChange={setCustLimit}
+          disabled={loading}
+        />
       </Card>
 
       {/* Add Customer */}

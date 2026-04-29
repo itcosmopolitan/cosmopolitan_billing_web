@@ -1,11 +1,12 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
 import { fmt, stockStatus, exportToCSV } from '@/utils/helpers'
 import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
-  FormGroup, FormRow, Select, KPICard, ProgressBar, EmptyState, Tag
+  FormGroup, FormRow, Select, KPICard, ProgressBar, EmptyState, Tag, PaginationBar
 } from '@/components/ui'
+import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 const TABS = [
   { id: 'all',      label: 'All Items' },
@@ -44,28 +45,25 @@ export default function ItemsPage() {
   const [adjQty, setAdjQty]     = useState('')
   const [adjReason, setAdjReason] = useState('Physical count')
   const [items, setItems]       = useState([])
+  const [itemSkip, setItemSkip] = useState(0)
+  const [itemLimit, setItemLimit] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading]   = useState(true)
   const [categories, setCategories] = useState([])
 
-  // Fetch items on mount
-  useEffect(() => {
-    fetchItems()
-  }, [])
-
-  const fetchItems = async () => {
+  const fetchItems = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await itemsAPI.list({ branch_id: branchFilter })
+      const data = await fetchAllList(itemsAPI.list, { branch_id: branchFilter })
       setItems(data || [])
-      
-      // Extract unique categories
       if (data && data.length > 0) {
-        const uniqueCats = [...new Set(data.map(item => item.categoryId))]
-        const cats = uniqueCats.map(catId => ({
+        const uniqueCats = [...new Set(data.map((item) => item.categoryId))]
+        const cats = uniqueCats.map((catId) => ({
           id: catId,
-          name: data.find(item => item.categoryId === catId)?.categoryName || catId
+          name: data.find((item) => item.categoryId === catId)?.categoryName || catId,
         }))
         setCategories(cats)
+      } else {
+        setCategories([])
       }
     } catch (err) {
       console.error('Failed to fetch items:', err)
@@ -74,7 +72,15 @@ export default function ItemsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [branchFilter])
+
+  useEffect(() => {
+    fetchItems()
+  }, [fetchItems])
+
+  useEffect(() => {
+    setItemSkip(0)
+  }, [search, catFilter, tab, branchFilter])
 
   const patchForm = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -87,6 +93,10 @@ export default function ItemsPage() {
     if (tab === 'inactive') list = list.filter((p) => p.active === false)
     return list
   }, [items, search, catFilter, tab])
+
+  const pageRows = useMemo(() => {
+    return filtered.slice(itemSkip, itemSkip + itemLimit)
+  }, [filtered, itemSkip, itemLimit])
 
   const totals = useMemo(() => ({
     items:    items.length,
@@ -243,7 +253,7 @@ export default function ItemsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p) => {
+                {pageRows.map((p) => {
                   const branchStock = p.available_stock || 0
                   const { cls, label } = stockStatus(branchStock, p.reorder_level)
                   return (
@@ -282,6 +292,14 @@ export default function ItemsPage() {
             </table>
           </div>
         )}
+        <PaginationBar
+          total={filtered.length}
+          skip={itemSkip}
+          limit={itemLimit}
+          onSkipChange={setItemSkip}
+          onLimitChange={setItemLimit}
+          disabled={loading}
+        />
       </Card>
 
       {/* Add / Edit Item Modal */}

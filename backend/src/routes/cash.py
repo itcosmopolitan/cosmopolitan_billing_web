@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from src.database import get_db
 from src.models import CashEntry
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -25,14 +26,26 @@ class DayCloseRequest(BaseModel):
     closed_by: str
 
 @router.get("/{branch_id}/entries")
-async def get_entries(branch_id: str, date: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+async def get_entries(
+    branch_id: str,
+    date: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
     q = select(CashEntry).where(CashEntry.branch_id == branch_id)
+    cq = select(func.count(CashEntry.id)).where(CashEntry.branch_id == branch_id)
     if date:
         q = q.where(CashEntry.date == date)
+        cq = cq.where(CashEntry.date == date)
     q = q.order_by(CashEntry.created_at)
-    result = await db.execute(q)
+    total = int((await db.execute(cq)).scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
     entries = result.scalars().all()
-    return [_e(e) for e in entries]
+    items = [_e(e) for e in entries]
+    return paged(items, total, sk, lim)
 
 @router.get("/{branch_id}/summary")
 async def get_summary(branch_id: str, date: Optional[str] = None, db: AsyncSession = Depends(get_db)):

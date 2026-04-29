@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from src.database import get_db
 from src.models import SaleInvoice, SaleLineItem, PurchaseBill, PurchaseLineItem, Item, ItemStock
+from src.pagination import paged, normalize_limit, normalize_skip
 from typing import Optional
 
 router = APIRouter()
@@ -101,9 +102,17 @@ async def tax_summary(
 @router.get("/stock-movement")
 async def stock_movement(
     branch_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Item).where(Item.active == True).limit(50))
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    base = select(Item).where(Item.active == True).order_by(Item.name)
+    total = int(
+        (await db.execute(select(func.count(Item.id)).where(Item.active == True))).scalar() or 0
+    )
+    result = await db.execute(base.offset(sk).limit(lim))
     items = result.scalars().all()
     rows = []
     for i, item in enumerate(items):
@@ -120,7 +129,7 @@ async def stock_movement(
             "transfers_in": ti, "transfers_out": tto,
             "adjustments": adj, "closing": closing, "variance": closing - base,
         })
-    return {"branch_id": branch_id, "items": rows}
+    return {"branch_id": branch_id, **paged(rows, total, sk, lim)}
 
 
 @router.get("/branch-comparison")

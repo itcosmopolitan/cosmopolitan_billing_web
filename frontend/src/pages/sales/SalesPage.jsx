@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, customersAPI, branchesAPI } from '@/api'
 import { fmt, fmtDate, statusChip, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, AlertBar } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, AlertBar, PaginationBar } from '@/components/ui'
+import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
 
 const TABS = [
@@ -29,10 +30,23 @@ export default function SalesPage() {
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
   const [invoices, setInvoices] = useState([])
+  const [invoiceTotal, setInvoiceTotal] = useState(0)
+  const [invSkip, setInvSkip] = useState(0)
+  const [invLimit, setInvLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [salesSummary, setSalesSummary] = useState(null)
   const [quotations, setQuotations] = useState([])
+  const [quoteTotal, setQuoteTotal] = useState(0)
+  const [quoteSkip, setQuoteSkip] = useState(0)
+  const [quoteLimit, setQuoteLimit] = useState(DEFAULT_PAGE_SIZE)
   const [returns, setReturns]   = useState([])
+  const [retTotal, setRetTotal] = useState(0)
+  const [retSkip, setRetSkip] = useState(0)
+  const [retLimit, setRetLimit] = useState(DEFAULT_PAGE_SIZE)
   const [orders, setOrders]     = useState([])
   const [creditPurchases, setCreditPurchases] = useState([])
+  const [credTotal, setCredTotal] = useState(0)
+  const [credSkip, setCredSkip] = useState(0)
+  const [credLimit, setCredLimit] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading]   = useState(true)
   const [branches, setBranches] = useState([])
   const [showQuoteForm, setShowQuoteForm] = useState(false)
@@ -40,69 +54,146 @@ export default function SalesPage() {
   const pqf = (k, v) => setQuoteForm(f => ({...f, [k]: v}))
   const [quoteItems, setQuoteItems] = useState([])
   const [showQuoteDetail, setShowQuoteDetail] = useState(null)
+  const [salesListVersion, setSalesListVersion] = useState(0)
+  const [quoteListVersion, setQuoteListVersion] = useState(0)
 
-  // Fetch data on mount
-  useEffect(() => {
-    fetchData()
+  const loadBranches = useCallback(async () => {
+    try {
+      const raw = await branchesAPI.list({ skip: 0, limit: 500 }).catch(() => ({}))
+      const { items } = unwrapPaged(raw)
+      setBranches(items || [])
+    } catch {
+      setBranches([])
+    }
   }, [])
 
-  const fetchData = async () => {
-    try {
-      setLoading(true)
-      const [salesData, branchesData, returnsData, creditData] = await Promise.all([
-        salesAPI.list().catch(() => []),
-        branchesAPI.list().catch(() => []),
-        salesAPI.returns().catch(() => []),
-        salesAPI.creditPurchases().catch(() => [])
-      ])
-      setInvoices(salesData || [])
-      setBranches(branchesData || [])
-      setReturns(returnsData || [])
-      setCreditPurchases(creditData || [])
-      // TODO: Re-enable after backend server is restarted to create quotation tables
-      setQuotations([])
-      setOrders([])
-      
-      // Fetch quotations once backend is ready
-      try {
-        const quoteData = await salesAPI.quotations.list()
-        setQuotations(quoteData || [])
-      } catch (err) {
-        // Silently fail - quotation tables may not exist yet
-        console.log('Quotations not available yet')
-      }
-    } catch (err) {
-      console.error('Failed to fetch sales:', err)
-      setInvoices([])
-      toast.error('Failed to load sales data')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const fetchData = useCallback(async () => {
+    await loadBranches()
+  }, [loadBranches])
 
-  // Filter invoices with date range
-  const filtered = useMemo(() => {
-    let list = [...invoices]
-    if (search)   list = list.filter((i) => i.number.toLowerCase().includes(search.toLowerCase()) || i.customerName.toLowerCase().includes(search.toLowerCase()))
-    if (statusF)  list = list.filter((i) => i.status === statusF)
-    if (branchF)  list = list.filter((i) => i.branchId === branchF)
-    if (dateFrom) list = list.filter((i) => i.date >= dateFrom)
-    if (dateTo)   list = list.filter((i) => i.date <= dateTo)
-    return list
-  }, [invoices, search, statusF, branchF, dateFrom, dateTo])
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  useEffect(() => {
+    setInvSkip(0)
+  }, [search, statusF, branchF, dateFrom, dateTo])
+
+  useEffect(() => {
+    if (tab !== 'invoices') {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        setLoading(true)
+        const raw = await salesAPI.list({
+          skip: invSkip,
+          limit: invLimit,
+          search: search || undefined,
+          status: statusF || undefined,
+          branch_id: branchF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+        })
+        const { items, total, summary } = unwrapPaged(raw)
+        if (!cancelled) {
+          setInvoices(items || [])
+          setInvoiceTotal(total)
+          setSalesSummary(summary)
+        }
+      } catch (err) {
+        console.error('Failed to fetch sales:', err)
+        if (!cancelled) {
+          setInvoices([])
+          setInvoiceTotal(0)
+          setSalesSummary(null)
+        }
+        toast.error('Failed to load sales data')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, invSkip, invLimit, search, statusF, branchF, dateFrom, dateTo, salesListVersion])
+
+  useEffect(() => {
+    if (tab !== 'quotes') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await salesAPI.quotations.list({ skip: quoteSkip, limit: quoteLimit })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setQuotations(items || [])
+          setQuoteTotal(total)
+        }
+      } catch {
+        if (!cancelled) {
+          setQuotations([])
+          setQuoteTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, quoteSkip, quoteLimit, quoteListVersion])
+
+  useEffect(() => {
+    if (tab !== 'credit') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await salesAPI.creditPurchases({ skip: credSkip, limit: credLimit })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setCreditPurchases(items || [])
+          setCredTotal(total)
+        }
+      } catch {
+        if (!cancelled) {
+          setCreditPurchases([])
+          setCredTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, credSkip, credLimit])
+
+  useEffect(() => {
+    if (tab !== 'returns') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await salesAPI.returns({ skip: retSkip, limit: retLimit })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setReturns(items || [])
+          setRetTotal(total)
+        }
+      } catch {
+        if (!cancelled) {
+          setReturns([])
+          setRetTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, retSkip, retLimit])
 
   const totals = useMemo(() => ({
-    total:    filtered.reduce((s, i) => s + (i.total || 0), 0),
-    paid:     filtered.filter((i) => i.status === 'paid').reduce((s, i) => s + (i.total || 0), 0),
-    credit:   filtered.filter((i) => i.status === 'pending').reduce((s, i) => s + ((i.total || 0) - (i.paidAmount || 0)), 0),
-    overdue:  filtered.filter((i) => i.status === 'overdue').reduce((s, i) => s + (i.total || 0), 0),
-  }), [filtered])
+    total:   salesSummary?.amountTotal ?? 0,
+    paid:    salesSummary?.collectedPaid ?? 0,
+    credit:  salesSummary?.creditPending ?? 0,
+    overdue: salesSummary?.overdueTotal ?? 0,
+  }), [salesSummary])
 
   const recordPayment = async () => {
     if (!payAmt || Number(payAmt) <= 0) { toast.error('Enter a valid amount'); return }
     try {
       await salesAPI.payment(showPayment.id, { amount: Number(payAmt), mode: payMode, ref: payRef })
-      await fetchData()
+      setSalesListVersion((v) => v + 1)
+      await loadBranches()
       toast.success(`Payment of ${fmt(payAmt)} recorded`)
       setShowPayment(null)
       setPayAmt('')
@@ -143,7 +234,9 @@ export default function SalesPage() {
         notes: quoteForm.notes
       }
       await salesAPI.quotations.create(payload)
-      await fetchData()
+      setQuoteSkip(0)
+      setQuoteListVersion((v) => v + 1)
+      await loadBranches()
       toast.success('Quotation created successfully')
       setShowQuoteForm(false)
       setQuoteForm({ customerName: '', customerId: '', branchId: 'br-001', items: [], discount: 0, validUntil: '', notes: '' })
@@ -161,7 +254,7 @@ export default function SalesPage() {
     <div className="page-container">
       <SectionHeader title="Sales Management" subtitle="Invoices, orders, quotations, and customer payments">
         <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = filtered.map(i => ({
+          const exportData = invoices.map(i => ({
             'Invoice Number': i.number || i.id,
             'Customer': i.customerName || 'Walk-in',
             'Date': i.date || '—',
@@ -203,7 +296,7 @@ export default function SalesPage() {
           </div>
 
           <Card bodyPadding={false}>
-            {filtered.length === 0 ? <EmptyState icon="🧾" title="No invoices found" /> : (
+            {invoices.length === 0 ? <EmptyState icon="🧾" title="No invoices found" /> : (
               <table className="data-table">
                 <thead>
                   <tr>
@@ -213,7 +306,7 @@ export default function SalesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((inv) => (
+                  {invoices.map((inv) => (
                     <tr key={inv.id}>
                       <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{inv.number}</span></td>
                       <td>
@@ -239,6 +332,14 @@ export default function SalesPage() {
                 </tbody>
               </table>
             )}
+            <PaginationBar
+              total={invoiceTotal}
+              skip={invSkip}
+              limit={invLimit}
+              onSkipChange={setInvSkip}
+              onLimitChange={setInvLimit}
+              disabled={loading}
+            />
           </Card>
         </>
       )}
@@ -274,6 +375,13 @@ export default function SalesPage() {
                 </tbody>
               </table>
             )}
+            <PaginationBar
+              total={quoteTotal}
+              skip={quoteSkip}
+              limit={quoteLimit}
+              onSkipChange={setQuoteSkip}
+              onLimitChange={setQuoteLimit}
+            />
           </Card>
           
           <Modal open={showQuoteForm} onClose={() => setShowQuoteForm(false)} title="Create Quotation" size="lg"
@@ -337,6 +445,13 @@ export default function SalesPage() {
               </tbody>
             </table>
           )}
+          <PaginationBar
+            total={credTotal}
+            skip={credSkip}
+            limit={credLimit}
+            onSkipChange={setCredSkip}
+            onLimitChange={setCredLimit}
+          />
         </Card>
       )}
 
@@ -362,6 +477,13 @@ export default function SalesPage() {
               </tbody>
             </table>
           )}
+          <PaginationBar
+            total={retTotal}
+            skip={retSkip}
+            limit={retLimit}
+            onSkipChange={setRetSkip}
+            onLimitChange={setRetLimit}
+          />
         </Card>
       )}
 

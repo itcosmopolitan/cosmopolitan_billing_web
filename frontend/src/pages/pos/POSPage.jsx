@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
 import { itemsAPI, customersAPI, salesAPI } from '@/api'
+import { fetchAllList } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { PRODUCTS, CUSTOMERS } from '@/utils/seedData'
 import { Modal, Chip } from '@/components/ui'
@@ -90,8 +91,8 @@ export default function POSPage() {
     try {
       setLoading(true)
       const [itemsData, customersData] = await Promise.all([
-        itemsAPI.list({ branch_id: branchId }),
-        customersAPI.list(),
+        fetchAllList(itemsAPI.list, { branch_id: branchId }),
+        fetchAllList(customersAPI.list),
       ])
       
       setProducts(itemsData || [])

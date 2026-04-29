@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 from src.database import get_db
 from src.models import Item, ItemStock, Category
+from src.pagination import paged, normalize_limit, normalize_skip
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
@@ -41,23 +42,35 @@ async def list_items(
     category_id: Optional[str] = None,
     branch_id: Optional[str] = "br-001",
     status: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
     q = select(Item).where(Item.active == True).options(selectinload(Item.category))
     if search:
         q = q.where(Item.name.ilike(f"%{search}%"))
     if category_id:
         q = q.where(Item.category_id == category_id)
-    result = await db.execute(q.offset(skip).limit(limit))
+    cq = select(func.count(Item.id)).where(Item.active == True)
+    if search:
+        cq = cq.where(Item.name.ilike(f"%{search}%"))
+    if category_id:
+        cq = cq.where(Item.category_id == category_id)
+    total = int((await db.execute(cq)).scalar() or 0)
+    result = await db.execute(q.order_by(Item.name).offset(sk).limit(lim))
     items = result.scalars().all()
-    # Return items with stock for requested branch
+    ids = [it.id for it in items]
+    stock_by_item = {}
+    if ids:
+        sr = await db.execute(
+            select(ItemStock).where(and_(ItemStock.item_id.in_(ids), ItemStock.branch_id == branch_id))
+        )
+        for row in sr.scalars().all():
+            stock_by_item[row.item_id] = row.quantity
     out = []
     for item in items:
-        stock_q = select(ItemStock).where(ItemStock.item_id == item.id, ItemStock.branch_id == branch_id)
-        s = await db.execute(stock_q)
-        stock = s.scalar_one_or_none()
         out.append({
             "id": item.id,
             "name": item.name,
@@ -75,9 +88,9 @@ async def list_items(
             "emoji": item.emoji,
             "batch_tracking": item.batch_tracking,
             "expiry_tracking": item.expiry_tracking,
-            "available_stock": stock.quantity if stock else 0,
+            "available_stock": stock_by_item.get(item.id, 0),
         })
-    return out
+    return paged(out, total, sk, lim)
 
 @router.post("/")
 async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
