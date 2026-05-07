@@ -1,12 +1,15 @@
 {
-  "name": "retailos-pro",
+  "name": "cosmopolitan-pro",
   "version": "1.0.0",
   "private": true,
   "workspaces": ["frontend", "backend"],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
     "build": "npm run build --workspace=frontend",
-    "seed": "npm run seed --workspace=backend"
+    "seed": "npm run seed --workspace=backend",
+    "lint:js": "npm run lint --workspace=frontend",
+    "lint:py": "ruff check backend/src",
+    "lint": "npm run lint:js && npm run lint:py"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

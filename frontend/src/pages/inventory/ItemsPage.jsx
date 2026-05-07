@@ -1,12 +1,16 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
+import { useAppStore } from '@/store'
+import { useCan } from '@/auth/permissions'
 import { fmt, stockStatus, exportToCSV } from '@/utils/helpers'
 import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
-  FormGroup, FormRow, Select, KPICard, ProgressBar, EmptyState, Tag, PaginationBar
+  FormGroup, KPICard, EmptyState, Tag, PaginationBar,
+  SortableHeader,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import ItemFormModal from './ItemFormModal'
 
 const TABS = [
   { id: 'all',      label: 'All Items' },
@@ -14,15 +18,6 @@ const TABS = [
   { id: 'expiry',   label: 'Near Expiry' },
   { id: 'inactive', label: 'Inactive' },
 ]
-
-const BRANCHES = [
-  { id: 'br-001', name: 'Anna Nagar', code: 'AN' },
-  { id: 'br-002', name: 'T. Nagar', code: 'TN' },
-  { id: 'br-003', name: 'Vadapalani', code: 'VD' },
-  { id: 'br-004', name: 'Velachery', code: 'VL' },
-]
-
-const BRANCH_COLS = BRANCHES.slice(0, 4)
 
 const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', categoryId: '', brand: '',
@@ -32,10 +27,13 @@ const EMPTY_ITEM = {
 }
 
 export default function ItemsPage() {
+  const can = useCan()
+  const branches = useAppStore((s) => s.branches)
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const [tab, setTab]           = useState('all')
   const [search, setSearch]     = useState('')
   const [catFilter, setCatFilter] = useState('')
-  const [branchFilter, setBranchFilter] = useState('br-001')
+  const [branchFilter, setBranchFilter] = useState(() => activeBranch?.id || 'br-001')
   const [showAdd, setShowAdd]   = useState(false)
   const [editItem, setEditItem] = useState(null)
   const [showAdj, setShowAdj]   = useState(null)
@@ -47,8 +45,24 @@ export default function ItemsPage() {
   const [items, setItems]       = useState([])
   const [itemSkip, setItemSkip] = useState(0)
   const [itemLimit, setItemLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [itemSortBy, setItemSortBy] = useState('name')
+  const [itemSortOrder, setItemSortOrder] = useState('asc')
   const [loading, setLoading]   = useState(true)
   const [categories, setCategories] = useState([])
+
+  // Client-side sort because the page fetches all items at once via
+  // fetchAllList and paginates locally. If/when this switches to true
+  // server-side pagination, send sort_by/sort_order in the API call instead
+  // (the backend already accepts them — see backend/src/routes/items.py).
+  const onSort = (key) => {
+    setItemSkip(0)
+    if (itemSortBy === key) {
+      setItemSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setItemSortBy(key)
+    setItemSortOrder('asc')
+  }
 
   const fetchItems = useCallback(async () => {
     try {
@@ -91,8 +105,26 @@ export default function ItemsPage() {
     if (tab === 'low')      list = list.filter((p) => p.available_stock > 0 && p.available_stock <= p.reorder_level)
     if (tab === 'expiry')   list = list.slice(0, 6)
     if (tab === 'inactive') list = list.filter((p) => p.active === false)
+    // Sort: numeric columns sort numerically, everything else string-compare.
+    // 'category_id' uses the resolved categoryName for a UX that matches what
+    // the user sees in the column.
+    const sortKey = itemSortBy
+    const dir = itemSortOrder === 'desc' ? -1 : 1
+    const numericKeys = new Set(['cost_price', 'selling_price', 'tax_rate', 'reorder_level', 'available_stock'])
+    const valueOf = (row) => {
+      if (sortKey === 'category_id') return row.categoryName || ''
+      const v = row[sortKey]
+      if (v == null) return numericKeys.has(sortKey) ? 0 : ''
+      return v
+    }
+    list.sort((a, b) => {
+      const av = valueOf(a)
+      const bv = valueOf(b)
+      if (numericKeys.has(sortKey)) return (Number(av) - Number(bv)) * dir
+      return String(av).localeCompare(String(bv)) * dir
+    })
     return list
-  }, [items, search, catFilter, tab])
+  }, [items, search, catFilter, tab, itemSortBy, itemSortOrder])
 
   const pageRows = useMemo(() => {
     return filtered.slice(itemSkip, itemSkip + itemLimit)
@@ -106,7 +138,7 @@ export default function ItemsPage() {
   }), [items])
 
   const openAdd  = () => { setForm(EMPTY_ITEM); setEditItem(null); setShowAdd(true) }
-  const openEdit = (item) => { 
+  const openEdit = (item) => {
     setForm({
       name: item.name,
       sku: item.sku,
@@ -150,7 +182,7 @@ export default function ItemsPage() {
         expiry_tracking: form.expiry_tracking,
         opening_stock: editItem ? 0 : Number(form.opening_stock),
       }
-      
+
       if (editItem) {
         await itemsAPI.update(editItem, payload)
         toast.success('Item updated')
@@ -209,8 +241,12 @@ export default function ItemsPage() {
           exportToCSV(exportData, `Items_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Items exported')
         }}>↓ Export</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Adjust Stock</button>
-        <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add Item</button>
+        {can('items.adjust') && (
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Adjust Stock</button>
+        )}
+        {can('items.create') && (
+          <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add Item</button>
+        )}
       </SectionHeader>
 
       {/* KPIs */}
@@ -231,7 +267,7 @@ export default function ItemsPage() {
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <select className="form-input" style={{ width: 150 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-          {BRANCHES.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
       </div>
 
@@ -241,13 +277,13 @@ export default function ItemsPage() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Item</th>
+                  <SortableHeader label="Item" sortKey="name" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
                   <th>SKU / Barcode</th>
-                  <th>Category</th>
-                  <th className="text-right">Cost</th>
-                  <th className="text-right">Price</th>
+                  <SortableHeader label="Category" sortKey="category_id" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
+                  <SortableHeader label="Cost" sortKey="cost_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
+                  <SortableHeader label="Price" sortKey="selling_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
                   <th>GST</th>
-                  <th className="text-right">Stock</th>
+                  <SortableHeader label="Stock" sortKey="available_stock" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
                   <th>Status</th>
                   <th style={{ width: 120 }}></th>
                 </tr>
@@ -255,7 +291,9 @@ export default function ItemsPage() {
               <tbody>
                 {pageRows.map((p) => {
                   const branchStock = p.available_stock || 0
-                  const { cls, label } = stockStatus(branchStock, p.reorder_level)
+                  // `cls` is destructured but unused — kept named so the
+                  // shape of stockStatus() stays self-documenting.
+                  const { label } = stockStatus(branchStock, p.reorder_level)
                   return (
                     <tr key={p.id}>
                       <td>
@@ -281,8 +319,12 @@ export default function ItemsPage() {
                       <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
-                          <button className="btn btn-ghost btn-xs" onClick={() => openEdit(p)}>Edit</button>
-                          <button className="btn btn-ghost btn-xs" onClick={() => { setShowAdj(p); setAdjQty(branchStock) }}>Adj</button>
+                          {can('items.edit') && (
+                            <button className="btn btn-ghost btn-xs" onClick={() => openEdit(p)}>Edit</button>
+                          )}
+                          {can('items.adjust') && (
+                            <button className="btn btn-ghost btn-xs" onClick={() => { setShowAdj(p); setAdjQty(branchStock) }}>Adj</button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -302,60 +344,15 @@ export default function ItemsPage() {
         />
       </Card>
 
-      {/* Add / Edit Item Modal */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title={editItem ? 'Edit Item' : 'Add New Item'} icon="📦" size="lg"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowAdd(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={saveItem}>{editItem ? 'Update Item' : 'Save Item'}</button>
-        </>}>
-        <FormRow>
-          <FormGroup label="Item Name" required><input className="form-input" value={form.name} onChange={(e) => patchForm('name', e.target.value)} placeholder="e.g. Basmati Rice 5kg" /></FormGroup>
-          <FormGroup label="Brand"><input className="form-input" value={form.brand} onChange={(e) => patchForm('brand', e.target.value)} placeholder="e.g. India Gate" /></FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="SKU"><input className="form-input" value={form.sku} onChange={(e) => patchForm('sku', e.target.value)} placeholder="Auto-generated if blank" /></FormGroup>
-          <FormGroup label="Barcode"><input className="form-input" value={form.barcode} onChange={(e) => patchForm('barcode', e.target.value)} placeholder="Scan or enter" /></FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Category">
-            <select className="form-input" value={form.categoryId} onChange={(e) => patchForm('categoryId', e.target.value)}>
-              <option value="">Select Category</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </FormGroup>
-          <FormGroup label="Unit">
-            <select className="form-input" value={form.unit} onChange={(e) => patchForm('unit', e.target.value)}>
-              {['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Pack', 'Box', 'Dozen'].map((u) => <option key={u}>{u}</option>)}
-            </select>
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Cost Price (₹)" required><input className="form-input" type="number" value={form.cost_price} onChange={(e) => patchForm('cost_price', e.target.value)} placeholder="0.00" /></FormGroup>
-          <FormGroup label="Selling Price (₹)" required><input className="form-input" type="number" value={form.selling_price} onChange={(e) => patchForm('selling_price', e.target.value)} placeholder="0.00" /></FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="GST Rate">
-            <select className="form-input" value={form.tax_rate} onChange={(e) => patchForm('tax_rate', e.target.value)}>
-              {[0, 5, 12, 18, 28].map((r) => <option key={r} value={r}>{r}%</option>)}
-            </select>
-          </FormGroup>
-          <FormGroup label="HSN Code"><input className="form-input" value={form.hsn_code} onChange={(e) => patchForm('hsn_code', e.target.value)} placeholder="e.g. 1006" /></FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Reorder Level"><input className="form-input" type="number" value={form.reorder_level} onChange={(e) => patchForm('reorder_level', e.target.value)} placeholder="Min stock trigger" /></FormGroup>
-          <FormGroup label="Opening Stock"><input className="form-input" type="number" value={form.opening_stock} onChange={(e) => patchForm('opening_stock', e.target.value)} placeholder="0" /></FormGroup>
-        </FormRow>
-        <div style={{ display: 'flex', gap: 20, marginTop: 6 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={form.batch_tracking} onChange={(e) => patchForm('batch_tracking', e.target.checked)} />
-            Batch tracking
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={form.expiry_tracking} onChange={(e) => patchForm('expiry_tracking', e.target.checked)} />
-            Expiry date tracking
-          </label>
-        </div>
-      </Modal>
+      <ItemFormModal
+        open={showAdd}
+        onClose={() => setShowAdd(false)}
+        editing={!!editItem}
+        form={form}
+        patchForm={patchForm}
+        onSave={saveItem}
+        categories={categories}
+      />
 
       {/* Stock Adjustment Modal */}
       <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Stock Adjustment" icon="⚖" size="sm"
@@ -391,8 +388,8 @@ export default function ItemsPage() {
         </>}>
         <SearchBar value={adjSelectSearch} onChange={setAdjSelectSearch} placeholder="Search by name, SKU, or barcode…" />
         <div style={{ marginTop: 12, maxHeight: 400, overflowY: 'auto' }}>
-          {items.filter(item => 
-            adjSelectSearch === '' || 
+          {items.filter(item =>
+            adjSelectSearch === '' ||
             item.name.toLowerCase().includes(adjSelectSearch.toLowerCase()) ||
             (item.sku && item.sku.toLowerCase().includes(adjSelectSearch.toLowerCase())) ||
             (item.barcode && item.barcode.includes(adjSelectSearch))
@@ -427,8 +424,8 @@ export default function ItemsPage() {
               </div>
             </div>
           ))}
-          {items.filter(item => 
-            adjSelectSearch === '' || 
+          {items.filter(item =>
+            adjSelectSearch === '' ||
             item.name.toLowerCase().includes(adjSelectSearch.toLowerCase()) ||
             (item.sku && item.sku.toLowerCase().includes(adjSelectSearch.toLowerCase())) ||
             (item.barcode && item.barcode.includes(adjSelectSearch))

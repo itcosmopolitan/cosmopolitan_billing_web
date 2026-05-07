@@ -1,31 +1,55 @@
 """
-RetailOS Pro — Database Seed Script
+Cosmopolitan Pro — Database Seed Script
 Run: python src/seed.py
-Populates SQLite with all demo data for Sri Murugan Traders
+
+Populates SQLite with the Sri Murugan Traders demo dataset. The chain is
+modelled as a Maldives-based retail operation (Male, Addu, Hulhumalé,
+Felidhoo + a Hulhumalé warehouse). Earlier revisions had a Chennai/Tamil
+Nadu naming throughout; Tier 3 of the audit consolidates everything to
+Maldives. India-style GSTIN values and a Tamil Nadu HQ remain on the
+Organisation row by design — the parent is registered in TN with overseas
+storefronts.
 """
 import asyncio
+import os
+import sys
 import uuid
-import hashlib
-from datetime import datetime
-from sqlalchemy import text
 
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Load config first before importing database
 from src import config
+
 config.load()
 
-from src.database import get_engine, get_async_session, Base
+from src.database import Base, get_async_session, get_engine
 from src.models import (
-    Organisation, Branch, User, Category, Item, ItemStock,
-    Customer, Vendor, SaleInvoice, SaleLineItem,
-    PurchaseBill, PurchaseLineItem, StockTransfer, TransferLineItem,
-    CashEntry, AuditLog
+    AuditLog,
+    Branch,
+    CashEntry,
+    Category,
+    Customer,
+    Item,
+    ItemStock,
+    Organisation,
+    PurchaseBill,
+    PurchaseLineItem,
+    Role,
+    SaleInvoice,
+    SaleLineItem,
+    StockTransfer,
+    TransferLineItem,
+    User,
+    Vendor,
 )
+from src.security import hash_password
+from src.system_roles import SYSTEM_ROLES
+
 
 def hp(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
+    """Bcrypt password hash. Real auth (Phase 1.5) verifies against this via
+    src.security.verify_password."""
+    return hash_password(pw)
 
 async def seed():
     engine = get_engine()
@@ -58,18 +82,30 @@ async def seed():
             Branch(id="br-004", name="Felidhoo",    code="FD", manager="Anitha M.",   phone="+960-684 7890", address="22, Island Road, Felidhoo - 20001", gstin="33AAZCS1429R1Z4", active=True),
             Branch(id="br-005", name="Warehouse",   code="WH", manager="Central",     phone="+960-330 0001", address="Plot 14, Industrial Zone, Hulhumalé - 20001", gstin="", active=True),
         ]
-        for b in branches: db.add(b)
+        for b in branches:
+            db.add(b)
+
+        # ── Roles ─────────────────────────────────────────────────────────────
+        for rid, key, label, color, desc, perms in SYSTEM_ROLES:
+            db.add(Role(
+                id=rid, key=key, label=label, color=color,
+                description=desc, permissions=perms,
+                is_system=True, active=True,
+            ))
 
         # ── Users ─────────────────────────────────────────────────────────────
+        # role_id links to the system role rows added above; the legacy `role`
+        # enum column is kept in sync until Phase 3 drops it.
         users = [
-            User(id="usr-001", name="Suresh Anand", email="suresh@srimurugan.com",  hashed_password=hp("admin123"),    role="super_admin",       branch_id=None,    avatar="SA", active=True),
-            User(id="usr-002", name="Kavitha R.",   email="kavitha@srimurugan.com", hashed_password=hp("kavitha123"),  role="branch_manager",    branch_id="br-001", avatar="KR", active=True),
-            User(id="usr-003", name="Arjun M.",     email="arjun@srimurugan.com",   hashed_password=hp("arjun123"),    role="cashier",           branch_id="br-001", avatar="AM", active=True),
-            User(id="usr-004", name="Deepa S.",     email="deepa@srimurugan.com",   hashed_password=hp("deepa123"),    role="inventory_manager", branch_id="br-002", avatar="DS", active=True),
-            User(id="usr-005", name="Prakash V.",   email="prakash@srimurugan.com", hashed_password=hp("prakash123"),  role="finance",           branch_id=None,     avatar="PV", active=False),
-            User(id="usr-006", name="Mohan K.",     email="mohan@srimurugan.com",   hashed_password=hp("mohan123"),    role="branch_manager",    branch_id="br-002", avatar="MK", active=True),
+            User(id="usr-001", name="Suresh Anand", email="suresh@srimurugan.com",  hashed_password=hp("admin123"),    role="super_admin",       role_id="role-super-admin",       branch_id=None,    avatar="SA", active=True),
+            User(id="usr-002", name="Kavitha R.",   email="kavitha@srimurugan.com", hashed_password=hp("kavitha123"),  role="branch_manager",    role_id="role-branch-manager",    branch_id="br-001", avatar="KR", active=True),
+            User(id="usr-003", name="Arjun M.",     email="arjun@srimurugan.com",   hashed_password=hp("arjun123"),    role="cashier",           role_id="role-cashier",           branch_id="br-001", avatar="AM", active=True),
+            User(id="usr-004", name="Deepa S.",     email="deepa@srimurugan.com",   hashed_password=hp("deepa123"),    role="inventory_manager", role_id="role-inventory-manager", branch_id="br-002", avatar="DS", active=True),
+            User(id="usr-005", name="Prakash V.",   email="prakash@srimurugan.com", hashed_password=hp("prakash123"),  role="finance",           role_id="role-finance",           branch_id=None,     avatar="PV", active=False),
+            User(id="usr-006", name="Mohan K.",     email="mohan@srimurugan.com",   hashed_password=hp("mohan123"),    role="branch_manager",    role_id="role-branch-manager",    branch_id="br-002", avatar="MK", active=True),
         ]
-        for u in users: db.add(u)
+        for u in users:
+            db.add(u)
 
         # ── Categories ────────────────────────────────────────────────────────
         cats = [
@@ -82,7 +118,8 @@ async def seed():
             Category(id="cat-007", name="Personal Care",     icon="🪥"),
             Category(id="cat-008", name="Frozen & Chilled",  icon="❄️"),
         ]
-        for c in cats: db.add(c)
+        for c in cats:
+            db.add(c)
 
         # ── Items + Stock ─────────────────────────────────────────────────────
         items_data = [
@@ -123,7 +160,8 @@ async def seed():
             Customer(id="cu-005", name="Subramanian V.", phone="9500011234", email="",                   gstin="",                  branch_id="br-003", credit_limit=5000,   outstanding=0,     total_purchases=48200,   type="retail",    active=True),
             Customer(id="cu-006", name="Krishnan Stores",phone="9444455123", email="krishnan@email.com", gstin="33PQRST9876H1Z1",   branch_id="br-002", credit_limit=50000,  outstanding=6200,  total_purchases=680000,  type="wholesale", active=False),
         ]
-        for c in customers: db.add(c)
+        for c in customers:
+            db.add(c)
 
         # ── Vendors ───────────────────────────────────────────────────────────
         vendors = [
@@ -134,13 +172,14 @@ async def seed():
             Vendor(id="vn-005", name="Parle Distributor TN",   contact_person="Babu",          phone="9345512345", gstin="33UVWXY0005E1Z1", payment_terms="30 days",  outstanding=12400, total_purchases=640000),
             Vendor(id="vn-006", name="Amul Milk Depot",        contact_person="Rajaram",       phone="9876500001", gstin="33ABCDE1111F1Z1", payment_terms="Weekly",   outstanding=0,     total_purchases=1120000),
         ]
-        for v in vendors: db.add(v)
+        for v in vendors:
+            db.add(v)
 
         # ── Sale Invoices ─────────────────────────────────────────────────────
         inv_data = [
             {
                 "id":"inv-001","number":"INV-2024-1847","customer_id":"cu-002","customer_name":"Rajesh Stores",
-                "branch_id":"br-001","branch_name":"Anna Nagar","cashier":"Arjun M.","date":"2024-04-16",
+                "branch_id":"br-001","branch_name":"Male","cashier":"Arjun M.","date":"2024-04-16",
                 "subtotal":10420,"tax_total":222,"discount":0,"total":10642,"paid_amount":10642,
                 "payment_mode":"upi","status":"paid","notes":"",
                 "items":[
@@ -150,7 +189,7 @@ async def seed():
             },
             {
                 "id":"inv-002","number":"INV-2024-1846","customer_id":None,"customer_name":"Walk-in",
-                "branch_id":"br-001","branch_name":"Anna Nagar","cashier":"Arjun M.","date":"2024-04-16",
+                "branch_id":"br-001","branch_name":"Male","cashier":"Arjun M.","date":"2024-04-16",
                 "subtotal":430,"tax_total":77.4,"discount":0,"total":507,"paid_amount":507,
                 "payment_mode":"cash","status":"paid","notes":"",
                 "items":[
@@ -160,7 +199,7 @@ async def seed():
             },
             {
                 "id":"inv-003","number":"INV-2024-1845","customer_id":"cu-001","customer_name":"Priya Sharma",
-                "branch_id":"br-001","branch_name":"Anna Nagar","cashier":"Arjun M.","date":"2024-04-16",
+                "branch_id":"br-001","branch_name":"Male","cashier":"Arjun M.","date":"2024-04-16",
                 "subtotal":1280,"tax_total":72,"discount":0,"total":1352,"paid_amount":1352,
                 "payment_mode":"card","status":"paid","notes":"",
                 "items":[
@@ -170,7 +209,7 @@ async def seed():
             },
             {
                 "id":"inv-004","number":"INV-2024-1844","customer_id":"cu-004","customer_name":"Anand Traders",
-                "branch_id":"br-001","branch_name":"Anna Nagar","cashier":"Kavitha R.","date":"2024-04-16",
+                "branch_id":"br-001","branch_name":"Male","cashier":"Kavitha R.","date":"2024-04-16",
                 "subtotal":17920,"tax_total":296,"discount":200,"total":18016,"paid_amount":0,
                 "payment_mode":"credit","status":"pending","notes":"Net 30 days",
                 "items":[
@@ -180,7 +219,7 @@ async def seed():
             },
             {
                 "id":"inv-005","number":"INV-2024-1843","customer_id":None,"customer_name":"Walk-in",
-                "branch_id":"br-002","branch_name":"T. Nagar","cashier":"Deepa S.","date":"2024-04-16",
+                "branch_id":"br-002","branch_name":"Addu","cashier":"Deepa S.","date":"2024-04-16",
                 "subtotal":768,"tax_total":138.24,"discount":0,"total":906,"paid_amount":906,
                 "payment_mode":"cash","status":"paid","notes":"",
                 "items":[
@@ -189,7 +228,7 @@ async def seed():
             },
             {
                 "id":"inv-006","number":"INV-2024-1842","customer_id":"cu-004","customer_name":"Anand Traders",
-                "branch_id":"br-001","branch_name":"Anna Nagar","cashier":"Arjun M.","date":"2024-04-15",
+                "branch_id":"br-001","branch_name":"Male","cashier":"Arjun M.","date":"2024-04-15",
                 "subtotal":44700,"tax_total":740,"discount":400,"total":45040,"paid_amount":20000,
                 "payment_mode":"partial","status":"partial","notes":"Balance ₹25,040 due May 1",
                 "items":[
@@ -199,7 +238,7 @@ async def seed():
             },
             {
                 "id":"inv-007","number":"INV-2024-1840","customer_id":"cu-006","customer_name":"Krishnan Stores",
-                "branch_id":"br-002","branch_name":"T. Nagar","cashier":"Deepa S.","date":"2024-04-04",
+                "branch_id":"br-002","branch_name":"Addu","cashier":"Deepa S.","date":"2024-04-04",
                 "subtotal":3800,"tax_total":684,"discount":0,"total":4484,"paid_amount":0,
                 "payment_mode":"credit","status":"overdue","notes":"Overdue 12 days",
                 "items":[
@@ -231,7 +270,7 @@ async def seed():
         bill_data = [
             {
                 "id":"pb-001","number":"PUR-2024-0412","vendor_id":"vn-001","vendor_name":"Sri Krishna Traders",
-                "branch_id":"br-001","branch_name":"Anna Nagar","date":"2024-04-16","due_date":"2024-05-16",
+                "branch_id":"br-001","branch_name":"Male","date":"2024-04-16","due_date":"2024-05-16",
                 "subtotal":38400,"tax_total":720,"discount":0,"total":39120,"paid_amount":39120,
                 "payment_ref":"NEFT-20240416-001","status":"paid",
                 "items":[
@@ -241,7 +280,7 @@ async def seed():
             },
             {
                 "id":"pb-002","number":"PUR-2024-0411","vendor_id":"vn-002","vendor_name":"Madurai Provisions Co.",
-                "branch_id":"br-002","branch_name":"T. Nagar","date":"2024-04-15","due_date":"2024-04-30",
+                "branch_id":"br-002","branch_name":"Addu","date":"2024-04-15","due_date":"2024-04-30",
                 "subtotal":22640,"tax_total":352,"discount":0,"total":22992,"paid_amount":11496,
                 "payment_ref":"CHQ-1001","status":"partial",
                 "items":[
@@ -251,7 +290,7 @@ async def seed():
             },
             {
                 "id":"pb-003","number":"PUR-2024-0410","vendor_id":"vn-003","vendor_name":"Chennai Oils Ltd",
-                "branch_id":"br-001","branch_name":"Anna Nagar","date":"2024-04-14","due_date":"2024-04-24",
+                "branch_id":"br-001","branch_name":"Male","date":"2024-04-14","due_date":"2024-04-24",
                 "subtotal":20320,"tax_total":1016,"discount":0,"total":21336,"paid_amount":0,
                 "payment_ref":"","status":"pending",
                 "items":[
@@ -261,7 +300,7 @@ async def seed():
             },
             {
                 "id":"pb-004","number":"PUR-2024-0409","vendor_id":"vn-004","vendor_name":"Tamil Nadu Agri Corp",
-                "branch_id":"br-003","branch_name":"Vadapalani","date":"2024-04-13","due_date":"2024-05-28",
+                "branch_id":"br-003","branch_name":"Hulhumalé","date":"2024-04-13","due_date":"2024-05-28",
                 "subtotal":22200,"tax_total":0,"discount":200,"total":22000,"paid_amount":22000,
                 "payment_ref":"NEFT-20240413-002","status":"paid",
                 "items":[
@@ -271,7 +310,7 @@ async def seed():
             },
             {
                 "id":"pb-005","number":"PUR-2024-0408","vendor_id":"vn-005","vendor_name":"Parle Distributor TN",
-                "branch_id":"br-001","branch_name":"Anna Nagar","date":"2024-04-12","due_date":"2024-04-12",
+                "branch_id":"br-001","branch_name":"Male","date":"2024-04-12","due_date":"2024-04-12",
                 "subtotal":12880,"tax_total":2318,"discount":0,"total":15198,"paid_amount":0,
                 "payment_ref":"","status":"overdue",
                 "items":[
@@ -281,7 +320,7 @@ async def seed():
             },
             {
                 "id":"pb-006","number":"PUR-2024-0407","vendor_id":"vn-006","vendor_name":"Amul Milk Depot",
-                "branch_id":"br-002","branch_name":"T. Nagar","date":"2024-04-11","due_date":"2024-04-18",
+                "branch_id":"br-002","branch_name":"Addu","date":"2024-04-11","due_date":"2024-04-18",
                 "subtotal":7960,"tax_total":283.2,"discount":0,"total":8243.2,"paid_amount":8243.2,
                 "payment_ref":"NEFT-20240411-001","status":"paid",
                 "items":[
@@ -313,11 +352,11 @@ async def seed():
         transfers = [
             {
                 "id":"tr-001","ref_number":"TRF-2024-041",
-                "from_branch_id":"br-001","from_branch_name":"Anna Nagar",
-                "to_branch_id":"br-002","to_branch_name":"T. Nagar",
+                "from_branch_id":"br-001","from_branch_name":"Male",
+                "to_branch_id":"br-002","to_branch_name":"Addu",
                 "requested_by":"Mohan K.","approved_by":None,
                 "status":"pending","priority":"Urgent","request_date":"2024-04-16",
-                "notes":"Urgent — low stock at TN",
+                "notes":"Urgent — low stock at Addu",
                 "items":[
                     {"item_id":"pr-001","item_name":"Basmati Rice 5kg","qty":20},
                     {"item_id":"pr-002","item_name":"Toor Dal 1kg","qty":15},
@@ -327,7 +366,7 @@ async def seed():
             {
                 "id":"tr-002","ref_number":"TRF-2024-040",
                 "from_branch_id":"br-005","from_branch_name":"Warehouse",
-                "to_branch_id":"br-004","to_branch_name":"Velachery",
+                "to_branch_id":"br-004","to_branch_name":"Felidhoo",
                 "requested_by":"Anitha M.","approved_by":"Suresh Anand",
                 "status":"received","priority":"Normal","request_date":"2024-04-15","notes":"",
                 "items":[
@@ -337,8 +376,8 @@ async def seed():
             },
             {
                 "id":"tr-003","ref_number":"TRF-2024-039",
-                "from_branch_id":"br-002","from_branch_name":"T. Nagar",
-                "to_branch_id":"br-003","to_branch_name":"Vadapalani",
+                "from_branch_id":"br-002","from_branch_name":"Addu",
+                "to_branch_id":"br-003","to_branch_name":"Hulhumalé",
                 "requested_by":"Ravi S.","approved_by":"Kavitha R.",
                 "status":"transit","priority":"Normal","request_date":"2024-04-14","notes":"",
                 "items":[
@@ -380,7 +419,7 @@ async def seed():
         logs = [
             AuditLog(id=str(uuid.uuid4()), action="Invoice Created",    user_id="usr-003", user_name="Arjun M.",    module="Sales",    ref="INV-2024-1847", detail="Created invoice for Rajesh Stores — ₹10,642", risk="low"),
             AuditLog(id=str(uuid.uuid4()), action="Discount Applied",   user_id="usr-002", user_name="Kavitha R.",  module="Sales",    ref="INV-2024-1844", detail="Invoice discount ₹200 applied (1.1%)",         risk="low"),
-            AuditLog(id=str(uuid.uuid4()), action="Transfer Approved",  user_id="usr-001", user_name="Suresh Anand",module="Inventory",ref="TRF-2024-041",  detail="Approved stock transfer AN→TN (3 items)",       risk="medium"),
+            AuditLog(id=str(uuid.uuid4()), action="Transfer Approved",  user_id="usr-001", user_name="Suresh Anand",module="Inventory",ref="TRF-2024-041",  detail="Approved stock transfer Male→Addu (3 items)",    risk="medium"),
             AuditLog(id=str(uuid.uuid4()), action="Payment Recorded",   user_id="usr-003", user_name="Arjun M.",   module="Finance",  ref="INV-2024-1842", detail="Partial payment ₹20,000 for Anand Traders",     risk="low"),
             AuditLog(id=str(uuid.uuid4()), action="Cash Entry",         user_id="usr-002", user_name="Kavitha R.",  module="Cash",    ref="CE-003",        detail="Cash out ₹2,400 — Electricity TNEB-APR24",      risk="low"),
             AuditLog(id=str(uuid.uuid4()), action="Invoice Cancelled",  user_id="usr-002", user_name="Kavitha R.",  module="Sales",   ref="INV-2024-1839", detail="Invoice cancelled — Customer return",            risk="high"),
@@ -393,7 +432,7 @@ async def seed():
         await db.commit()
         print("✅  Database seeded successfully!")
         print("    Branches: 5  |  Items: 16  |  Stock entries: 80")
-        print("    Customers: 6 |  Vendors: 6 |  Users: 6")
+        print(f"    Customers: 6 |  Vendors: 6 |  Users: 6  |  Roles: {len(SYSTEM_ROLES)}")
         print("    Invoices: 7  |  Bills: 6   |  Transfers: 3")
         print("    Cash entries: 8  |  Audit logs: 8")
 

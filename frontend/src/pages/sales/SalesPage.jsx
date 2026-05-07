@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { salesAPI, customersAPI, branchesAPI } from '@/api'
-import { fmt, fmtDate, statusChip, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, AlertBar, PaginationBar } from '@/components/ui'
+import { salesAPI, branchesAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
+import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, EmptyState, Tag, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
+import QuoteFormModal from './QuoteFormModal'
 
 const TABS = [
   { id: 'invoices',  label: 'Invoices' },
@@ -17,6 +19,7 @@ const TABS = [
 
 export default function SalesPage() {
   const navigate = useNavigate()
+  const can = useCan()
   const [tab, setTab]           = useState('invoices')
   const [search, setSearch]     = useState('')
   const [statusF, setStatusF]   = useState('')
@@ -33,27 +36,40 @@ export default function SalesPage() {
   const [invoiceTotal, setInvoiceTotal] = useState(0)
   const [invSkip, setInvSkip] = useState(0)
   const [invLimit, setInvLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [invSortBy, setInvSortBy] = useState('created_at')
+  const [invSortOrder, setInvSortOrder] = useState('desc')
   const [salesSummary, setSalesSummary] = useState(null)
   const [quotations, setQuotations] = useState([])
   const [quoteTotal, setQuoteTotal] = useState(0)
   const [quoteSkip, setQuoteSkip] = useState(0)
   const [quoteLimit, setQuoteLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [quoteSortBy, setQuoteSortBy] = useState('created_at')
+  const [quoteSortOrder, setQuoteSortOrder] = useState('desc')
   const [returns, setReturns]   = useState([])
   const [retTotal, setRetTotal] = useState(0)
   const [retSkip, setRetSkip] = useState(0)
   const [retLimit, setRetLimit] = useState(DEFAULT_PAGE_SIZE)
-  const [orders, setOrders]     = useState([])
+  const [retSortBy, setRetSortBy] = useState('date')
+  const [retSortOrder, setRetSortOrder] = useState('desc')
+  // Sales orders aren't implemented yet — the tab renders an empty state
+  // and a "+ New Sales Order" CTA. Kept as a stable empty array for now.
+  const orders = []
   const [creditPurchases, setCreditPurchases] = useState([])
   const [credTotal, setCredTotal] = useState(0)
   const [credSkip, setCredSkip] = useState(0)
   const [credLimit, setCredLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [credSortBy, setCredSortBy] = useState('created_at')
+  const [credSortOrder, setCredSortOrder] = useState('desc')
   const [loading, setLoading]   = useState(true)
   const [branches, setBranches] = useState([])
   const [showQuoteForm, setShowQuoteForm] = useState(false)
   const [quoteForm, setQuoteForm] = useState({ customerName: '', customerId: '', branchId: 'br-001', items: [], discount: 0, validUntil: '', notes: '' })
   const pqf = (k, v) => setQuoteForm(f => ({...f, [k]: v}))
-  const [quoteItems, setQuoteItems] = useState([])
-  const [showQuoteDetail, setShowQuoteDetail] = useState(null)
+  // Only the setter is used (line ~431 — "View" button on quotes table);
+  // the panel itself is wired through showDetail. Drop the getter to
+  // avoid an unused-var warning.
+  // eslint-disable-next-line no-unused-vars
+  const [, setShowQuoteDetail] = useState(null)
   const [salesListVersion, setSalesListVersion] = useState(0)
   const [quoteListVersion, setQuoteListVersion] = useState(0)
 
@@ -91,6 +107,8 @@ export default function SalesPage() {
         const raw = await salesAPI.list({
           skip: invSkip,
           limit: invLimit,
+          sort_by: invSortBy,
+          sort_order: invSortOrder,
           search: search || undefined,
           status: statusF || undefined,
           branch_id: branchF || undefined,
@@ -116,14 +134,19 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, invSkip, invLimit, search, statusF, branchF, dateFrom, dateTo, salesListVersion])
+  }, [tab, invSkip, invLimit, search, statusF, branchF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
 
   useEffect(() => {
     if (tab !== 'quotes') return
     let cancelled = false
     ;(async () => {
       try {
-        const raw = await salesAPI.quotations.list({ skip: quoteSkip, limit: quoteLimit })
+        const raw = await salesAPI.quotations.list({
+          skip: quoteSkip,
+          limit: quoteLimit,
+          sort_by: quoteSortBy,
+          sort_order: quoteSortOrder,
+        })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setQuotations(items || [])
@@ -137,14 +160,19 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, quoteSkip, quoteLimit, quoteListVersion])
+  }, [tab, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder])
 
   useEffect(() => {
     if (tab !== 'credit') return
     let cancelled = false
     ;(async () => {
       try {
-        const raw = await salesAPI.creditPurchases({ skip: credSkip, limit: credLimit })
+        const raw = await salesAPI.creditPurchases({
+          skip: credSkip,
+          limit: credLimit,
+          sort_by: credSortBy,
+          sort_order: credSortOrder,
+        })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setCreditPurchases(items || [])
@@ -158,14 +186,19 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, credSkip, credLimit])
+  }, [tab, credSkip, credLimit, credSortBy, credSortOrder])
 
   useEffect(() => {
     if (tab !== 'returns') return
     let cancelled = false
     ;(async () => {
       try {
-        const raw = await salesAPI.returns({ skip: retSkip, limit: retLimit })
+        const raw = await salesAPI.returns({
+          skip: retSkip,
+          limit: retLimit,
+          sort_by: retSortBy,
+          sort_order: retSortOrder,
+        })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setReturns(items || [])
@@ -179,7 +212,19 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, retSkip, retLimit])
+  }, [tab, retSkip, retLimit, retSortBy, retSortOrder])
+
+  // Tab-aware sort handler for the four list tabs in this page. Each tab
+  // owns its own sortBy/sortOrder pair; the closure picks them up.
+  const toggleSort = (currentBy, currentOrder, setBy, setOrder, setSkip, key, defaultOrder = 'asc') => {
+    setSkip(0)
+    if (currentBy === key) {
+      setOrder(currentOrder === 'asc' ? 'desc' : 'asc')
+      return
+    }
+    setBy(key)
+    setOrder(defaultOrder)
+  }
 
   const totals = useMemo(() => ({
     total:   salesSummary?.amountTotal ?? 0,
@@ -266,8 +311,12 @@ export default function SalesPage() {
           exportToCSV(exportData, `Sales_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Sales exported')
         }}>↓ Export</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => toast('Quotation feature coming soon')}>+ Quotation</button>
-        <button className="btn btn-primary btn-sm" onClick={() => navigate('/pos')}>+ New Sale</button>
+        {can('invoices.create') && (
+          <button className="btn btn-secondary btn-sm" onClick={() => toast('Quotation feature coming soon')}>+ Quotation</button>
+        )}
+        {can('pos.use', 'invoices.create') && (
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/pos')}>+ New Sale</button>
+        )}
       </SectionHeader>
 
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
@@ -300,9 +349,16 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Invoice #</th><th>Customer</th><th>Branch</th><th>Date</th>
-                    <th>Cashier</th><th className="text-right">Amount</th>
-                    <th className="text-right">Paid</th><th>Mode</th><th>Status</th><th></th>
+                    <SortableHeader label="Invoice #" sortKey="number" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
+                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                    <SortableHeader label="Branch" sortKey="branch_id" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                    <SortableHeader label="Date" sortKey="date" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
+                    <SortableHeader label="Cashier" sortKey="cashier" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                    <SortableHeader label="Amount" sortKey="total" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
+                    <SortableHeader label="Paid" sortKey="paid_amount" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
+                    <SortableHeader label="Mode" sortKey="payment_mode" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                    <SortableHeader label="Status" sortKey="status" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -323,7 +379,7 @@ export default function SalesPage() {
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
                           <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(inv)}>View</button>
-                          {['pending', 'partial', 'overdue'].includes(inv.status) &&
+                          {['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit') &&
                             <button className="btn btn-primary btn-xs" onClick={() => { setShowPayment(inv); setPayAmt(String((inv.total || 0) - (inv.paidAmount || 0))) }}>Pay</button>}
                         </div>
                       </td>
@@ -346,15 +402,27 @@ export default function SalesPage() {
 
       {tab === 'quotes' && (
         <>
-          <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowQuoteForm(true)}>+ Create Quotation</button>
-          </div>
+          {can('invoices.create') && (
+            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
+              <button className="btn btn-primary btn-sm" onClick={() => setShowQuoteForm(true)}>+ Create Quotation</button>
+            </div>
+          )}
           <Card bodyPadding={false}>
             {quotations.length === 0 ? (
               <EmptyState icon="📄" title="No quotations" desc="No quotations created yet" />
             ) : (
               <table className="data-table">
-                <thead><tr><th>Quote #</th><th>Customer</th><th>Date</th><th>Valid Till</th><th className="text-right">Amount</th><th>Status</th><th></th></tr></thead>
+                <thead>
+                  <tr>
+                    <SortableHeader label="Quote #" sortKey="number" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
+                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                    <SortableHeader label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
+                    <SortableHeader label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
+                    <SortableHeader label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
+                    <SortableHeader label="Status" sortKey="status" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                    <th></th>
+                  </tr>
+                </thead>
                 <tbody>
                   {quotations.map((q) => (
                     <tr key={q.id}>
@@ -383,36 +451,15 @@ export default function SalesPage() {
               onLimitChange={setQuoteLimit}
             />
           </Card>
-          
-          <Modal open={showQuoteForm} onClose={() => setShowQuoteForm(false)} title="Create Quotation" size="lg"
-            footer={<><button className="btn btn-secondary" onClick={() => setShowQuoteForm(false)}>Cancel</button><button className="btn btn-primary" onClick={saveQuotation}>Create</button></>}>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
-              <FormGroup label="Customer Name" required><input className="form-input" value={quoteForm.customerName} onChange={e => pqf('customerName', e.target.value)}/></FormGroup>
-              <FormGroup label="Branch"><select className="form-input" value={quoteForm.branchId} onChange={e => pqf('branchId', e.target.value)}>{branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></FormGroup>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
-              <FormGroup label="Valid Until"><input className="form-input" type="date" value={quoteForm.validUntil} onChange={e => pqf('validUntil', e.target.value)}/></FormGroup>
-              <FormGroup label="Discount"><input className="form-input" type="number" value={quoteForm.discount} onChange={e => pqf('discount', Number(e.target.value))}/></FormGroup>
-            </div>
-            <FormGroup label="Items" required>
-              <table className="data-table" style={{marginBottom:12}}>
-                <thead><tr><th>Item</th><th style={{width:80}}>Qty</th><th style={{width:100}}>Price</th><th style={{width:80}}>Tax %</th><th></th></tr></thead>
-                <tbody>
-                  {quoteForm.items.map((it, i) => (
-                    <tr key={i}>
-                      <td><input className="form-input" placeholder="Item name" value={it.name} onChange={e => {const n = [...quoteForm.items]; n[i].name = e.target.value; pqf('items', n)}}/></td>
-                      <td><input className="form-input" type="number" value={it.qty} onChange={e => {const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n)}}/></td>
-                      <td><input className="form-input" type="number" value={it.price} onChange={e => {const n = [...quoteForm.items]; n[i].price = e.target.value; pqf('items', n)}}/></td>
-                      <td><input className="form-input" type="number" value={it.taxRate} onChange={e => {const n = [...quoteForm.items]; n[i].taxRate = e.target.value; pqf('items', n)}}/></td>
-                      <td><button className="btn btn-danger btn-xs" onClick={() => pqf('items', quoteForm.items.filter((_, j) => j !== i))}>Remove</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <button className="btn btn-secondary btn-sm" onClick={() => pqf('items', [...quoteForm.items, { name: '', qty: 1, price: 0, taxRate: 0 }])}>+ Add Item</button>
-            </FormGroup>
-            <FormGroup label="Notes"><textarea className="form-input" style={{height:72}} value={quoteForm.notes} onChange={e => pqf('notes', e.target.value)}/></FormGroup>
-          </Modal>
+
+          <QuoteFormModal
+            open={showQuoteForm}
+            onClose={() => setShowQuoteForm(false)}
+            onSave={saveQuotation}
+            quoteForm={quoteForm}
+            pqf={pqf}
+            branches={branches}
+          />
         </>
       )}
 
@@ -422,7 +469,18 @@ export default function SalesPage() {
             <EmptyState icon="💳" title="No credit purchases" desc="Invoices purchased on credit will appear here" />
           ) : (
             <table className="data-table">
-              <thead><tr><th>Invoice #</th><th>Customer</th><th>Date</th><th className="text-right">Amount</th><th>Due Date</th><th>Status</th><th className="text-right">Balance Due</th><th></th></tr></thead>
+              <thead>
+                <tr>
+                  <SortableHeader label="Invoice #" sortKey="number" sortBy={credSortBy} sortOrder={credSortOrder} onSort={(k) => toggleSort(credSortBy, credSortOrder, setCredSortBy, setCredSortOrder, setCredSkip, k, 'desc')} />
+                  <SortableHeader label="Customer" sortKey="customer_name" sortBy={credSortBy} sortOrder={credSortOrder} onSort={(k) => toggleSort(credSortBy, credSortOrder, setCredSortBy, setCredSortOrder, setCredSkip, k)} />
+                  <SortableHeader label="Date" sortKey="date" sortBy={credSortBy} sortOrder={credSortOrder} onSort={(k) => toggleSort(credSortBy, credSortOrder, setCredSortBy, setCredSortOrder, setCredSkip, k, 'desc')} />
+                  <SortableHeader label="Amount" sortKey="total" sortBy={credSortBy} sortOrder={credSortOrder} onSort={(k) => toggleSort(credSortBy, credSortOrder, setCredSortBy, setCredSortOrder, setCredSkip, k, 'desc')} className="text-right" align="right" />
+                  <th>Due Date</th>
+                  <SortableHeader label="Status" sortKey="status" sortBy={credSortBy} sortOrder={credSortOrder} onSort={(k) => toggleSort(credSortBy, credSortOrder, setCredSortBy, setCredSortOrder, setCredSkip, k)} />
+                  <SortableHeader label="Balance Due" sortKey="balance_due" sortBy={credSortBy} sortOrder={credSortOrder} onSort={(k) => toggleSort(credSortBy, credSortOrder, setCredSortBy, setCredSortOrder, setCredSkip, k)} className="text-right" align="right" />
+                  <th></th>
+                </tr>
+              </thead>
               <tbody>
                 {creditPurchases.map((inv) => (
                   <tr key={inv.id}>
@@ -461,7 +519,17 @@ export default function SalesPage() {
             <EmptyState icon="↩️" title="No credit notes" desc="Credit notes / returns will appear here" />
           ) : (
             <table className="data-table">
-              <thead><tr><th>Credit Note #</th><th>Customer</th><th>Ref Invoice</th><th>Date</th><th className="text-right">Amount</th><th>Reason</th><th>Status</th></tr></thead>
+              <thead>
+                <tr>
+                  <SortableHeader label="Credit Note #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                  <SortableHeader label="Customer" sortKey="customer_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                  <SortableHeader label="Ref Invoice" sortKey="ref_invoice" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                  <SortableHeader label="Date" sortKey="date" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                  <SortableHeader label="Amount" sortKey="amount" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
+                  <th>Reason</th>
+                  <SortableHeader label="Status" sortKey="status" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                </tr>
+              </thead>
               <tbody>
                 {returns.map((r) => (
                   <tr key={r.id}>

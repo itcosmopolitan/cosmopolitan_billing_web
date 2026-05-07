@@ -1,0 +1,33 @@
+[tool.ruff]
+# Match the project's existing line length (most files use ~120). Tighter
+# than 100 would force a lot of wrapping in route handlers; looser than 120
+# hides genuinely long lines worth refactoring.
+line-length = 120
+target-version = "py311"
+exclude = [
+    ".venv",
+    "venv",
+    "__pycache__",
+    "alembic",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+# Curated rule set — start minimal so the existing codebase comes up clean,
+# expand later. F = pyflakes (unused imports/vars), E/W = pycodestyle,
+# I = isort. Skip noisy ones (D = docstrings, ANN = annotations, etc.).
+select = ["F", "E", "W", "I"]
+ignore = [
+    "E501",  # Line too long — handled at the formatter; some long strings are unavoidable.
+    "E402",  # Module-level import not at top — used in main.py for config.load() ordering.
+    "E711",  # Comparison to None — SQLAlchemy where-clause idioms (.is_(None)) collide here.
+    "E712",  # Comparison to True/False — same reason (Item.active == True).
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/seed.py" = ["E501"]   # Long string literals for demo addresses, etc.
+"src/models.py" = ["E501"] # Long Column() declarations.
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]

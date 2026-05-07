@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { fmt, fmtDate } from '@/utils/helpers'
 
 // ─── Thermal Receipt Component ────────────────────────────────────────────────
-export function Receipt({ sale, branch, onClose }) {
+export function Receipt({ sale, branch }) {
   const ref = useRef(null)
 
   const printReceipt = () => {
@@ -30,8 +30,8 @@ export function Receipt({ sale, branch, onClose }) {
       <body>
         <div class="center">
           <div class="logo">Sri Murugan Traders</div>
-          <div>${branch?.name || 'Anna Nagar Branch'}</div>
-          <div>${branch?.address || 'Chennai'}</div>
+          <div>${branch?.name || 'Male Branch'}</div>
+          <div>${branch?.address || 'Male, Maldives'}</div>
           <div>Phone: ${branch?.phone || ''}</div>
           <div>GSTIN: ${branch?.gst || ''}</div>
         </div>

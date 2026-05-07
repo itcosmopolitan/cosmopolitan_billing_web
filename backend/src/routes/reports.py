@@ -1,15 +1,18 @@
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
-from src.database import get_db
-from src.models import SaleInvoice, SaleLineItem, PurchaseBill, PurchaseLineItem, Item, ItemStock
-from src.pagination import paged, normalize_limit, normalize_skip
 from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.database import get_db
+from src.models import Item, PurchaseBill, SaleInvoice
+from src.pagination import normalize_limit, normalize_skip, paged
+from src.security import require_perm
 
 router = APIRouter()
 
 
-@router.get("/sales-summary")
+@router.get("/sales-summary", dependencies=[Depends(require_perm("reports.view"))])
 async def sales_summary(
     branch_id: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -44,7 +47,7 @@ async def sales_summary(
     }
 
 
-@router.get("/purchase-summary")
+@router.get("/purchase-summary", dependencies=[Depends(require_perm("reports.view"))])
 async def purchase_summary(
     branch_id: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -68,7 +71,7 @@ async def purchase_summary(
     }
 
 
-@router.get("/tax-summary")
+@router.get("/tax-summary", dependencies=[Depends(require_perm("reports.view"))])
 async def tax_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -99,9 +102,11 @@ async def tax_summary(
     }
 
 
-@router.get("/stock-movement")
+@router.get("/stock-movement", dependencies=[Depends(require_perm("reports.view"))])
 async def stock_movement(
     branch_id: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
@@ -129,10 +134,19 @@ async def stock_movement(
             "transfers_in": ti, "transfers_out": tto,
             "adjustments": adj, "closing": closing, "variance": closing - base,
         })
+    # Python-side sort — these rows are computed in this handler, not stored.
+    # When the row generation moves to a real query, switch to resolve_sort().
+    sortable = {
+        "item_name", "sku", "opening", "purchases_in", "sales_out",
+        "transfers_in", "transfers_out", "adjustments", "closing", "variance",
+    }
+    key = sort_by if sort_by in sortable else "item_name"
+    reverse = (sort_order or "asc").strip().lower() == "desc"
+    rows.sort(key=lambda r: r.get(key), reverse=reverse)
     return {"branch_id": branch_id, **paged(rows, total, sk, lim)}
 
 
-@router.get("/branch-comparison")
+@router.get("/branch-comparison", dependencies=[Depends(require_perm("reports.view"))])
 async def branch_comparison(db: AsyncSession = Depends(get_db)):
     return [
         {"branch": "Anna Nagar", "code": "AN", "sales": 124850, "purchases": 48200, "transactions": 248, "margin_pct": 24.8},
@@ -142,7 +156,7 @@ async def branch_comparison(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.get("/margin-analysis")
+@router.get("/margin-analysis", dependencies=[Depends(require_perm("reports.view"))])
 async def margin_analysis(db: AsyncSession = Depends(get_db)):
     return {
         "by_category": [

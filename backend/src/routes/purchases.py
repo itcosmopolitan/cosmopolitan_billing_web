@@ -1,14 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
-from sqlalchemy.orm import selectinload
-from src.database import get_db
-from src.models import PurchaseBill, PurchaseLineItem, ItemStock, VendorReturn, ReturnLineItem, Vendor
-from src.pagination import paged, normalize_limit, normalize_skip
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
 import uuid
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from src.database import get_db
+from src.models import PurchaseBill, PurchaseLineItem, ReturnLineItem, Vendor, VendorReturn
+from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.routes._atomic import adjust_stock_atomic
+from src.security import require_perm
 
 router = APIRouter()
 
@@ -106,7 +110,7 @@ async def _purchase_bills_summary(db: AsyncSession, conds):
 
 
 # ─── LIST ─────────────────────────────────────────────────────────────────────
-@router.get("/")
+@router.get("/", dependencies=[Depends(require_perm("purchases.view"))])
 async def list_bills(
     branch_id: Optional[str] = None,
     vendor_id: Optional[str] = None,
@@ -114,6 +118,8 @@ async def list_bills(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
@@ -121,10 +127,27 @@ async def list_bills(
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to)
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "number": PurchaseBill.number,
+            "vendor_name": PurchaseBill.vendor_name,
+            "branch_id": PurchaseBill.branch_id,
+            "date": PurchaseBill.date,
+            "due_date": PurchaseBill.due_date,
+            "total": PurchaseBill.total,
+            "paid_amount": PurchaseBill.paid_amount,
+            "balance_due": (PurchaseBill.total - PurchaseBill.paid_amount),
+            "status": PurchaseBill.status,
+            "created_at": PurchaseBill.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
     q = (
         select(PurchaseBill)
         .options(selectinload(PurchaseBill.line_items))
-        .order_by(PurchaseBill.created_at.desc())
     )
     if conds:
         q = q.where(and_(*conds))
@@ -133,14 +156,14 @@ async def list_bills(
     else:
         count_r = await db.execute(select(func.count(PurchaseBill.id)))
     total = int(count_r.scalar() or 0)
-    result = await db.execute(q.offset(sk).limit(lim))
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     bills = result.unique().scalars().all()
     out = [_bill_dict(b, b.line_items) for b in bills]
     summary = await _purchase_bills_summary(db, conds)
     return paged(out, total, sk, lim, summary=summary)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
-@router.get("/{bill_id}")
+@router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
 async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()
@@ -150,8 +173,13 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
     return _bill_dict(b, li_res.scalars().all())
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
-@router.post("/", status_code=201)
+@router.post("/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
 async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db)):
+    if not data.items:
+        raise HTTPException(400, "Purchase bill must have at least one line item")
+    for i in data.items:
+        if not i.name or i.qty <= 0:
+            raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
     subtotal  = sum(i.qty * i.cost for i in data.items)
     tax_total = sum(i.qty * i.cost * i.tax_rate / 100 for i in data.items)
@@ -188,29 +216,21 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db)):
             line_total=round(item.qty * item.cost, 2),
         )
         db.add(li)
-        # Auto-update stock (add to inventory on GRN)
+        # Auto-update stock atomically (single UPDATE; creates the stock row
+        # if missing). Replaces a read-modify-write race.
         if item.item_id:
-            sq = select(ItemStock).where(and_(
-                ItemStock.item_id == item.item_id,
-                ItemStock.branch_id == data.branch_id,
-            ))
-            sr = await db.execute(sq)
-            stock = sr.scalar_one_or_none()
-            if stock:
-                stock.quantity += item.qty
-            else:
-                db.add(ItemStock(
-                    id=str(uuid.uuid4()),
-                    item_id=item.item_id,
-                    branch_id=data.branch_id,
-                    quantity=item.qty,
-                ))
+            await adjust_stock_atomic(
+                db,
+                item_id=item.item_id,
+                branch_id=data.branch_id,
+                delta=item.qty,
+            )
 
     await db.commit()
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
-@router.post("/{bill_id}/payment")
+@router.post("/{bill_id}/payment", dependencies=[Depends(require_perm("purchases.edit"))])
 async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()
@@ -242,13 +262,15 @@ class VendorReturnCreate(BaseModel):
     items: List[ReturnLine]
     notes: Optional[str] = None
 
-@router.get("/returns/")
+@router.get("/returns/", dependencies=[Depends(require_perm("purchases.view"))])
 async def list_returns(
     vendor_id: Optional[str] = None,
     branch_id: Optional[str] = None,
     status: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
@@ -266,10 +288,26 @@ async def list_returns(
         conds.append(VendorReturn.date >= date_from)
     if date_to:
         conds.append(VendorReturn.date <= date_to)
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "number": VendorReturn.number,
+            "bill_number": VendorReturn.bill_number,
+            "vendor_name": VendorReturn.vendor_name,
+            "branch_id": VendorReturn.branch_id,
+            "date": VendorReturn.date,
+            "total": VendorReturn.total,
+            "credited_amount": VendorReturn.credited_amount,
+            "status": VendorReturn.status,
+            "created_at": VendorReturn.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
     q = (
         select(VendorReturn)
         .options(selectinload(VendorReturn.line_items))
-        .order_by(VendorReturn.created_at.desc())
     )
     if conds:
         q = q.where(and_(*conds))
@@ -278,12 +316,12 @@ async def list_returns(
     else:
         count_r = await db.execute(select(func.count(VendorReturn.id)))
     total = int(count_r.scalar() or 0)
-    result = await db.execute(q.offset(sk).limit(lim))
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     returns = result.unique().scalars().all()
     out = [_return_dict(r, r.line_items) for r in returns]
     return paged(out, total, sk, lim)
 
-@router.get("/returns/{return_id}")
+@router.get("/returns/{return_id}", dependencies=[Depends(require_perm("purchases.view"))])
 async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(VendorReturn).where(VendorReturn.id == return_id))
     r = result.scalar_one_or_none()
@@ -292,7 +330,7 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == return_id))
     return _return_dict(r, li_res.scalars().all())
 
-@router.post("/returns/", status_code=201)
+@router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
 async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get_db)):
     bill_result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == data.bill_id))
     bill = bill_result.scalar_one_or_none()
@@ -349,7 +387,7 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == ret.id))
     return _return_dict(ret, li_res.scalars().all())
 
-@router.post("/returns/{return_id}/approve")
+@router.post("/returns/{return_id}/approve", dependencies=[Depends(require_perm("purchases.edit"))])
 async def approve_return(return_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(VendorReturn).where(VendorReturn.id == return_id))
     ret = result.scalar_one_or_none()

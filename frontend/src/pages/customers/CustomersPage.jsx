@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { customersAPI, branchesAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 export default function CustomersPage() {
+  const can = useCan()
   const [search, setSearch]     = useState('')
   const [typeF, setTypeF]       = useState('')
   const [showAdd, setShowAdd]   = useState(false)
@@ -14,6 +16,8 @@ export default function CustomersPage() {
   const [custTotal, setCustTotal] = useState(0)
   const [custSkip, setCustSkip] = useState(0)
   const [custLimit, setCustLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [custSortBy, setCustSortBy] = useState('name')
+  const [custSortOrder, setCustSortOrder] = useState('asc')
   const [custSummary, setCustSummary] = useState(null)
   const [branches, setBranches] = useState([])
   const [loading, setLoading]   = useState(true)
@@ -49,6 +53,8 @@ export default function CustomersPage() {
         const raw = await customersAPI.list({
           skip: custSkip,
           limit: custLimit,
+          sort_by: custSortBy,
+          sort_order: custSortOrder,
           search: search || undefined,
           customer_type: typeF || undefined,
         })
@@ -79,7 +85,17 @@ export default function CustomersPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [custSkip, custLimit, search, typeF, listVersion])
+  }, [custSkip, custLimit, search, typeF, listVersion, custSortBy, custSortOrder])
+
+  const onSort = (key) => {
+    setCustSkip(0)
+    if (custSortBy === key) {
+      setCustSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setCustSortBy(key)
+    setCustSortOrder('asc')
+  }
 
   const totals = useMemo(() => ({
     total:       custTotal,
@@ -140,7 +156,9 @@ export default function CustomersPage() {
           exportToCSV(exportData, `Customers_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Customers exported')
         }}>↓ Export</button>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>+ Add Customer</button>
+        {can('customers.create') && (
+          <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>+ Add Customer</button>
+        )}
       </SectionHeader>
 
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
@@ -163,7 +181,18 @@ export default function CustomersPage() {
         {customers.length === 0 ? <EmptyState icon="👥" title="No customers found" /> : (
           <table className="data-table">
             <thead>
-              <tr><th>Customer</th><th>Contact</th><th>Type</th><th>Branch</th><th className="text-right">Credit Limit</th><th className="text-right">Outstanding</th><th style={{width:100}}>Credit Used</th><th className="text-right">Total Purchases</th><th>Status</th><th></th></tr>
+              <tr>
+                <SortableHeader label="Customer" sortKey="name" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
+                <SortableHeader label="Contact" sortKey="phone" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
+                <SortableHeader label="Type" sortKey="customer_type" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
+                <th>Branch</th>
+                <SortableHeader label="Credit Limit" sortKey="credit_limit" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
+                <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
+                <th style={{width:100}}>Credit Used</th>
+                <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
+                <th>Status</th>
+                <th></th>
+              </tr>
             </thead>
             <tbody>
               {customers.map(c => {
@@ -191,7 +220,9 @@ export default function CustomersPage() {
                     <td>
                       <div style={{ display:'flex', gap:4 }}>
                         <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(c)}>View</button>
-                        <button className="btn btn-ghost btn-xs">Edit</button>
+                        {can('customers.edit') && (
+                          <button className="btn btn-ghost btn-xs">Edit</button>
+                        )}
                       </div>
                     </td>
                   </tr>

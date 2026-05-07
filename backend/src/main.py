@@ -1,16 +1,27 @@
 """
-RetailOS Pro — FastAPI Backend
+Cosmopolitan Pro — FastAPI Backend
 Multi-branch retail billing & POS platform
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from src import config
-from src.database import get_engine, Base
+from src.database import init_schema
 from src.routes import (
-    auth, branches, items, customers, vendors,
-    sales, purchases, transfers, cash, reports, users, dashboard
+    auth,
+    branches,
+    cash,
+    customers,
+    dashboard,
+    items,
+    permissions,
+    purchases,
+    reports,
+    roles,
+    sales,
+    transfers,
+    users,
+    vendors,
 )
 
 # ─── Load Configuration ────────────────────────────────────────────────────
@@ -49,12 +60,13 @@ app.include_router(transfers.router,  prefix=f"{PREFIX}/transfers", tags=["Trans
 app.include_router(cash.router,       prefix=f"{PREFIX}/cash",      tags=["Cash"])
 app.include_router(reports.router,    prefix=f"{PREFIX}/reports",   tags=["Reports"])
 app.include_router(users.router,      prefix=f"{PREFIX}/users",     tags=["Users"])
+app.include_router(roles.router,       prefix=f"{PREFIX}/roles",       tags=["Roles"])
+app.include_router(permissions.router, prefix=f"{PREFIX}/permissions", tags=["Permissions"])
 
 @app.on_event("startup")
 async def startup():
-    engine = get_engine()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Creates tables, applies additive column migrations, backfills role_id (D6).
+    await init_schema()
 
 @app.get("/api/health")
 async def health():

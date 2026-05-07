@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
-from sqlalchemy.orm import selectinload
-from src.database import get_db
-from src.models import Item, ItemStock, Category
-from src.pagination import paged, normalize_limit, normalize_skip
-from pydantic import BaseModel
-from typing import Optional, List
 import uuid
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import and_, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from src.database import get_db
+from src.models import Item, ItemStock
+from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.routes._atomic import set_stock_atomic
+from src.security import require_perm
 
 router = APIRouter()
 
@@ -36,12 +40,34 @@ class StockAdjustRequest(BaseModel):
     reason: str
     notes: Optional[str] = None
 
-@router.get("/")
+
+class ItemPatch(BaseModel):
+    """Partial item update body. Excludes immutable / derived fields like
+    `id`, `sku` (managed by create), `active` (use a separate deactivation
+    endpoint when added). `data: dict` + setattr would have allowed any
+    column to be flipped from a PATCH."""
+    name: Optional[str] = None
+    barcode: Optional[str] = None
+    category_id: Optional[str] = None
+    brand: Optional[str] = None
+    unit: Optional[str] = None
+    cost_price: Optional[float] = None
+    selling_price: Optional[float] = None
+    tax_rate: Optional[float] = None
+    hsn_code: Optional[str] = None
+    reorder_level: Optional[int] = None
+    emoji: Optional[str] = None
+    batch_tracking: Optional[bool] = None
+    expiry_tracking: Optional[bool] = None
+
+@router.get("/", dependencies=[Depends(require_perm("items.view", "pos.use"))])
 async def list_items(
     search: Optional[str] = None,
     category_id: Optional[str] = None,
     branch_id: Optional[str] = "br-001",
     status: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
@@ -59,7 +85,29 @@ async def list_items(
     if category_id:
         cq = cq.where(Item.category_id == category_id)
     total = int((await db.execute(cq)).scalar() or 0)
-    result = await db.execute(q.order_by(Item.name).offset(sk).limit(lim))
+    # NB: `available_stock` is a per-branch lookup done in Python below, not a
+    # column on Item — we can't sort by it at the SQL level without a join. If
+    # that becomes important, restructure the query to join ItemStock and add
+    # `available_stock` to the allow-list as a query expression.
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "name": Item.name,
+            "sku": Item.sku,
+            "barcode": Item.barcode,
+            "category_id": Item.category_id,
+            "cost_price": Item.cost_price,
+            "selling_price": Item.selling_price,
+            "tax_rate": Item.tax_rate,
+            "reorder_level": Item.reorder_level,
+            "created_at": Item.created_at,
+            "updated_at": Item.updated_at,
+        },
+        default_key="name",
+        default_order="asc",
+    )
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     items = result.scalars().all()
     ids = [it.id for it in items]
     stock_by_item = {}
@@ -92,7 +140,7 @@ async def list_items(
         })
     return paged(out, total, sk, lim)
 
-@router.post("/")
+@router.post("/", dependencies=[Depends(require_perm("items.create"))])
 async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
     item = Item(
         id=str(uuid.uuid4()),
@@ -122,13 +170,13 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"id": item.id, "message": "Item created"}
 
-@router.put("/{item_id}")
+@router.put("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
 async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Item).where(Item.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
-    
+
     item.name = data.name
     item.sku = data.sku or item.sku
     item.barcode = data.barcode
@@ -142,30 +190,31 @@ async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends
     item.reorder_level = data.reorder_level
     item.batch_tracking = data.batch_tracking
     item.expiry_tracking = data.expiry_tracking
-    
+
     await db.commit()
     await db.refresh(item)
     return {"id": item.id, "message": "Item updated"}
 
-@router.patch("/{item_id}")
-async def patch_item(item_id: str, data: dict, db: AsyncSession = Depends(get_db)):
+@router.patch("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
+async def patch_item(item_id: str, data: ItemPatch, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Item).where(Item.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
-    for k, v in data.items():
-        if hasattr(item, k):
-            setattr(item, k, v)
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(item, k, v)
     await db.commit()
     return {"message": "Updated"}
 
-@router.post("/adjust")
+@router.post("/adjust", dependencies=[Depends(require_perm("items.adjust"))])
 async def adjust_stock(data: StockAdjustRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ItemStock).where(ItemStock.item_id == data.item_id, ItemStock.branch_id == data.branch_id))
-    stock = result.scalar_one_or_none()
-    if not stock:
-        stock = ItemStock(id=str(uuid.uuid4()), item_id=data.item_id, branch_id=data.branch_id, quantity=0)
-        db.add(stock)
-    stock.quantity = data.new_qty
+    if data.new_qty < 0:
+        raise HTTPException(400, "new_qty must be >= 0")
+    await set_stock_atomic(
+        db,
+        item_id=data.item_id,
+        branch_id=data.branch_id,
+        new_qty=data.new_qty,
+    )
     await db.commit()
     return {"message": "Stock adjusted"}

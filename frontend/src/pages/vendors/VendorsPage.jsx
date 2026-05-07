@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { vendorsAPI, purchasesAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, PaginationBar } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 
 export default function VendorsPage() {
+  const can = useCan()
   const [search, setSearch]   = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
@@ -14,6 +16,8 @@ export default function VendorsPage() {
   const [vendorTotal, setVendorTotal] = useState(0)
   const [venSkip, setVenSkip] = useState(0)
   const [venLimit, setVenLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [venSortBy, setVenSortBy] = useState('name')
+  const [venSortOrder, setVenSortOrder] = useState('asc')
   const [loading, setLoading] = useState(true)
   const [listVersion, setListVersion] = useState(0)
   const [editingVendor, setEditingVendor] = useState(null)
@@ -29,6 +33,8 @@ export default function VendorsPage() {
       const raw = await vendorsAPI.list({
         skip: venSkip,
         limit: venLimit,
+        sort_by: venSortBy,
+        sort_order: venSortOrder,
         search: search || undefined,
       })
       const { items, total } = unwrapPaged(raw)
@@ -41,7 +47,20 @@ export default function VendorsPage() {
     } finally {
       setLoading(false)
     }
-  }, [venSkip, venLimit, search, listVersion])
+    // listVersion is the manual cache-bust knob — bumping it triggers a
+    // re-fetch (used by save/edit/delete handlers below). Keep it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venSkip, venLimit, search, listVersion, venSortBy, venSortOrder])
+
+  const onSort = (key) => {
+    setVenSkip(0)
+    if (venSortBy === key) {
+      setVenSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setVenSortBy(key)
+    setVenSortOrder('asc')
+  }
 
   useEffect(() => {
     fetchVendors()
@@ -54,7 +73,7 @@ export default function VendorsPage() {
   const save = async () => {
     if (!form.name) { toast.error('Vendor name required'); return }
     try {
-      const data = await vendorsAPI.create({
+      await vendorsAPI.create({
         name: form.name,
         contact_person: form.contact_person,
         phone: form.phone,
@@ -90,7 +109,7 @@ export default function VendorsPage() {
   const saveEdit = async () => {
     if (!form.name) { toast.error('Vendor name required'); return }
     try {
-      const data = await vendorsAPI.update(editingVendor.id, {
+      await vendorsAPI.update(editingVendor.id, {
         name: form.name,
         contact_person: form.contact_person,
         phone: form.phone,
@@ -153,7 +172,9 @@ export default function VendorsPage() {
           exportToCSV(exportData, `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Vendors exported')
         }}>↓ Export</button>
-        <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
+        {can('vendors.create') && (
+          <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
+        )}
       </SectionHeader>
 
       <div className="grid-kpi" style={{marginBottom:20}}>
@@ -170,7 +191,17 @@ export default function VendorsPage() {
       <Card bodyPadding={false}>
         {vendors.length === 0 ? <EmptyState icon="🏭" title="No vendors found" /> : (
           <table className="data-table">
-            <thead><tr><th>Vendor</th><th>Contact</th><th>GSTIN</th><th>Payment Terms</th><th className="text-right">Outstanding</th><th className="text-right">Total Purchases</th><th></th></tr></thead>
+            <thead>
+              <tr>
+                <SortableHeader label="Vendor" sortKey="name" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                <SortableHeader label="Contact" sortKey="contact_person" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                <th>GSTIN</th>
+                <SortableHeader label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                <th></th>
+              </tr>
+            </thead>
             <tbody>
               {vendors.map(v => (
                 <tr key={v.id}>
@@ -188,7 +219,9 @@ export default function VendorsPage() {
                   <td className="text-right mono">{fmt(v.total_purchases)}</td>
                   <td>
                     <div style={{display:'flex',gap:4}}>
-                      <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
+                      {can('vendors.edit') && (
+                        <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
+                      )}
                       <button className="btn btn-primary btn-xs" onClick={() => openHistory(v)}>History</button>
                     </div>
                   </td>

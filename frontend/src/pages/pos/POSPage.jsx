@@ -2,11 +2,22 @@ import { useState, useEffect, useRef } from 'react'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
 import { itemsAPI, customersAPI, salesAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { fetchAllList } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { PRODUCTS, CUSTOMERS } from '@/utils/seedData'
-import { Modal, Chip } from '@/components/ui'
+import { Modal } from '@/components/ui'
 import { Receipt } from '@/components/Receipt'
+import CartRow from './CartRow'
+import PanelDragHandle from './PanelDragHandle'
+import {
+  POS_STORAGE_SPLIT,
+  POS_STORAGE_LEADING,
+  POS_DRAG_MIME,
+  readStoredSplit,
+  readStoredLeading,
+  leadingPanelFromDrop,
+} from './posDrag'
 
 const mapSeedProductsForBranch = (branchId) =>
   (PRODUCTS || []).map((p) => ({
@@ -29,37 +40,8 @@ const mapSeedProductsForBranch = (branchId) =>
 const mapSeedCustomersForBranch = (branchId) =>
   (CUSTOMERS || []).filter((c) => c.active !== false && (!c.branchId || c.branchId === branchId))
 
-const POS_STORAGE_SPLIT = 'pos.leftPaneRatio'
-const POS_STORAGE_LEADING = 'pos.leadingPanel'
-const POS_DRAG_MIME = 'application/x-pos-panel'
-
-function readStoredSplit() {
-  try {
-    const v = Number(localStorage.getItem(POS_STORAGE_SPLIT))
-    if (Number.isFinite(v) && v >= 30 && v <= 70) return v
-  } catch {
-    /* ignore */
-  }
-  return 50
-}
-
-function readStoredLeading() {
-  try {
-    const v = localStorage.getItem(POS_STORAGE_LEADING)
-    if (v === 'cart' || v === 'products') return v
-  } catch {
-    /* ignore */
-  }
-  return 'products'
-}
-
-/** dropSide 'left'|'right', dragged 'products'|'cart' → which panel is on the left */
-function leadingPanelFromDrop(dropSide, dragged) {
-  if (dropSide === 'left') return dragged
-  return dragged === 'products' ? 'cart' : 'products'
-}
-
 export default function POSPage() {
+  const can = useCan()
   const [search, setSearch] = useState('')
   const [activeCat, setActiveCat] = useState('all')
   const [showHeld, setShowHeld] = useState(false)
@@ -81,9 +63,13 @@ export default function POSPage() {
   const { activeBranch } = useAppStore()
   const { cart, customer, discountPct, discountAmt, heldBills, paymentMethod } = store
 
-  // Fetch products (branch stock) and customers
+  // Fetch products (branch stock) and customers when the active branch
+  // changes. fetchData is intentionally NOT in the dep array — it's
+  // declared below the effect and only references state that's already
+  // captured by activeBranch.id.
   useEffect(() => {
     fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBranch?.id])
 
   const fetchData = async () => {
@@ -94,10 +80,10 @@ export default function POSPage() {
         fetchAllList(itemsAPI.list, { branch_id: branchId }),
         fetchAllList(customersAPI.list),
       ])
-      
+
       setProducts(itemsData || [])
       setCustomers(customersData || [])
-      
+
       // Extract unique categories from products
       if (itemsData && itemsData.length > 0) {
         const uniqueCats = [...new Set(itemsData.map(p => p.categoryId))]
@@ -137,6 +123,12 @@ export default function POSPage() {
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
+    // store + handleComplete are deliberately omitted from the dep array.
+    // The shortcuts close over the latest cart/paymentMethod/customer via
+    // the named deps; including the function refs would re-bind the
+    // listener on every render. Properly fixing this needs useCallback
+    // around handleComplete and a stable store ref — out of scope here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart, paymentMethod, customer])
 
   const filtered = products.filter((p) => {
@@ -148,14 +140,13 @@ export default function POSPage() {
   const handleComplete = async () => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
-    
+
     setCompleting(true)
     try {
       const sub = store.getSubtotal()
       const tax = store.getTaxTotal()
       const disc = store.getDiscount()
-      const total = store.getTotal()
-      
+
       // Call API to create sale
       const result = await salesAPI.create({
         customer_id: customer?.id || null,
@@ -181,7 +172,7 @@ export default function POSPage() {
         payment_mode: paymentMethod,
         notes: store.notes,
       })
-      
+
       setLastSale({
         number: result.number,
         total: result.total,
@@ -192,7 +183,7 @@ export default function POSPage() {
         items: cart.map(i => ({ name: i.name, qty: i.qty, price: i.price, lineTotal: i.lineTotal })),
         id: result.id,
       })
-      
+
       setShowComplete(true)
       store.clearCart()
       toast.success(`Sale ${result.number} completed!`)
@@ -517,7 +508,7 @@ export default function POSPage() {
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
-                      disableDiscount={hasBillLevelDiscount}
+                      disableDiscount={hasBillLevelDiscount || !can('pos.discount')}
                     />
                   ))}
                 </tbody>
@@ -526,28 +517,30 @@ export default function POSPage() {
           )}
         </div>
 
-        {/* Discount row */}
-        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)' }}>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <input
-              className="form-input"
-              style={{ flex: 1, padding: '7px 10px', fontSize: 12, opacity: hasLineLevelDiscount ? 0.6 : 1 }}
-              placeholder={hasLineLevelDiscount ? 'Clear line-item discounts to use bill discount' : 'Bill discount % (>10% needs approval)'}
-              type="number"
-              min="0"
-              max="100"
-              value={discountPct || ''}
-              onChange={(e) => store.setDiscount(Number(e.target.value), 0)}
-              disabled={hasLineLevelDiscount}
-            />
-            <input className="form-input" style={{ width: 90, padding: '7px 10px', fontSize: 12 }} placeholder="Coupon" />
-          </div>
-          {(hasLineLevelDiscount || hasBillLevelDiscount) && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-              {hasLineLevelDiscount ? 'Using line-item discount mode.' : 'Using bill-level discount mode.'}
+        {/* Discount row — gated on pos.discount; cashier role does not have it. */}
+        {can('pos.discount') && (
+          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                className="form-input"
+                style={{ flex: 1, padding: '7px 10px', fontSize: 12, opacity: hasLineLevelDiscount ? 0.6 : 1 }}
+                placeholder={hasLineLevelDiscount ? 'Clear line-item discounts to use bill discount' : 'Bill discount % (>10% needs approval)'}
+                type="number"
+                min="0"
+                max="100"
+                value={discountPct || ''}
+                onChange={(e) => store.setDiscount(Number(e.target.value), 0)}
+                disabled={hasLineLevelDiscount}
+              />
+              <input className="form-input" style={{ width: 90, padding: '7px 10px', fontSize: 12 }} placeholder="Coupon" />
             </div>
-          )}
-        </div>
+            {(hasLineLevelDiscount || hasBillLevelDiscount) && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                {hasLineLevelDiscount ? 'Using line-item discount mode.' : 'Using bill-level discount mode.'}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Totals */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-raised)' }}>
@@ -628,169 +621,5 @@ export default function POSPage() {
       </Modal>
 
     </div>
-  )
-}
-
-function PanelDragHandle({ panel, onDragEnd, title }) {
-  return (
-    <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData(POS_DRAG_MIME, panel)
-        e.dataTransfer.setData('text/plain', panel)
-        e.dataTransfer.effectAllowed = 'move'
-      }}
-      onDragEnd={onDragEnd}
-      title={title}
-      aria-label={title}
-      style={{
-        flexShrink: 0,
-        cursor: 'grab',
-        padding: '6px 7px',
-        borderRadius: 8,
-        border: '1px solid var(--border-default)',
-        background: 'var(--bg-raised)',
-        color: 'var(--text-muted)',
-        fontSize: 11,
-        fontWeight: 700,
-        lineHeight: 1,
-        letterSpacing: -0.5,
-        userSelect: 'none',
-      }}
-    >
-      ⋮⋮
-    </div>
-  )
-}
-
-function lineMarginPct(unitPrice, costPrice) {
-  const p = Number(unitPrice)
-  const c = Number(costPrice)
-  if (!p || p <= 0) return null
-  return ((p - c) / p) * 100
-}
-
-function CartRow({ item, onQtyChange, onRemove, onDiscChange, onDiscTypeChange, disableDiscount }) {
-  const marginPct = lineMarginPct(item.price, item.costPrice)
-  const marginPositive = marginPct != null && marginPct >= 0
-  const hsn = item.hsnCode || '—'
-  const hasStock = item.availableStock != null || item.available_stock != null
-  const stockQty = hasStock ? Number(item.availableStock ?? item.available_stock) || 0 : null
-  const stockExceeded = stockQty != null && item.qty > stockQty
-  const discType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
-  const discValue = Number(item.lineDiscountValue ?? item.lineDiscountPct ?? item.lineDiscountFlat ?? 0) || 0
-
-  return (
-    <tr
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-raised)' }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-    >
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', minWidth: 230 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 18, lineHeight: 1 }}>{item.emoji || '📦'}</span>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.35 }}>{item.name}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-              <span style={{ fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
-              <span style={{ fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty ?? '—'}</span>
-              {stockExceeded && (
-                <span
-                  title="Stock exceeded"
-                  style={{ color: 'var(--amber)', cursor: 'help', fontSize: 12, lineHeight: 1 }}
-                  aria-label="Stock exceeded"
-                >
-                  ⚠️
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <input
-            className="form-input"
-            type="number"
-            min={1}
-            step={1}
-            value={item.qty}
-            onChange={(e) => {
-              const v = parseInt(e.target.value, 10)
-              if (Number.isFinite(v)) onQtyChange(v)
-            }}
-            style={{ width: 52, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
-          />
-        </div>
-      </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }}>
-        {fmt(item.price)}
-      </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>
-        {marginPct == null ? (
-          <span style={{ color: 'var(--text-muted)' }}>—</span>
-        ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600, color: marginPositive ? 'var(--green)' : 'var(--red)', fontSize: 12 }}>
-            <span aria-hidden>{marginPositive ? '↑' : '↓'}</span>
-            <span style={{ fontFamily: 'DM Mono, monospace' }}>{marginPct.toFixed(1)}%</span>
-          </span>
-        )}
-      </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: disableDiscount ? 0.6 : 1 }}>
-          <input
-            className="form-input"
-            type="number"
-            min={0}
-            max={discType === 'pct' ? 100 : undefined}
-            step={discType === 'pct' ? 0.5 : 1}
-            value={discValue || ''}
-            onChange={(e) => onDiscChange(Number(e.target.value) || 0)}
-            disabled={disableDiscount}
-            style={{ width: 86, padding: '4px 7px', fontSize: 12 }}
-          />
-          <div style={{ display: 'inline-flex', border: '1px solid var(--border-default)', borderRadius: 7, overflow: 'hidden' }}>
-            <button
-              type="button"
-              onClick={() => onDiscTypeChange('pct')}
-              disabled={disableDiscount}
-              style={{
-                border: 'none',
-                borderRight: '1px solid var(--border-default)',
-                background: discType === 'pct' ? 'var(--accent-bg)' : 'transparent',
-                color: discType === 'pct' ? 'var(--accent)' : 'var(--text-muted)',
-                cursor: disableDiscount ? 'not-allowed' : 'pointer',
-                fontSize: 11,
-                padding: '4px 7px',
-                fontWeight: 600,
-              }}
-            >
-              %
-            </button>
-            <button
-              type="button"
-              onClick={() => onDiscTypeChange('flat')}
-              disabled={disableDiscount}
-              style={{
-                border: 'none',
-                background: discType === 'flat' ? 'var(--accent-bg)' : 'transparent',
-                color: discType === 'flat' ? 'var(--accent)' : 'var(--text-muted)',
-                cursor: disableDiscount ? 'not-allowed' : 'pointer',
-                fontSize: 11,
-                padding: '4px 7px',
-                fontWeight: 600,
-              }}
-            >
-              ₹
-            </button>
-          </div>
-        </div>
-      </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)' }}>
-        {fmt(item.lineTotal)}
-      </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'center' }}>
-        <button type="button" onClick={onRemove} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 2px' }} aria-label="Remove line">✕</button>
-      </td>
-    </tr>
   )
 }

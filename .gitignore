@@ -22,3 +22,17 @@ env/
 
 # IDE (optional)
 .idea/
+
+# ─── Local-only / not committed to feature branches ──────────────────────────
+# Agent + tooling configuration kept local. Push these in a separate dedicated
+# commit/PR if/when the team agrees on them — don't sneak them into feature PRs.
+.cursor/
+.github/
+AGENTS.md
+CLAUDE.md
+CONTRIBUTING.md
+# Local engineering docs (worksheet, design notes). docs/ISSUES.md and
+# docs/USERS_AND_ROLES.md were already tracked in HEAD — they remain tracked,
+# but new files added under docs/ are ignored. If you want to push doc changes
+# touch them with `git add -f` deliberately.
+docs/

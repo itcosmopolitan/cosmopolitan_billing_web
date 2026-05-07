@@ -2,34 +2,45 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
+import { authAPI, permissionsAPI } from '@/api'
 
+// Demo accounts shown on the login screen. Email + password MUST match what
+// `backend/src/seed.py` writes — these are passed straight to the real
+// /auth/login endpoint (Phase 1.5 — fixes ISS-002).
 const DEMO_USERS = [
-  { email: 'suresh@srimurugan.com', password: 'admin123', name: 'Suresh Anand', role: 'super_admin', avatar: 'SA' },
-  { email: 'kavitha@srimurugan.com', password: 'branch123', name: 'Kavitha R.', role: 'branch_manager', avatar: 'KR' },
-  { email: 'arjun@srimurugan.com', password: 'cash123', name: 'Arjun M.', role: 'cashier', avatar: 'AM' },
+  { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'super_admin',       avatar: 'SA' },
+  { email: 'kavitha@srimurugan.com', password: 'kavitha123', name: 'Kavitha R.',   role: 'branch_manager',    avatar: 'KR' },
+  { email: 'arjun@srimurugan.com',   password: 'arjun123',   name: 'Arjun M.',     role: 'cashier',           avatar: 'AM' },
+  { email: 'deepa@srimurugan.com',   password: 'deepa123',   name: 'Deepa S.',     role: 'inventory_manager', avatar: 'DS' },
 ]
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const setUser = useAppStore(s => s.setUser)
+  const setSession = useAppStore((s) => s.setSession)
   const [email, setEmail] = useState('suresh@srimurugan.com')
   const [password, setPassword] = useState('admin123')
   const [loading, setLoading] = useState(false)
 
   const handleLogin = async (e) => {
     e.preventDefault()
+    if (loading) return
     setLoading(true)
-    await new Promise(r => setTimeout(r, 600))
-    const user = DEMO_USERS.find(u => u.email === email && u.password === password)
-    if (user) {
-      setUser(user)
-      localStorage.setItem('retailos_token', 'demo-jwt-token')
+    try {
+      const { token, user } = await authAPI.login(email.trim().toLowerCase(), password)
+      if (!token || !user) throw new Error('Malformed login response')
+      localStorage.setItem('retailos_token', token)
+      // Refresh the catalog in case the boot fetch failed (catalog is open
+      // access — this is a cheap call).
+      const catalog = await permissionsAPI.catalog().catch(() => undefined)
+      setSession({ user, permissions: user.permissions || [], permCatalog: catalog })
       toast.success(`Welcome back, ${user.name}!`)
       navigate('/dashboard')
-    } else {
-      toast.error('Invalid credentials. Try a demo account below.')
+    } catch (err) {
+      // Toast already fired by global axios interceptor; nothing else to do.
+      console.error(err)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
@@ -114,7 +125,7 @@ export default function LoginPage() {
         </div>
 
         <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginTop: 20 }}>
-          Sri Murugan Traders Pvt Ltd · Chennai, Tamil Nadu
+          Sri Murugan Traders Pvt Ltd · Maldives operations
         </p>
       </div>
     </div>

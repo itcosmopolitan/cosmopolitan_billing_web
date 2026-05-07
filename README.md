@@ -1,7 +1,6 @@
-# RetailOS Pro 🏪
+# Cosmopolitan Pro
 
-**Multi-branch retail billing, POS, inventory, and management platform**  
-Built for Sri Murugan Traders Pvt Ltd — Chennai, Tamil Nadu
+**Multi-branch retail billing, POS, inventory, and management platform**
 
 ---
 
@@ -11,7 +10,7 @@ Built for Sri Murugan Traders Pvt Ltd — Chennai, Tamil Nadu
 - Touch-friendly product grid with category filter and barcode search
 - Live cart with quantity controls, GST calculation, discounts
 - 4 payment modes: Cash, Card, UPI, Credit
-- Hold & resume multiple bills simultaneously  
+- Hold & resume multiple bills simultaneously
 - Keyboard shortcuts: `F2` search · `F4` hold · `F8` complete sale
 - **Thermal receipt printing + WhatsApp share**
 
@@ -62,19 +61,21 @@ chmod +x run.sh && ./run.sh
 run.bat
 ```
 
-Open **http://localhost:3000**  
+Open **http://localhost:3000**
 API Docs: **http://localhost:8080/api/docs**
 
 ---
 
 ## 🔐 Demo Accounts
 
+Passwords are bcrypt-hashed by `seed.py` (the plaintext below is what to type at the login screen).
+
 | Name | Email | Password | Role |
 |---|---|---|---|
 | Suresh Anand | suresh@srimurugan.com | admin123 | Super Admin |
-| Kavitha R. | kavitha@srimurugan.com | branch123 | Branch Manager |
-| Arjun M. | arjun@srimurugan.com | cash123 | Cashier |
-| Deepa S. | deepa@srimurugan.com | inv123 | Inventory Mgr |
+| Kavitha R. | kavitha@srimurugan.com | kavitha123 | Branch Manager |
+| Arjun M. | arjun@srimurugan.com | arjun123 | Cashier |
+| Deepa S. | deepa@srimurugan.com | deepa123 | Inventory Mgr |
 
 ---
 
@@ -92,20 +93,27 @@ API Docs: **http://localhost:8080/api/docs**
 ## 📁 Structure
 
 ```
-retailos/
+cosmopolitan_billing_web/
 ├── frontend/src/
 │   ├── pages/          # 12 full-featured pages
 │   ├── components/     # UI library + Receipt + Layout
 │   ├── store/          # Zustand (app state + POS cart)
 │   ├── api/            # Axios API client
+│   ├── auth/           # useCan, RequireAuth/RequirePerm guards
 │   └── utils/          # Helpers + seed data
 ├── backend/src/
 │   ├── main.py         # FastAPI app
-│   ├── models.py       # 15 ORM models
+│   ├── security.py     # JWT + require_perm dependency
+│   ├── permissions.py  # Permission catalog
+│   ├── system_roles.py # 6 seeded system roles
+│   ├── models.py       # 16+ ORM models
 │   ├── seed.py         # Demo data seeder
-│   └── routes/         # 12 API route files
-├── run.sh              # Mac/Linux launcher
-└── run.bat             # Windows launcher
+│   └── routes/         # 14 API route files (incl. roles, permissions)
+├── docs/               # USERS_AND_ROLES, ISSUES, WORKSHEET
+├── run.sh              # macOS/Linux launcher
+├── run.bat             # Windows launcher
+├── stop.bat            # Windows stop
+└── restart.bat         # Windows restart
 ```
 
 ---

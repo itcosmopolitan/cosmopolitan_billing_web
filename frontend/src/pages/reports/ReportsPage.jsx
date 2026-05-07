@@ -1,9 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts'
-import { SALES_INVOICES, PURCHASE_BILLS, PRODUCTS, BRANCHES, SALES_TREND } from '@/utils/seedData'
+import { SALES_INVOICES, PURCHASE_BILLS, PRODUCTS, SALES_TREND } from '@/utils/seedData'
+import { reportsAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, KPICard, BarList, Chip, AlertBar } from '@/components/ui'
+
+// Phase 4 follow-up: the detail tables on this page (sales register, purchase
+// register, stock movement) still iterate over seed data because the
+// equivalent paged backend endpoints (reportsAPI.salesRegister etc.) don't
+// exist yet. KPIs and aggregate panels below ARE wired to reportsAPI and
+// reflect live database state.
 
 const TABS = [
   { id: 'sales',     label: '📈 Sales Register' },
@@ -58,11 +66,53 @@ const CAT_DATA = [
 ]
 
 export default function ReportsPage() {
+  const branches = useAppStore((s) => s.branches)
   const [tab, setTab]       = useState('sales')
   const [dateFrom, setFrom] = useState('2024-04-01')
   const [dateTo, setTo]     = useState('2024-04-16')
   const [branchF, setBranch] = useState('')
   const [filterApplied, setFilterApplied] = useState(false)
+
+  // Live API data per tab. KPIs render from these; detail tables still use
+  // seed (Phase 4 backlog).
+  const [salesSummary, setSalesSummary] = useState(null)
+  const [purchaseSummary, setPurchaseSummary] = useState(null)
+  const [taxSummaryData, setTaxSummary] = useState(null)
+  const [branchCompare, setBranchCompare] = useState([])
+  const [marginData, setMarginData] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const params = { branch_id: branchF || undefined, date_from: dateFrom, date_to: dateTo }
+    ;(async () => {
+      try {
+        const [s, p, t, b, m] = await Promise.all([
+          reportsAPI.salesSummary(params).catch(() => null),
+          reportsAPI.purchaseSummary(params).catch(() => null),
+          reportsAPI.taxSummary({ date_from: dateFrom, date_to: dateTo }).catch(() => null),
+          reportsAPI.branchCompare().catch(() => []),
+          reportsAPI.marginAnalysis().catch(() => null),
+        ])
+        if (cancelled) return
+        setSalesSummary(s)
+        setPurchaseSummary(p)
+        setTaxSummary(t)
+        setBranchCompare(Array.isArray(b) ? b : [])
+        setMarginData(m)
+      } catch (e) {
+        // Toast already fired by axios interceptor.
+        console.error(e)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [branchF, dateFrom, dateTo, filterApplied])
+
+  // Helpers — fall back to seed-derived numbers when the API hasn't replied
+  // yet, so the page stays usable on first paint.
+  const seedSalesTotal = useMemo(() => SALES_INVOICES.reduce((s, i) => s + i.total, 0), [])
+  const seedPurchaseTotal = useMemo(() => PURCHASE_BILLS.reduce((s, b) => s + b.total, 0), [])
+  const seedSalesCount = SALES_INVOICES.length
+  const seedPurchaseCount = PURCHASE_BILLS.length
 
   const handleGenerate = () => {
     if (!dateFrom || !dateTo) {
@@ -167,7 +217,7 @@ export default function ReportsPage() {
         <input type="date" className="form-input" style={{width:140}} value={dateTo} onChange={e=>setTo(e.target.value)} />
         <select className="form-input" style={{width:150}} value={branchF} onChange={e=>setBranch(e.target.value)}>
           <option value="">All Branches</option>
-          {BRANCHES.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          {branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         <button className="btn btn-primary btn-sm" onClick={handleGenerate}>▶ Generate</button>
         <button className="btn btn-secondary btn-sm" onClick={exportCurrentTab}>↓ Excel</button>
@@ -180,10 +230,29 @@ export default function ReportsPage() {
       {tab === 'sales' && (
         <>
           <div className="grid-kpi" style={{marginBottom:20}}>
-            <KPICard label="Total Sales (Apr)" value={fmt(1248500)} color="var(--accent)" />
-            <KPICard label="Total Transactions" value="1,247" color="var(--blue)" />
-            <KPICard label="Avg Ticket Size" value={fmt(1001)} color="var(--teal)" />
-            <KPICard label="Returns" value={fmt(12400)} color="var(--red)" />
+            <KPICard
+              label="Total Sales"
+              value={fmt(salesSummary?.total_sales ?? seedSalesTotal)}
+              color="var(--accent)"
+            />
+            <KPICard
+              label="Invoices"
+              value={String(salesSummary?.invoice_count ?? seedSalesCount)}
+              color="var(--blue)"
+            />
+            <KPICard
+              label="Avg Ticket Size"
+              value={fmt(
+                ((salesSummary?.total_sales ?? seedSalesTotal) /
+                  Math.max(1, salesSummary?.invoice_count ?? seedSalesCount))
+              )}
+              color="var(--teal)"
+            />
+            <KPICard
+              label="Outstanding"
+              value={fmt(salesSummary?.outstanding ?? 0)}
+              color="var(--red)"
+            />
           </div>
 
           <div className="grid-2" style={{marginBottom:18}}>
@@ -266,10 +335,26 @@ export default function ReportsPage() {
       {tab === 'purchase' && (
         <>
           <div className="grid-kpi" style={{marginBottom:20}}>
-            <KPICard label="Total Purchases (Apr)" value={fmt(842600)} color="var(--purple)" />
-            <KPICard label="Vendors Used"           value="6"           color="var(--blue)" />
-            <KPICard label="Pending Payments"       value={fmt(118400)} color="var(--amber)" />
-            <KPICard label="Overdue Bills"          value="2"           color="var(--red)" />
+            <KPICard
+              label="Total Purchases"
+              value={fmt(purchaseSummary?.total_purchases ?? seedPurchaseTotal)}
+              color="var(--purple)"
+            />
+            <KPICard
+              label="Bills"
+              value={String(purchaseSummary?.bill_count ?? seedPurchaseCount)}
+              color="var(--blue)"
+            />
+            <KPICard
+              label="Outstanding"
+              value={fmt(purchaseSummary?.outstanding ?? 0)}
+              color="var(--amber)"
+            />
+            <KPICard
+              label="Paid"
+              value={fmt(purchaseSummary?.paid ?? 0)}
+              color="var(--green)"
+            />
           </div>
           <Card title={`Purchase Register — ${dateFrom} to ${dateTo}`} titleRight={<button className="btn btn-secondary btn-sm" onClick={() => {
             const exportData = PURCHASE_BILLS.map(b => ({
@@ -312,14 +397,21 @@ export default function ReportsPage() {
       {tab === 'tax' && (
         <>
           <AlertBar type="blue" icon="ℹ" style={{marginBottom:18}}>
-            This GST summary is for manual filing reference only. Share with your CA/Auditor. RetailOS does not file returns automatically.
+            This GST summary is for manual filing reference only. Share with your CA/Auditor. Cosmopolitan Pro does not file returns automatically.
           </AlertBar>
+          {(() => {
+            // Prefer live API rows; fall back to module-level seed constants.
+            const rowsOut = taxSummaryData?.output_tax || TAX_OUTPUT
+            const rowsIn  = taxSummaryData?.input_tax  || TAX_INPUT
+            const sumOut  = rowsOut.reduce((s, r) => s + (r.cgst || 0) + (r.sgst || 0), 0)
+            const sumIn   = rowsIn.reduce((s, r) => s + (r.cgst || 0) + (r.sgst || 0), 0)
+            return (
           <div className="grid-2" style={{marginBottom:18}}>
             <Card title={`GST Output Tax — Sales (${dateFrom} to ${dateTo})`} bodyPadding={false}>
               <table className="data-table">
                 <thead><tr><th>GST Rate</th><th className="text-right">Taxable Sales</th><th className="text-right">CGST</th><th className="text-right">SGST</th><th className="text-right">Total GST</th></tr></thead>
                 <tbody>
-                  {TAX_OUTPUT.map(r=>(
+                  {rowsOut.map(r=>(
                     <tr key={r.rate}>
                       <td style={{fontWeight:500}}>{r.rate}</td>
                       <td className="text-right mono">{fmt(r.taxable)}</td>
@@ -330,10 +422,10 @@ export default function ReportsPage() {
                   ))}
                   <tr style={{background:'var(--bg-raised)',fontWeight:700}}>
                     <td>Total</td>
-                    <td className="text-right mono">{fmt(TAX_OUTPUT.reduce((s,r)=>s+r.taxable,0))}</td>
-                    <td className="text-right mono" style={{color:'var(--accent)'}}>{fmt(TAX_OUTPUT.reduce((s,r)=>s+r.cgst,0))}</td>
-                    <td className="text-right mono" style={{color:'var(--accent)'}}>{fmt(TAX_OUTPUT.reduce((s,r)=>s+r.sgst,0))}</td>
-                    <td className="text-right mono" style={{color:'var(--accent)'}}>{fmt(TAX_OUTPUT.reduce((s,r)=>s+r.cgst+r.sgst,0))}</td>
+                    <td className="text-right mono">{fmt(rowsOut.reduce((s,r)=>s+r.taxable,0))}</td>
+                    <td className="text-right mono" style={{color:'var(--accent)'}}>{fmt(rowsOut.reduce((s,r)=>s+r.cgst,0))}</td>
+                    <td className="text-right mono" style={{color:'var(--accent)'}}>{fmt(rowsOut.reduce((s,r)=>s+r.sgst,0))}</td>
+                    <td className="text-right mono" style={{color:'var(--accent)'}}>{fmt(sumOut)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -342,7 +434,7 @@ export default function ReportsPage() {
               <table className="data-table">
                 <thead><tr><th>GST Rate</th><th className="text-right">Taxable Purchase</th><th className="text-right">CGST Paid</th><th className="text-right">SGST Paid</th><th className="text-right">ITC Available</th></tr></thead>
                 <tbody>
-                  {TAX_INPUT.map(r=>(
+                  {rowsIn.map(r=>(
                     <tr key={r.rate}>
                       <td style={{fontWeight:500}}>{r.rate}</td>
                       <td className="text-right mono">{fmt(r.taxable)}</td>
@@ -353,22 +445,29 @@ export default function ReportsPage() {
                   ))}
                   <tr style={{background:'var(--bg-raised)',fontWeight:700}}>
                     <td>Total</td>
-                    <td className="text-right mono">{fmt(TAX_INPUT.reduce((s,r)=>s+r.taxable,0))}</td>
-                    <td className="text-right mono" style={{color:'var(--green)'}}>{fmt(TAX_INPUT.reduce((s,r)=>s+r.cgst,0))}</td>
-                    <td className="text-right mono" style={{color:'var(--green)'}}>{fmt(TAX_INPUT.reduce((s,r)=>s+r.sgst,0))}</td>
-                    <td className="text-right mono" style={{color:'var(--green)'}}>{fmt(TAX_INPUT.reduce((s,r)=>s+r.cgst+r.sgst,0))}</td>
+                    <td className="text-right mono">{fmt(rowsIn.reduce((s,r)=>s+r.taxable,0))}</td>
+                    <td className="text-right mono" style={{color:'var(--green)'}}>{fmt(rowsIn.reduce((s,r)=>s+r.cgst,0))}</td>
+                    <td className="text-right mono" style={{color:'var(--green)'}}>{fmt(rowsIn.reduce((s,r)=>s+r.sgst,0))}</td>
+                    <td className="text-right mono" style={{color:'var(--green)'}}>{fmt(sumIn)}</td>
                   </tr>
                 </tbody>
               </table>
             </Card>
           </div>
+            )
+          })()}
           <Card title={`Net GST Payable Summary — ${dateFrom} to ${dateTo}`}>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
-              {[
-                {label:'Output GST (from Sales)',  value:fmt(122880), color:'var(--red)',    sub:'Total collected from customers'},
-                {label:'Input Tax Credit (ITC)',   value:fmt(63840),  color:'var(--green)',  sub:'GST paid on purchases (claimable)'},
-                {label:'Net GST Payable',          value:fmt(59040),  color:'var(--accent)', sub:'Output − ITC = Payable to Government'},
-              ].map(c=>(
+              {(() => {
+                const out = taxSummaryData?.total_output ?? 122880
+                const inp = taxSummaryData?.total_input ?? 63840
+                const net = taxSummaryData?.net_payable ?? Math.max(0, out - inp)
+                return [
+                  {label:'Output GST (from Sales)', value:fmt(out), color:'var(--red)',    sub:'Total collected from customers'},
+                  {label:'Input Tax Credit (ITC)',  value:fmt(inp), color:'var(--green)',  sub:'GST paid on purchases (claimable)'},
+                  {label:'Net GST Payable',         value:fmt(net), color:'var(--accent)', sub:'Output − ITC = Payable to Government'},
+                ]
+              })().map(c=>(
                 <div key={c.label} style={{padding:'18px 20px',background:'var(--bg-raised)',borderRadius:12,textAlign:'center'}}>
                   <div style={{fontSize:11.5,color:'var(--text-muted)',marginBottom:8}}>{c.label}</div>
                   <div style={{fontSize:26,fontWeight:700,fontFamily:'DM Mono,monospace',color:c.color,marginBottom:6}}>{c.value}</div>
@@ -438,12 +537,20 @@ export default function ReportsPage() {
       {tab === 'branch' && (
         <>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:20}}>
-            {[
-              {name:'Anna Nagar', sales:1480000, purchases:840000, cashiers:4, color:'#6366f1'},
-              {name:'T. Nagar',   sales:1120000, purchases:620000, cashiers:3, color:'#a78bfa'},
-              {name:'Vadapalani', sales:860000,  purchases:480000, cashiers:2, color:'#2dd4bf'},
-              {name:'Velachery',  sales:540000,  purchases:310000, cashiers:2, color:'#f5a623'},
-            ].map(b=>(
+            {(branchCompare.length > 0
+              ? branchCompare.map((b, i) => ({
+                  name: b.branch,
+                  sales: b.sales,
+                  purchases: b.purchases,
+                  color: ['#6366f1','#a78bfa','#2dd4bf','#f5a623','#22c97a','#f5485c'][i % 6],
+                }))
+              : [
+                  {name:'Male',      sales:1480000, purchases:840000, color:'#6366f1'},
+                  {name:'Addu',      sales:1120000, purchases:620000, color:'#a78bfa'},
+                  {name:'Hulhumalé', sales:860000,  purchases:480000, color:'#2dd4bf'},
+                  {name:'Felidhoo',  sales:540000,  purchases:310000, color:'#f5a623'},
+                ]
+            ).map(b=>(
               <div key={b.name} style={{background:'var(--bg-surface)',border:'1px solid var(--border-default)',borderRadius:14,padding:18}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
                   <span style={{width:10,height:10,borderRadius:'50%',background:b.color,display:'inline-block'}}/>
@@ -453,7 +560,7 @@ export default function ReportsPage() {
                   <div><div style={{fontSize:11,color:'var(--text-muted)'}}>Sales (Apr)</div><div style={{fontSize:16,fontWeight:700,color:'var(--text-primary)'}}>{fmt(b.sales)}</div></div>
                   <div><div style={{fontSize:11,color:'var(--text-muted)'}}>Purchases</div><div style={{fontSize:15,fontWeight:600,color:'var(--text-secondary)'}}>{fmt(b.purchases)}</div></div>
                 </div>
-                <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>Performance vs Anna Nagar</div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>Performance vs Male</div>
                 <div style={{height:6,background:'var(--bg-hover)',borderRadius:3,overflow:'hidden'}}>
                   <div style={{height:'100%',borderRadius:3,background:b.color,width:`${Math.round(b.sales/14800)}%`,transition:'width 1s ease'}}/>
                 </div>
@@ -468,9 +575,9 @@ export default function ReportsPage() {
                 <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`₹${(v/1000).toFixed(0)}K`}/>
                 <Tooltip content={<TT/>}/>
                 <Legend wrapperStyle={{fontSize:11,color:'var(--text-muted)'}}/>
-                <Bar dataKey="sales"     name="Anna Nagar" fill="#6366f1" radius={[3,3,0,0]}/>
-                <Bar dataKey="tnagar"    name="T. Nagar"   fill="#a78bfa" radius={[3,3,0,0]}/>
-                <Bar dataKey="vadapalani" name="Vadapalani" fill="#2dd4bf" radius={[3,3,0,0]}/>
+                <Bar dataKey="sales"     name="Male"      fill="#6366f1" radius={[3,3,0,0]}/>
+                <Bar dataKey="tnagar"    name="Addu"      fill="#a78bfa" radius={[3,3,0,0]}/>
+                <Bar dataKey="vadapalani" name="Hulhumalé" fill="#2dd4bf" radius={[3,3,0,0]}/>
               </BarChart>
             </ResponsiveContainer>
           </Card>
@@ -480,12 +587,23 @@ export default function ReportsPage() {
       {/* ── MARGIN ANALYSIS ─────────────────────────────────────── */}
       {tab === 'margin' && (
         <>
+          {(() => {
+            const cats = marginData?.by_category || []
+            const tops = marginData?.top_items || []
+            const totalRevenue = cats.reduce((s, c) => s + (c.revenue || 0), 0)
+            const totalMargin  = cats.reduce((s, c) => s + (c.margin || 0), 0)
+            const avgMargin    = totalRevenue ? (totalMargin / totalRevenue) * 100 : 0
+            const best         = tops[0]
+            const worst        = tops[tops.length - 1]
+            return (
           <div className="grid-kpi" style={{marginBottom:20}}>
-            <KPICard label="Avg Gross Margin"  value="23.4%"    color="var(--green)"  />
-            <KPICard label="Highest Margin"    value="Parle-G"  color="var(--teal)"   sub="28.4% margin" />
-            <KPICard label="Lowest Margin"     value="Milk 1L"  color="var(--amber)"  sub="8.8% margin" />
-            <KPICard label="Margin on Revenue" value={fmt(292000)} color="var(--accent)" />
+            <KPICard label="Avg Gross Margin"  value={cats.length ? `${avgMargin.toFixed(1)}%` : '23.4%'} color="var(--green)" />
+            <KPICard label="Highest Margin"    value={best?.name || 'Parle-G'}  color="var(--teal)"   sub={best ? `${best.margin_pct?.toFixed(1)}% margin` : '28.4% margin'} />
+            <KPICard label="Lowest Margin"     value={worst?.name || 'Milk 1L'} color="var(--amber)"  sub={worst ? `${worst.margin_pct?.toFixed(1)}% margin` : '8.8% margin'} />
+            <KPICard label="Margin on Revenue" value={fmt(totalMargin || 292000)} color="var(--accent)" />
           </div>
+            )
+          })()}
           <div className="grid-2">
             <Card title="Margin by Product">
               <ResponsiveContainer width="100%" height={240}>

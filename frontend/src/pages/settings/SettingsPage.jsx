@@ -1,10 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { TAX_RATES, ROLES } from '@/utils/seedData'
-import { roleColors, roleLabels } from '@/utils/helpers'
-import { usersAPI, branchesAPI } from '@/api'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar } from '@/components/ui'
+import { roleColors } from '@/utils/helpers'
+import { usersAPI, branchesAPI, rolesAPI, permissionsAPI } from '@/api'
+import { useAppStore } from '@/store'
+import { useCan } from '@/auth/permissions'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import RoleEditor from './RoleEditor'
+import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
 
 const TABS = [
   { id: 'org',      label: '🏢 Organisation' },
@@ -17,19 +20,29 @@ const TABS = [
 
 
 export default function SettingsPage() {
+  const can = useCan()
   const [tab, setTab]         = useState('org')
   const [showUser, setShowUser] = useState(false)
   const [users, setUsers]     = useState([])
   const [userTotal, setUserTotal] = useState(0)
   const [userSkip, setUserSkip] = useState(0)
   const [userLimit, setUserLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [userSortBy, setUserSortBy] = useState('name')
+  const [userSortOrder, setUserSortOrder] = useState('asc')
   const [userListVersion, setUserListVersion] = useState(0)
   const [branches, setBranches] = useState([])
   const [brSkip, setBrSkip] = useState(0)
   const [brLimit, setBrLimit] = useState(DEFAULT_PAGE_SIZE)
+  // Branches are loaded in full via fetchAllList (small list — used by every
+  // dropdown), so sort them client-side rather than re-fetching on every
+  // header click.
+  const [branchSortBy, setBranchSortBy] = useState('name')
+  const [branchSortOrder, setBranchSortOrder] = useState('asc')
   const [showBranch, setShowBranch] = useState(false)
-  const [userForm, setUserForm] = useState({ name:'', email:'', role:'cashier', branch_id:'', active:true })
+  const [userForm, setUserForm] = useState({ name:'', email:'', role_id:'', branch_id:'', active:true })
   const [branchForm, setBranchForm] = useState({ name:'', code:'', manager:'', phone:'', address:'' })
+  // Only the setter is consumed; loading state is internal to the boot effect.
+  // eslint-disable-next-line no-unused-vars
   const [loading, setLoading] = useState(true)
   const puf = (k,v) => setUserForm(f=>({...f,[k]:v}))
   const pbf = (k,v) => setBranchForm(f=>({...f,[k]:v}))
@@ -37,8 +50,18 @@ export default function SettingsPage() {
   const [editBranchForm, setEditBranchForm] = useState({})
   const [showEditUser, setShowEditUser] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
-  const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role:'cashier', branch_id:'' })
+  const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role_id:'', branch_id:'' })
   const peuf = (k,v) => setEditUserForm(f=>({...f,[k]:v}))
+
+  // RBAC: roles + permission catalog (Phase 1 of Users & Roles)
+  const roles = useAppStore((s) => s.roles)
+  const permCatalog = useAppStore((s) => s.permCatalog)
+  const setRoles = useAppStore((s) => s.setRoles)
+  const setPermCatalog = useAppStore((s) => s.setPermCatalog)
+  const [editingRole, setEditingRole] = useState(null)   // role row or null for new
+  const [showRoleEditor, setShowRoleEditor] = useState(false)
+  const roleById = (id) => roles.find((r) => r.id === id)
+  const roleForUser = (u) => roleById(u.role_id) || roles.find((r) => r.key === u.role)
 
   const loadAllBranches = async () => {
     try {
@@ -50,22 +73,54 @@ export default function SettingsPage() {
     }
   }
 
+  const reloadRoles = async () => {
+    try { setRoles(await rolesAPI.list()) } catch (e) { console.error(e) }
+  }
+
+  const openNewRole = () => { setEditingRole(null); setShowRoleEditor(true) }
+  const openEditRole = (role) => { setEditingRole(role); setShowRoleEditor(true) }
+  const deleteRole = async (role) => {
+    if (role.is_system) { toast.error('System roles cannot be deleted'); return }
+    if (role.user_count > 0) { toast.error(`Reassign the ${role.user_count} user(s) using this role first`); return }
+    if (!window.confirm(`Delete role "${role.label}"? This cannot be undone.`)) return
+    try { await rolesAPI.delete(role.id); toast.success('Role deleted'); await reloadRoles() }
+    catch (e) { console.error(e) }
+  }
+
   useEffect(() => {
-    ;(async () => {
+    (async () => {
       try {
         setLoading(true)
-        await loadAllBranches()
+        // Load branches (paginated upstream, fetched in full here for the
+        // dropdowns) and the RBAC roles + permission catalog in parallel.
+        // Users are paginated separately by the next useEffect.
+        const [, rolesData, catalogData] = await Promise.all([
+          loadAllBranches(),
+          rolesAPI.list().catch(() => []),
+          permissionsAPI.catalog().catch(() => ({})),
+        ])
+        setRoles(rolesData || [])
+        setPermCatalog(catalogData || {})
       } finally {
         setLoading(false)
       }
     })()
+    // setRoles + setPermCatalog are stable Zustand setters; loadAllBranches
+    // is a top-level fn that doesn't change between renders. Boot-once
+    // intentionally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
-        const raw = await usersAPI.list({ skip: userSkip, limit: userLimit })
+        const raw = await usersAPI.list({
+          skip: userSkip,
+          limit: userLimit,
+          sort_by: userSortBy,
+          sort_order: userSortOrder,
+        })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setUsers(items || [])
@@ -80,12 +135,45 @@ export default function SettingsPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [userSkip, userLimit, userListVersion])
+  }, [userSkip, userLimit, userListVersion, userSortBy, userSortOrder])
+
+  const onUserSort = (key) => {
+    setUserSkip(0)
+    if (userSortBy === key) {
+      setUserSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setUserSortBy(key)
+    setUserSortOrder('asc')
+  }
+
+  const sortedBranches = useMemo(() => {
+    const dir = branchSortOrder === 'desc' ? -1 : 1
+    const valueOf = (b) => b[branchSortBy] ?? ''
+    return [...branches].sort((a, b) => {
+      const av = valueOf(a)
+      const bv = valueOf(b)
+      if (typeof av === 'boolean' || typeof bv === 'boolean') {
+        return ((av === true) - (bv === true)) * dir
+      }
+      return String(av).localeCompare(String(bv)) * dir
+    })
+  }, [branches, branchSortBy, branchSortOrder])
 
   const branchPageRows = useMemo(
-    () => branches.slice(brSkip, brSkip + brLimit),
-    [branches, brSkip, brLimit]
+    () => sortedBranches.slice(brSkip, brSkip + brLimit),
+    [sortedBranches, brSkip, brLimit]
   )
+
+  const onBranchSort = (key) => {
+    setBrSkip(0)
+    if (branchSortBy === key) {
+      setBranchSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setBranchSortBy(key)
+    setBranchSortOrder('asc')
+  }
 
   const pbfEdit = (k, v) => {
     setEditBranchForm(prev => ({ ...prev, [k]: v }))
@@ -108,13 +196,13 @@ export default function SettingsPage() {
 
   const saveUser = async () => {
     if (!userForm.name || !userForm.email) { toast.error('Name and email required'); return }
-    if (!userForm.role) { toast.error('Select a role'); return }
-    
+    if (!userForm.role_id) { toast.error('Select a role'); return }
+
     try {
       const payload = {
         name: userForm.name,
         email: userForm.email,
-        role: userForm.role,
+        role_id: userForm.role_id,
         branch_id: userForm.branch_id || null
       }
       await usersAPI.create(payload)
@@ -123,10 +211,10 @@ export default function SettingsPage() {
       await loadAllBranches()
       toast.success('User created successfully')
       setShowUser(false)
-      setUserForm({ name:'', email:'', role:'cashier', branch_id:'', active:true })
+      setUserForm({ name:'', email:'', role_id:'', branch_id:'', active:true })
     } catch (err) {
       console.error(err)
-      toast.error('Failed to create user')
+      // toast already fired by global axios interceptor on non-2xx
     }
   }
 
@@ -143,19 +231,24 @@ export default function SettingsPage() {
 
   const openEditUser = (user) => {
     setEditingUser(user)
-    setEditUserForm({ name: user.name, email: user.email, role: user.role, branch_id: user.branch_id || '' })
+    setEditUserForm({
+      name: user.name,
+      email: user.email,
+      role_id: user.role_id || roleForUser(user)?.id || '',
+      branch_id: user.branch_id || '',
+    })
     setShowEditUser(true)
   }
 
   const saveEditUser = async () => {
     if (!editUserForm.name || !editUserForm.email) { toast.error('Name and email required'); return }
-    if (!editUserForm.role) { toast.error('Select a role'); return }
-    
+    if (!editUserForm.role_id) { toast.error('Select a role'); return }
+
     try {
       const payload = {
         name: editUserForm.name,
         email: editUserForm.email,
-        role: editUserForm.role,
+        role_id: editUserForm.role_id,
         branch_id: editUserForm.branch_id || null
       }
       await usersAPI.update(editingUser.id, payload)
@@ -165,67 +258,49 @@ export default function SettingsPage() {
       setEditingUser(null)
     } catch (err) {
       console.error(err)
-      toast.error('Failed to update user')
+      // toast already fired by global axios interceptor on non-2xx
     }
   }
 
-    const saveBranch = async () => {
-        try {
-            const res = await fetch('http://localhost:8080/api/v1/branches/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: branchForm.name,
-                    code: branchForm.code,
-                    manager: branchForm.manager,
-                    phone: branchForm.phone,
-                    address: branchForm.address,
-                    gstin: "",
-                    active: true
-                })
-            })
-
-            if (!res.ok) {
-                throw new Error('API failed')
-            }
-            await res.json()
-            // ✅ CLOSE MODAL HERE
-            setShowBranch(false)
-            // ✅ refresh data
-            loadAllBranches()
-            toast.success('Branch added')
-        }
-        catch (err) {
-            console.error(err)
-            toast.error('Failed to add branch')
-        }
+  const saveBranch = async () => {
+    try {
+      await branchesAPI.create({
+        name: branchForm.name,
+        code: branchForm.code,
+        manager: branchForm.manager,
+        phone: branchForm.phone,
+        address: branchForm.address,
+        gstin: '',
+        active: true,
+      })
+      setShowBranch(false)
+      loadAllBranches()
+      toast.success('Branch added')
+    } catch (err) {
+      console.error(err)
+      // Toast already fired by global axios interceptor.
     }
+  }
 
-    const updateBranch = async () => {
-        try {
-            const res = await fetch(`http://localhost:8080/api/v1/branches/${editBranchForm.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: editBranchForm.name,
-                    code: editBranchForm.code,
-                    manager: editBranchForm.manager,
-                    phone: editBranchForm.phone,
-                    address: editBranchForm.address,
-                    gstin: editBranchForm.gstin || "",
-                    active: editBranchForm.active ?? true
-                })
-            })
-            if (!res.ok) throw new Error("Update failed")
-            toast.success("Branch updated")
-            setShowEditBranch(false)
-            loadAllBranches() // refresh list
-        }
-        catch (err) {
-            console.error(err)
-            toast.error("Failed to update branch")
-        }
+  const updateBranch = async () => {
+    try {
+      await branchesAPI.update(editBranchForm.id, {
+        name: editBranchForm.name,
+        code: editBranchForm.code,
+        manager: editBranchForm.manager,
+        phone: editBranchForm.phone,
+        address: editBranchForm.address,
+        gstin: editBranchForm.gstin || '',
+        active: editBranchForm.active ?? true,
+      })
+      toast.success('Branch updated')
+      setShowEditBranch(false)
+      loadAllBranches()
+    } catch (err) {
+      console.error(err)
+      // Toast already fired by global axios interceptor.
     }
+  }
 
   return (
     <div className="page-container">
@@ -280,11 +355,23 @@ export default function SettingsPage() {
       {tab === 'branches' && (
         <>
           <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
-            <button className="btn btn-primary btn-sm" onClick={()=>setShowBranch(true)}>+ Add Branch</button>
+            {can('settings.edit') && (
+              <button className="btn btn-primary btn-sm" onClick={()=>setShowBranch(true)}>+ Add Branch</button>
+            )}
           </div>
           <Card bodyPadding={false}>
             <table className="data-table">
-              <thead><tr><th>Branch</th><th>Code</th><th>Manager</th><th>Phone</th><th>Address</th><th>Status</th><th></th></tr></thead>
+              <thead>
+                <tr>
+                  <SortableHeader label="Branch" sortKey="name" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                  <SortableHeader label="Code" sortKey="code" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                  <SortableHeader label="Manager" sortKey="manager" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                  <SortableHeader label="Phone" sortKey="phone" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                  <th>Address</th>
+                  <SortableHeader label="Status" sortKey="active" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                  <th></th>
+                </tr>
+              </thead>
               <tbody>
                 {branchPageRows.map(b=>(
                   <tr key={b.id}>
@@ -296,10 +383,12 @@ export default function SettingsPage() {
                     <td><Chip status={b.active?'active':'inactive'}/></td>
                     <td>
                       <div style={{display:'flex',gap:4}}>
-                        <button className="btn btn-ghost btn-xs" onClick={() => {
-                            setEditBranchForm(b)
-                            setShowEditBranch(true)
-                            }}>Edit</button>
+                        {can('settings.edit') && (
+                          <button className="btn btn-ghost btn-xs" onClick={() => {
+                              setEditBranchForm(b)
+                              setShowEditBranch(true)
+                              }}>Edit</button>
+                        )}
                         <button className="btn btn-ghost btn-xs" onClick={()=>toast('Branch settings…')}>Settings</button>
                       </div>
                     </td>
@@ -338,35 +427,53 @@ export default function SettingsPage() {
       {tab === 'users' && (
         <>
           <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
-            <button className="btn btn-primary btn-sm" onClick={()=>setShowUser(true)}>+ Invite User</button>
+            {can('users.create') && (
+              <button className="btn btn-primary btn-sm" onClick={()=>setShowUser(true)}>+ Invite User</button>
+            )}
           </div>
           <div className="grid-65" style={{alignItems:'start'}}>
             <Card title="Users" bodyPadding={false}>
               <table className="data-table">
-                <thead><tr><th>User</th><th>Role</th><th>Branch</th><th>Last Login</th><th>Status</th><th></th></tr></thead>
+                <thead>
+                  <tr>
+                    <SortableHeader label="User" sortKey="name" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
+                    <SortableHeader label="Role" sortKey="role" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
+                    <SortableHeader label="Branch" sortKey="branch_id" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
+                    <SortableHeader label="Last Login" sortKey="last_login" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
+                    <SortableHeader label="Status" sortKey="active" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
+                    <th></th>
+                  </tr>
+                </thead>
                 <tbody>
                   {users.map(u=>{
                     const branch = branches.find(b => b.id === u.branch_id)
                     const initials = u.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()
+                    const r = roleForUser(u)
+                    const rLabel = r?.label || u.role
+                    const rColor = roleColors[u.role] || roleColors[r?.key] || 'var(--accent)'
                     return (
                     <tr key={u.id}>
                       <td>
                         <div style={{display:'flex',alignItems:'center',gap:10}}>
-                          <Avatar initials={initials} size={30} color={roleColors[u.role]||'var(--accent)'} />
+                          <Avatar initials={initials} size={30} color={rColor} />
                           <div>
                             <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{u.name}</div>
                             <div style={{fontSize:11,color:'var(--text-muted)'}}>{u.email}</div>
                           </div>
                         </div>
                       </td>
-                      <td><span style={{fontSize:11.5,padding:'3px 9px',borderRadius:20,fontWeight:600,background:(roleColors[u.role]||'var(--accent)')+'18',color:roleColors[u.role]||'var(--accent)'}}>{roleLabels[u.role]||u.role}</span></td>
+                      <td><span style={{fontSize:11.5,padding:'3px 9px',borderRadius:20,fontWeight:600,background:rColor+'18',color:rColor}}>{rLabel}</span></td>
                       <td style={{fontSize:12}}>{branch?.name || 'All Branches'}</td>
                       <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{u.last_login || '—'}</td>
                       <td><Chip status={u.active?'active':'inactive'}/></td>
                       <td>
                         <div style={{display:'flex',gap:4}}>
-                          <button className="btn btn-ghost btn-xs" onClick={()=>openEditUser(u)}>Edit</button>
-                          <button className="btn btn-danger btn-xs" onClick={()=>toggleUser(u.id)}>{u.active?'Disable':'Enable'}</button>
+                          {can('users.edit') && (
+                            <button className="btn btn-ghost btn-xs" onClick={()=>openEditUser(u)}>Edit</button>
+                          )}
+                          {can('users.edit') && (
+                            <button className="btn btn-danger btn-xs" onClick={()=>toggleUser(u.id)}>{u.active?'Disable':'Enable'}</button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -381,25 +488,59 @@ export default function SettingsPage() {
                 onLimitChange={setUserLimit}
               />
             </Card>
-            <Card title="Roles & Permissions">
-              {Object.entries(ROLES).map(([key, r]) => (
-                <div key={key} style={{padding:'10px 12px',background:'var(--bg-raised)',borderRadius:8,marginBottom:8}}>
-                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
-                    <span style={{fontSize:11.5,padding:'2px 8px',borderRadius:20,fontWeight:600,background:(roleColors[key]||'var(--accent)')+'18',color:roleColors[key]||'var(--accent)'}}>{r.label}</span>
+            <Card
+              title="Roles & Permissions"
+              titleRight={can('users.manage_roles') ? <button className="btn btn-primary btn-xs" onClick={openNewRole}>+ New Role</button> : null}
+            >
+              {roles.length === 0 && (
+                <div style={{padding:'12px 0',fontSize:12,color:'var(--text-muted)'}}>No roles yet. Restart backend after seeding.</div>
+              )}
+              {roles.map((r) => {
+                const rColor = roleColors[r.key] || (r.color && `var(--${r.color})`) || 'var(--accent)'
+                const granted = (r.permissions || []).join(', ') || '(none)'
+                return (
+                  <div key={r.id} style={{padding:'10px 12px',background:'var(--bg-raised)',borderRadius:8,marginBottom:8}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                      <span style={{fontSize:11.5,padding:'2px 8px',borderRadius:20,fontWeight:600,background:rColor+'18',color:rColor}}>{r.label}</span>
+                      {r.is_system && <Tag color="gray">system</Tag>}
+                      <span style={{fontSize:11,color:'var(--text-muted)'}}>· {r.user_count} user{r.user_count===1?'':'s'}</span>
+                      <div style={{flex:1}}/>
+                      {can('users.manage_roles') && (
+                        <button className="btn btn-ghost btn-xs" onClick={()=>openEditRole(r)}>Edit</button>
+                      )}
+                      {can('users.manage_roles') && (
+                        <button
+                          className="btn btn-ghost btn-xs"
+                          onClick={()=>deleteRole(r)}
+                          disabled={r.is_system || r.user_count > 0}
+                          title={r.is_system ? 'System roles cannot be deleted' : (r.user_count > 0 ? 'Reassign users first' : 'Delete role')}
+                          style={{ opacity: (r.is_system || r.user_count > 0) ? 0.4 : 1 }}
+                        >Delete</button>
+                      )}
+                    </div>
+                    {r.description && <div style={{fontSize:11.5,color:'var(--text-secondary)',marginBottom:4}}>{r.description}</div>}
+                    <div style={{fontSize:11,color:'var(--text-muted)',lineHeight:1.5,fontFamily:'DM Mono, monospace'}}>{granted}</div>
                   </div>
-                  <div style={{fontSize:11.5,color:'var(--text-muted)',lineHeight:1.5}}>{r.permissions.join(', ')}</div>
-                </div>
-              ))}
+                )
+              })}
             </Card>
+            <RoleEditor
+              open={showRoleEditor}
+              onClose={()=>setShowRoleEditor(false)}
+              role={editingRole}
+              catalog={permCatalog}
+              onSaved={reloadRoles}
+            />
           </div>
           <Modal open={showUser} onClose={()=>setShowUser(false)} title="Invite User" icon="👤" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowUser(false)}>Cancel</button><button className="btn btn-primary" onClick={saveUser}>Create User</button></>}>
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={userForm.name} onChange={e=>puf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Email" required><input className="form-input" type="email" value={userForm.email} onChange={e=>puf('email',e.target.value)}/></FormGroup></FormRow>
             <FormRow>
-              <FormGroup label="Role">
-                <select className="form-input" value={userForm.role} onChange={e=>puf('role',e.target.value)}>
-                  {Object.entries(ROLES).map(([k,r])=><option key={k} value={k}>{r.label}</option>)}
+              <FormGroup label="Role" required>
+                <select className="form-input" value={userForm.role_id} onChange={e=>puf('role_id',e.target.value)}>
+                  <option value="">— Select role —</option>
+                  {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
                 </select>
               </FormGroup>
               <FormGroup label="Branch">
@@ -416,9 +557,10 @@ export default function SettingsPage() {
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={editUserForm.name} onChange={e=>peuf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Email" required><input className="form-input" type="email" value={editUserForm.email} onChange={e=>peuf('email',e.target.value)}/></FormGroup></FormRow>
             <FormRow>
-              <FormGroup label="Role">
-                <select className="form-input" value={editUserForm.role} onChange={e=>peuf('role',e.target.value)}>
-                  {Object.entries(ROLES).map(([k,r])=><option key={k} value={k}>{r.label}</option>)}
+              <FormGroup label="Role" required>
+                <select className="form-input" value={editUserForm.role_id} onChange={e=>peuf('role_id',e.target.value)}>
+                  <option value="">— Select role —</option>
+                  {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
                 </select>
               </FormGroup>
               <FormGroup label="Branch">
@@ -432,118 +574,9 @@ export default function SettingsPage() {
         </>
       )}
 
-      {/* ── TAX CONFIG ────────────────────────────────────────────── */}
-      {tab === 'tax' && (
-        <>
-          <AlertBar type="blue" icon="ℹ" style={{marginBottom:16}}>Tax rates are used for invoice calculations and GST reports only. RetailOS does not file returns or integrate with government portals.</AlertBar>
-          <Card title="GST Rate Configuration" bodyPadding={false}>
-            <table className="data-table">
-              <thead><tr><th>Rate</th><th>Description</th><th>HSN Examples</th><th>Applicable To</th><th></th></tr></thead>
-              <tbody>
-                {TAX_RATES.map(r=>(
-                  <tr key={r.rate}>
-                    <td><span style={{fontSize:14,fontWeight:700,fontFamily:'DM Mono',color:'var(--accent)'}}>{r.rate}%</span></td>
-                    <td><span style={{fontWeight:500}}>{r.label}</span></td>
-                    <td style={{fontSize:12,color:'var(--text-muted)',fontFamily:'DM Mono'}}>{r.examples.split(',')[0]}</td>
-                    <td style={{fontSize:12.5,color:'var(--text-secondary)'}}>{r.examples}</td>
-                    <td><button className="btn btn-ghost btn-xs">Edit</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-          <div style={{height:16}}/>
-          <Card title="Other Tax Settings">
-            {[
-              {label:'Tax Inclusive Pricing', desc:'Show prices inclusive of GST at POS', value:'Off'},
-              {label:'Auto-calculate GST on purchases', desc:'Apply tax rates automatically on purchase entry', value:'On'},
-              {label:'Show HSN Code on invoices', desc:'Print HSN/SAC codes on sales invoices', value:'On'},
-              {label:'CGST + SGST split on invoices', desc:'Show tax breakup as CGST and SGST separately', value:'On'},
-            ].map(r=>(
-              <div key={r.label} style={{display:'flex',alignItems:'center',padding:'12px 0',borderBottom:'1px solid var(--border-subtle)'}}>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:13.5,fontWeight:500,color:'var(--text-primary)'}}>{r.label}</div>
-                  <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{r.desc}</div>
-                </div>
-                <button className="btn btn-secondary btn-sm" onClick={()=>toast('Toggle setting')}>{r.value}</button>
-              </div>
-            ))}
-          </Card>
-        </>
-      )}
-
-      {/* ── DOCUMENT NUMBERING ────────────────────────────────────── */}
-      {tab === 'numbering' && (
-        <Card title="Document Number Formats">
-          <div style={{display:'flex',flexDirection:'column',gap:10}}>
-            {[
-              {doc:'Sales Invoice', prefix:'INV', format:'INV-YYYY-####', sample:'INV-2024-1847', branch:'Per Branch'},
-              {doc:'Purchase Bill', prefix:'PUR', format:'PUR-YYYY-####', sample:'PUR-2024-0412', branch:'Centralised'},
-              {doc:'POS Receipt',   prefix:'POS', format:'POS-YYYY-####', sample:'POS-2024-1848', branch:'Per Branch'},
-              {doc:'Stock Transfer',prefix:'TRF', format:'TRF-YYYY-###',  sample:'TRF-2024-041',  branch:'Centralised'},
-              {doc:'Credit Note',   prefix:'CN',  format:'CN-YYYY-####',  sample:'CN-2024-0012',  branch:'Per Branch'},
-              {doc:'Quotation',     prefix:'QT',  format:'QT-YYYY-####',  sample:'QT-2024-0088',  branch:'Per Branch'},
-            ].map(r=>(
-              <div key={r.doc} style={{display:'grid',gridTemplateColumns:'160px 140px 160px 140px auto',alignItems:'center',gap:12,padding:'10px 14px',background:'var(--bg-raised)',borderRadius:8}}>
-                <span style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{r.doc}</span>
-                <span style={{fontSize:12,fontFamily:'DM Mono',color:'var(--accent)'}}>{r.format}</span>
-                <span style={{fontSize:12,fontFamily:'DM Mono',color:'var(--text-muted)'}}>{r.sample}</span>
-                <span style={{fontSize:11.5}}><Tag>{r.branch}</Tag></span>
-                <button className="btn btn-ghost btn-xs" onClick={()=>toast('Edit format')}>Edit</button>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {/* ── INVOICE TEMPLATE ──────────────────────────────────────── */}
-      {tab === 'invoice' && (
-        <div className="grid-2" style={{alignItems:'start'}}>
-          <Card title="Invoice Template Settings">
-            {[
-              {label:'Header',        options:['Company name + logo','Logo only','Name only']},
-              {label:'Show HSN Codes',options:['Yes','No']},
-              {label:'Show Item Desc',options:['Yes','No']},
-              {label:'Tax Display',   options:['CGST+SGST','Integrated GST','Total GST only']},
-              {label:'Footer Text',   type:'textarea', value:'Thank you for your business!\nGoods once sold cannot be returned.'},
-              {label:'Terms',         type:'textarea', value:'Payment due within 30 days. Interest @ 2% per month on overdue.'},
-            ].map(r=>(
-              <div key={r.label} style={{marginBottom:12}}>
-                <label className="form-label">{r.label}</label>
-                {r.type==='textarea'
-                  ? <textarea className="form-input" defaultValue={r.value} style={{height:64}}/>
-                  : <select className="form-input"><option>{r.options[0]}</option>{r.options.slice(1).map(o=><option key={o}>{o}</option>)}</select>
-                }
-              </div>
-            ))}
-            <button className="btn btn-primary btn-sm" onClick={()=>toast('Template settings saved')}>Save Template</button>
-          </Card>
-          <Card title="Invoice Preview">
-            <div style={{border:'1px solid var(--border-default)',borderRadius:10,padding:20,fontFamily:'DM Mono',fontSize:11.5,background:'var(--bg-raised)',lineHeight:1.7}}>
-              <div style={{textAlign:'center',marginBottom:10}}>
-                <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>SRI MURUGAN TRADERS PVT LTD</div>
-                <div>12, Anna Nagar West, Chennai — 600 040</div>
-                <div>GSTIN: 33AAZCS1429R1Z1 | Ph: 044-2626 1234</div>
-              </div>
-              <div style={{textAlign:'center',fontWeight:700,borderTop:'1px solid var(--border-default)',borderBottom:'1px solid var(--border-default)',padding:'4px 0',margin:'8px 0'}}>TAX INVOICE</div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-                <div><div>Invoice #: INV-2024-1847</div><div>Date: 16/04/2024</div></div>
-                <div><div>Customer: Rajesh Stores</div><div>GSTIN: 33ABCDE1234F1Z5</div></div>
-              </div>
-              <table style={{width:'100%',borderCollapse:'collapse',marginBottom:8}}>
-                <thead><tr>{['Item','Qty','Rate','GST','Amount'].map(h=><th key={h} style={{padding:'4px 6px',borderBottom:'1px solid var(--border-default)',textAlign:h==='Item'?'left':'right'}}>{h}</th>)}</tr></thead>
-                <tbody>
-                  <tr>{['Basmati Rice 5kg','20','₹299','0%','₹5,980'].map((c,i)=><td key={i} style={{padding:'3px 6px',textAlign:i===0?'left':'right'}}>{c}</td>)}</tr>
-                </tbody>
-              </table>
-              <div style={{textAlign:'right',borderTop:'1px solid var(--border-default)',paddingTop:6}}>
-                <div>Subtotal: ₹5,980 | CGST: ₹0 | SGST: ₹0</div>
-                <div style={{fontWeight:700,fontSize:13}}>Total: ₹5,980</div>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
+      {tab === 'tax'       && <TaxConfigTab />}
+      {tab === 'numbering' && <NumberingTab />}
+      {tab === 'invoice'   && <InvoiceTemplateTab />}
     </div>
   )
 }

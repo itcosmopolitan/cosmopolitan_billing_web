@@ -1,13 +1,11 @@
 // ─── SEED DATA ───────────────────────────────────────────────────────────────
-// Realistic demo data for a Tamil Nadu grocery/FMCG retail chain
-
-export const BRANCHES = [
-  { id: 'br-001', name: 'Male', code: 'ML', manager: 'Kavitha R.', phone: '+960-330 1234', address: '12, Orchid Magu, Male - 20001', gst: '33AAZCS1429R1Z1', active: true },
-  { id: 'br-002', name: 'Addu', code: 'AD', manager: 'Mohan K.', phone: '+960-688 5678', address: '45, Equatorial Road, Addu City - 20001', gst: '33AAZCS1429R1Z2', active: true },
-  { id: 'br-003', name: 'Hulhumalé', code: 'HM', manager: 'Ravi S.', phone: '+960-664 3456', address: '8, Central Plaza, Hulhumalé - 20001', gst: '33AAZCS1429R1Z3', active: true },
-  { id: 'br-004', name: 'Felidhoo', code: 'FD', manager: 'Anitha M.', phone: '+960-684 7890', address: '22, Island Road, Felidhoo - 20001', gst: '33AAZCS1429R1Z4', active: true },
-  { id: 'br-005', name: 'Warehouse', code: 'WH', manager: 'Central', phone: '+960-330 0001', address: 'Plot 14, Industrial Zone, Hulhumalé - 20001', gst: '', active: true },
-]
+// Frontend-side fallback / demo data, used by pages that haven't been wired
+// to the backend yet (Dashboard, Reports — see Tier 3 of the audit) and by
+// POSPage as an offline fallback when the backend is unreachable.
+//
+// Branches were intentionally removed from this file: the canonical branch
+// list lives on the server (`/branches`) and is hydrated into useAppStore at
+// boot. Consume `useAppStore.branches` instead.
 
 export const CATEGORIES = [
   { id: 'cat-001', name: 'Grains & Pulses', icon: '🌾' },

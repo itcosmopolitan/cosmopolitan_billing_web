@@ -69,36 +69,58 @@ const normalizeCartItem = (raw) => {
 // ─── App Store ────────────────────────────────────────────────────────────────
 export const useAppStore = create(
   persist(
-    (set, get) => ({
-      // User session
-      user: {
-        id: 'usr-001',
-        name: 'Suresh Anand',
-        email: 'suresh@srimurugan.com',
-        role: 'super_admin',
-        avatar: 'SA',
-        permissions: ['*'], // super admin has all
-      },
+    (set) => ({
+      // User session — populated by App.jsx on boot via /auth/me, or by
+      // LoginPage after a successful /auth/login. Default null so RequireAuth
+      // bounces unauthenticated visitors to /login. Fixes ISS-003 (was a
+      // hardcoded super-admin that re-instated on every page reload).
+      user: null,
 
-      // Current branch context
-      activeBranch: { id: 'br-001', name: 'Anna Nagar', code: 'AN' },
-      branches: [
-        { id: 'br-001', name: 'Anna Nagar', code: 'AN', manager: 'Kavitha R.' },
-        { id: 'br-002', name: 'T. Nagar', code: 'TN', manager: 'Mohan K.' },
-        { id: 'br-003', name: 'Vadapalani', code: 'VD', manager: 'Ravi S.' },
-        { id: 'br-004', name: 'Velachery', code: 'VL', manager: 'Anitha M.' },
-        { id: 'br-005', name: 'Warehouse', code: 'WH', manager: 'Central' },
-      ],
+      // Branch context — populated by App.jsx on boot from
+      // `branchesAPI.list()`. Single source of truth: never hardcode branches
+      // here or anywhere else (was a 3-way duplication that desynced when the
+      // seed switched branch names mid-project — see audit ISS-006/refactor).
+      activeBranch: null,
+      branches: [],
 
       // UI preferences
       sidebarCollapsed: false,
       theme: 'light',
 
+      // ── RBAC session state (Users & Roles, Phase 1 + 1.5) ────────────────
+      // `permissions` is the list granted to the current user (e.g. ["items.view", "*"]).
+      // `permCatalog` is the full module → [actions] map from /permissions/catalog,
+      // needed to expand wildcards in useCan().
+      // `roles` caches /roles/ for the Roles editor in Settings.
+      // None of these are persisted to localStorage — we always re-fetch on app
+      // boot so a permission revoke takes effect on the next reload.
+      permissions: [],
+      permCatalog: {},
+      roles: [],
+
       // Actions
       setActiveBranch: (branch) => set({ activeBranch: branch }),
+      setBranches: (branches) => set((s) => {
+        // Keep the persisted activeBranch if it still exists in the new list,
+        // otherwise default to the first one (or null if the list is empty).
+        const list = Array.isArray(branches) ? branches : []
+        const stillThere = list.find((b) => b.id === s.activeBranch?.id)
+        return {
+          branches: list,
+          activeBranch: stillThere || list[0] || null,
+        }
+      }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setTheme: (theme) => set({ theme }),
       setUser: (user) => set({ user }),
+      setPermCatalog: (permCatalog) => set({ permCatalog }),
+      setRoles: (roles) => set({ roles }),
+      setSession: ({ user, permissions, permCatalog }) => set({
+        user,
+        permissions: permissions || [],
+        ...(permCatalog ? { permCatalog } : {}),
+      }),
+      clearSession: () => set({ user: null, permissions: [], roles: [] }),
     }),
     { name: 'retailos-app', partialize: (s) => ({ activeBranch: s.activeBranch, theme: s.theme, sidebarCollapsed: s.sidebarCollapsed }) }
   )

@@ -1,6 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
+import { authAPI, branchesAPI, permissionsAPI } from '@/api'
+import { fetchAllList } from '@/utils/pagination'
+import { RequireAuth, RequirePerm } from '@/auth/guards'
 import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
 import LoginPage from '@/pages/auth/LoginPage'
@@ -19,7 +22,7 @@ import SettingsPage  from '@/pages/settings/SettingsPage'
 import AuditPage     from '@/pages/settings/AuditPage'
 
 function AppShell() {
-  const { sidebarCollapsed } = useAppStore()
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const sidebarW = sidebarCollapsed ? 56 : 220
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -29,18 +32,22 @@ function AppShell() {
         <main style={{ flex: 1 }}>
           <Routes>
             <Route path="/"           element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard"  element={<Dashboard />} />
-            <Route path="/pos"        element={<POSPage />} />
-            <Route path="/items"      element={<ItemsPage />} />
-            <Route path="/transfers"  element={<TransfersPage />} />
-            <Route path="/sales"      element={<SalesPage />} />
-            <Route path="/purchases"  element={<PurchasesPage />} />
-            <Route path="/customers"  element={<CustomersPage />} />
-            <Route path="/vendors"    element={<VendorsPage />} />
-            <Route path="/cash"       element={<CashPage />} />
-            <Route path="/reports"    element={<ReportsPage />} />
-            <Route path="/settings"   element={<SettingsPage />} />
-            <Route path="/audit"      element={<AuditPage />} />
+            {/* Phase 2 + 3 — every module route is gated on its `*.view`
+                permission. Sidebar nav already filters by useCan(), so a
+                user can't normally land here without the perm; this is
+                belt-and-braces. */}
+            <Route path="/dashboard"  element={<RequirePerm perm="dashboard.view"><Dashboard /></RequirePerm>} />
+            <Route path="/pos"        element={<RequirePerm perm="pos.use"><POSPage /></RequirePerm>} />
+            <Route path="/items"      element={<RequirePerm perm="items.view"><ItemsPage /></RequirePerm>} />
+            <Route path="/transfers"  element={<RequirePerm perm="transfers.view"><TransfersPage /></RequirePerm>} />
+            <Route path="/sales"      element={<RequirePerm perm="invoices.view"><SalesPage /></RequirePerm>} />
+            <Route path="/purchases"  element={<RequirePerm perm="purchases.view"><PurchasesPage /></RequirePerm>} />
+            <Route path="/customers"  element={<RequirePerm perm="customers.view"><CustomersPage /></RequirePerm>} />
+            <Route path="/vendors"    element={<RequirePerm perm="vendors.view"><VendorsPage /></RequirePerm>} />
+            <Route path="/cash"       element={<RequirePerm perm="cash.view"><CashPage /></RequirePerm>} />
+            <Route path="/reports"    element={<RequirePerm perm="reports.view"><ReportsPage /></RequirePerm>} />
+            <Route path="/settings"   element={<RequirePerm perm="settings.view"><SettingsPage /></RequirePerm>} />
+            <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditPage /></RequirePerm>} />
           </Routes>
         </main>
       </div>
@@ -48,8 +55,25 @@ function AppShell() {
   )
 }
 
+/** Tiny splash shown while the boot fetch runs, to avoid a flicker of
+ *  "logged out" UI before /auth/me resolves. */
+function BootSplash() {
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'var(--bg-base)', color: 'var(--text-muted)', fontSize: 13,
+    }}>
+      Loading…
+    </div>
+  )
+}
+
 export default function App() {
-  const { theme } = useAppStore()
+  const theme = useAppStore((s) => s.theme)
+  const setSession = useAppStore((s) => s.setSession)
+  const setPermCatalog = useAppStore((s) => s.setPermCatalog)
+  const setBranches = useAppStore((s) => s.setBranches)
+  const [booting, setBooting] = useState(true)
 
   useEffect(() => {
     const nextTheme = theme === 'dark' ? 'dark' : 'light'
@@ -57,10 +81,48 @@ export default function App() {
     document.documentElement.style.colorScheme = nextTheme
   }, [theme])
 
+  // Boot-time hydration. If a token is present we resolve the real user via
+  // /auth/me (Phase 1.5 — fixes ISS-002 / ISS-003). The catalog and branches
+  // list are open-access, so we always fetch them. Skipping /auth/me when no
+  // token is present avoids the 401-redirect loop the global axios
+  // interceptor would otherwise trigger.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const token = localStorage.getItem('retailos_token')
+        const tasks = [
+          permissionsAPI.catalog().catch(() => ({})),
+          fetchAllList(branchesAPI.list).catch(() => []),
+        ]
+        if (token) tasks.push(authAPI.me().catch(() => null))
+        const [catalog, branches, me] = await Promise.all(tasks)
+        if (cancelled) return
+        setPermCatalog(catalog || {})
+        setBranches(branches || [])
+        if (token && me) {
+          setSession({ user: me, permissions: me.permissions || [] })
+        }
+      } finally {
+        if (!cancelled) setBooting(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [setSession, setPermCatalog, setBranches])
+
+  if (booting) return <BootSplash />
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/*"     element={<AppShell />} />
+      <Route
+        path="/*"
+        element={
+          <RequireAuth>
+            <AppShell />
+          </RequireAuth>
+        }
+      />
     </Routes>
   )
 }

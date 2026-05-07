@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { purchasesAPI, vendorsAPI, branchesAPI, itemsAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, AlertBar, PaginationBar } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import NewBillModal from './NewBillModal'
 
 const TABS = [
   { id: 'bills',   label: 'Purchase Bills' },
@@ -13,6 +15,7 @@ const TABS = [
 ]
 
 export default function PurchasesPage() {
+  const can = useCan()
   const [tab, setTab]           = useState('bills')
   const [search, setSearch]     = useState('')
   const [statusF, setStatusF]   = useState('')
@@ -26,11 +29,15 @@ export default function PurchasesPage() {
   const [billTotal, setBillTotal] = useState(0)
   const [billSkip, setBillSkip] = useState(0)
   const [billLimit, setBillLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [billSortBy, setBillSortBy] = useState('created_at')
+  const [billSortOrder, setBillSortOrder] = useState('desc')
   const [purchaseSummary, setPurchaseSummary] = useState(null)
   const [returns, setReturns]   = useState([])
   const [retTotal, setRetTotal] = useState(0)
   const [retSkip, setRetSkip] = useState(0)
   const [retLimit, setRetLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [retSortBy, setRetSortBy] = useState('created_at')
+  const [retSortOrder, setRetSortOrder] = useState('desc')
   const [vendors, setVendors]   = useState([])
   const [branches, setBranches] = useState([])
   const [items, setItems]       = useState([])
@@ -83,6 +90,8 @@ export default function PurchasesPage() {
         const raw = await purchasesAPI.list({
           skip: billSkip,
           limit: billLimit,
+          sort_by: billSortBy,
+          sort_order: billSortOrder,
           search: search || undefined,
           status: statusF || undefined,
           vendor_id: vendorF || undefined,
@@ -106,7 +115,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, billSkip, billLimit, search, statusF, vendorF, listVersion])
+  }, [tab, billSkip, billLimit, search, statusF, vendorF, listVersion, billSortBy, billSortOrder])
 
   useEffect(() => {
     if (tab !== 'returns') {
@@ -115,7 +124,12 @@ export default function PurchasesPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const raw = await purchasesAPI.returns.list({ skip: retSkip, limit: retLimit })
+        const raw = await purchasesAPI.returns.list({
+          skip: retSkip,
+          limit: retLimit,
+          sort_by: retSortBy,
+          sort_order: retSortOrder,
+        })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setReturns(items || [])
@@ -129,7 +143,20 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, retSkip, retLimit, listVersion])
+  }, [tab, retSkip, retLimit, listVersion, retSortBy, retSortOrder])
+
+  // Tab-aware sort handler — both bills and returns tabs use this with a
+  // closure over the right state setters. defaultOrder lets columns like
+  // money / dates start descending when first clicked.
+  const toggleSort = (currentBy, currentOrder, setBy, setOrder, setSkip, key, defaultOrder = 'asc') => {
+    setSkip(0)
+    if (currentBy === key) {
+      setOrder(currentOrder === 'asc' ? 'desc' : 'asc')
+      return
+    }
+    setBy(key)
+    setOrder(defaultOrder)
+  }
 
   const totals = useMemo(() => ({
     total:   purchaseSummary?.amountTotal ?? 0,
@@ -265,7 +292,9 @@ export default function PurchasesPage() {
           toast.success('Purchases exported')
         }}>↓ Export</button>
         <button className="btn btn-secondary btn-sm" onClick={() => toast('New PO creation coming soon')}>+ New PO</button>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowNewBill(true)}>+ New Bill</button>
+        {can('purchases.create') && (
+          <button className="btn btn-primary btn-sm" onClick={() => setShowNewBill(true)}>+ New Bill</button>
+        )}
       </SectionHeader>
 
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
@@ -293,7 +322,20 @@ export default function PurchasesPage() {
           <Card bodyPadding={false}>
             {bills.length === 0 ? <EmptyState icon="📋" title="No bills found" /> : (
               <table className="data-table">
-                <thead><tr><th>Bill #</th><th>Vendor</th><th>Branch</th><th>Date</th><th>Due Date</th><th className="text-right">Total</th><th className="text-right">Paid</th><th className="text-right">Balance</th><th>Status</th><th></th></tr></thead>
+                <thead>
+                  <tr>
+                    <SortableHeader label="Bill #" sortKey="number" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} />
+                    <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} />
+                    <SortableHeader label="Branch" sortKey="branch_id" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} />
+                    <SortableHeader label="Date" sortKey="date" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} />
+                    <SortableHeader label="Due Date" sortKey="due_date" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} />
+                    <SortableHeader label="Total" sortKey="total" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} className="text-right" align="right" />
+                    <SortableHeader label="Paid" sortKey="paid_amount" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} className="text-right" align="right" />
+                    <SortableHeader label="Balance" sortKey="balance_due" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} className="text-right" align="right" />
+                    <SortableHeader label="Status" sortKey="status" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} />
+                    <th></th>
+                  </tr>
+                </thead>
                 <tbody>
                   {bills.map((b) => (
                     <tr key={b.id}>
@@ -309,7 +351,7 @@ export default function PurchasesPage() {
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
                           <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(b)}>View</button>
-                          {b.status !== 'paid' && <button className="btn btn-primary btn-xs" onClick={() => { setShowPay(b); setPayAmt(String((b.total || 0) - (b.paidAmount || 0))) }}>Pay</button>}
+                          {b.status !== 'paid' && can('purchases.edit') && <button className="btn btn-primary btn-xs" onClick={() => { setShowPay(b); setPayAmt(String((b.total || 0) - (b.paidAmount || 0))) }}>Pay</button>}
                         </div>
                       </td>
                     </tr>
@@ -362,11 +404,23 @@ export default function PurchasesPage() {
         <>
           <Card title="Vendor Returns" bodyPadding={false}>
             {returns.length === 0 ? (
-              <EmptyState icon="↩️" title="No vendor returns" desc="Vendor return notes will appear here once created" action={<button className="btn btn-primary btn-sm" onClick={() => setShowNewReturn(true)}>+ Create Return</button>} />
+              <EmptyState icon="↩️" title="No vendor returns" desc="Vendor return notes will appear here once created" action={can('purchases.create') ? <button className="btn btn-primary btn-sm" onClick={() => setShowNewReturn(true)}>+ Create Return</button> : null} />
             ) : (
               <>
                 <table className="data-table">
-                  <thead><tr><th>Return #</th><th>Bill #</th><th>Vendor</th><th>Date</th><th className="text-right">Total</th><th className="text-right">Credit</th><th>Reason</th><th>Status</th><th></th></tr></thead>
+                  <thead>
+                    <tr>
+                      <SortableHeader label="Return #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                      <SortableHeader label="Bill #" sortKey="bill_number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                      <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                      <SortableHeader label="Date" sortKey="date" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                      <SortableHeader label="Total" sortKey="total" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
+                      <SortableHeader label="Credit" sortKey="credited_amount" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
+                      <th>Reason</th>
+                      <SortableHeader label="Status" sortKey="status" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                      <th></th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {returns.map((r) => (
                       <tr key={r.id}>
@@ -381,16 +435,18 @@ export default function PurchasesPage() {
                         <td>
                           <div style={{ display: 'flex', gap: 4 }}>
                             <button className="btn btn-ghost btn-xs" onClick={() => setReturnDetail(r)}>View</button>
-                            {r.status !== 'paid' && <button className="btn btn-primary btn-xs" onClick={() => approveReturn(r.id)}>Approve</button>}
+                            {r.status !== 'paid' && can('purchases.edit') && <button className="btn btn-primary btn-xs" onClick={() => approveReturn(r.id)}>Approve</button>}
                           </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', textAlign: 'center' }}>
-                  <button className="btn btn-primary btn-sm" onClick={() => setShowNewReturn(true)}>+ Create Return</button>
-                </div>
+                {can('purchases.create') && (
+                  <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', textAlign: 'center' }}>
+                    <button className="btn btn-primary btn-sm" onClick={() => setShowNewReturn(true)}>+ Create Return</button>
+                  </div>
+                )}
                 <PaginationBar
                   total={retTotal}
                   skip={retSkip}
@@ -477,47 +533,19 @@ export default function PurchasesPage() {
         )}
       </Modal>
 
-      {/* New Bill Modal */}
-      <Modal open={showNewBill} onClose={() => setShowNewBill(false)} title="New Purchase Bill" icon="📋" size="lg"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowNewBill(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={saveNewBill}>Save Bill</button>
-        </>}>
-        <FormRow>
-          <FormGroup label="Vendor" required>
-            <select className="form-input" value={newBill.vendorId} onChange={(e) => patchBill('vendorId', e.target.value)}>
-              <option value="">Select vendor…</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-          </FormGroup>
-          <FormGroup label="Receiving Branch">
-            <select className="form-input" value={newBill.branchId} onChange={(e) => patchBill('branchId', e.target.value)}>
-              <option value="">Select branch…</option>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Bill Date"><input className="form-input" type="date" value={newBill.billDate} onChange={(e) => patchBill('billDate', e.target.value)} /></FormGroup>
-          <FormGroup label="Due Date"><input className="form-input" type="date" value={newBill.dueDate} onChange={(e) => patchBill('dueDate', e.target.value)} /></FormGroup>
-        </FormRow>
-        <div className="form-label" style={{ marginBottom: 8 }}>Items Received</div>
-        {newBill.items.map((item, i) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 100px auto', gap: 8, marginBottom: 6 }}>
-            <select className="form-input" value={item.itemId} onChange={(e) => patchBillItem(i, 'itemId', e.target.value)}>
-              <option value="">Select item…</option>
-              {items.map((it) => <option key={it.id} value={it.id}>{it.name} (₹{fmt(it.costPrice)})</option>)}
-            </select>
-            <input className="form-input" type="number" placeholder="Qty" value={item.qty} onChange={(e) => patchBillItem(i, 'qty', e.target.value)} />
-            <input className="form-input" type="number" placeholder="Cost ₹" value={item.cost} onChange={(e) => patchBillItem(i, 'cost', e.target.value)} />
-            <button className="btn btn-ghost btn-sm" onClick={() => setNewBill((b) => ({ ...b, items: b.items.filter((_, idx) => idx !== i) }))}>✕</button>
-          </div>
-        ))}
-        <button className="btn btn-ghost btn-sm" style={{ marginBottom: 14 }} onClick={() => setNewBill((b) => ({ ...b, items: [...b.items, { itemId: '', qty: '', cost: '' }] }))}>+ Add item</button>
-        <FormRow>
-          <FormGroup label="Discount (₹)"><input className="form-input" type="number" value={newBill.discount} onChange={(e) => patchBill('discount', e.target.value)} /></FormGroup>
-        </FormRow>
-      </Modal>
+      <NewBillModal
+        open={showNewBill}
+        onClose={() => setShowNewBill(false)}
+        onSave={saveNewBill}
+        newBill={newBill}
+        patchBill={patchBill}
+        patchBillItem={patchBillItem}
+        addItem={() => setNewBill((b) => ({ ...b, items: [...b.items, { itemId: '', qty: '', cost: '' }] }))}
+        removeItem={(i) => setNewBill((b) => ({ ...b, items: b.items.filter((_, idx) => idx !== i) }))}
+        vendors={vendors}
+        branches={branches}
+        items={items}
+      />
 
       {/* Return Detail Modal */}
       <Modal open={!!returnDetail} onClose={() => setReturnDetail(null)} title={`Vendor Return — ${returnDetail?.number}`} icon="↩️" size="lg"
