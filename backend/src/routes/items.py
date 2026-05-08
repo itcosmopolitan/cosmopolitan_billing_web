@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.models import Item, ItemStock
-from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort, pagination_from_page
 from src.routes._atomic import set_stock_atomic
 from src.security import require_perm
 
@@ -68,23 +68,40 @@ async def list_items(
     status: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    page_no: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    include_total: bool = True,
+    pos_mode: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
+    if page_no is not None or per_page is not None:
+        pn, pp, sk, lim = pagination_from_page(page_no, per_page)
+    else:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
+        pn = max(1, (sk // lim) + 1)
+        pp = lim
     q = select(Item).where(Item.active == True).options(selectinload(Item.category))
     if search:
-        q = q.where(Item.name.ilike(f"%{search}%"))
+        term = f"%{search}%"
+        q = q.where(
+            (Item.name.ilike(term)) | (Item.sku.ilike(term)) | (Item.barcode.ilike(term))
+        )
     if category_id:
         q = q.where(Item.category_id == category_id)
-    cq = select(func.count(Item.id)).where(Item.active == True)
-    if search:
-        cq = cq.where(Item.name.ilike(f"%{search}%"))
-    if category_id:
-        cq = cq.where(Item.category_id == category_id)
-    total = int((await db.execute(cq)).scalar() or 0)
+    total = 0
+    if include_total and not pos_mode:
+        cq = select(func.count(Item.id)).where(Item.active == True)
+        if search:
+            term = f"%{search}%"
+            cq = cq.where(
+                (Item.name.ilike(term)) | (Item.sku.ilike(term)) | (Item.barcode.ilike(term))
+            )
+        if category_id:
+            cq = cq.where(Item.category_id == category_id)
+        total = int((await db.execute(cq)).scalar() or 0)
     # NB: `available_stock` is a per-branch lookup done in Python below, not a
     # column on Item — we can't sort by it at the SQL level without a join. If
     # that becomes important, restructure the query to join ItemStock and add
@@ -107,8 +124,13 @@ async def list_items(
         default_key="name",
         default_order="asc",
     )
-    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
+    fetch_limit = lim + 1 if (pos_mode and not include_total) else lim
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(fetch_limit))
     items = result.scalars().all()
+    has_more = False
+    if pos_mode and not include_total:
+        has_more = len(items) > lim
+        items = items[:lim]
     ids = [it.id for it in items]
     stock_by_item = {}
     if ids:
@@ -138,6 +160,18 @@ async def list_items(
             "expiry_tracking": item.expiry_tracking,
             "available_stock": stock_by_item.get(item.id, 0),
         })
+    if pos_mode and not include_total:
+        return paged(
+            out,
+            total,
+            sk,
+            lim,
+            page_context={
+                "page_no": pn,
+                "per_page": pp,
+                "has_more_page": has_more,
+            },
+        )
     return paged(out, total, sk, lim)
 
 @router.post("/", dependencies=[Depends(require_perm("items.create"))])

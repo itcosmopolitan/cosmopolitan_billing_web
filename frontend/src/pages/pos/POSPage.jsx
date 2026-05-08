@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
 import { itemsAPI, customersAPI, salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fetchAllList } from '@/utils/pagination'
+import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { PRODUCTS, CUSTOMERS } from '@/utils/seedData'
 import { Modal } from '@/components/ui'
@@ -43,11 +43,16 @@ const mapSeedCustomersForBranch = (branchId) =>
 export default function POSPage() {
   const can = useCan()
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [activeCat, setActiveCat] = useState('all')
   const [showHeld, setShowHeld] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
   const [lastSale, setLastSale] = useState(null)
   const [products, setProducts] = useState([])
+  const [productPageNo, setProductPageNo] = useState(1)
+  const [productTotal, setProductTotal] = useState(null)
+  const [hasMoreProducts, setHasMoreProducts] = useState(false)
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false)
   const [customers, setCustomers] = useState([])
   const [categories, setCategories] = useState([{ id: 'all', name: 'All', icon: '⊞' }])
   const [loading, setLoading] = useState(true)
@@ -58,48 +63,86 @@ export default function POSPage() {
   const [dragOverSide, setDragOverSide] = useState(null)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
+  const productPaneRef = useRef(null)
+  const skipSearchEffectRef = useRef(true)
 
   const store = usePOSStore()
   const { activeBranch } = useAppStore()
   const { cart, customer, discountPct, discountAmt, heldBills, paymentMethod } = store
 
-  // Fetch products (branch stock) and customers when the active branch
-  // changes. fetchData is intentionally NOT in the dep array — it's
-  // declared below the effect and only references state that's already
-  // captured by activeBranch.id.
+  // Debounce product search to reduce API calls while typing.
   useEffect(() => {
-    fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBranch?.id])
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 250)
+    return () => clearTimeout(t)
+  }, [search])
 
-  const fetchData = async () => {
-    const branchId = activeBranch?.id || 'br-001'
+  const updateCategories = (rows, reset = false) => {
+    setCategories((prev) => {
+      const map = new Map()
+      if (!reset) {
+        prev.forEach((c) => {
+          if (c.id !== 'all') map.set(c.id, c.name)
+        })
+      }
+      rows.forEach((p) => {
+        if (p.categoryId) map.set(p.categoryId, p.categoryName || p.categoryId)
+      })
+      const merged = [...map.entries()]
+        .map(([id, name]) => ({ id, name, icon: '📦' }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      return [{ id: 'all', name: 'All', icon: '⊞' }, ...merged]
+    })
+  }
+
+  const loadProductsPage = async ({ branchId, pageNo, reset = false, resetCategories = false }) => {
+    const perPage = 100
+    const raw = await itemsAPI.list({
+      branch_id: branchId,
+      page_no: pageNo,
+      per_page: perPage,
+      search: debouncedSearch || undefined,
+      category_id: activeCat !== 'all' ? activeCat : undefined,
+      sort_by: 'name',
+      sort_order: 'asc',
+      pos_mode: true,
+      include_total: false,
+    })
+    const data = unwrapPaged(raw)
+    const rows = data.items || []
+    updateCategories(rows, resetCategories)
+    setProductTotal(typeof data.total === 'number' && data.total > 0 ? data.total : null)
+    setProductPageNo(data.pageNo || pageNo)
+    setHasMoreProducts(Boolean(data.hasMorePage))
+    if (reset) {
+      setProducts(rows)
+      return
+    }
+    setProducts((prev) => {
+      const seen = new Set(prev.map((p) => p.id))
+      const next = [...prev]
+      rows.forEach((r) => {
+        if (!seen.has(r.id)) next.push(r)
+      })
+      return next
+    })
+  }
+
+  const fetchCustomers = async () => {
+    const customersData = await fetchAllList(customersAPI.list)
+    setCustomers(customersData || [])
+  }
+
+  const resetProducts = async (branchId, resetCategories = false) => {
     try {
       setLoading(true)
-      const [itemsData, customersData] = await Promise.all([
-        fetchAllList(itemsAPI.list, { branch_id: branchId }),
-        fetchAllList(customersAPI.list),
-      ])
-
-      setProducts(itemsData || [])
-      setCustomers(customersData || [])
-
-      // Extract unique categories from products
-      if (itemsData && itemsData.length > 0) {
-        const uniqueCats = [...new Set(itemsData.map(p => p.categoryId))]
-        const catData = uniqueCats.map(catId => ({
-          id: catId,
-          name: itemsData.find(p => p.categoryId === catId)?.categoryName || catId,
-          icon: '📦'
-        }))
-        setCategories([{ id: 'all', name: 'All', icon: '⊞' }, ...catData])
-      }
+      await loadProductsPage({ branchId, pageNo: 1, reset: true, resetCategories })
     } catch (err) {
-      console.error('Failed to fetch data:', err)
+      console.error('Failed to fetch items:', err)
       const fallbackProducts = mapSeedProductsForBranch(branchId)
-      const fallbackCustomers = mapSeedCustomersForBranch(branchId)
       setProducts(fallbackProducts)
-      setCustomers(fallbackCustomers)
+      setProductTotal(fallbackProducts.length)
+      setProductPageNo(1)
+      setHasMoreProducts(false)
       const uniqueCats = [...new Set(fallbackProducts.map((p) => p.categoryId))]
       const catData = uniqueCats.map((catId) => ({
         id: catId,
@@ -112,6 +155,45 @@ export default function POSPage() {
       setLoading(false)
     }
   }
+
+  const loadMoreProducts = async () => {
+    if (loading || loadingMoreProducts || !hasMoreProducts) return
+    const branchId = activeBranch?.id || 'br-001'
+    try {
+      setLoadingMoreProducts(true)
+      await loadProductsPage({ branchId, pageNo: productPageNo + 1, reset: false })
+    } catch (err) {
+      console.error('Failed to fetch more items:', err)
+    } finally {
+      setLoadingMoreProducts(false)
+    }
+  }
+
+  useEffect(() => {
+    const branchId = activeBranch?.id || 'br-001'
+    setCategories([{ id: 'all', name: 'All', icon: '⊞' }])
+    resetProducts(branchId, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBranch?.id])
+
+  useEffect(() => {
+    if (skipSearchEffectRef.current) {
+      skipSearchEffectRef.current = false
+      return
+    }
+    const branchId = activeBranch?.id || 'br-001'
+    resetProducts(branchId, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, activeCat])
+
+  useEffect(() => {
+    const branchId = activeBranch?.id || 'br-001'
+    fetchCustomers().catch((err) => {
+      console.error('Failed to fetch customers:', err)
+      setCustomers(mapSeedCustomersForBranch(branchId))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBranch?.id])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -131,11 +213,7 @@ export default function POSPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart, paymentMethod, customer])
 
-  const filtered = products.filter((p) => {
-    const matchCat = activeCat === 'all' || p.categoryId === activeCat
-    const matchQ = !search || p.name.toLowerCase().includes(search.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(search.toLowerCase())) || (p.barcode && p.barcode.includes(search))
-    return matchCat && matchQ
-  })
+  const filtered = products
 
   const handleComplete = async () => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
@@ -301,7 +379,14 @@ export default function POSPage() {
 
       {/* Product browser — grid column follows leadingPanel */}
       <div
+        ref={productPaneRef}
         {...panelDropHandlers(productsDropSide)}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) {
+            loadMoreProducts()
+          }
+        }}
         style={{
           gridColumn: leadingPanel === 'products' ? 1 : 3,
           gridRow: 1,
@@ -394,6 +479,18 @@ export default function POSPage() {
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
             <div style={{ fontSize: 32, marginBottom: 10 }}>🔍</div>
             <div style={{ fontSize: 14 }}>No products found</div>
+          </div>
+        )}
+
+        {filtered.length > 0 && (
+          <div style={{ textAlign: 'center', padding: '12px 0 6px', color: 'var(--text-muted)', fontSize: 12 }}>
+            {loadingMoreProducts
+              ? 'Loading more products…'
+              : hasMoreProducts
+                ? 'Scroll to load more'
+                : productTotal
+                  ? `Loaded ${filtered.length} of ${productTotal}`
+                  : `Loaded ${filtered.length} items`}
           </div>
         )}
 
