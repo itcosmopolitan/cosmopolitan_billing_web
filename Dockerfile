@@ -16,7 +16,7 @@ RUN pip install -r backend/requirements.txt
 
 # ─── Build frontend (production build) ────────────────
 WORKDIR /app/frontend
-RUN npm install
+RUN yarn
 RUN yarn build
 
 # ─── Back to root ─────────────────────────────────────
