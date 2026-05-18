@@ -1,16 +1,15 @@
 """
-RetailOS Pro — Database Models
+Cosmopolitan Pro — Database Models
 All ORM models for the retail platform
 """
-from datetime import datetime
-from typing import Optional
-from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime,
-    ForeignKey, Text, JSON, Enum as SAEnum
-)
-from sqlalchemy.orm import relationship
-from src.database import Base
 import enum
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import relationship
+
+from src.database import Base
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -80,6 +79,24 @@ class Branch(Base):
     cash_entries = relationship("CashEntry", back_populates="branch")
 
 
+# ─── Role ─────────────────────────────────────────────────────────────────────
+# See docs/USERS_AND_ROLES.md §5.1. `permissions` is a JSON list of strings
+# from src.permissions.PERMISSIONS catalog (D1) — wildcards `*` and
+# `module.*` are allowed and expanded at check time.
+class Role(Base):
+    __tablename__ = "roles"
+    id          = Column(String, primary_key=True)
+    key         = Column(String, unique=True, nullable=False)
+    label       = Column(String, nullable=False)
+    description = Column(Text, default="")
+    color       = Column(String, default="blue")
+    permissions = Column(JSON, default=list)
+    is_system   = Column(Boolean, default=False)
+    active      = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ─── User ─────────────────────────────────────────────────────────────────────
 class User(Base):
     __tablename__ = "users"
@@ -87,7 +104,11 @@ class User(Base):
     name         = Column(String, nullable=False)
     email        = Column(String, nullable=False, unique=True)
     hashed_password = Column(String, nullable=False)
+    # Legacy denormalised role enum — kept as a read-cache for one release cycle
+    # (frontend and seed.py still write/read it). New code should resolve via
+    # `role_id` → `roles` table. Drop in Phase 3 (first Alembic migration).
     role         = Column(SAEnum(UserRole), default=UserRole.cashier)
+    role_id      = Column(String, ForeignKey("roles.id"), nullable=True)
     branch_id    = Column(String, ForeignKey("branches.id"), nullable=True)
     avatar       = Column(String)
     active       = Column(Boolean, default=True)

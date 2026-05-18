@@ -20,9 +20,20 @@ api.interceptors.response.use(
   (res) => res.data,
   (err) => {
     const msg = err?.response?.data?.detail || err.message || 'Request failed'
-    if (err?.response?.status === 401) {
-      localStorage.removeItem('retailos_token')
-      window.location.href = '/login'
+    const status = err?.response?.status
+    const url = err?.config?.url || ''
+    const isAuthEndpoint = url.startsWith('/auth/')
+    if (status === 401) {
+      // Always surface the message — silent redirect on 401 made wrong-password
+      // login look broken (no toast, no UI change).
+      toast.error(msg)
+      // Don't kick the user to /login if the failing request IS /auth/login
+      // (already there) or /auth/me (App.jsx boot — RequireAuth handles it).
+      if (!isAuthEndpoint) {
+        localStorage.removeItem('retailos_token')
+        const here = window.location.pathname
+        if (here !== '/login') window.location.href = '/login'
+      }
     } else {
       toast.error(msg)
     }
@@ -63,8 +74,8 @@ export const salesAPI = {
   create:  (data)   => api.post('/sales/', data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
-  returns: ()       => api.get('/sales/returns'),
-  creditPurchases: () => api.get('/sales/credit/purchases'),
+  returns: (params) => api.get('/sales/returns', { params }),
+  creditPurchases: (params) => api.get('/sales/credit/purchases', { params }),
   quotations: {
     list:    (params) => api.get('/sales/quotations/', { params }),
     get:     (id)     => api.get(`/sales/quotations/${id}`),
@@ -105,7 +116,7 @@ export const vendorsAPI = {
 
 // ─── Branches ────────────────────────────────────────────────────────────────
 export const branchesAPI = {
-  list:   ()       => api.get('/branches/'),
+  list:   (params) => api.get('/branches/', { params }),
   get:    (id)     => api.get(`/branches/${id}`),
   create: (data)   => api.post('/branches/', data),
   update: (id, data) => api.put(`/branches/${id}`, data),
@@ -140,8 +151,23 @@ export const reportsAPI = {
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 export const usersAPI = {
-  list:   ()         => api.get('/users/'),
+  list:   (params)   => api.get('/users/', { params }),
   create: (data)     => api.post('/users/', data),
   update: (id, data) => api.patch(`/users/${id}`, data),
   toggle: (id)       => api.patch(`/users/${id}/toggle`),
+}
+
+// ─── Roles ────────────────────────────────────────────────────────────────────
+// See docs/USERS_AND_ROLES.md §7.4. CRUD on roles + the read-only permission
+// catalog used by the Roles editor and useCan().
+export const rolesAPI = {
+  list:   ()         => api.get('/roles/'),
+  get:    (id)       => api.get(`/roles/${id}`),
+  create: (data)     => api.post('/roles/', data),
+  update: (id, data) => api.put(`/roles/${id}`, data),
+  delete: (id)       => api.delete(`/roles/${id}`),
+}
+
+export const permissionsAPI = {
+  catalog: () => api.get('/permissions/catalog'),
 }

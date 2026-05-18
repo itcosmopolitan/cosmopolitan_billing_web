@@ -1,16 +1,25 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { vendorsAPI, purchasesAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, PaginationBar, SortableHeader } from '@/components/ui'
+import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 
 export default function VendorsPage() {
+  const can = useCan()
   const [search, setSearch]   = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [vendors, setVendors] = useState([])
+  const [vendorTotal, setVendorTotal] = useState(0)
+  const [venSkip, setVenSkip] = useState(0)
+  const [venLimit, setVenLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [venSortBy, setVenSortBy] = useState('name')
+  const [venSortOrder, setVenSortOrder] = useState('asc')
   const [loading, setLoading] = useState(true)
+  const [listVersion, setListVersion] = useState(0)
   const [editingVendor, setEditingVendor] = useState(null)
   const [historyVendor, setHistoryVendor] = useState(null)
   const [historyData, setHistoryData] = useState([])
@@ -18,38 +27,53 @@ export default function VendorsPage() {
   const [form, setForm]       = useState({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
 
-  // Fetch vendors on mount
-  useEffect(() => {
-    fetchVendors()
-  }, [])
-
-  const fetchVendors = async () => {
+  const fetchVendors = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await vendorsAPI.list()
-      setVendors(data || [])
+      const raw = await vendorsAPI.list({
+        skip: venSkip,
+        limit: venLimit,
+        sort_by: venSortBy,
+        sort_order: venSortOrder,
+        search: search || undefined,
+      })
+      const { items, total } = unwrapPaged(raw)
+      setVendors(items || [])
+      setVendorTotal(total)
     } catch (err) {
       console.error('Failed to fetch vendors:', err)
       setVendors([])
+      setVendorTotal(0)
     } finally {
       setLoading(false)
     }
+    // listVersion is the manual cache-bust knob — bumping it triggers a
+    // re-fetch (used by save/edit/delete handlers below). Keep it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venSkip, venLimit, search, listVersion, venSortBy, venSortOrder])
+
+  const onSort = (key) => {
+    setVenSkip(0)
+    if (venSortBy === key) {
+      setVenSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setVenSortBy(key)
+    setVenSortOrder('asc')
   }
 
-  const filtered = useMemo(() => {
-    if (!search) return vendors
-    const q = search.toLowerCase()
-    return vendors.filter(v => 
-      v.name.toLowerCase().includes(q) || 
-      (v.contact_person && v.contact_person.toLowerCase().includes(q)) || 
-      (v.phone && v.phone.includes(q))
-    )
-  }, [vendors, search])
+  useEffect(() => {
+    fetchVendors()
+  }, [fetchVendors])
+
+  useEffect(() => {
+    setVenSkip(0)
+  }, [search])
 
   const save = async () => {
     if (!form.name) { toast.error('Vendor name required'); return }
     try {
-      const data = await vendorsAPI.create({
+      await vendorsAPI.create({
         name: form.name,
         contact_person: form.contact_person,
         phone: form.phone,
@@ -58,7 +82,7 @@ export default function VendorsPage() {
         gstin: form.gstin,
         payment_terms: form.payment_terms,
       })
-      setVendors(list => [...list, data])
+      setListVersion((v) => v + 1)
       toast.success('Vendor added')
       setShowAdd(false)
       setForm({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
@@ -85,7 +109,7 @@ export default function VendorsPage() {
   const saveEdit = async () => {
     if (!form.name) { toast.error('Vendor name required'); return }
     try {
-      const data = await vendorsAPI.update(editingVendor.id, {
+      await vendorsAPI.update(editingVendor.id, {
         name: form.name,
         contact_person: form.contact_person,
         phone: form.phone,
@@ -94,7 +118,7 @@ export default function VendorsPage() {
         gstin: form.gstin,
         payment_terms: form.payment_terms,
       })
-      setVendors(list => list.map(v => v.id === editingVendor.id ? data : v))
+      setListVersion((v) => v + 1)
       toast.success('Vendor updated')
       setShowEdit(false)
       setEditingVendor(null)
@@ -110,8 +134,9 @@ export default function VendorsPage() {
     setShowHistory(true)
     setHistoryLoading(true)
     try {
-      const data = await purchasesAPI.list({ vendor_id: vendor.id })
-      setHistoryData(data || [])
+      const raw = await purchasesAPI.list({ vendor_id: vendor.id, skip: 0, limit: 500 })
+      const { items } = unwrapPaged(raw)
+      setHistoryData(items || [])
     } catch (err) {
       console.error('Failed to fetch purchase history:', err)
       setHistoryData([])
@@ -122,7 +147,7 @@ export default function VendorsPage() {
   }
 
   const totals = {
-    total: vendors.length,
+    total: vendorTotal,
     outstanding: vendors.reduce((s,v)=>s+v.outstanding,0),
     topVendor: vendors.length > 0 ? vendors.reduce((a,v)=>v.total_purchases>a.total_purchases?v:a, vendors[0]) : null,
   }
@@ -133,7 +158,7 @@ export default function VendorsPage() {
     <div className="page-container">
       <SectionHeader title="Vendor Master" subtitle="Manage suppliers, payment terms, and outstanding payables">
         <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = filtered.map(v => ({
+          const exportData = vendors.map(v => ({
             'Vendor Name': v.name,
             'Contact Person': v.contact_person || '—',
             'Phone': v.phone || '—',
@@ -147,14 +172,16 @@ export default function VendorsPage() {
           exportToCSV(exportData, `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Vendors exported')
         }}>↓ Export</button>
-        <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
+        {can('vendors.create') && (
+          <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
+        )}
       </SectionHeader>
 
       <div className="grid-kpi" style={{marginBottom:20}}>
         <KPICard label="Total Vendors"   value={totals.total}              color="var(--accent)"  icon="🏭" />
         <KPICard label="Total Payables"  value={fmt(totals.outstanding)}   color="var(--red)"     icon="💳" />
         <KPICard label="Top Vendor"      value={totals.topVendor?.name.split(' ')[0]} color="var(--green)" sub={fmt(totals.topVendor?.total_purchases)} icon="🏆" />
-        <KPICard label="With Balance"    value={vendors.filter(v=>v.outstanding>0).length} color="var(--amber)" icon="⚠️" />
+        <KPICard label="With Balance"    value={vendors.filter(v=>v.outstanding>0).length} color="var(--amber)" icon="⚠️" sub="this page" />
       </div>
 
       <div className="filter-bar">
@@ -162,11 +189,21 @@ export default function VendorsPage() {
       </div>
 
       <Card bodyPadding={false}>
-        {filtered.length === 0 ? <EmptyState icon="🏭" title="No vendors found" /> : (
+        {vendors.length === 0 ? <EmptyState icon="🏭" title="No vendors found" /> : (
           <table className="data-table">
-            <thead><tr><th>Vendor</th><th>Contact</th><th>GSTIN</th><th>Payment Terms</th><th className="text-right">Outstanding</th><th className="text-right">Total Purchases</th><th></th></tr></thead>
+            <thead>
+              <tr>
+                <SortableHeader label="Vendor" sortKey="name" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                <SortableHeader label="Contact" sortKey="contact_person" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                <th>GSTIN</th>
+                <SortableHeader label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                <th></th>
+              </tr>
+            </thead>
             <tbody>
-              {filtered.map(v => (
+              {vendors.map(v => (
                 <tr key={v.id}>
                   <td>
                     <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
@@ -182,7 +219,9 @@ export default function VendorsPage() {
                   <td className="text-right mono">{fmt(v.total_purchases)}</td>
                   <td>
                     <div style={{display:'flex',gap:4}}>
-                      <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
+                      {can('vendors.edit') && (
+                        <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
+                      )}
                       <button className="btn btn-primary btn-xs" onClick={() => openHistory(v)}>History</button>
                     </div>
                   </td>
@@ -191,6 +230,14 @@ export default function VendorsPage() {
             </tbody>
           </table>
         )}
+        <PaginationBar
+          total={vendorTotal}
+          skip={venSkip}
+          limit={venLimit}
+          onSkipChange={setVenSkip}
+          onLimitChange={setVenLimit}
+          disabled={loading}
+        />
       </Card>
 
       <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Add Vendor" icon="🏭" size="md"

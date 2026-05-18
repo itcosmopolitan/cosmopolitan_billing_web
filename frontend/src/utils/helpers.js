@@ -110,10 +110,10 @@ export const exportToCSV = (data, filename = 'export.csv', columns = null) => {
 
   // Use provided columns or extract from first row
   const cols = columns || Object.keys(data[0])
-  
+
   // Create CSV header
   const header = cols.join(',')
-  
+
   // Create CSV rows
   const rows = data.map(row =>
     cols.map(col => {
@@ -122,15 +122,15 @@ export const exportToCSV = (data, filename = 'export.csv', columns = null) => {
       if (val === null || val === undefined) return ''
       const str = String(val)
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"` 
+        return `"${str.replace(/"/g, '""')}"`
       }
       return str
     }).join(',')
   )
-  
+
   // Combine and add BOM for UTF-8 Excel compatibility
   const csv = '\uFEFF' + header + '\n' + rows.join('\n')
-  
+
   // Create blob and download
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
 export function Modal({ open, onClose, title, children, footer, size = 'md', icon }) {
@@ -289,6 +289,9 @@ export function Tag({ children, color }) {
     </span>
   )
 }
+
+export { PaginationBar } from './PaginationBar'
+export { SortableHeader } from './SortableHeader'
 
 // ─── Inline Bar Chart ─────────────────────────────────────────────────────────
 export function BarList({ items, valueFormatter = (v) => v, color = 'var(--accent)' }) {

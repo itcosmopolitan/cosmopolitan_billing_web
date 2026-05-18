@@ -1,0 +1,47 @@
+# Pre-commit hooks. Install once with `pre-commit install` (after `pip install
+# pre-commit`); thereafter every `git commit` runs these.
+#
+# Order: cheap generic hooks first (whitespace, EOF, JSON), then the
+# language-specific linters scoped to their workspaces.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(frontend/(dist|public)|backend/retailos\.db|.*\.lock|.*\.snap)
+      - id: end-of-file-fixer
+        exclude: ^(frontend/(dist|public)|backend/retailos\.db|.*\.lock|.*\.snap)
+      - id: check-yaml
+      - id: check-json
+        # package.json has comments-via-trailing-commas in some tooling; keep
+        # this strict by default and add per-file excludes only if needed.
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=512']
+
+  # Backend — ruff (config in backend/pyproject.toml).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff
+        name: ruff (backend)
+        files: ^backend/src/.*\.py$
+        args: [--fix]
+
+  # Frontend — eslint (config in frontend/.eslintrc.cjs). Runs the workspace's
+  # pinned eslint binary so we don't depend on a global install.
+  #
+  # Pre-commit passes file paths relative to the repo root (e.g.
+  # "frontend/src/foo.jsx"). After `cd frontend` those paths point at
+  # frontend/frontend/src/foo.jsx which doesn't exist — eslint then errors
+  # with "No files matching the pattern" for every file. The fix builds an
+  # args array that strips the leading "frontend/" prefix from each path
+  # before invoking eslint. Tested on Git Bash for Windows.
+  - repo: local
+    hooks:
+      - id: eslint-frontend
+        name: eslint (frontend)
+        entry: bash -c 'cd frontend && args=(); for f in "$@"; do args+=("${f#frontend/}"); done; exec npx --no-install eslint --max-warnings=0 "${args[@]}"' --
+        language: system
+        files: ^frontend/src/.*\.(js|jsx)$
+        pass_filenames: true

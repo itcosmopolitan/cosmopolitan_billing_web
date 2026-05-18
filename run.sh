@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RetailOS Pro — One-click launcher
+# Cosmopolitan Pro — One-click launcher
 # Usage: ./run.sh
 
 set -e
@@ -12,7 +12,7 @@ RESET='\033[0m'
 
 echo ""
 echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${CYAN}║        RetailOS Pro v2.4 — Launcher      ║${RESET}"
+echo -e "${BOLD}${CYAN}║       Cosmopolitan Pro — Launcher        ║${RESET}"
 echo -e "${BOLD}${CYAN}║   Multi-Branch Retail Management Platform ║${RESET}"
 echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${RESET}"
 echo ""
@@ -83,7 +83,7 @@ sleep 3
 
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${GREEN}║          RetailOS Pro is running!         ║${RESET}"
+echo -e "${BOLD}${GREEN}║       Cosmopolitan Pro is running!        ║${RESET}"
 echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════╣${RESET}"
 echo -e "${BOLD}${GREEN}║  App:      http://localhost:3000          ║${RESET}"
 echo -e "${BOLD}${GREEN}║  API Docs: http://localhost:8080/api/docs ║${RESET}"

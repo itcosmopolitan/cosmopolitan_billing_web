@@ -2,27 +2,46 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
+import { authAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { Avatar } from '@/components/ui'
+import { roleLabels } from '@/utils/helpers'
 
+// Phase 2: each nav item declares the permission required to *see* it.
+// Items without `perm` (or with perm: null) are visible to everyone (e.g. a
+// future "Help" link). The `useCan` filter applied below hides anything the
+// current user can't access — same source-of-truth strings as the backend
+// route guards in src/security.py require_perm().
 const navItems = [
-  { section: null,        path: '/dashboard',  icon: '▦',  label: 'Dashboard' },
-  { section: null,        path: '/pos',         icon: '🧾', label: 'POS Billing',      badge: null },
-  { section: 'Inventory', path: '/items',       icon: '📦', label: 'Items & Stock',    badge: 4 },
-  { section: null,        path: '/transfers',   icon: '↔',  label: 'Stock Transfers',  badge: 1 },
-  { section: 'Commerce',  path: '/sales',       icon: '🛒', label: 'Sales' },
-  { section: null,        path: '/purchases',   icon: '📋', label: 'Purchases',        badge: 5 },
-  { section: null,        path: '/customers',   icon: '👥', label: 'Customers' },
-  { section: null,        path: '/vendors',     icon: '🏭', label: 'Vendors' },
-  { section: 'Finance',   path: '/cash',        icon: '💰', label: 'Cash Control' },
-  { section: null,        path: '/reports',     icon: '📊', label: 'Reports' },
-  { section: 'Admin',     path: '/settings',    icon: '⚙', label: 'Settings' },
-  { section: null,        path: '/audit',       icon: '🔍', label: 'Audit Trail' },
+  { section: null,        path: '/dashboard', icon: '▦',  label: 'Dashboard',       perm: 'dashboard.view' },
+  { section: null,        path: '/pos',        icon: '🧾', label: 'POS Billing',     perm: 'pos.use' },
+  { section: 'Inventory', path: '/items',      icon: '📦', label: 'Items & Stock',   perm: 'items.view',     badge: 4 },
+  { section: null,        path: '/transfers',  icon: '↔',  label: 'Stock Transfers', perm: 'transfers.view', badge: 1 },
+  { section: 'Commerce',  path: '/sales',      icon: '🛒', label: 'Sales',           perm: 'invoices.view' },
+  { section: null,        path: '/purchases',  icon: '📋', label: 'Purchases',       perm: 'purchases.view', badge: 5 },
+  { section: null,        path: '/customers',  icon: '👥', label: 'Customers',       perm: 'customers.view' },
+  { section: null,        path: '/vendors',    icon: '🏭', label: 'Vendors',         perm: 'vendors.view' },
+  { section: 'Finance',   path: '/cash',       icon: '💰', label: 'Cash Control',    perm: 'cash.view' },
+  { section: null,        path: '/reports',    icon: '📊', label: 'Reports',         perm: 'reports.view' },
+  { section: 'Admin',     path: '/settings',   icon: '⚙', label: 'Settings',        perm: 'settings.view' },
+  { section: null,        path: '/audit',      icon: '🔍', label: 'Audit Trail',     perm: 'audit.view' },
 ]
 
 export default function Sidebar() {
   const navigate = useNavigate()
   const [showUserMenu, setShowUserMenu] = useState(false)
-  const { user, activeBranch, branches, setActiveBranch, sidebarCollapsed } = useAppStore()
+  const { user, activeBranch, branches, setActiveBranch, sidebarCollapsed, roles, clearSession } = useAppStore()
+  const can = useCan()
+
+  // Resolve the role label dynamically. Prefer the live `roles` list (covers
+  // custom roles) and fall back to the static `roleLabels` map for the system
+  // roles that ship with the app, then to the raw role string.
+  const userRole = roles.find((r) => r.id === user?.role_id) || roles.find((r) => r.key === user?.role)
+  const userRoleLabel = userRole?.label || roleLabels[user?.role] || user?.role || ''
+
+  // Phase 2: hide nav items the current user can't access. Items without a
+  // `perm` are always visible.
+  const visibleNav = navItems.filter((item) => !item.perm || can(item.perm))
 
   let lastSection = null
 
@@ -56,7 +75,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {navItems.map((item) => {
+        {visibleNav.map((item) => {
           const showSection = item.section && item.section !== lastSection
           if (item.section) lastSection = item.section
           return (
@@ -108,17 +127,15 @@ export default function Sidebar() {
           <select
             className="form-input"
             style={{ padding: '6px 10px', fontSize: 12 }}
-            value={activeBranch.id}
+            value={activeBranch?.id || ''}
             onChange={(e) => {
               const b = branches.find((x) => x.id === e.target.value)
               if (b) setActiveBranch(b)
             }}
           >
-            <option>Male</option>
-<option>Addu</option> 
-<option>Hulhumalé</option> 
-<option>Felidhoo</option> 
-<option>Warehouse</option> 
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
           </select>
         </div>
       )}
@@ -142,11 +159,11 @@ export default function Sidebar() {
           onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
-          <Avatar initials={user.avatar} size={30} />
+          <Avatar initials={user?.avatar || '?'} size={30} />
           {!sidebarCollapsed && (
             <div style={{ overflow: 'hidden', textAlign: 'left' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>Super Admin</div>
+              <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.name || '—'}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{userRoleLabel}</div>
             </div>
           )}
         </button>
@@ -168,8 +185,8 @@ export default function Sidebar() {
           }}>
             {/* Profile Info */}
             <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{user.name}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{user.email}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{user?.name || '—'}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{user?.email || ''}</div>
             </div>
 
             {/* Menu Items */}
@@ -233,11 +250,15 @@ export default function Sidebar() {
               </button>
 
               <button
-                onClick={() => {
+                onClick={async () => {
+                  setShowUserMenu(false)
+                  // Best-effort server notification (no-op today, kept for
+                  // symmetry / future audit logging).
+                  authAPI.logout().catch(() => {})
                   localStorage.removeItem('retailos_token')
+                  clearSession()
                   toast.success('Logged out successfully')
                   navigate('/login')
-                  setShowUserMenu(false)
                 }}
                 style={{
                   width: '100%',

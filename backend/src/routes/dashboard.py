@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Query
 from typing import Optional
+
+from fastapi import APIRouter, Depends
+
+from src.security import require_perm
 
 router = APIRouter()
 
-@router.get("/kpis")
+# All dashboard endpoints are gated on `dashboard.view`. The dashboard.export
+# permission exists in the catalog but no dedicated export endpoint lives here
+# yet — add one (and gate it on `dashboard.export`) when the UI grows that.
+
+@router.get("/kpis", dependencies=[Depends(require_perm("dashboard.view"))])
 async def get_kpis(branch_id: Optional[str] = None):
     return {
         "today_sales": 124850,
@@ -16,13 +23,13 @@ async def get_kpis(branch_id: Optional[str] = None):
         "overdue_invoices": 18,
     }
 
-@router.get("/sales-trend")
+@router.get("/sales-trend", dependencies=[Depends(require_perm("dashboard.view"))])
 async def sales_trend(days: int = 14, branch_id: Optional[str] = None):
     import random
     dates = [f"Apr {i}" for i in range(3, 17)]
     return [{"date": d, "sales": random.randint(70000, 150000), "purchases": random.randint(10000, 90000)} for d in dates]
 
-@router.get("/top-products")
+@router.get("/top-products", dependencies=[Depends(require_perm("dashboard.view"))])
 async def top_products(branch_id: Optional[str] = None, limit: int = 5):
     return [
         {"name": "Basmati Rice 5kg", "units": 84, "revenue": 25200},
@@ -32,7 +39,7 @@ async def top_products(branch_id: Optional[str] = None, limit: int = 5):
         {"name": "Amul Butter 500g", "units": 68,  "revenue": 10200},
     ]
 
-@router.get("/branch-comparison")
+@router.get("/branch-comparison", dependencies=[Depends(require_perm("dashboard.view"))])
 async def branch_comparison():
     return [
         {"branch": "Anna Nagar", "sales": 124850, "purchases": 48200},
@@ -41,7 +48,7 @@ async def branch_comparison():
         {"branch": "Velachery",  "sales": 46200,  "purchases": 18000},
     ]
 
-@router.get("/alerts")
+@router.get("/alerts", dependencies=[Depends(require_perm("dashboard.view"))])
 async def alerts():
     return [
         {"type": "danger", "text": "Basmati Rice critical stock at T.Nagar", "module": "inventory"},

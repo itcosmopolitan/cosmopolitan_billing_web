@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { transfersAPI, branchesAPI, itemsAPI } from '@/api'
-import { fmtDate, fmt } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, KPICard, EmptyState, AlertBar } from '@/components/ui'
+import { useCan } from '@/auth/permissions'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, KPICard, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 const TABS = [
   { id: 'all',      label: 'All Transfers' },
@@ -19,27 +20,27 @@ const STEPS = [
 ]
 
 export default function TransfersPage() {
+  const can = useCan()
   const [tab, setTab]           = useState('all')
   const [showNew, setShowNew]   = useState(false)
   const [showDetail, setShowDetail] = useState(null)
   const [transfers, setTransfers] = useState([])
+  const [trSkip, setTrSkip] = useState(0)
+  const [trLimit, setTrLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [trSortBy, setTrSortBy] = useState('created_at')
+  const [trSortOrder, setTrSortOrder] = useState('desc')
   const [branches, setBranches] = useState([])
   const [items, setItems]       = useState([])
   const [loading, setLoading]   = useState(true)
   const [newForm, setNewForm]   = useState({ from_branch_id: 'br-001', to_branch_id: 'br-002', priority: 'Normal', notes: '', items: [{ item_id: '', qty: '' }] })
 
-  // Fetch data on mount
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true)
       const [transfersData, branchesData, itemsData] = await Promise.all([
-        transfersAPI.list(),
-        branchesAPI.list().catch(() => []),
-        itemsAPI.list().catch(() => [])
+        fetchAllList(transfersAPI.list),
+        fetchAllList(branchesAPI.list).catch(() => []),
+        fetchAllList(itemsAPI.list, { branch_id: 'br-001' }).catch(() => []),
       ])
       setTransfers(transfersData || [])
       setBranches(branchesData || [])
@@ -51,11 +52,45 @@ export default function TransfersPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  useEffect(() => {
+    setTrSkip(0)
+  }, [tab])
 
   const patchForm = (k, v) => setNewForm((f) => ({ ...f, [k]: v }))
 
-  const filtered = tab === 'all' ? transfers : transfers.filter((t) => t.status === tab)
+  const filtered = useMemo(() => {
+    const base = tab === 'all' ? transfers : transfers.filter((t) => t.status === tab)
+    // Client-side sort (same reasoning as ItemsPage — page uses fetchAllList).
+    const dir = trSortOrder === 'desc' ? -1 : 1
+    const valueOf = (row) => row[trSortBy] ?? ''
+    return [...base].sort((a, b) => {
+      const av = valueOf(a)
+      const bv = valueOf(b)
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
+      return String(av).localeCompare(String(bv)) * dir
+    })
+  }, [transfers, tab, trSortBy, trSortOrder])
+
+  const onSort = (key) => {
+    setTrSkip(0)
+    if (trSortBy === key) {
+      setTrSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setTrSortBy(key)
+    setTrSortOrder(key === 'created_at' ? 'desc' : 'asc')
+  }
+
+  const pageRows = useMemo(
+    () => filtered.slice(trSkip, trSkip + trLimit),
+    [filtered, trSkip, trLimit]
+  )
 
   const approve = async (id) => {
     try {
@@ -119,14 +154,16 @@ export default function TransfersPage() {
   return (
     <div className="page-container">
       <SectionHeader title="Stock Transfers" subtitle="Move stock between branches with approval workflow">
-        <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New Transfer</button>
+        {can('transfers.create') && (
+          <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New Transfer</button>
+        )}
       </SectionHeader>
 
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
         <KPICard label="Pending Approval" value={pending}  color="var(--amber)" icon="⏳" />
         <KPICard label="In Transit"       value={transit}  color="var(--blue)"  icon="🚚" />
         <KPICard label="Received (Apr)"   value={received} color="var(--green)" icon="✅" />
-        <KPICard label="Total"            value={transfers.length} color="var(--accent)" icon="↔" />
+        <KPICard label="Total"            value={transfers.length} color="var(--accent)" icon="↔" sub="all transfers" />
       </div>
 
       {pending > 0 && <AlertBar type="amber" icon="⚠️" style={{ marginBottom: 16 }}>
@@ -141,16 +178,16 @@ export default function TransfersPage() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Ref #</th>
-                    <th>From → To</th>
+                    <SortableHeader label="Ref #" sortKey="ref_number" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                    <SortableHeader label="From → To" sortKey="from_branch_id" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                     <th>Items</th>
-                    <th>Status</th>
-                    <th>Date</th>
+                    <SortableHeader label="Status" sortKey="status" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                    <SortableHeader label="Date" sortKey="created_at" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((t) => (
+                  {pageRows.map((t) => (
                     <tr key={t.id}>
                       <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{t.number || t.ref_number}</span></td>
                       <td>
@@ -168,8 +205,8 @@ export default function TransfersPage() {
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
                           <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(t)}>View</button>
-                          {t.status === 'pending'  && <button className="btn btn-primary btn-xs" onClick={() => approve(t.id)}>Approve</button>}
-                          {t.status === 'transit'  && <button className="btn btn-success btn-xs" onClick={() => receive(t.id)}>Receive</button>}
+                          {t.status === 'pending'  && can('transfers.approve') && <button className="btn btn-primary btn-xs" onClick={() => approve(t.id)}>Approve</button>}
+                          {t.status === 'transit'  && can('transfers.receive') && <button className="btn btn-success btn-xs" onClick={() => receive(t.id)}>Receive</button>}
                         </div>
                       </td>
                     </tr>
@@ -177,6 +214,14 @@ export default function TransfersPage() {
                 </tbody>
               </table>
             )}
+            <PaginationBar
+              total={filtered.length}
+              skip={trSkip}
+              limit={trLimit}
+              onSkipChange={setTrSkip}
+              onLimitChange={setTrLimit}
+              disabled={loading}
+            />
           </Card>
         </div>
 

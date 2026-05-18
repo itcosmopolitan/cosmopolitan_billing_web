@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { SectionHeader, Card, SearchBar, Chip, Tag } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Tag } from '@/components/ui'
 
 const AUDIT_LOGS = [
   { id:1, action:'Invoice Created',       user:'Arjun M.',    module:'Sales',    ref:'INV-2024-1847', detail:'Created invoice for Rajesh Stores — ₹10,642', time:'16 Apr 2024, 10:42 AM', risk:'low' },

@@ -18,12 +18,12 @@ const pageTitles = {
 }
 
 export default function Topbar() {
-  const { activeBranch, toggleSidebar, sidebarCollapsed, theme, setTheme } = useAppStore()
+  const { activeBranch, toggleSidebar, theme, setTheme } = useAppStore()
   const location = useLocation()
   const navigate = useNavigate()
   const [notifOpen, setNotifOpen] = useState(false)
 
-  const title = pageTitles[location.pathname] || 'RetailOS Pro'
+  const title = pageTitles[location.pathname] || 'Cosmopolitan Pro'
 
   const notifications = [
     { id: 1, type: 'warning', text: 'Basmati Rice critical stock at T.Nagar', time: '10 min ago' },
@@ -53,14 +53,17 @@ export default function Topbar() {
         <span>+</span> New Sale
       </button>
 
-      {/* Branch pill */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 11px',
-        background: 'var(--bg-raised)', border: '1px solid var(--border-default)',
-        borderRadius: 8, cursor: 'default', fontSize: 12.5, color: 'var(--text-secondary)',
-      }}>
+      {/* Branch pill — bound to activeBranch from the store. */}
+      <div
+        title={activeBranch?.name || 'No branch selected'}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '5px 11px',
+          background: 'var(--bg-raised)', border: '1px solid var(--border-default)',
+          borderRadius: 8, cursor: 'default', fontSize: 12.5, color: 'var(--text-secondary)',
+        }}
+      >
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
-        Male
+        {activeBranch?.name || '—'}
       </div>
 
       {/* Notifications */}

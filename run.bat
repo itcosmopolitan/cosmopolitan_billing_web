@@ -1,10 +1,10 @@
 @echo off
-title RetailOS Pro Launcher
+title Cosmopolitan Pro Launcher
 color 0B
 
 echo.
 echo  ==========================================
-echo       RetailOS Pro v2.4 -- Launcher
+echo       Cosmopolitan Pro -- Launcher
 echo   Multi-Branch Retail Management Platform
 echo  ==========================================
 echo.
@@ -54,19 +54,19 @@ echo.
 
 :: Start backend in new window
 cd /d "%~dp0backend"
-start "RetailOS Backend" cmd /k "uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload"
+start "Cosmopolitan Backend" cmd /k "uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload"
 
 timeout /t 3 /nobreak >nul
 
 :: Start frontend in new window
 cd /d "%~dp0frontend"
-start "RetailOS Frontend" cmd /k "npm run dev"
+start "Cosmopolitan Frontend" cmd /k "npm run dev"
 
 timeout /t 4 /nobreak >nul
 
 echo.
 echo  ==========================================
-echo       RetailOS Pro is running!
+echo       Cosmopolitan Pro is running!
 echo  ==========================================
 echo   App:      http://localhost:3000
 echo   API Docs: http://localhost:8080/api/docs

@@ -1,11 +1,16 @@
+import uuid
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+
 from src.database import get_db
 from src.models import Customer
-from pydantic import BaseModel
-from typing import Optional
-import uuid
+from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.routes._serializers import serialize_customer
+from src.security import require_perm
 
 router = APIRouter()
 
@@ -19,32 +24,121 @@ class CustomerCreate(BaseModel):
     credit_limit: float = 10000
     customer_type: str = "retail"
 
-@router.get("/")
+
+class CustomerUpdate(BaseModel):
+    """Typed update body — restricts client-writeable fields. `outstanding`
+    and `total_purchases` are derived by sales/payment flows and must not be
+    settable via PATCH."""
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    gstin: Optional[str] = None
+    branch_id: Optional[str] = None
+    credit_limit: Optional[float] = None
+    type: Optional[str] = None
+    notes: Optional[str] = None
+    active: Optional[bool] = None
+
+@router.get("/", dependencies=[Depends(require_perm("customers.view"))])
 async def list_customers(
     search: Optional[str] = None,
     customer_type: Optional[str] = None,
     branch_id: Optional[str] = None,
-    skip: int = 0, limit: int = 100,
-    db: AsyncSession = Depends(get_db)
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
 ):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
     q = select(Customer)
-    if search:        q = q.where(Customer.name.ilike(f"%{search}%"))
-    if customer_type: q = q.where(Customer.type == customer_type)
-    if branch_id:     q = q.where(Customer.branch_id == branch_id)
-    result = await db.execute(q.offset(skip).limit(limit))
+    cq = select(func.count(Customer.id))
+    if search:
+        term = f"%{search}%"
+        q = q.where(
+            or_(
+                Customer.name.ilike(term),
+                Customer.phone.ilike(term),
+                Customer.email.ilike(term),
+            )
+        )
+        cq = cq.where(
+            or_(
+                Customer.name.ilike(term),
+                Customer.phone.ilike(term),
+                Customer.email.ilike(term),
+            )
+        )
+    if customer_type:
+        q = q.where(Customer.type == customer_type)
+        cq = cq.where(Customer.type == customer_type)
+    if branch_id:
+        q = q.where(Customer.branch_id == branch_id)
+        cq = cq.where(Customer.branch_id == branch_id)
+    total = int((await db.execute(cq)).scalar() or 0)
+    conds = []
+    if search:
+        term = f"%{search}%"
+        conds.append(
+            or_(
+                Customer.name.ilike(term),
+                Customer.phone.ilike(term),
+                Customer.email.ilike(term),
+            )
+        )
+    if customer_type:
+        conds.append(Customer.type == customer_type)
+    if branch_id:
+        conds.append(Customer.branch_id == branch_id)
+    outstanding_total = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Customer.outstanding), 0)).where(and_(*conds) if conds else True)
+            )
+        ).scalar()
+        or 0
+    )
+    wb_filter = and_(Customer.outstanding > 0, *conds) if conds else (Customer.outstanding > 0)
+    with_balance = int((await db.execute(select(func.count(Customer.id)).where(wb_filter))).scalar() or 0)
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "name": Customer.name,
+            "phone": Customer.phone,
+            "email": Customer.email,
+            "customer_type": Customer.type,
+            "credit_limit": Customer.credit_limit,
+            "outstanding": Customer.outstanding,
+            "total_purchases": Customer.total_purchases,
+            "created_at": Customer.created_at,
+        },
+        default_key="name",
+        default_order="asc",
+    )
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     customers = result.scalars().all()
-    return [_cust_dict(c) for c in customers]
+    items = [serialize_customer(c) for c in customers]
+    return paged(
+        items,
+        total,
+        sk,
+        lim,
+        summary={"outstandingTotal": outstanding_total, "withBalanceCount": with_balance},
+    )
 
-@router.get("/{customer_id}")
+@router.get("/{customer_id}", dependencies=[Depends(require_perm("customers.view"))])
 async def get_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Customer).where(Customer.id == customer_id))
     c = result.scalar_one_or_none()
-    if not c: raise HTTPException(404, "Customer not found")
-    return _cust_dict(c)
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    return serialize_customer(c)
 
-@router.post("/", status_code=201)
+@router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create"))])
 async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db)):
-    print(data)
     c = Customer(id=str(uuid.uuid4()), name=data.name, phone=data.phone,
                  email=data.email, address=data.address, gstin=data.gst_in,
                  branch_id=data.branch_id, credit_limit=data.credit_limit,
@@ -53,21 +147,13 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     await db.commit()
     return {"id": c.id, "message": "Customer created"}
 
-@router.put("/{customer_id}")
-async def update_customer(customer_id: str, data: dict, db: AsyncSession = Depends(get_db)):
+@router.put("/{customer_id}", dependencies=[Depends(require_perm("customers.edit"))])
+async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Customer).where(Customer.id == customer_id))
     c = result.scalar_one_or_none()
-    if not c: raise HTTPException(404, "Customer not found")
-    for k, v in data.items():
-        if hasattr(c, k): setattr(c, k, v)
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(c, k, v)
     await db.commit()
     return {"message": "Updated"}
-
-def _cust_dict(c):
-    return {
-        "id": c.id, "name": c.name, "phone": c.phone, "email": c.email,
-        "address": c.address, "gst_in": c.gstin, "branch_id": c.branch_id,
-        "credit_limit": c.credit_limit, "outstanding": c.outstanding,
-        "total_purchases": c.total_purchases, "customer_type": c.type,
-        "active": c.active,
-    }

@@ -1,13 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
-from sqlalchemy.orm import selectinload
-from src.database import get_db
-from src.models import SaleInvoice, SaleLineItem, ItemStock, Quotation, QuotationLineItem, Customer
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
 import uuid
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from src.database import get_db
+from src.models import (
+    InvoiceStatus,
+    Quotation,
+    QuotationLineItem,
+    QuotationStatus,
+    SaleInvoice,
+    SaleLineItem,
+)
+from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.routes._atomic import add_payment_atomic, adjust_stock_atomic
+from src.security import require_perm
 
 router = APIRouter()
 
@@ -91,8 +103,84 @@ SAMPLE_RETURNS = [
     }
 ]
 
+
+def _sale_invoice_filters(
+    branch_id: Optional[str],
+    status: Optional[str],
+    customer_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+):
+    conds = []
+    if branch_id:
+        conds.append(SaleInvoice.branch_id == branch_id)
+    if status:
+        try:
+            conds.append(SaleInvoice.status == InvoiceStatus(status))
+        except ValueError:
+            conds.append(SaleInvoice.status == status)
+    if customer_id:
+        conds.append(SaleInvoice.customer_id == customer_id)
+    if date_from:
+        conds.append(SaleInvoice.date >= date_from)
+    if date_to:
+        conds.append(SaleInvoice.date <= date_to)
+    if search:
+        conds.append(
+            or_(
+                SaleInvoice.number.ilike(f"%{search}%"),
+                SaleInvoice.customer_name.ilike(f"%{search}%"),
+            )
+        )
+    return conds
+
+
+async def _sales_list_summary(db: AsyncSession, conds):
+    base = and_(*conds) if conds else True
+    amount_total = float(
+        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(base))).scalar() or 0
+    )
+    collected_paid = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(
+                    and_(base, SaleInvoice.status == InvoiceStatus.paid)
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    credit_pending = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0)).where(
+                    and_(base, SaleInvoice.status == InvoiceStatus.pending)
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    overdue_total = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(
+                    and_(base, SaleInvoice.status == InvoiceStatus.overdue)
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    return {
+        "amountTotal": amount_total,
+        "collectedPaid": collected_paid,
+        "creditPending": credit_pending,
+        "overdueTotal": overdue_total,
+    }
+
+
 # ─── LIST ─────────────────────────────────────────────────────────────────────
-@router.get("/")
+@router.get("/", dependencies=[Depends(require_perm("invoices.view"))])
 async def list_invoices(
     branch_id: Optional[str] = None,
     status: Optional[str] = None,
@@ -100,48 +188,115 @@ async def list_invoices(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(SaleInvoice).order_by(SaleInvoice.created_at.desc())
-    if branch_id:   q = q.where(SaleInvoice.branch_id == branch_id)
-    if status:      q = q.where(SaleInvoice.status == status)
-    if customer_id: q = q.where(SaleInvoice.customer_id == customer_id)
-    if date_from:   q = q.where(SaleInvoice.date >= date_from)
-    if date_to:     q = q.where(SaleInvoice.date <= date_to)
-    if search:
-        q = q.where(or_(
-            SaleInvoice.number.ilike(f"%{search}%"),
-            SaleInvoice.customer_name.ilike(f"%{search}%"),
-        ))
-    result = await db.execute(q.offset(skip).limit(limit))
-    invoices = result.scalars().all()
-    out = []
-    for inv in invoices:
-        li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == inv.id))
-        items = li_res.scalars().all()
-        out.append(_inv_dict(inv, items))
-    return out
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to)
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "number": SaleInvoice.number,
+            "customer_name": SaleInvoice.customer_name,
+            "branch_id": SaleInvoice.branch_id,
+            "date": SaleInvoice.date,
+            "cashier": SaleInvoice.cashier,
+            "total": SaleInvoice.total,
+            "paid_amount": SaleInvoice.paid_amount,
+            "balance_due": (SaleInvoice.total - SaleInvoice.paid_amount),
+            "status": SaleInvoice.status,
+            "payment_mode": SaleInvoice.payment_mode,
+            "created_at": SaleInvoice.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    q = (
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+    )
+    if conds:
+        q = q.where(and_(*conds))
+    count_r = await db.execute(select(func.count(SaleInvoice.id)).where(and_(*conds)) if conds else select(func.count(SaleInvoice.id)))
+    total = int(count_r.scalar() or 0)
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
+    invoices = result.unique().scalars().all()
+    out = [_inv_dict(inv, inv.line_items) for inv in invoices]
+    summary = await _sales_list_summary(db, conds)
+    return paged(out, total, sk, lim, summary=summary)
 
 # ─── LIST RETURNS ────────────────────────────────────────────────────────────
-@router.get("/returns")
-async def list_returns(db: AsyncSession = Depends(get_db)):
-    """List all credit notes / returns"""
-    return SAMPLE_RETURNS
+@router.get("/returns", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_returns(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """List all credit notes / returns. Sorted in Python because SAMPLE_RETURNS
+    is a static list — no SQL backing yet."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    key_map = {
+        "number":        lambda r: r.get("number", ""),
+        "customer_name": lambda r: r.get("customer_name", ""),
+        "ref_invoice":   lambda r: r.get("ref_invoice", ""),
+        "date":          lambda r: r.get("date", ""),
+        "amount":        lambda r: r.get("amount", 0),
+        "status":        lambda r: r.get("status", ""),
+    }
+    selected_key = sort_by if sort_by in key_map else "date"
+    desc = (sort_order or "desc").strip().lower() == "desc"
+    sorted_data = sorted(SAMPLE_RETURNS, key=key_map[selected_key], reverse=desc)
+    data = sorted_data[sk : sk + lim]
+    return paged(data, len(SAMPLE_RETURNS), sk, lim)
 
 # ─── QUOTATIONS ───────────────────────────────────────────────────────────────
-@router.get("/quotations/")
-async def list_quotations(branch_id: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+@router.get("/quotations/", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_quotations(
+    branch_id: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
     """List all quotations"""
-    q = select(Quotation).options(selectinload(Quotation.line_items))
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    q_count = select(func.count(Quotation.id))
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "number": Quotation.number,
+            "customer_name": Quotation.customer_name,
+            "branch_id": Quotation.branch_id,
+            "date": Quotation.date,
+            "valid_until": Quotation.valid_until,
+            "total": Quotation.total,
+            "status": Quotation.status,
+            "created_at": Quotation.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    q = select(Quotation).options(selectinload(Quotation.line_items)).order_by(sort_expr)
     if branch_id:
         q = q.where(Quotation.branch_id == branch_id)
-    result = await db.execute(q)
+        q_count = q_count.where(Quotation.branch_id == branch_id)
+    total = int((await db.execute(q_count)).scalar() or 0)
+    result = await db.execute(q.offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
-    return [_quote_dict(q, q.line_items) for q in quotations]
+    items_out = [_quote_dict(qt, qt.line_items) for qt in quotations]
+    return paged(items_out, total, sk, lim)
 
-@router.get("/quotations/{quote_id}")
+@router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm("invoices.view"))])
 async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db)):
     """Get a specific quotation"""
     result = await db.execute(select(Quotation).options(selectinload(Quotation.line_items)).where(Quotation.id == quote_id))
@@ -150,27 +305,27 @@ async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Quotation not found")
     return _quote_dict(quote, quote.line_items)
 
-@router.post("/quotations/", status_code=201)
+@router.post("/quotations/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
 async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get_db)):
     """Create a new quotation"""
     # Validate items
     if not data.items or len(data.items) == 0:
         raise HTTPException(400, "Quotation must have at least one item")
-    
+
     for i in data.items:
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have name and positive quantity")
-    
+
     # Generate quotation number
     result = await db.execute(select(func.count(Quotation.id)))
     quote_count = result.scalar() or 0
     quote_num = f"QT-{datetime.now().year}-{str(quote_count + 1).zfill(4)}"
-    
+
     # Calculate totals
     subtotal = sum(i.qty * i.price for i in data.items)
     tax_total = sum(i.qty * i.price * (i.tax_rate / 100) for i in data.items)
     total = subtotal + tax_total - data.discount
-    
+
     # Create quotation
     quote = Quotation(
         id=str(uuid.uuid4()),
@@ -188,7 +343,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         total=round(total, 2),
         notes=data.notes,
     )
-    
+
     # Add line items
     for item in data.items:
         line_total = item.qty * item.price + (item.qty * item.price * item.tax_rate / 100) - item.line_discount
@@ -204,39 +359,70 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
             line_total=round(line_total, 2),
         )
         db.add(li)
-    
+
     db.add(quote)
     await db.commit()
     await db.refresh(quote)
     return {"id": quote.id, "number": quote.number, "total": round(total, 2), "status": "draft"}
 
-@router.patch("/quotations/{quote_id}/status")
+@router.patch("/quotations/{quote_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
 async def update_quotation_status(quote_id: str, status: str, db: AsyncSession = Depends(get_db)):
-    """Update quotation status"""
+    """Update quotation status — `status` must be a valid QuotationStatus value."""
+    try:
+        new_status = QuotationStatus(status)
+    except ValueError:
+        valid = ", ".join(s.value for s in QuotationStatus)
+        raise HTTPException(400, f"Invalid status '{status}'. Must be one of: {valid}")
     result = await db.execute(select(Quotation).where(Quotation.id == quote_id))
     quote = result.scalar_one_or_none()
     if not quote:
         raise HTTPException(404, "Quotation not found")
-    quote.status = status
+    quote.status = new_status
     await db.commit()
-    return {"status": quote.status}
+    return {"status": quote.status.value}
 
 # ─── LIST CREDIT PURCHASES ───────────────────────────────────────────────────
-@router.get("/credit/purchases")
-async def list_credit_purchases(db: AsyncSession = Depends(get_db)):
+@router.get("/credit/purchases", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_credit_purchases(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
     """List all invoices purchased on credit (unpaid)"""
-    q = select(SaleInvoice).where(SaleInvoice.payment_mode == "credit")
-    result = await db.execute(q)
-    invoices = result.scalars().all()
-    out = []
-    for inv in invoices:
-        li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == inv.id))
-        items = li_res.scalars().all()
-        out.append(_inv_dict(inv, items))
-    return out
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = [SaleInvoice.payment_mode == "credit"]
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "number": SaleInvoice.number,
+            "customer_name": SaleInvoice.customer_name,
+            "date": SaleInvoice.date,
+            "total": SaleInvoice.total,
+            "paid_amount": SaleInvoice.paid_amount,
+            "balance_due": (SaleInvoice.total - SaleInvoice.paid_amount),
+            "status": SaleInvoice.status,
+            "created_at": SaleInvoice.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    q = (
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.payment_mode == "credit")
+    )
+    total = int((await db.execute(select(func.count(SaleInvoice.id)).where(and_(*conds)))).scalar() or 0)
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
+    invoices = result.unique().scalars().all()
+    out = [_inv_dict(inv, inv.line_items) for inv in invoices]
+    return paged(out, total, sk, lim)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
-@router.get("/{invoice_id}")
+@router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
     inv = result.scalar_one_or_none()
@@ -246,8 +432,13 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
     return _inv_dict(inv, li_res.scalars().all())
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
-@router.post("/", status_code=201)
+@router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
 async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
+    if not data.items:
+        raise HTTPException(400, "Invoice must have at least one line item")
+    for i in data.items:
+        if not i.name or i.qty <= 0:
+            raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
     # Line net (pre-tax) after line_discount (percentage off list line gross)
     line_rows = []
@@ -267,8 +458,7 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
     status    = "paid" if paid >= total else "pending"
 
     # Sequential-ish number
-    count_res = await db.execute(func.count(SaleInvoice.id))
-    count = count_res.scalar() or 0
+    count = (await db.execute(select(func.count(SaleInvoice.id)))).scalar() or 0
     inv_num = f"INV-{datetime.now().year}-{2000 + count}"
 
     inv = SaleInvoice(
@@ -299,40 +489,54 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
             line_total=line_net,
         )
         db.add(li)
-        # Auto-deduct stock
+        # Auto-deduct stock atomically (single UPDATE; no read-modify-write
+        # race). Allow oversell-to-zero rather than 400-erroring on
+        # insufficient stock so a manager can override after the fact.
         if item.item_id:
-            sq = select(ItemStock).where(and_(
-                ItemStock.item_id == item.item_id,
-                ItemStock.branch_id == data.branch_id,
-            ))
-            sr = await db.execute(sq)
-            stock = sr.scalar_one_or_none()
-            if stock:
-                stock.quantity = max(0, stock.quantity - item.qty)
+            try:
+                await adjust_stock_atomic(
+                    db,
+                    item_id=item.item_id,
+                    branch_id=data.branch_id,
+                    delta=-item.qty,
+                )
+            except ValueError:
+                # Insufficient stock — clamp to zero rather than fail the sale.
+                # Audit log will pick this up in Phase 4 hardening.
+                await db.execute(
+                    text(
+                        "UPDATE item_stock SET quantity = 0 "
+                        "WHERE item_id = :i AND branch_id = :b"
+                    ),
+                    {"i": item.item_id, "b": data.branch_id},
+                )
 
     await db.commit()
     await db.refresh(inv)
     return {"id": inv.id, "number": inv_num, "total": round(total, 2), "status": status}
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
-@router.post("/{invoice_id}/payment")
+@router.post("/{invoice_id}/payment", dependencies=[Depends(require_perm("invoices.edit"))])
 async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
-    inv = result.scalar_one_or_none()
-    if not inv:
-        raise HTTPException(404, "Invoice not found")
-    print(inv.paid_amount)
-    inv.paid_amount = min(inv.total, round(inv.paid_amount + data.amount, 2))
-    inv.status = "paid" if inv.paid_amount >= inv.total else "partial"
+    result = await add_payment_atomic(db, invoice_id=invoice_id, amount=data.amount)
+    if result is None:
+        # Either the invoice doesn't exist or amount <= 0. Differentiate.
+        exists = (await db.execute(
+            select(SaleInvoice.id).where(SaleInvoice.id == invoice_id)
+        )).scalar_one_or_none()
+        if not exists:
+            raise HTTPException(404, "Invoice not found")
+        raise HTTPException(400, "amount must be > 0")
+    paid, balance = result
     await db.commit()
     return {
-        "status": inv.status,
-        "paid_amount": inv.paid_amount,
-        "balance": round(inv.total - inv.paid_amount, 2),
+        "status": "paid" if balance <= 0 else "partial",
+        "paid_amount": paid,
+        "balance": balance,
     }
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
-@router.post("/{invoice_id}/cancel")
+@router.post("/{invoice_id}/cancel", dependencies=[Depends(require_perm("invoices.cancel"))])
 async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
     inv = result.scalar_one_or_none()
