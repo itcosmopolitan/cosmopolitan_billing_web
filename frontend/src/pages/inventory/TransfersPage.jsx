@@ -3,7 +3,17 @@ import toast from 'react-hot-toast'
 import { transfersAPI, branchesAPI, itemsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, KPICard, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { fmtDate } from '@/utils/helpers'
+import {
+  allocatableBatches,
+  computeAutoAllocation,
+  isAllocationValid,
+  allocationSum,
+  toApiPayload,
+  formatAllocationSummary,
+} from '@/utils/batchAllocation'
 
 const TABS = [
   { id: 'all',      label: 'All Transfers' },
@@ -32,15 +42,25 @@ export default function TransfersPage() {
   const [branches, setBranches] = useState([])
   const [items, setItems]       = useState([])
   const [loading, setLoading]   = useState(true)
-  const [newForm, setNewForm]   = useState({ from_branch_id: 'br-001', to_branch_id: 'br-002', priority: 'Normal', notes: '', items: [{ item_id: '', qty: '' }] })
+  const [newForm, setNewForm]   = useState({
+    from_branch_id: 'br-001', to_branch_id: 'br-002', priority: 'Normal', notes: '',
+    items: [{ item_id: '', qty: '', batchAllocation: [], batchAllocationCustom: false }],
+  })
+  // Cache of `${itemId}|${branchId}` → batch list, populated lazily when the
+  // operator picks a tracked item in the New Transfer form. Avoids hitting
+  // /items/{id}/batches on every render.
+  const [batchOptions, setBatchOptions] = useState({})
+  // Active allocation editor target — `{ index }` when open. Mirrors the
+  // POS pattern: a single shared modal driven by a row pointer.
+  const [allocEditor, setAllocEditor] = useState(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (branchForItems = 'br-001') => {
     try {
       setLoading(true)
       const [transfersData, branchesData, itemsData] = await Promise.all([
         fetchAllList(transfersAPI.list),
         fetchAllList(branchesAPI.list).catch(() => []),
-        fetchAllList(itemsAPI.list, { branch_id: 'br-001' }).catch(() => []),
+        fetchAllList(itemsAPI.list, { branch_id: branchForItems }).catch(() => []),
       ])
       setTransfers(transfersData || [])
       setBranches(branchesData || [])
@@ -57,6 +77,84 @@ export default function TransfersPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // Refresh the item list whenever the operator changes the source branch in
+  // the New Transfer form — stock counts and batch availability are per-branch.
+  useEffect(() => {
+    if (!showNew) return
+    fetchAllList(itemsAPI.list, { branch_id: newForm.from_branch_id })
+      .then((rows) => setItems(rows || []))
+      .catch(() => { /* keep existing items on failure */ })
+    // Branch changed → every cached batch list AND every per-row
+    // `batchAllocation` is now stale (the batch IDs refer to lots at the
+    // PREVIOUS source branch). We must blow both away. Without clearing
+    // the allocation, the auto-allocation effect would short-circuit
+    // (its `batches.length === 0` guard fires while the new-branch cache
+    // is still empty) and the stale batch IDs would survive submit. On
+    // approve, the backend would detect the branch mismatch and — in its
+    // legacy error path — zero out ALL stock for that item at the actual
+    // source branch. Destructive data loss; see backend safety net in
+    // transfers.approve_transfer.
+    setBatchOptions({})
+    setNewForm((f) => ({
+      ...f,
+      items: f.items.map((row) => (
+        row.item_id
+          ? { ...row, batchAllocation: [], batchAllocationCustom: false }
+          : row
+      )),
+    }))
+  }, [showNew, newForm.from_branch_id])
+
+  const loadBatchesForRow = useCallback(async (itemId) => {
+    if (!itemId) return null
+    const key = `${itemId}|${newForm.from_branch_id}`
+    if (batchOptions[key]) return batchOptions[key]
+    try {
+      const data = await itemsAPI.batches.list(itemId, { branch_id: newForm.from_branch_id })
+      const rows = allocatableBatches(data?.items || [])
+      setBatchOptions((prev) => ({ ...prev, [key]: rows }))
+      return rows
+    } catch {
+      setBatchOptions((prev) => ({ ...prev, [key]: [] }))
+      return []
+    }
+  }, [batchOptions, newForm.from_branch_id])
+
+  // Auto-allocate FIFO/FEFO whenever a row's batch list or qty changes and the
+  // operator hasn't locked the split via the modal. Mirrors CartRow's effect.
+  //
+  // Also kicks off a lazy fetch for any row whose (item, branch) batches
+  // aren't cached yet — covers the case where the operator changed the
+  // source branch AFTER selecting items, in which case loadBatchesForRow
+  // never fires from the row's item-select onChange. Without this fetch,
+  // the new-branch cache stays empty, the short-circuit below skips the
+  // row, and the row's allocation stays empty → submit is blocked (which
+  // is correct) but the user has no way out other than reselecting items.
+  useEffect(() => {
+    if (!showNew) return
+    let mutated = false
+    const next = newForm.items.map((row) => {
+      if (!row.item_id || row.batchAllocationCustom) return row
+      const picked = items.find((x) => x.id === row.item_id)
+      if (!picked?.batch_tracking) return row
+      const key = `${row.item_id}|${newForm.from_branch_id}`
+      const batches = batchOptions[key]
+      if (batches === undefined) {
+        // Not in cache yet — trigger a fetch and let this effect re-run
+        // when batchOptions updates.
+        loadBatchesForRow(row.item_id)
+        return row
+      }
+      if (batches.length === 0) return row
+      const auto = computeAutoAllocation(batches, Number(row.qty) || 0)
+      const same = JSON.stringify(auto) === JSON.stringify(row.batchAllocation || [])
+      if (same) return row
+      mutated = true
+      return { ...row, batchAllocation: auto }
+    })
+    if (mutated) setNewForm((f) => ({ ...f, items: next }))
+  }, [showNew, newForm.items, newForm.from_branch_id, batchOptions, items, loadBatchesForRow])
 
   useEffect(() => {
     setTrSkip(0)
@@ -116,6 +214,34 @@ export default function TransfersPage() {
 
   const submitNew = async () => {
     if (newForm.from_branch_id === newForm.to_branch_id) { toast.error('From and To branches must differ'); return }
+    // Validate every tracked row's allocation matches its qty before posting.
+    for (const row of newForm.items) {
+      if (!row.item_id) continue
+      const picked = items.find((x) => x.id === row.item_id)
+      if (!picked?.batch_tracking) continue
+      const need = Number(row.qty) || 0
+      if (!isAllocationValid(row.batchAllocation || [], need)) {
+        toast.error(`Fix batch split for ${picked.name} — ${allocationSum(row.batchAllocation || [])}/${need} allocated`)
+        return
+      }
+      // Defense in depth: every allocation batch_id must exist in the CURRENT
+      // (new branch) cache. Catches the case where someone managed to keep a
+      // stale allocation referencing the previous source branch's lots.
+      // Without this, the backend would 400 (or worse — see backend safety
+      // net) on approve.
+      const key = `${row.item_id}|${newForm.from_branch_id}`
+      const known = new Set((batchOptions[key] || []).map((b) => b.id))
+      if (known.size === 0) {
+        toast.error(`Loading batches for ${picked.name}, please retry in a moment`)
+        return
+      }
+      for (const entry of row.batchAllocation || []) {
+        if (!known.has(entry.id)) {
+          toast.error(`Stale batch in ${picked.name} — re-select the item to refresh`)
+          return
+        }
+      }
+    }
     try {
       await transfersAPI.create({
         from_branch_id: newForm.from_branch_id,
@@ -125,13 +251,17 @@ export default function TransfersPage() {
           return {
             item_id: i.item_id,
             item_name: itm?.name || 'Unknown',
-            qty: Number(i.qty)
+            qty: Number(i.qty),
+            // Explicit operator split — backend consumes these batches in
+            // this order on approve. Untracked items send undefined and
+            // fall through to the aggregate path.
+            batch_allocation: toApiPayload(i.batchAllocation),
           }
         }),
         requested_by: 'Current User',
         notes: newForm.notes,
       })
-      await fetchData()
+      await fetchData(newForm.from_branch_id)
       setShowNew(false)
       toast.success('Transfer submitted')
     } catch (err) {
@@ -140,8 +270,22 @@ export default function TransfersPage() {
     }
   }
 
-  const addItemRow = () => setNewForm((f) => ({ ...f, items: [...f.items, { item_id: '', qty: '' }] }))
-  const patchItem  = (i, k, v) => setNewForm((f) => ({ ...f, items: f.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }))
+  const addItemRow = () => setNewForm((f) => ({
+    ...f,
+    items: [...f.items, { item_id: '', qty: '', batchAllocation: [], batchAllocationCustom: false }],
+  }))
+  const patchItem  = (i, k, v) => setNewForm((f) => ({
+    ...f,
+    items: f.items.map((it, idx) => {
+      if (idx !== i) return it
+      // Clear the allocation whenever the item changes — batches belong to a
+      // specific item, so the previous split becomes meaningless. Same for
+      // qty: reset custom so the auto-effect re-flows the split.
+      if (k === 'item_id') return { ...it, item_id: v, batchAllocation: [], batchAllocationCustom: false }
+      if (k === 'qty') return { ...it, qty: v, batchAllocationCustom: false }
+      return { ...it, [k]: v }
+    }),
+  }))
 
   const pending  = transfers.filter((t) => t.status === 'pending').length
   const transit  = transfers.filter((t) => t.status === 'transit').length
@@ -266,18 +410,87 @@ export default function TransfersPage() {
 
         <div style={{ marginBottom: 14 }}>
           <div className="form-label">Items to Transfer</div>
-          {newForm.items.map((item, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 100px auto', gap: 8, marginBottom: 6 }}>
-              <select className="form-input" value={item.item_id} onChange={(e) => patchItem(i, 'item_id', e.target.value)}>
-                <option value="">Select item…</option>
-                {items.map((itm) => (
-                  <option key={itm.id} value={itm.id}>{itm.name}</option>
-                ))}
-              </select>
-              <input className="form-input" type="number" placeholder="Qty" value={item.qty} onChange={(e) => patchItem(i, 'qty', e.target.value)} />
-              <button className="btn btn-ghost btn-sm" onClick={() => setNewForm((f) => ({ ...f, items: f.items.filter((_, idx) => idx !== i) }))}>✕</button>
-            </div>
-          ))}
+          <AlertBar type="blue" icon="🧴">
+            Tracked items auto-split by <strong>FIFO/FEFO</strong>. Click the ✎ to
+            override the split across multiple batches — the receiving branch
+            inherits the exact lot metadata of every batch you draw from.
+          </AlertBar>
+          {newForm.items.map((row, i) => {
+            const picked = items.find((x) => x.id === row.item_id)
+            const tracked = Boolean(picked?.batch_tracking)
+            const expiryTracked = Boolean(picked?.expiry_tracking)
+            const strategy = expiryTracked ? 'FEFO' : 'FIFO'
+            const key = row.item_id ? `${row.item_id}|${newForm.from_branch_id}` : null
+            const batches = key ? (batchOptions[key] || []) : []
+            const allocation = row.batchAllocation || []
+            const need = Number(row.qty) || 0
+            const valid = isAllocationValid(allocation, need)
+            return (
+              <div key={i} style={{ marginBottom: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px auto', gap: 8 }}>
+                  <select
+                    className="form-input"
+                    value={row.item_id}
+                    onChange={(e) => {
+                      patchItem(i, 'item_id', e.target.value)
+                      if (e.target.value) loadBatchesForRow(e.target.value)
+                    }}
+                  >
+                    <option value="">Select item…</option>
+                    {items.map((itm) => (
+                      <option key={itm.id} value={itm.id}>
+                        {itm.name}{itm.batch_tracking ? ` · ${itm.expiry_tracking ? 'FEFO' : 'FIFO'}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <input className="form-input" type="number" placeholder="Qty" value={row.qty} onChange={(e) => patchItem(i, 'qty', e.target.value)} />
+                  <button className="btn btn-ghost btn-sm" onClick={() => setNewForm((f) => ({ ...f, items: f.items.filter((_, idx) => idx !== i) }))}>✕</button>
+                </div>
+                {tracked && row.item_id && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, paddingLeft: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: expiryTracked ? 'rgba(245,158,11,0.15)' : 'var(--accent-bg)', color: expiryTracked ? 'var(--amber)' : 'var(--accent)', letterSpacing: 0.3 }}>
+                      {strategy}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Source batches:</span>
+                    {batches.length === 0 ? (
+                      <span style={{ fontSize: 11, color: 'var(--amber)' }}>none available at source</span>
+                    ) : allocation.length === 0 ? (
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>enter a qty…</span>
+                    ) : (
+                      <span style={{ fontSize: 11, fontFamily: 'DM Mono, monospace', color: valid ? 'var(--text-secondary)' : 'var(--red)' }}>
+                        {formatAllocationSummary(allocation)}
+                      </span>
+                    )}
+                    {row.batchAllocationCustom && (
+                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: 'var(--bg-raised)', color: 'var(--text-secondary)', letterSpacing: 0.4 }}>CUSTOM</span>
+                    )}
+                    {!valid && allocation.length > 0 && (
+                      <span style={{ fontSize: 10.5, color: 'var(--red)' }}>⚠ {allocationSum(allocation)} / {need}</span>
+                    )}
+                    {batches.length > 0 && need > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        title="Edit batch split"
+                        onClick={async () => {
+                          const rows = await loadBatchesForRow(row.item_id)
+                          setAllocEditor({
+                            index: i,
+                            batches: rows || batches,
+                            itemName: picked?.name || 'Item',
+                            expiryTracking: expiryTracked,
+                          })
+                        }}
+                        style={{ fontSize: 10.5, padding: '2px 6px' }}
+                      >
+                        ✎ Edit split
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           <button className="btn btn-ghost btn-sm" onClick={addItemRow}>+ Add item</button>
         </div>
 
@@ -295,6 +508,30 @@ export default function TransfersPage() {
           <textarea className="form-input" placeholder="Reason for transfer, special instructions…" value={newForm.notes} onChange={(e) => patchForm('notes', e.target.value)} style={{ height: 72 }} />
         </FormGroup>
       </Modal>
+
+      {/* Per-line batch allocation editor for the New Transfer form. Saving
+          flips `batchAllocationCustom` so the auto-FIFO/FEFO effect leaves
+          this row alone until qty/item changes. */}
+      <BatchAllocationModal
+        open={!!allocEditor}
+        onClose={() => setAllocEditor(null)}
+        item={allocEditor ? { name: allocEditor.itemName, emoji: '🧴', expiry_tracking: allocEditor.expiryTracking } : null}
+        qty={allocEditor ? Number(newForm.items[allocEditor.index]?.qty || 0) : 0}
+        batches={allocEditor?.batches || []}
+        allocation={allocEditor ? (newForm.items[allocEditor.index]?.batchAllocation || []) : []}
+        strategyLabel={allocEditor?.expiryTracking ? 'FEFO' : 'FIFO'}
+        onSave={(next) => {
+          if (!allocEditor) return
+          setNewForm((f) => ({
+            ...f,
+            items: f.items.map((it, idx) => idx === allocEditor.index
+              ? { ...it, batchAllocation: next, batchAllocationCustom: true }
+              : it),
+          }))
+          setAllocEditor(null)
+          toast.success('Batch split saved')
+        }}
+      />
 
       {/* Detail Drawer */}
       <Modal open={!!showDetail} onClose={() => setShowDetail(null)} title={`Transfer — ${showDetail?.number || showDetail?.ref_number}`} icon="↔" size="md"
@@ -317,13 +554,77 @@ export default function TransfersPage() {
               <>
                 <div className="form-label" style={{ marginBottom: 8 }}>Items</div>
                 <table className="data-table">
-                  <thead><tr><th>Item</th><th className="text-right">Qty</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th className="text-right">Qty</th>
+                      <th>Source batches drained</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {showDetail.items.map((item, idx) => (
-                      <tr key={idx}><td>{item.name || 'Unknown'}</td><td className="text-right mono">{item.qty}</td></tr>
-                    ))}
+                    {showDetail.items.map((item, idx) => {
+                      // Approved/received: actual lots drained at source.
+                      // Pending: operator-pre-allocated split (if any).
+                      const drained = item.batches || []
+                      const requested = item.requested_allocation || []
+                      const showRequested = drained.length === 0 && requested.length > 0
+                      const lots = showRequested
+                        ? requested.map((r) => ({
+                            batch_id: r.batch_id,
+                            batch_number: r.batch_id?.slice(-8),
+                            consumed: r.qty,
+                          }))
+                        : drained
+                      return (
+                        <tr key={idx} style={{ verticalAlign: 'top' }}>
+                          <td>
+                            <div style={{ fontSize: 13 }}>{item.name || 'Unknown'}</div>
+                            {item.preferred_batch_id && requested.length === 0 && (
+                              <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                                Operator pick: <span className="mono">{item.preferred_batch_id.slice(-8)}</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="text-right mono">{item.qty}</td>
+                          <td>
+                            {lots.length === 0 ? (
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {showDetail.status === 'pending' ? '— auto-allocate on approval' : 'untracked / no allocation'}
+                              </span>
+                            ) : (
+                              <>
+                                {showRequested && (
+                                  <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: 0.4, marginBottom: 4 }}>
+                                    PLANNED SPLIT
+                                  </div>
+                                )}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                  {lots.map((b, bi) => (
+                                    <div key={bi} style={{ fontSize: 11, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                                      <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                                        {b.batch_number || b.batch_id?.slice(-8)}
+                                      </span>
+                                      <span style={{ color: 'var(--text-muted)' }}>×{b.consumed}</span>
+                                      {b.expiry_date && (
+                                        <span style={{ color: 'var(--amber)' }}>exp {fmtDate(b.expiry_date)}</span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
+                {showDetail.status === 'received' && showDetail.items.some((it) => it.batches?.length) && (
+                  <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    ℹ Each batch above was recreated at <strong>{showDetail.to_branch_name || showDetail.to_branch_id}</strong> with the original
+                    lot number, mfg / expiry date and cost — so FIFO/FEFO ordering carries across the transfer.
+                  </div>
+                )}
               </>
             )}
             {showDetail.notes && <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8, fontSize: 12.5, color: 'var(--text-secondary)' }}>{showDetail.notes}</div>}

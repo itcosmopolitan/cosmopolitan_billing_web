@@ -56,6 +56,11 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # created by Base.metadata.create_all() in init_schema() — no DDL entry
     # needed here for new tables, only for additive columns on existing ones.
     ("users", "all_branches", "BOOLEAN DEFAULT 0 NOT NULL"),
+    # Batch tracking (Phase 3): transfer lines remember which source batch the
+    # operator picked and which lots got drained on approve.
+    ("transfer_line_items", "preferred_batch_id",   "VARCHAR"),
+    ("transfer_line_items", "requested_allocation", "TEXT"),
+    ("transfer_line_items", "batch_allocation",     "TEXT"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.

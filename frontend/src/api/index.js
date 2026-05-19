@@ -71,6 +71,16 @@ export const itemsAPI = {
   update:  (id, data) => api.put(`/items/${id}`, data),
   adjust:  (data)   => api.post('/items/adjust', data),
   delete:  (id)     => api.delete(`/items/${id}`),
+  // Batch / lot tracking (FIFO + FEFO inventory). `listBatches` returns
+  // batches ordered nearest-expiry first; `createBatch` adds a new lot and
+  // also bumps the per-branch stock counter; `patchBatch` edits metadata
+  // (numbers, dates, notes) without changing quantity.
+  batches: {
+    list:        (itemId, params) => api.get(`/items/${itemId}/batches`, { params }),
+    create:      (itemId, data)   => api.post(`/items/${itemId}/batches`, data),
+    patch:       (batchId, data)  => api.patch(`/items/batches/${batchId}`, data),
+    nearExpiry:  (params)         => api.get('/items/batches/near-expiry', { params }),
+  },
 }
 
 // ─── Sales ────────────────────────────────────────────────────────────────────
