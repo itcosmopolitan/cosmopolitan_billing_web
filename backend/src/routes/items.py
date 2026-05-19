@@ -9,7 +9,13 @@ from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.models import Item, ItemStock
-from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.pagination import (
+    normalize_limit,
+    normalize_skip,
+    paged,
+    pagination_from_page,
+    resolve_sort,
+)
 from src.routes._atomic import set_stock_atomic
 from src.security import require_perm
 
@@ -77,9 +83,7 @@ async def list_items(
     db: AsyncSession = Depends(get_db),
 ):
     if page_no is not None or per_page is not None:
-        #commenting below line as there is no such function
-        # pn, pp, sk, lim = pagination_from_page(page_no, per_page)
-        pass
+        pn, pp, sk, lim = pagination_from_page(page_no, per_page)
     else:
         sk = normalize_skip(skip)
         lim = normalize_limit(limit)

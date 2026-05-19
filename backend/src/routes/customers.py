@@ -28,17 +28,33 @@ class CustomerCreate(BaseModel):
 class CustomerUpdate(BaseModel):
     """Typed update body — restricts client-writeable fields. `outstanding`
     and `total_purchases` are derived by sales/payment flows and must not be
-    settable via PATCH."""
+    settable via PATCH.
+
+    Field names mirror the public API contract (`gst_in`, `customer_type`)
+    used by `CustomerCreate` and `serialize_customer`, NOT the underlying
+    SQLAlchemy column names (`gstin`, `type`). Pydantic v2's default
+    `extra="ignore"` would silently drop API-named keys otherwise, leaving
+    those columns silently un-updated on a round-trip GET → mutate → PUT.
+    The handler below maps API names → column names via `_FIELD_TO_COLUMN`.
+    """
     name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
-    gstin: Optional[str] = None
+    gst_in: Optional[str] = None
     branch_id: Optional[str] = None
     credit_limit: Optional[float] = None
-    type: Optional[str] = None
+    customer_type: Optional[str] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+
+
+# Map CustomerUpdate field names → Customer ORM column names where they
+# differ. Single source of truth so PUT and POST can't drift again.
+_FIELD_TO_COLUMN = {
+    "gst_in": "gstin",
+    "customer_type": "type",
+}
 
 @router.get("/", dependencies=[Depends(require_perm("customers.view"))])
 async def list_customers(
@@ -154,6 +170,6 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
     if not c:
         raise HTTPException(404, "Customer not found")
     for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(c, k, v)
+        setattr(c, _FIELD_TO_COLUMN.get(k, k), v)
     await db.commit()
     return {"message": "Updated"}

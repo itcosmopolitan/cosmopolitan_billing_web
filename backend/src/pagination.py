@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_PAGE_SIZE = 50
 ALLOWED_PAGE_SIZES = (50, 100, 200, 500)
@@ -26,6 +26,31 @@ def normalize_skip(skip: Optional[int]) -> int:
     except (TypeError, ValueError):
         return 0
     return max(0, s)
+
+
+def normalize_page_no(page_no: Optional[int]) -> int:
+    if page_no is None:
+        return 1
+    try:
+        p = int(page_no)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, p)
+
+
+def pagination_from_page(
+    page_no: Optional[int], per_page: Optional[int]
+) -> Tuple[int, int, int, int]:
+    """Convert page-based params into (page_no, per_page, skip, limit).
+
+    `per_page` is normalized through the allow-list in `normalize_limit`, so the
+    caller can't request arbitrary page sizes; `skip` is derived from the
+    normalized values to keep the two pagination styles consistent.
+    """
+    pn = normalize_page_no(page_no)
+    pp = normalize_limit(per_page)
+    sk = (pn - 1) * pp
+    return pn, pp, sk, pp
 
 
 def paged(items: List[Any], total: int, skip: int, limit: int, **extra: Any) -> Dict[str, Any]:
