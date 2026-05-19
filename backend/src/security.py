@@ -203,14 +203,29 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         ).scalar_one_or_none()
         if role:
             granted = list(role.permissions or [])
+    # Local import keeps this module free of routes/* circular risk.
+    from src.routes._serializers import get_user_branch_ids
+    branch_ids = await get_user_branch_ids(db, user.id)
     return {
         "id": user.id,
         "name": user.name,
         "email": user.email,
         "role": user.role.value if hasattr(user.role, "value") else user.role,
         "role_id": user.role_id,
+        # Legacy single-branch field; mirrors branch_ids[0] purely for
+        # backwards compat. New frontend code reads branch_ids + all_branches
+        # instead; this is here only so older reads don't break.
         "branch_id": user.branch_id,
+        # Multi-branch list (2026-05-18). Empty when all_branches=True; in
+        # that case the frontend treats the user as having every branch.
+        "branch_ids": branch_ids,
+        "all_branches": bool(getattr(user, "all_branches", False)),
         "avatar": user.avatar,
         "active": bool(user.active),
+        # Read by the frontend RequirePasswordSet guard — when True, the
+        # user is redirected to /change-password and blocked from everything
+        # else. Mirror in routes/_serializers.serialize_user (used by other
+        # endpoints); keep both in sync.
+        "must_change_password": bool(getattr(user, "must_change_password", False)),
         "permissions": sorted(expand(granted)),
     }

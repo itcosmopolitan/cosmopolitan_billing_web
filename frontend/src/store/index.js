@@ -115,10 +115,26 @@ export const useAppStore = create(
       setUser: (user) => set({ user }),
       setPermCatalog: (permCatalog) => set({ permCatalog }),
       setRoles: (roles) => set({ roles }),
-      setSession: ({ user, permissions, permCatalog }) => set({
-        user,
-        permissions: permissions || [],
-        ...(permCatalog ? { permCatalog } : {}),
+      setSession: ({ user, permissions, permCatalog }) => set((s) => {
+        // When the session changes (login / boot rehydrate), re-evaluate the
+        // persisted activeBranch against the new user's allowed branches.
+        // A previously-persisted activeBranch from a super-admin session
+        // would otherwise stick around for a cashier who can't actually
+        // access it. Users with all_branches=true (or no branch_ids list)
+        // keep whatever activeBranch they had.
+        const allowedIds = user?.all_branches || !user?.branch_ids?.length
+          ? null  // null = no constraint
+          : new Set(user.branch_ids)
+        const activeOk = !allowedIds || (s.activeBranch && allowedIds.has(s.activeBranch.id))
+        const fallback = allowedIds
+          ? s.branches.find((b) => allowedIds.has(b.id))
+          : (s.activeBranch || s.branches[0])
+        return {
+          user,
+          permissions: permissions || [],
+          activeBranch: activeOk ? s.activeBranch : (fallback || null),
+          ...(permCatalog ? { permCatalog } : {}),
+        }
       }),
       clearSession: () => set({ user: null, permissions: [], roles: [] }),
     }),

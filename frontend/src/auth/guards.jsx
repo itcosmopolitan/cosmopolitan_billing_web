@@ -14,6 +14,25 @@ export function RequireAuth({ children }) {
   return children
 }
 
+/**
+ * Force the user to /change-password if the backend says they must — i.e.
+ * an admin just created their account with a temp password and they haven't
+ * picked their own yet. Wrap around AppShell AFTER RequireAuth so this only
+ * fires for logged-in users.
+ *
+ * The /change-password route itself does NOT use this guard (would loop).
+ * It uses RequireAuth alone so the user can land there with a valid JWT
+ * and complete the change. After success, ChangePasswordPage refetches
+ * /auth/me to clear the flag in the store and lets the user proceed.
+ */
+export function RequirePasswordSet({ children }) {
+  const user = useAppStore((s) => s.user)
+  if (user && user.must_change_password) {
+    return <Navigate to="/change-password" replace />
+  }
+  return children
+}
+
 export function RequirePerm({ perm, perms, children, fallback }) {
   const can = useCan()
   const needed = perms || (perm ? [perm] : [])

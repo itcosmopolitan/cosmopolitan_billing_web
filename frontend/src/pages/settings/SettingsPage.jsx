@@ -4,7 +4,7 @@ import { roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
@@ -22,6 +22,12 @@ const TABS = [
 export default function SettingsPage() {
   const can = useCan()
   const [tab, setTab]         = useState('org')
+  // Sub-toggle inside the "Users & Roles" parent tab — picks between the
+  // Users table view and the Roles cards view. Both render full-width
+  // (replaces the previous 65/35 split). State is per-mount, so toggling
+  // away always returns to a fresh page-1 view (deliberate — preserve was
+  // explicitly out of scope, see WORKSHEET 2026-05-18).
+  const [usersTab, setUsersTab] = useState('users')
   const [showUser, setShowUser] = useState(false)
   const [users, setUsers]     = useState([])
   const [userTotal, setUserTotal] = useState(0)
@@ -30,6 +36,11 @@ export default function SettingsPage() {
   const [userSortBy, setUserSortBy] = useState('name')
   const [userSortOrder, setUserSortOrder] = useState('asc')
   const [userListVersion, setUserListVersion] = useState(0)
+  // Roles are loaded in full by the boot effect (small list — the catalog of
+  // role types, typically <20). Paginate client-side for consistency with
+  // the Users table — server-side pagination on /roles/ would be overkill.
+  const [roleSkip, setRoleSkip] = useState(0)
+  const [roleLimit, setRoleLimit] = useState(DEFAULT_PAGE_SIZE)
   const [branches, setBranches] = useState([])
   const [brSkip, setBrSkip] = useState(0)
   const [brLimit, setBrLimit] = useState(DEFAULT_PAGE_SIZE)
@@ -39,7 +50,18 @@ export default function SettingsPage() {
   const [branchSortBy, setBranchSortBy] = useState('name')
   const [branchSortOrder, setBranchSortOrder] = useState('asc')
   const [showBranch, setShowBranch] = useState(false)
-  const [userForm, setUserForm] = useState({ name:'', email:'', role_id:'', branch_id:'', active:true })
+  // Auto-generated temp password — admin can override. Re-rolled by the
+  // useEffect below whenever the Add User modal opens, so two consecutive
+  // creates don't share a password if the admin happens to forget to copy.
+  // `branch_ids` is the multi-branch list — admin must pick ≥1 branch.
+  // The legacy "all_branches" implicit-all mode was removed from the UI on
+  // 2026-05-18 sixth session (see WORKSHEET); the backend still accepts
+  // all_branches=True for older clients but nothing in this UI sends it.
+  const [userForm, setUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[], active:true, password:'' })
+  // After a successful create, holds the temp password to display in a
+  // confirmation modal (with copy). Cleared on close. null while the modal
+  // isn't open.
+  const [createdUser, setCreatedUser] = useState(null)
   const [branchForm, setBranchForm] = useState({ name:'', code:'', manager:'', phone:'', address:'' })
   // Only the setter is consumed; loading state is internal to the boot effect.
   // eslint-disable-next-line no-unused-vars
@@ -50,7 +72,7 @@ export default function SettingsPage() {
   const [editBranchForm, setEditBranchForm] = useState({})
   const [showEditUser, setShowEditUser] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
-  const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role_id:'', branch_id:'' })
+  const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[] })
   const peuf = (k,v) => setEditUserForm(f=>({...f,[k]:v}))
 
   // RBAC: roles + permission catalog (Phase 1 of Users & Roles)
@@ -194,27 +216,78 @@ export default function SettingsPage() {
 
   const saveOrg = () => toast.success('Organisation profile saved')
 
+  // Cryptographically random URL-safe temp password generator. ~12 chars
+  // from 9 random bytes. Matches the server-side default in
+  // backend/src/routes/users.py (_generate_temp_password) so the admin sees
+  // a similar shape whether they take the pre-fill or let the server gen.
+  const generateTempPassword = () => {
+    const bytes = new Uint8Array(9)
+    window.crypto.getRandomValues(bytes)
+    // base64url: + → -, / → _, strip padding
+    return btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  }
+
+  // Whenever the Add User modal opens, roll a fresh password into the form.
+  // The admin sees it pre-filled (transparency) and can clear or edit it.
+  useEffect(() => {
+    if (showUser) {
+      setUserForm((f) => ({ ...f, password: generateTempPassword() }))
+    }
+  }, [showUser])
+
   const saveUser = async () => {
     if (!userForm.name || !userForm.email) { toast.error('Name and email required'); return }
     if (!userForm.role_id) { toast.error('Select a role'); return }
+    // Mirror backend _assign_branches: caller must pick at least one branch.
+    if (!userForm.branch_ids || userForm.branch_ids.length === 0) {
+      toast.error('Pick at least one branch')
+      return
+    }
+    // Backend would also accept an empty/missing password and auto-generate,
+    // but for the post-create confirmation modal we always want a value to
+    // display — so guard here too.
+    if (!userForm.password || userForm.password.length < 8) {
+      toast.error('Temporary password must be at least 8 characters')
+      return
+    }
 
     try {
       const payload = {
         name: userForm.name,
         email: userForm.email,
         role_id: userForm.role_id,
-        branch_id: userForm.branch_id || null
+        branch_ids: userForm.branch_ids,
+        password: userForm.password,
       }
-      await usersAPI.create(payload)
+      const result = await usersAPI.create(payload)
       setUserSkip(0)
       setUserListVersion((v) => v + 1)
       await loadAllBranches()
-      toast.success('User created successfully')
       setShowUser(false)
-      setUserForm({ name:'', email:'', role_id:'', branch_id:'', active:true })
+      // Show the post-create confirmation modal with the temp password to
+      // share. Prefer the server-echoed `temp_password` (covers the case
+      // where the server generated one because the admin cleared the
+      // field) and fall back to what we sent.
+      setCreatedUser({
+        name: userForm.name,
+        email: userForm.email,
+        password: result?.temp_password || userForm.password,
+      })
+      setUserForm({ name:'', email:'', role_id:'', branch_ids:[], active:true, password:'' })
     } catch (err) {
       console.error(err)
       // toast already fired by global axios interceptor on non-2xx
+    }
+  }
+
+  const copyTempPassword = async () => {
+    if (!createdUser?.password) return
+    try {
+      await navigator.clipboard.writeText(createdUser.password)
+      toast.success('Temporary password copied')
+    } catch {
+      toast.error('Copy failed — select and copy manually')
     }
   }
 
@@ -231,11 +304,26 @@ export default function SettingsPage() {
 
   const openEditUser = (user) => {
     setEditingUser(user)
+    // Source of truth: the multi-branch list. Fallbacks for legacy data:
+    //   - Pre-multi-branch records (single user.branch_id, no list) → wrap
+    //     the single id in an array.
+    //   - Legacy all_branches=True records (e.g. a seeded super-admin from
+    //     before the implicit-all UI was removed) → expand to every CURRENT
+    //     branch. The first save then writes back an explicit list and the
+    //     all_branches flag flips off, so the user is migrated in place.
+    let initialBranchIds = []
+    if (Array.isArray(user.branch_ids) && user.branch_ids.length > 0) {
+      initialBranchIds = [...user.branch_ids]
+    } else if (user.all_branches) {
+      initialBranchIds = branches.map((b) => b.id)
+    } else if (user.branch_id) {
+      initialBranchIds = [user.branch_id]
+    }
     setEditUserForm({
       name: user.name,
       email: user.email,
       role_id: user.role_id || roleForUser(user)?.id || '',
-      branch_id: user.branch_id || '',
+      branch_ids: initialBranchIds,
     })
     setShowEditUser(true)
   }
@@ -243,13 +331,17 @@ export default function SettingsPage() {
   const saveEditUser = async () => {
     if (!editUserForm.name || !editUserForm.email) { toast.error('Name and email required'); return }
     if (!editUserForm.role_id) { toast.error('Select a role'); return }
+    if (!editUserForm.branch_ids || editUserForm.branch_ids.length === 0) {
+      toast.error('Pick at least one branch')
+      return
+    }
 
     try {
       const payload = {
         name: editUserForm.name,
         email: editUserForm.email,
         role_id: editUserForm.role_id,
-        branch_id: editUserForm.branch_id || null
+        branch_ids: editUserForm.branch_ids,
       }
       await usersAPI.update(editingUser.id, payload)
       setUserListVersion((v) => v + 1)
@@ -426,13 +518,29 @@ export default function SettingsPage() {
       {/* ── USERS & ROLES ─────────────────────────────────────────── */}
       {tab === 'users' && (
         <>
-          <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
-            {can('users.create') && (
-              <button className="btn btn-primary btn-sm" onClick={()=>setShowUser(true)}>+ Invite User</button>
-            )}
+          {/* Toggle sits under the parent tab. Splits the previous combined
+              view into two full-width sections; each section owns its own
+              header + Add button + table/list + pagination. */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
+            <SegmentedToggle
+              value={usersTab}
+              onChange={setUsersTab}
+              options={[
+                { id: 'users', label: 'Users' },
+                { id: 'roles', label: 'Roles' },
+              ]}
+              ariaLabel="Users or Roles section"
+            />
           </div>
-          <div className="grid-65" style={{alignItems:'start'}}>
-            <Card title="Users" bodyPadding={false}>
+
+          {usersTab === 'users' && (
+            <Card
+              title="Users"
+              titleRight={can('users.create')
+                ? <button className="btn btn-primary btn-sm" onClick={() => setShowUser(true)}>+ Add User</button>
+                : null}
+              bodyPadding={false}
+            >
               <table className="data-table">
                 <thead>
                   <tr>
@@ -446,11 +554,21 @@ export default function SettingsPage() {
                 </thead>
                 <tbody>
                   {users.map(u=>{
-                    const branch = branches.find(b => b.id === u.branch_id)
                     const initials = u.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()
                     const r = roleForUser(u)
                     const rLabel = r?.label || u.role
                     const rColor = roleColors[u.role] || roleColors[r?.key] || 'var(--accent)'
+                    // Branches column: "All branches" badge when all_branches=true,
+                    // otherwise a flat chip list of branch names. All chips look
+                    // equal — there's no meaningful "primary branch" concept
+                    // for end users (users.branch_id mirrors branch_ids[0] purely
+                    // for backwards compat; nothing downstream branches on it).
+                    // Falls back to the legacy single branch_id for any pre-
+                    // migration record.
+                    const assigned = Array.isArray(u.branch_ids) && u.branch_ids.length > 0
+                      ? u.branch_ids
+                      : (u.branch_id ? [u.branch_id] : [])
+                    const branchNames = assigned.map(bid => branches.find(b=>b.id===bid)?.name || bid)
                     return (
                     <tr key={u.id}>
                       <td>
@@ -463,7 +581,29 @@ export default function SettingsPage() {
                         </div>
                       </td>
                       <td><span style={{fontSize:11.5,padding:'3px 9px',borderRadius:20,fontWeight:600,background:rColor+'18',color:rColor}}>{rLabel}</span></td>
-                      <td style={{fontSize:12}}>{branch?.name || 'All Branches'}</td>
+                      <td style={{fontSize:12}}>
+                        {u.all_branches ? (
+                          <span style={{ padding:'2px 9px', borderRadius:20, fontSize:11, fontWeight:600,
+                                          background:'var(--accent)18', color:'var(--accent)' }}>
+                            All branches
+                          </span>
+                        ) : branchNames.length === 0 ? (
+                          <span style={{ color:'var(--text-muted)' }}>—</span>
+                        ) : (
+                          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                            {branchNames.map((name, i) => (
+                              <span key={i} style={{
+                                padding:'2px 8px', borderRadius:20, fontSize:11, fontWeight:500,
+                                background:'var(--bg-raised)',
+                                color:'var(--text-secondary)',
+                                border:'1px solid var(--border-subtle)',
+                              }}>
+                                {name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{u.last_login || '—'}</td>
                       <td><Chip status={u.active?'active':'inactive'}/></td>
                       <td>
@@ -488,14 +628,19 @@ export default function SettingsPage() {
                 onLimitChange={setUserLimit}
               />
             </Card>
+          )}
+
+          {usersTab === 'roles' && (
             <Card
               title="Roles & Permissions"
-              titleRight={can('users.manage_roles') ? <button className="btn btn-primary btn-xs" onClick={openNewRole}>+ New Role</button> : null}
+              titleRight={can('users.manage_roles')
+                ? <button className="btn btn-primary btn-sm" onClick={openNewRole}>+ Add Role</button>
+                : null}
             >
               {roles.length === 0 && (
                 <div style={{padding:'12px 0',fontSize:12,color:'var(--text-muted)'}}>No roles yet. Restart backend after seeding.</div>
               )}
-              {roles.map((r) => {
+              {roles.slice(roleSkip, roleSkip + roleLimit).map((r) => {
                 const rColor = roleColors[r.key] || (r.color && `var(--${r.color})`) || 'var(--accent)'
                 const granted = (r.permissions || []).join(', ') || '(none)'
                 return (
@@ -523,53 +668,132 @@ export default function SettingsPage() {
                   </div>
                 )
               })}
+              {roles.length > 0 && (
+                <PaginationBar
+                  total={roles.length}
+                  skip={roleSkip}
+                  limit={roleLimit}
+                  onSkipChange={setRoleSkip}
+                  onLimitChange={setRoleLimit}
+                />
+              )}
             </Card>
-            <RoleEditor
-              open={showRoleEditor}
-              onClose={()=>setShowRoleEditor(false)}
-              role={editingRole}
-              catalog={permCatalog}
-              onSaved={reloadRoles}
-            />
-          </div>
-          <Modal open={showUser} onClose={()=>setShowUser(false)} title="Invite User" icon="👤" size="md"
+          )}
+
+          <RoleEditor
+            open={showRoleEditor}
+            onClose={()=>setShowRoleEditor(false)}
+            role={editingRole}
+            catalog={permCatalog}
+            onSaved={reloadRoles}
+          />
+
+          <Modal open={showUser} onClose={()=>setShowUser(false)} title="Add User" icon="👤" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowUser(false)}>Cancel</button><button className="btn btn-primary" onClick={saveUser}>Create User</button></>}>
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={userForm.name} onChange={e=>puf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Email" required><input className="form-input" type="email" value={userForm.email} onChange={e=>puf('email',e.target.value)}/></FormGroup></FormRow>
-            <FormRow>
-              <FormGroup label="Role" required>
-                <select className="form-input" value={userForm.role_id} onChange={e=>puf('role_id',e.target.value)}>
-                  <option value="">— Select role —</option>
-                  {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
-                </select>
-              </FormGroup>
-              <FormGroup label="Branch">
-                <select className="form-input" value={userForm.branch_id} onChange={e=>puf('branch_id',e.target.value)}>
-                  <option value="">All Branches</option>
-                  {branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-              </FormGroup>
-            </FormRow>
-            <AlertBar type="blue" icon="ℹ">An invitation email will be sent to the user with a secure login link.</AlertBar>
+            <FormGroup label="Role" required>
+              <select className="form-input" value={userForm.role_id} onChange={e=>puf('role_id',e.target.value)}>
+                <option value="">— Select role —</option>
+                {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
+              </select>
+            </FormGroup>
+            <FormGroup label="Branches" required>
+              <MultiSelect
+                options={branches.map(b => ({ id: b.id, label: b.name }))}
+                value={userForm.branch_ids}
+                onChange={(ids) => puf('branch_ids', ids)}
+                placeholder="Choose branches…"
+              />
+            </FormGroup>
+            <FormGroup label="Temporary password" required>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={userForm.password}
+                  onChange={e=>puf('password', e.target.value)}
+                  style={{ fontFamily: 'DM Mono, monospace', flex: 1 }}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={()=>puf('password', generateTempPassword())}
+                  title="Generate a new random password"
+                >
+                  Regenerate
+                </button>
+              </div>
+            </FormGroup>
+            <AlertBar type="blue" icon="ℹ">
+              The user signs in with this temporary password and is required
+              to change it on first login. No email is sent — share the password
+              with them securely (Signal / WhatsApp / in person, not email).
+            </AlertBar>
+          </Modal>
+
+          {/* Post-create confirmation. Displays once with the temp password
+              and a copy button — admin should grab it now because it's not
+              recoverable later (only the bcrypt hash is stored server-side). */}
+          <Modal
+            open={!!createdUser}
+            onClose={()=>setCreatedUser(null)}
+            title="User created"
+            icon="✅"
+            size="sm"
+            footer={
+              <>
+                <button className="btn btn-secondary" onClick={copyTempPassword}>Copy password</button>
+                <button className="btn btn-primary" onClick={()=>setCreatedUser(null)}>Got it</button>
+              </>
+            }
+          >
+            {createdUser && (
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                  <strong>{createdUser.name}</strong> ({createdUser.email}) was created.
+                  Share this temporary password securely &mdash; they&apos;ll be required
+                  to change it on first login.
+                </div>
+                <div style={{
+                  padding: '12px 14px',
+                  background: 'var(--bg-raised)',
+                  border: '1px solid var(--border-default)',
+                  borderRadius: 8,
+                  fontFamily: 'DM Mono, monospace',
+                  fontSize: 15,
+                  textAlign: 'center',
+                  letterSpacing: '0.04em',
+                  userSelect: 'all',
+                }}>
+                  {createdUser.password}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 10 }}>
+                  This password won&apos;t be shown again. The server only stores the bcrypt hash.
+                </div>
+              </div>
+            )}
           </Modal>
           <Modal open={showEditUser} onClose={()=>setShowEditUser(false)} title="Edit User" icon="✏️" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowEditUser(false)}>Cancel</button><button className="btn btn-primary" onClick={saveEditUser}>Update User</button></>}>
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={editUserForm.name} onChange={e=>peuf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Email" required><input className="form-input" type="email" value={editUserForm.email} onChange={e=>peuf('email',e.target.value)}/></FormGroup></FormRow>
-            <FormRow>
-              <FormGroup label="Role" required>
-                <select className="form-input" value={editUserForm.role_id} onChange={e=>peuf('role_id',e.target.value)}>
-                  <option value="">— Select role —</option>
-                  {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
-                </select>
-              </FormGroup>
-              <FormGroup label="Branch">
-                <select className="form-input" value={editUserForm.branch_id} onChange={e=>peuf('branch_id',e.target.value)}>
-                  <option value="">All Branches</option>
-                  {branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-              </FormGroup>
-            </FormRow>
+            <FormGroup label="Role" required>
+              <select className="form-input" value={editUserForm.role_id} onChange={e=>peuf('role_id',e.target.value)}>
+                <option value="">— Select role —</option>
+                {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
+              </select>
+            </FormGroup>
+            <FormGroup label="Branches" required>
+              <MultiSelect
+                options={branches.map(b => ({ id: b.id, label: b.name }))}
+                value={editUserForm.branch_ids}
+                onChange={(ids) => peuf('branch_ids', ids)}
+                placeholder="Choose branches…"
+              />
+            </FormGroup>
           </Modal>
         </>
       )}

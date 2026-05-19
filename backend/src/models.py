@@ -109,11 +109,48 @@ class User(Base):
     # `role_id` → `roles` table. Drop in Phase 3 (first Alembic migration).
     role         = Column(SAEnum(UserRole), default=UserRole.cashier)
     role_id      = Column(String, ForeignKey("roles.id"), nullable=True)
+    # Legacy single-branch FK. Pre-multi-branch this was THE branch the user
+    # belonged to; it's now mirrored from `user_branches[0]` purely so older
+    # code that reads `user.branch_id` keeps working until those reads are
+    # migrated. There is NO user-facing "primary branch" concept — the
+    # authoritative list is `user_branches` (see UserBranch below) and any
+    # ordering inside it is incidental. When `all_branches=True` this column
+    # is null and user_branches is empty (the user has access to every
+    # branch — the super-admin pattern). See docs/USERS_AND_ROLES.md §5.2.
     branch_id    = Column(String, ForeignKey("branches.id"), nullable=True)
     avatar       = Column(String)
     active       = Column(Boolean, default=True)
     last_login   = Column(DateTime)
     created_at   = Column(DateTime, default=datetime.utcnow)
+    # True when an admin has just created/reset this user with a temp password
+    # and they haven't changed it yet. Frontend forces a redirect to
+    # /change-password and blocks all other navigation while True. Flag clears
+    # on a successful POST /auth/change-password. See docs/USERS_AND_ROLES.md
+    # §10 Phase 4 ("Force password change on first login") for the design.
+    must_change_password = Column(Boolean, default=False, nullable=False)
+    # When True, user has access to ALL branches (super-admin pattern). The
+    # `user_branches` table is empty for this user and `branch_id` is null.
+    # When False, `user_branches` lists the specific branches and `branch_id`
+    # mirrors the primary one.
+    all_branches = Column(Boolean, default=False, nullable=False)
+
+
+# ─── UserBranch (join table for multi-branch user assignment) ─────────────────
+class UserBranch(Base):
+    """Many-to-many between users and branches. A user can be assigned to
+    multiple branches; their primary branch (first one assigned) is mirrored
+    on `users.branch_id` for backwards compat with code that pre-dates the
+    multi-branch feature.
+
+    NB: this is purely a UI/data-filter mechanism — there is no per-branch
+    permission enforcement on the backend yet. A user with branch_ids=[A,B]
+    could still pass `?branch_id=C` to a list endpoint and the server won't
+    reject it. Enforcement is tracked under docs/USERS_AND_ROLES.md §10
+    Phase 4 (per-branch permission scoping).
+    """
+    __tablename__ = "user_branches"
+    user_id   = Column(String, ForeignKey("users.id",     ondelete="CASCADE"), primary_key=True)
+    branch_id = Column(String, ForeignKey("branches.id",  ondelete="CASCADE"), primary_key=True)
 
 
 # ─── Category ─────────────────────────────────────────────────────────────────

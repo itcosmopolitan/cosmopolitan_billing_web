@@ -15,13 +15,22 @@ const NOTIF_TYPE = {
 }
 
 export default function Topbar() {
-  const { activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
+  const { user, activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
   const navigate = useNavigate()
 
   const [notifOpen, setNotifOpen]   = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
   const notifRef  = useRef(null)
   const branchRef = useRef(null)
+
+  // Branch picker filtered to the user's assigned branches. Users with
+  // all_branches=true or no branch_ids list (legacy super-admin records) see
+  // every branch. Multi-branch users get a switcher over their allowed
+  // subset only. Cosmetic UI gate — backend enforcement of branch_id query
+  // params is still tracked under USERS_AND_ROLES.md §10 Phase 4.
+  const allowedBranches = user?.all_branches || !user?.branch_ids?.length
+    ? branches
+    : branches.filter((b) => user.branch_ids.includes(b.id))
 
   // Single click-outside handler that closes whichever menu is open.
   useEffect(() => {
@@ -53,7 +62,10 @@ export default function Topbar() {
         <Icon.Menu size={18} />
       </IconButton>
 
-      {/* Branch picker — the only persistent context the topbar carries. */}
+      {/* Branch picker — the only persistent context the topbar carries.
+          Hidden entirely if the user has no branches at all (defensive — the
+          seed always gives every active user at least one branch). */}
+      {allowedBranches.length > 0 && (
       <div style={{ position: 'relative' }} ref={branchRef}>
         <button
           onClick={() => setBranchOpen((v) => !v)}
@@ -128,12 +140,12 @@ export default function Topbar() {
             }}>
               Switch branch
             </div>
-            {branches.length === 0 && (
+            {allowedBranches.length === 0 && (
               <div style={{ padding: '14px', fontSize: 12.5, color: 'var(--text-muted)' }}>
                 No branches configured.
               </div>
             )}
-            {branches.map((b) => {
+            {allowedBranches.map((b) => {
               const active = b.id === activeBranch?.id
               return (
                 <button
@@ -172,6 +184,7 @@ export default function Topbar() {
           </div>
         )}
       </div>
+      )}
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
