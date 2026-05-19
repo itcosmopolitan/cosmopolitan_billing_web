@@ -9,6 +9,7 @@ admin perms. See docs/USERS_AND_ROLES.md §7 / §10 (Phase 3 notes).
 from __future__ import annotations
 
 import uuid
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -29,15 +30,15 @@ class RoleCreate(BaseModel):
     label: str = Field(min_length=1, max_length=80)
     description: str = ""
     color: str = "blue"
-    permissions: list[str] = Field(default_factory=list)
+    permissions: List[str] = Field(default_factory=list)
 
 
 class RoleUpdate(BaseModel):
-    label: str | None = None
-    description: str | None = None
-    color: str | None = None
-    permissions: list[str] | None = None
-    active: bool | None = None
+    label: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    permissions: Optional[List[str]] = None
+    active: Optional[bool] = None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

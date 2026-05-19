@@ -193,6 +193,16 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         ).scalar_one_or_none()
         if role:
             granted = list(role.permissions or [])
+    elif user.role:
+        # Keep permission resolution aligned with `require_perm`: users that
+        # still have only the legacy role enum should get the same grants in
+        # `/auth/login` and `/auth/me` as route guards enforce server-side.
+        role_key = user.role.value if hasattr(user.role, "value") else user.role
+        role = (
+            await db.execute(select(Role).where(Role.key == role_key))
+        ).scalar_one_or_none()
+        if role:
+            granted = list(role.permissions or [])
     return {
         "id": user.id,
         "name": user.name,
