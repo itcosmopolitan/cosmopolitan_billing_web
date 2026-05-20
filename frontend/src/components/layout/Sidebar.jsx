@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
 import { authAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { Avatar } from '@/components/ui'
+import * as Icon from '@/components/ui/Icons'
 import { roleLabels } from '@/utils/helpers'
 
 // Phase 2: each nav item declares the permission required to *see* it.
@@ -13,24 +14,28 @@ import { roleLabels } from '@/utils/helpers'
 // current user can't access — same source-of-truth strings as the backend
 // route guards in src/security.py require_perm().
 const navItems = [
-  { section: null,        path: '/dashboard', icon: '▦',  label: 'Dashboard',       perm: 'dashboard.view' },
-  { section: null,        path: '/pos',        icon: '🧾', label: 'POS Billing',     perm: 'pos.use' },
-  { section: 'Inventory', path: '/items',      icon: '📦', label: 'Items & Stock',   perm: 'items.view',     badge: 4 },
-  { section: null,        path: '/transfers',  icon: '↔',  label: 'Stock Transfers', perm: 'transfers.view', badge: 1 },
-  { section: 'Commerce',  path: '/sales',      icon: '🛒', label: 'Sales',           perm: 'invoices.view' },
-  { section: null,        path: '/purchases',  icon: '📋', label: 'Purchases',       perm: 'purchases.view', badge: 5 },
-  { section: null,        path: '/customers',  icon: '👥', label: 'Customers',       perm: 'customers.view' },
-  { section: null,        path: '/vendors',    icon: '🏭', label: 'Vendors',         perm: 'vendors.view' },
-  { section: 'Finance',   path: '/cash',       icon: '💰', label: 'Cash Control',    perm: 'cash.view' },
-  { section: null,        path: '/reports',    icon: '📊', label: 'Reports',         perm: 'reports.view' },
-  { section: 'Admin',     path: '/settings',   icon: '⚙', label: 'Settings',        perm: 'settings.view' },
-  { section: null,        path: '/audit',      icon: '🔍', label: 'Audit Trail',     perm: 'audit.view' },
+  { section: 'Main',      path: '/dashboard',  Icon: Icon.Dashboard,   label: 'Dashboard',       perm: 'dashboard.view' },
+  { section: null,        path: '/pos',        Icon: Icon.Receipt,     label: 'POS Billing',     perm: 'pos.use' },
+  { section: 'Inventory', path: '/items',      Icon: Icon.Package,     label: 'Items & Stock',   perm: 'items.view',     badge: 4 },
+  { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view', badge: 1 },
+  { section: 'Commerce',  path: '/sales',      Icon: Icon.ShoppingBag, label: 'Sales',           perm: 'invoices.view' },
+  { section: null,        path: '/purchases',  Icon: Icon.Clipboard,   label: 'Purchases',       perm: 'purchases.view', badge: 5 },
+  { section: null,        path: '/customers',  Icon: Icon.Users,       label: 'Customers',       perm: 'customers.view' },
+  { section: null,        path: '/vendors',    Icon: Icon.Factory,     label: 'Vendors',         perm: 'vendors.view' },
+  { section: 'Finance',   path: '/cash',       Icon: Icon.Wallet,      label: 'Cash Control',    perm: 'cash.view' },
+  { section: null,        path: '/reports',    Icon: Icon.BarChart,    label: 'Reports',         perm: 'reports.view' },
+  { section: 'Admin',     path: '/settings',   Icon: Icon.Settings,    label: 'Settings',        perm: 'settings.view' },
+  { section: null,        path: '/audit',      Icon: Icon.Search,      label: 'Audit Trail',     perm: 'audit.view' },
 ]
+
+const SIDEBAR_W          = 244
+const SIDEBAR_W_COLLAPSED = 68
 
 export default function Sidebar() {
   const navigate = useNavigate()
+  const userMenuRef = useRef(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
-  const { user, activeBranch, branches, setActiveBranch, sidebarCollapsed, roles, clearSession } = useAppStore()
+  const { user, sidebarCollapsed, toggleSidebar, roles, clearSession } = useAppStore()
   const can = useCan()
 
   // Resolve the role label dynamically. Prefer the live `roles` list (covers
@@ -43,12 +48,24 @@ export default function Sidebar() {
   // `perm` are always visible.
   const visibleNav = navItems.filter((item) => !item.perm || can(item.perm))
 
+  // Click-outside dismissal for the profile dropdown — feels broken without it.
+  useEffect(() => {
+    if (!showUserMenu) return
+    const onClick = (e) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setShowUserMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [showUserMenu])
+
   let lastSection = null
 
   return (
     <aside style={{
-      width: sidebarCollapsed ? 56 : 220,
-      minWidth: sidebarCollapsed ? 56 : 220,
+      width: sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W,
+      minWidth: sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W,
       background: 'var(--bg-surface)',
       borderRight: '1px solid var(--border-default)',
       display: 'flex',
@@ -60,57 +77,149 @@ export default function Sidebar() {
       overflow: 'hidden',
     }}>
 
-      {/* Logo */}
-      <div style={{ padding: '18px 16px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>R</div>
-          {!sidebarCollapsed && (
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.3px' }}>Cosmopolitan</div>
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>v2.4 · Multi-branch</div>
+      {/* Brand */}
+      <div style={{
+        height: 60,
+        padding: sidebarCollapsed ? '0' : '0 18px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+        gap: 11,
+        borderBottom: '1px solid var(--border-subtle)',
+        flexShrink: 0,
+      }}>
+        <div style={{
+          width: 34, height: 34, borderRadius: 9,
+          background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%)',
+          color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: 15, letterSpacing: '-0.5px',
+          boxShadow: '0 2px 8px rgba(99,102,241,0.35)',
+          flexShrink: 0,
+        }}>C</div>
+        {!sidebarCollapsed && (
+          <div style={{ overflow: 'hidden' }}>
+            <div style={{
+              fontSize: 14.5, fontWeight: 600, letterSpacing: '-0.25px',
+              color: 'var(--text-primary)',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              Cosmopolitan
             </div>
-          )}
-        </div>
+            <div style={{
+              fontSize: 10.5, color: 'var(--text-muted)', fontWeight: 500,
+              letterSpacing: '0.04em', marginTop: 1,
+            }}>
+              Billing Suite · v2.4
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Nav */}
-      <nav style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+      <nav style={{
+        flex: 1, overflowY: 'auto', overflowX: 'hidden',
+        padding: sidebarCollapsed ? '10px 8px' : '12px 10px',
+      }}>
         {visibleNav.map((item) => {
           const showSection = item.section && item.section !== lastSection
           if (item.section) lastSection = item.section
           return (
             <div key={item.path}>
               {showSection && !sidebarCollapsed && (
-                <div style={{ padding: '10px 16px 4px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.09em', textTransform: 'uppercase' }}>
+                <div style={{
+                  padding: '14px 10px 6px',
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  color: 'var(--text-muted)',
+                  letterSpacing: '0.1em',
+                  textTransform: 'uppercase',
+                }}>
                   {item.section}
                 </div>
               )}
+              {showSection && sidebarCollapsed && (
+                <div style={{
+                  height: 1, background: 'var(--border-subtle)',
+                  margin: '10px 6px 8px',
+                }} />
+              )}
               <NavLink
                 to={item.path}
+                title={sidebarCollapsed ? item.label : undefined}
                 style={({ isActive }) => ({
+                  position: 'relative',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 10,
-                  padding: sidebarCollapsed ? '10px' : '9px 16px',
+                  gap: 11,
+                  padding: sidebarCollapsed ? '9px' : '8px 10px',
                   justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                  borderRadius: 8,
+                  marginBottom: 2,
                   cursor: 'pointer',
                   color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
                   background: isActive ? 'var(--accent-bg)' : 'transparent',
-                  fontSize: 13.5,
+                  fontSize: 13,
+                  fontWeight: isActive ? 600 : 500,
                   textDecoration: 'none',
-                  transition: 'all 0.12s',
-                  position: 'relative',
-                  borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
+                  transition: 'background 120ms ease, color 120ms ease',
                 })}
+                onMouseEnter={(e) => {
+                  // Hover without breaking the active style: only apply when not active.
+                  if (!e.currentTarget.classList.contains('active')) {
+                    e.currentTarget.style.background = 'var(--bg-hover)'
+                    e.currentTarget.style.color = 'var(--text-primary)'
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!e.currentTarget.classList.contains('active')) {
+                    e.currentTarget.style.background = 'transparent'
+                    e.currentTarget.style.color = 'var(--text-secondary)'
+                  }
+                }}
               >
-                <span style={{ fontSize: 16, flexShrink: 0, width: 18, textAlign: 'center' }}>{item.icon}</span>
-                {!sidebarCollapsed && (
+                {({ isActive }) => (
                   <>
-                    <span style={{ flex: 1 }}>{item.label}</span>
-                    {item.badge && (
-                      <span style={{ background: 'var(--red)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10 }}>
-                        {item.badge}
-                      </span>
+                    {/* Subtle left accent bar in expanded mode. */}
+                    {isActive && !sidebarCollapsed && (
+                      <span style={{
+                        position: 'absolute', left: -10, top: 6, bottom: 6, width: 3,
+                        background: 'var(--accent)', borderRadius: '0 3px 3px 0',
+                      }} />
+                    )}
+                    <item.Icon size={18} strokeWidth={isActive ? 2 : 1.75} />
+                    {!sidebarCollapsed && (
+                      <>
+                        <span style={{
+                          flex: 1, whiteSpace: 'nowrap',
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>
+                          {item.label}
+                        </span>
+                        {item.badge && (
+                          <span style={{
+                            background: isActive ? 'var(--accent)' : 'var(--red)',
+                            color: '#fff',
+                            fontSize: 10, fontWeight: 700,
+                            minWidth: 18, height: 18,
+                            padding: '0 6px',
+                            borderRadius: 9,
+                            display: 'inline-flex',
+                            alignItems: 'center', justifyContent: 'center',
+                            lineHeight: 1,
+                          }}>
+                            {item.badge}
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {sidebarCollapsed && item.badge && (
+                      <span style={{
+                        position: 'absolute', top: 4, right: 4,
+                        width: 8, height: 8, borderRadius: '50%',
+                        background: 'var(--red)',
+                        boxShadow: '0 0 0 2px var(--bg-surface)',
+                      }} />
                     )}
                   </>
                 )}
@@ -120,170 +229,204 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Branch selector */}
-      {!sidebarCollapsed && (
-        <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }}>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Active Branch</div>
-          <select
-            className="form-input"
-            style={{ padding: '6px 10px', fontSize: 12 }}
-            value={activeBranch?.id || ''}
-            onChange={(e) => {
-              const b = branches.find((x) => x.id === e.target.value)
-              if (b) setActiveBranch(b)
-            }}
-          >
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* User */}
-      <div style={{ padding: '12px 14px', borderTop: '1px solid var(--border-subtle)', position: 'relative' }}>
+      {/* User profile + collapse toggle */}
+      <div style={{
+        borderTop: '1px solid var(--border-subtle)',
+        padding: sidebarCollapsed ? 8 : 10,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        position: 'relative',
+      }} ref={userMenuRef}>
         <button
-          onClick={() => setShowUserMenu(!showUserMenu)}
+          onClick={() => setShowUserMenu((v) => !v)}
+          title={sidebarCollapsed ? (user?.name || 'Account') : undefined}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 10,
             width: '100%',
-            background: 'transparent',
+            padding: sidebarCollapsed ? 4 : '8px 10px',
+            justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+            background: showUserMenu ? 'var(--bg-hover)' : 'transparent',
             border: 'none',
             cursor: 'pointer',
-            padding: 0,
             borderRadius: 8,
-            transition: 'all 0.2s',
+            transition: 'background 120ms ease',
+            textAlign: 'left',
           }}
-          onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          onMouseEnter={(e) => { if (!showUserMenu) e.currentTarget.style.background = 'var(--bg-hover)' }}
+          onMouseLeave={(e) => { if (!showUserMenu) e.currentTarget.style.background = 'transparent' }}
         >
-          <Avatar initials={user?.avatar || '?'} size={30} />
+          <Avatar initials={user?.avatar || (user?.name?.[0]?.toUpperCase() ?? '?')} size={32} />
           {!sidebarCollapsed && (
-            <div style={{ overflow: 'hidden', textAlign: 'left' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.name || '—'}</div>
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{userRoleLabel}</div>
+            <div style={{ overflow: 'hidden', flex: 1 }}>
+              <div style={{
+                fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                lineHeight: 1.2,
+              }}>
+                {user?.name || '—'}
+              </div>
+              <div style={{
+                fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {userRoleLabel || 'Signed in'}
+              </div>
             </div>
+          )}
+          {!sidebarCollapsed && (
+            <Icon.ChevronDown size={14} style={{
+              color: 'var(--text-muted)', flexShrink: 0,
+              transform: showUserMenu ? 'rotate(180deg)' : 'none',
+              transition: 'transform 150ms ease',
+            }} />
           )}
         </button>
 
-        {/* User Menu Dropdown */}
-        {showUserMenu && !sidebarCollapsed && (
+        {/* Collapse toggle (expanded mode only — topbar hamburger handles
+            collapsed mode). Keeps the affordance discoverable. */}
+        {!sidebarCollapsed && (
+          <button
+            onClick={toggleSidebar}
+            title="Collapse sidebar"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '6px 10px',
+              background: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: 'var(--text-muted)',
+              fontSize: 11.5,
+              fontWeight: 500,
+              transition: 'all 120ms ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--text-secondary)'
+              e.currentTarget.style.background = 'var(--bg-raised)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--text-muted)'
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <Icon.ChevronLeft size={14} />
+            Collapse
+          </button>
+        )}
+        {sidebarCollapsed && (
+          <button
+            onClick={toggleSidebar}
+            title="Expand sidebar"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 6,
+              background: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: 'var(--text-muted)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--text-secondary)'
+              e.currentTarget.style.background = 'var(--bg-raised)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--text-muted)'
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <Icon.ChevronRight size={14} />
+          </button>
+        )}
+
+        {/* User menu dropdown */}
+        {showUserMenu && (
           <div style={{
             position: 'absolute',
-            bottom: '100%',
-            left: 14,
-            right: 14,
-            background: 'var(--bg-raised)',
+            bottom: 'calc(100% + 6px)',
+            left: sidebarCollapsed ? 'calc(100% + 6px)' : 10,
+            right: sidebarCollapsed ? 'auto' : 10,
+            width: sidebarCollapsed ? 232 : 'auto',
+            background: 'var(--bg-surface)',
             border: '1px solid var(--border-default)',
-            borderRadius: 8,
-            marginBottom: 8,
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            borderRadius: 10,
+            boxShadow: 'var(--shadow-md)',
             zIndex: 1000,
             overflow: 'hidden',
           }}>
-            {/* Profile Info */}
             <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{user?.name || '—'}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{user?.email || ''}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {user?.name || '—'}
+              </div>
+              <div style={{
+                fontSize: 11, color: 'var(--text-muted)', marginTop: 3,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {user?.email || ''}
+              </div>
             </div>
 
-            {/* Menu Items */}
-            <div>
-              <button
-                onClick={() => {
-                  navigate('/settings')
-                  setShowUserMenu(false)
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  background: 'transparent',
-                  border: 'none',
-                  textAlign: 'left',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  color: 'var(--text-secondary)',
-                  transition: 'all 0.2s',
-                  borderBottom: '1px solid var(--border-subtle)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--bg-hover)'
-                  e.currentTarget.style.color = 'var(--text-primary)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent'
-                  e.currentTarget.style.color = 'var(--text-secondary)'
-                }}
-              >
-                ⚙ Profile Settings
-              </button>
-
-              <button
-                onClick={() => {
-                  navigate('/audit')
-                  setShowUserMenu(false)
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  background: 'transparent',
-                  border: 'none',
-                  textAlign: 'left',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  color: 'var(--text-secondary)',
-                  transition: 'all 0.2s',
-                  borderBottom: '1px solid var(--border-subtle)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--bg-hover)'
-                  e.currentTarget.style.color = 'var(--text-primary)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent'
-                  e.currentTarget.style.color = 'var(--text-secondary)'
-                }}
-              >
-                🔍 Audit Trail
-              </button>
-
-              <button
-                onClick={async () => {
-                  setShowUserMenu(false)
-                  // Best-effort server notification (no-op today, kept for
-                  // symmetry / future audit logging).
-                  authAPI.logout().catch(() => {})
-                  localStorage.removeItem('retailos_token')
-                  clearSession()
-                  toast.success('Logged out successfully')
-                  navigate('/login')
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  background: 'transparent',
-                  border: 'none',
-                  textAlign: 'left',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  color: 'var(--red)',
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--red-bg)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent'
-                }}
-              >
-                🚪 Logout
-              </button>
-            </div>
+            <MenuItem
+              icon={<Icon.UserCog size={15} />}
+              label="Profile & Settings"
+              onClick={() => { navigate('/settings'); setShowUserMenu(false) }}
+            />
+            <MenuItem
+              icon={<Icon.Search size={15} />}
+              label="Audit Trail"
+              onClick={() => { navigate('/audit'); setShowUserMenu(false) }}
+            />
+            <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+            <MenuItem
+              icon={<Icon.LogOut size={15} />}
+              label="Sign out"
+              danger
+              onClick={async () => {
+                setShowUserMenu(false)
+                // Best-effort server notification (no-op today, kept for
+                // symmetry / future audit logging).
+                authAPI.logout().catch(() => {})
+                localStorage.removeItem('retailos_token')
+                clearSession()
+                toast.success('Logged out successfully')
+                navigate('/login')
+              }}
+            />
           </div>
         )}
       </div>
     </aside>
+  )
+}
+
+function MenuItem({ icon, label, onClick, danger }) {
+  const baseColor = danger ? 'var(--red)' : 'var(--text-secondary)'
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        width: '100%', padding: '10px 14px',
+        background: 'transparent', border: 'none',
+        cursor: 'pointer', textAlign: 'left',
+        color: baseColor,
+        fontSize: 12.5, fontWeight: 500,
+        transition: 'background 120ms ease, color 120ms ease',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = danger ? 'var(--red-bg)' : 'var(--bg-hover)'
+        if (!danger) e.currentTarget.style.color = 'var(--text-primary)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent'
+        e.currentTarget.style.color = baseColor
+      }}
+    >
+      <span style={{ display: 'inline-flex', color: 'inherit' }}>{icon}</span>
+      {label}
+    </button>
   )
 }
