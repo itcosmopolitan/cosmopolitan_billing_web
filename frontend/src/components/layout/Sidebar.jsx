@@ -63,6 +63,14 @@ export default function Sidebar() {
   let lastSection = null
 
   return (
+    /* The aside intentionally has NO `overflow: hidden`. In collapsed mode
+       the user-profile dropdown flies out to the right of the sidebar via
+       `left: calc(100% + 6px)`, putting it at viewport x ≈ 74px — well
+       outside the 68px-wide aside. Clipping here silently hides the
+       dropdown and makes Profile / Audit / Sign out unreachable. Inner
+       text (brand, nav labels, user name) already truncates via its own
+       `overflow: hidden` + `text-overflow: ellipsis`, and the nav scroller
+       sets `overflowX: hidden`, so removing it here is safe. */
     <aside style={{
       width: sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W,
       minWidth: sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W,
@@ -74,7 +82,6 @@ export default function Sidebar() {
       top: 0, left: 0, bottom: 0,
       zIndex: 100,
       transition: 'width 0.2s ease',
-      overflow: 'hidden',
     }}>
 
       {/* Brand */}
