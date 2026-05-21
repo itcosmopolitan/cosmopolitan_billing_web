@@ -10,6 +10,18 @@ yarn-error.log*
 # npm workspaces — dependencies hoist to repo root
 node_modules/
 
+# Wrong package manager — this repo uses npm workspaces, not yarn / pnpm.
+# Block stray lockfiles so a teammate running `yarn install` by mistake can't
+# commit a second source of truth that silently drifts from package-lock.json.
+yarn.lock
+**/yarn.lock
+pnpm-lock.yaml
+**/pnpm-lock.yaml
+# Per-workspace npm lockfiles are also wrong — npm workspaces produce a single
+# root package-lock.json. If one of these appears, delete it.
+frontend/package-lock.json
+backend/package-lock.json
+
 # Python virtualenv (often created at repo root by run scripts)
 venv/
 .venv/
