@@ -4,7 +4,7 @@ import { roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
@@ -236,8 +236,17 @@ export default function SettingsPage() {
     }
   }, [showUser])
 
+  // Loose RFC-5322-inspired check — anything with a local part, an @, a
+  // domain, and a TLD. Intentionally permissive (e.g. accepts `.local` TLDs
+  // and most "weird but valid" addresses) so we don't reject things the
+  // user typed correctly. The backend uses Pydantic EmailStr (stricter,
+  // does deliverability checks) as the authoritative gate; this client-side
+  // check just saves a round trip for the obvious typos.
+  const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s || '').trim())
+
   const saveUser = async () => {
     if (!userForm.name || !userForm.email) { toast.error('Name and email required'); return }
+    if (!isValidEmail(userForm.email)) { toast.error('Enter a valid email (e.g. name@example.com)'); return }
     if (!userForm.role_id) { toast.error('Select a role'); return }
     // Mirror backend _assign_branches: caller must pick at least one branch.
     if (!userForm.branch_ids || userForm.branch_ids.length === 0) {
@@ -254,8 +263,12 @@ export default function SettingsPage() {
 
     try {
       const payload = {
-        name: userForm.name,
-        email: userForm.email,
+        name: userForm.name.trim(),
+        // Normalise the same way auth.py reads the login email
+        // (`data.email.lower()`) so a user created here matches their own
+        // /auth/login lookup. Avoids "I created Foo@X.com, login fails"
+        // class of bugs.
+        email: userForm.email.trim().toLowerCase(),
         role_id: userForm.role_id,
         branch_ids: userForm.branch_ids,
         password: userForm.password,
@@ -330,6 +343,7 @@ export default function SettingsPage() {
 
   const saveEditUser = async () => {
     if (!editUserForm.name || !editUserForm.email) { toast.error('Name and email required'); return }
+    if (!isValidEmail(editUserForm.email)) { toast.error('Enter a valid email (e.g. name@example.com)'); return }
     if (!editUserForm.role_id) { toast.error('Select a role'); return }
     if (!editUserForm.branch_ids || editUserForm.branch_ids.length === 0) {
       toast.error('Pick at least one branch')
@@ -338,8 +352,8 @@ export default function SettingsPage() {
 
     try {
       const payload = {
-        name: editUserForm.name,
-        email: editUserForm.email,
+        name: editUserForm.name.trim(),
+        email: editUserForm.email.trim().toLowerCase(),
         role_id: editUserForm.role_id,
         branch_ids: editUserForm.branch_ids,
       }
@@ -476,12 +490,12 @@ export default function SettingsPage() {
                     <td>
                       <div style={{display:'flex',gap:4}}>
                         {can('settings.edit') && (
-                          <button className="btn btn-ghost btn-xs" onClick={() => {
+                          <button className="btn btn-secondary btn-xs" onClick={() => {
                               setEditBranchForm(b)
                               setShowEditBranch(true)
                               }}>Edit</button>
                         )}
-                        <button className="btn btn-ghost btn-xs" onClick={()=>toast('Branch settings…')}>Settings</button>
+                        <button className="btn btn-secondary btn-xs" onClick={()=>toast('Branch settings…')}>Settings</button>
                       </div>
                     </td>
                   </tr>
@@ -518,36 +532,45 @@ export default function SettingsPage() {
       {/* ── USERS & ROLES ─────────────────────────────────────────── */}
       {tab === 'users' && (
         <>
-          {/* Toggle sits under the parent tab. Splits the previous combined
-              view into two full-width sections; each section owns its own
-              header + Add button + table/list + pagination. */}
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
-            <SegmentedToggle
-              value={usersTab}
-              onChange={setUsersTab}
-              options={[
-                { id: 'users', label: 'Users' },
-                { id: 'roles', label: 'Roles' },
-              ]}
-              ariaLabel="Users or Roles section"
-            />
-          </div>
+          {/* Toggle lives in the Card header (replacing the redundant "Users" /
+              "Roles & Permissions" title). One Card stays mounted across
+              toggle flips — only its body swaps — so keyboard focus on the
+              toggle is preserved. The titleRight + bodyPadding adapt to the
+              active sub-tab.
 
-          {usersTab === 'users' && (
-            <Card
-              title="Users"
-              titleRight={can('users.create')
-                ? <button className="btn btn-primary btn-sm" onClick={() => setShowUser(true)}>+ Add User</button>
-                : null}
-              bodyPadding={false}
-            >
+              NB: Card's title slot renders React elements as-is (no <h4>
+              wrapping) — see components/ui/Card. */}
+          <Card
+            title={
+              <SegmentedToggle
+                value={usersTab}
+                onChange={setUsersTab}
+                options={[
+                  { id: 'users', label: 'Users' },
+                  { id: 'roles', label: 'Roles' },
+                ]}
+                ariaLabel="Users or Roles section"
+              />
+            }
+            titleRight={
+              usersTab === 'users'
+                ? (can('users.create')
+                    ? <button className="btn btn-primary btn-sm" onClick={() => setShowUser(true)}>+ Add User</button>
+                    : null)
+                : (can('users.manage_roles')
+                    ? <button className="btn btn-primary btn-sm" onClick={openNewRole}>+ Add Role</button>
+                    : null)
+            }
+            bodyPadding={usersTab === 'roles'}
+          >
+            {usersTab === 'users' && (
+              <>
               <table className="data-table">
                 <thead>
                   <tr>
                     <SortableHeader label="User" sortKey="name" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
                     <SortableHeader label="Role" sortKey="role" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
                     <SortableHeader label="Branch" sortKey="branch_id" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
-                    <SortableHeader label="Last Login" sortKey="last_login" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
                     <SortableHeader label="Status" sortKey="active" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
                     <th></th>
                   </tr>
@@ -590,29 +613,23 @@ export default function SettingsPage() {
                         ) : branchNames.length === 0 ? (
                           <span style={{ color:'var(--text-muted)' }}>—</span>
                         ) : (
-                          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-                            {branchNames.map((name, i) => (
-                              <span key={i} style={{
-                                padding:'2px 8px', borderRadius:20, fontSize:11, fontWeight:500,
-                                background:'var(--bg-raised)',
-                                color:'var(--text-secondary)',
-                                border:'1px solid var(--border-subtle)',
-                              }}>
-                                {name}
-                              </span>
-                            ))}
-                          </div>
+                          <TruncatedChipList
+                            items={assigned.map((bid, i) => ({ id: bid, label: branchNames[i] }))}
+                            maxVisible={5}
+                            popoverTitle="Assigned branches"
+                          />
                         )}
                       </td>
-                      <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{u.last_login || '—'}</td>
                       <td><Chip status={u.active?'active':'inactive'}/></td>
                       <td>
                         <div style={{display:'flex',gap:4}}>
                           {can('users.edit') && (
-                            <button className="btn btn-ghost btn-xs" onClick={()=>openEditUser(u)}>Edit</button>
+                            <button className="btn btn-secondary btn-xs" onClick={()=>openEditUser(u)}>Edit</button>
                           )}
                           {can('users.edit') && (
-                            <button className="btn btn-danger btn-xs" onClick={()=>toggleUser(u.id)}>{u.active?'Disable':'Enable'}</button>
+                            <button className="btn btn-secondary btn-xs" onClick={()=>toggleUser(u.id)}>
+                              {u.active ? 'Mark as Inactive' : 'Mark as Active'}
+                            </button>
                           )}
                         </div>
                       </td>
@@ -627,16 +644,11 @@ export default function SettingsPage() {
                 onSkipChange={setUserSkip}
                 onLimitChange={setUserLimit}
               />
-            </Card>
-          )}
+              </>
+            )}
 
-          {usersTab === 'roles' && (
-            <Card
-              title="Roles & Permissions"
-              titleRight={can('users.manage_roles')
-                ? <button className="btn btn-primary btn-sm" onClick={openNewRole}>+ Add Role</button>
-                : null}
-            >
+            {usersTab === 'roles' && (
+              <>
               {roles.length === 0 && (
                 <div style={{padding:'12px 0',fontSize:12,color:'var(--text-muted)'}}>No roles yet. Restart backend after seeding.</div>
               )}
@@ -651,11 +663,11 @@ export default function SettingsPage() {
                       <span style={{fontSize:11,color:'var(--text-muted)'}}>· {r.user_count} user{r.user_count===1?'':'s'}</span>
                       <div style={{flex:1}}/>
                       {can('users.manage_roles') && (
-                        <button className="btn btn-ghost btn-xs" onClick={()=>openEditRole(r)}>Edit</button>
+                        <button className="btn btn-secondary btn-xs" onClick={()=>openEditRole(r)}>Edit</button>
                       )}
                       {can('users.manage_roles') && (
                         <button
-                          className="btn btn-ghost btn-xs"
+                          className="btn btn-danger btn-xs"
                           onClick={()=>deleteRole(r)}
                           disabled={r.is_system || r.user_count > 0}
                           title={r.is_system ? 'System roles cannot be deleted' : (r.user_count > 0 ? 'Reassign users first' : 'Delete role')}
@@ -677,8 +689,9 @@ export default function SettingsPage() {
                   onLimitChange={setRoleLimit}
                 />
               )}
-            </Card>
-          )}
+              </>
+            )}
+          </Card>
 
           <RoleEditor
             open={showRoleEditor}

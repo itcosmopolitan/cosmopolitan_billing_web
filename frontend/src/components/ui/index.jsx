@@ -233,11 +233,19 @@ export function SectionHeader({ title, subtitle, children }) {
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
 export function Card({ title, titleRight, children, bodyPadding = true, style }) {
+  // Wrap string/number titles in an <h4> for a11y + visual consistency. When
+  // the caller passes a React element (e.g. a SegmentedToggle in the title
+  // slot), render it as-is — h4 nesting an interactive widget is invalid
+  // HTML and confuses screen readers. The caller is responsible for any
+  // wrapping its element needs.
+  const titleIsText = typeof title === 'string' || typeof title === 'number'
   return (
     <div className="card" style={style}>
       {title && (
         <div className="card-header">
-          <h4 style={{ flex: 1, margin: 0 }}>{title}</h4>
+          {titleIsText
+            ? <h4 style={{ flex: 1, margin: 0 }}>{title}</h4>
+            : <div style={{ flex: 1, display: 'flex', alignItems: 'center', minWidth: 0 }}>{title}</div>}
           {titleRight}
         </div>
       )}
@@ -654,6 +662,216 @@ export function MultiSelect({ options, value, onChange, placeholder = 'Choose…
         <span>{triggerLabel}</span>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8 }}>▾</span>
       </button>
+      {popover}
+    </div>
+  )
+}
+
+// ─── TruncatedChipList ───────────────────────────────────────────────────────
+// Display a list of labels as inline chips, capped at `maxVisible`. When the
+// list overflows, an interactive "+N more" pill appears at the end; clicking
+// it opens a portaled popover that shows ALL items in a scrollable list
+// with a sticky search input. View-only — no checkboxes, no selection.
+//
+// Use for read-only table cells where a row's "tags" / "branches" /
+// "categories" can be long enough to dominate the row visually. Pair with
+// MultiSelect for the edit path; the two share the same portal + auto-flip
+// + outside-click / Escape close behavior (intentionally duplicated rather
+// than extracted into a shared hook — single second consumer doesn't yet
+// justify the abstraction; revisit when a third floating UI lands).
+//
+// Props:
+//   items:        [{ id, label }]  — full list to display
+//   maxVisible:   number           — chips before "+N more" appears (default 5)
+//   chipStyle:    object           — optional overrides for inline chip CSS
+//   popoverTitle: string           — small heading at the top of the popover
+//                                     (default "All items")
+
+const POPOVER_MAX_H_TR = 280
+const POPOVER_GAP_TR   = 4
+const VIEWPORT_PAD_TR  = 8
+const SEARCH_THRESHOLD = 8  // matches MultiSelect — only show search above this many items
+
+const DEFAULT_CHIP_STYLE = {
+  padding: '2px 8px',
+  borderRadius: 20,
+  fontSize: 11,
+  fontWeight: 500,
+  background: 'var(--bg-raised)',
+  color: 'var(--text-secondary)',
+  border: '1px solid var(--border-subtle)',
+  whiteSpace: 'nowrap',
+}
+
+export function TruncatedChipList({ items, maxVisible = 5, chipStyle, popoverTitle = 'All items' }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H_TR })
+  const triggerRef = useRef(null)
+  const popoverRef = useRef(null)
+  const searchRef = useRef(null)
+
+  const safeItems = Array.isArray(items) ? items : []
+  const visible = safeItems.slice(0, maxVisible)
+  const overflowCount = Math.max(0, safeItems.length - maxVisible)
+
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? safeItems.filter((it) => (it.label || '').toLowerCase().includes(q))
+    : safeItems
+
+  const reposition = () => {
+    const el = triggerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PAD_TR
+    const spaceAbove = rect.top - VIEWPORT_PAD_TR
+    const flipUp = spaceBelow < Math.min(POPOVER_MAX_H_TR, 180) && spaceAbove > spaceBelow
+    const maxHeight = Math.max(140, Math.min(POPOVER_MAX_H_TR, flipUp ? spaceAbove : spaceBelow))
+    // Anchor popover's right edge to the trigger's right edge — feels natural
+    // since the "+N more" pill is at the end of the chip strip. Clamp left
+    // so it doesn't fall off the screen for narrow viewports.
+    const width = 280
+    const right = rect.right
+    const left = Math.max(VIEWPORT_PAD_TR, right - width)
+    setCoords({
+      top: flipUp
+        ? Math.max(VIEWPORT_PAD_TR, rect.top - maxHeight - POPOVER_GAP_TR)
+        : rect.bottom + POPOVER_GAP_TR,
+      left,
+      width,
+      maxHeight,
+    })
+  }
+
+  useLayoutEffect(() => {
+    if (open) reposition()
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (open && searchRef.current) searchRef.current.focus()
+  }, [open])
+
+  useEffect(() => {
+    if (!open) setSearch('')
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => {
+      const inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
+      const inPopover = popoverRef.current && popoverRef.current.contains(e.target)
+      if (!inTrigger && !inPopover) setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open])
+
+  const mergedChipStyle = { ...DEFAULT_CHIP_STYLE, ...(chipStyle || {}) }
+
+  const popover = open ? createPortal(
+    <div
+      ref={popoverRef}
+      role="listbox"
+      aria-label={popoverTitle}
+      style={{
+        position: 'fixed',
+        top: coords.top,
+        left: coords.left,
+        width: coords.width,
+        maxHeight: coords.maxHeight,
+        overflowY: 'auto',
+        zIndex: 1100,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+        padding: 4,
+      }}
+    >
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 1,
+        background: 'var(--bg-surface)',
+        padding: '6px 8px 8px',
+        borderBottom: '1px solid var(--border-subtle)',
+        marginBottom: 4,
+      }}>
+        <div style={{
+          fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+          textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: safeItems.length >= SEARCH_THRESHOLD ? 6 : 0,
+        }}>
+          {popoverTitle} ({safeItems.length})
+        </div>
+        {safeItems.length >= SEARCH_THRESHOLD && (
+          <input
+            ref={searchRef}
+            type="text"
+            placeholder="Search…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="form-input"
+            style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        )}
+      </div>
+      {filtered.length === 0 ? (
+        <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+          No matches for &ldquo;{search}&rdquo;
+        </div>
+      ) : (
+        filtered.map((it) => (
+          <div
+            key={it.id}
+            role="option"
+            style={{
+              padding: '7px 10px', fontSize: 12.5,
+              color: 'var(--text-primary)', borderRadius: 4,
+            }}
+          >
+            {it.label}
+          </div>
+        ))
+      )}
+    </div>,
+    document.body,
+  ) : null
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+      {visible.map((it) => (
+        <span key={it.id} style={mergedChipStyle}>{it.label}</span>
+      ))}
+      {overflowCount > 0 && (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-label={`Show all ${safeItems.length} ${popoverTitle.toLowerCase()}`}
+          style={{
+            padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+            background: 'transparent',
+            color: 'var(--accent)',
+            border: '1px solid var(--accent)',
+            cursor: 'pointer', whiteSpace: 'nowrap',
+            fontFamily: 'inherit',
+          }}
+        >
+          +{overflowCount} more
+        </button>
+      )}
       {popover}
     </div>
   )

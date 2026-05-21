@@ -3,7 +3,7 @@ import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +28,12 @@ def _generate_temp_password() -> str:
 
 class UserCreate(BaseModel):
     name: str
-    email: str
+    # EmailStr enforces RFC-5322-ish syntax + checks deliverability via
+    # email-validator. Same type used in LoginRequest so the create + login
+    # paths agree on what counts as a valid address. Direct API callers
+    # (curl / scripts) sending a malformed email get a 422 from FastAPI
+    # before the handler runs.
+    email: EmailStr
     # `role` is the legacy enum string ("cashier", ...). `role_id` is the new
     # FK. Either is accepted on create/update; if both are provided role_id
     # wins. See docs/USERS_AND_ROLES.md §5.2 (role kept as cache for one cycle).
@@ -56,7 +61,9 @@ class UserUpdate(BaseModel):
     are accepted and routed through the same hashing / role-resolution paths
     as `create_user`."""
     name: Optional[str] = None
-    email: Optional[str] = None
+    # Same EmailStr gate as UserCreate when provided. Optional so PATCHes
+    # that don't touch the email field still work.
+    email: Optional[EmailStr] = None
     role: Optional[str] = None
     role_id: Optional[str] = None
     branch_id: Optional[str] = None
