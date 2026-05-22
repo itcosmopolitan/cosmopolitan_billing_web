@@ -184,7 +184,8 @@ async def seed():
         # expiry_offset_days, vendor_id). Tracked items split their seeded
         # stock across these batches so the demo dataset has rich FIFO/FEFO
         # behavior on day one (some near-expiry, some fresh, multiple lots).
-        from datetime import date, timedelta as _td
+        from datetime import date
+        from datetime import timedelta as _td
 
         BATCH_TEMPLATE = [
             # (label, fraction, received_offset_days, mfg_offset_days, expiry_offset_days)

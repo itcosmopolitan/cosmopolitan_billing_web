@@ -187,6 +187,7 @@ async def approve_transfer(transfer_id: str, approved_by: str = "Admin", db: Asy
     For untracked items we just decrement aggregate stock as before.
     """
     import json
+
     from sqlalchemy import text as _text
 
     result = await db.execute(select(StockTransfer).where(StockTransfer.id == transfer_id))
@@ -301,6 +302,7 @@ async def receive_transfer(transfer_id: str, received_by: str = "Staff", db: Asy
     Untracked items just bump the destination aggregate.
     """
     import json
+
     from src.models import ItemBatch
 
     result = await db.execute(select(StockTransfer).where(StockTransfer.id == transfer_id))
