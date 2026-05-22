@@ -221,10 +221,16 @@ h4 { font-size: 14px; font-weight: 600; }
 .btn-lg  { padding: 11px 22px; font-size: 15px; border-radius: var(--radius); }
 .btn-xl  { padding: 14px 28px; font-size: 16px; border-radius: var(--radius-md); }
 
-/* Form inputs */
+/* Form inputs.
+ *
+ * Editable inputs sit on the surface tone (#fff in light, dark surface in
+ * dark mode) with a slightly stronger border so they pop against
+ * `--bg-raised` panels (modals, cart, totals). The disabled state then has
+ * room to look genuinely "off" — muted text, raised background, lighter
+ * border, no focus ring. Hover hints at interactivity without being noisy. */
 .form-input {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
   color: var(--text-primary);
   border-radius: var(--radius-sm);
   padding: 9px 12px;
@@ -232,13 +238,30 @@ h4 { font-size: 14px; font-weight: 600; }
   font-size: 13.5px;
   width: 100%;
   outline: none;
-  transition: border-color var(--transition);
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
-.form-input:focus { border-color: var(--accent); }
+.form-input:hover:not(:disabled):not(:focus) {
+  border-color: var(--accent-dim, var(--accent));
+}
+.form-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
 .form-input::placeholder { color: var(--text-muted); }
-.form-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.form-input:disabled,
+.form-input[readonly] {
+  background: var(--bg-raised);
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 1;
+  box-shadow: none;
+}
+.form-input:disabled::placeholder,
+.form-input[readonly]::placeholder { color: var(--text-muted); opacity: 0.6; }
 
 select.form-input { cursor: pointer; }
+select.form-input:disabled { cursor: not-allowed; }
 textarea.form-input { resize: vertical; min-height: 80px; }
 
 .form-label {

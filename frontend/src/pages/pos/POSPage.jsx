@@ -1,13 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
 import { itemsAPI, customersAPI, salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
+import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { PRODUCTS, CUSTOMERS } from '@/utils/seedData'
 import { Modal } from '@/components/ui'
 import { Receipt } from '@/components/Receipt'
+import BatchAllocationModal from '@/components/BatchAllocationModal'
+import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
 import PanelDragHandle from './PanelDragHandle'
 import {
@@ -61,6 +64,17 @@ export default function POSPage() {
   const [leadingPanel, setLeadingPanel] = useState(readStoredLeading)
   const [isResizing, setIsResizing] = useState(false)
   const [dragOverSide, setDragOverSide] = useState(null)
+  // Pending in-app navigation captured by the leave-confirm modal. The
+  // function, when called, resumes the navigation that the operator tried to
+  // perform; setting it to null cancels and keeps the user on POS.
+  const [pendingNav, setPendingNav] = useState(null)
+  // Per-item batch list cache populated by CartRow's lazy fetch — the
+  // allocation modal needs the full list to render every available lot, not
+  // just the ones currently in the allocation.
+  const [batchListByItem, setBatchListByItem] = useState({})
+  // Active allocation editor target. `null` => modal closed. Shape:
+  //   { item, batches, allocation }
+  const [allocEditor, setAllocEditor] = useState(null)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -69,6 +83,15 @@ export default function POSPage() {
   const store = usePOSStore()
   const { activeBranch } = useAppStore()
   const { cart, customer, discountPct, discountAmt, heldBills, paymentMethod } = store
+
+  // Guard route changes when the cart has unsaved lines. We stash the
+  // resume-callback in state so a custom Modal (rather than window.confirm)
+  // can render Stay/Leave buttons. Holding a bill uses a different code path
+  // (heldBills) and is unaffected.
+  useNavigationBlocker(
+    cart.length > 0 && !pendingNav,
+    useCallback((proceed) => setPendingNav(() => proceed), []),
+  )
 
   // Debounce product search to reduce API calls while typing.
   useEffect(() => {
@@ -169,6 +192,46 @@ export default function POSPage() {
     }
   }
 
+  /** Re-fetch stock for every product page already loaded in the grid. Runs
+   *  after checkout so the catalog reflects deductions without a full reload. */
+  const refreshProductStock = useCallback(async () => {
+    const branchId = activeBranch?.id || 'br-001'
+    const perPage = 100
+    const listParams = {
+      branch_id: branchId,
+      per_page: perPage,
+      search: debouncedSearch || undefined,
+      category_id: activeCat !== 'all' ? activeCat : undefined,
+      sort_by: 'name',
+      sort_order: 'asc',
+      pos_mode: true,
+      include_total: false,
+    }
+    try {
+      const stockById = new Map()
+      for (let page = 1; page <= productPageNo; page += 1) {
+        const raw = await itemsAPI.list({ ...listParams, page_no: page })
+        const rows = unwrapPaged(raw).items || []
+        rows.forEach((p) => stockById.set(p.id, p))
+      }
+      if (stockById.size === 0) return
+      setProducts((prev) =>
+        prev.map((p) => {
+          const fresh = stockById.get(p.id)
+          if (!fresh) return p
+          return {
+            ...p,
+            available_stock: fresh.available_stock,
+            batches_count: fresh.batches_count,
+            nearest_expiry: fresh.nearest_expiry,
+          }
+        }),
+      )
+    } catch (err) {
+      console.error('Failed to refresh stock after sale:', err)
+    }
+  }, [activeBranch?.id, debouncedSearch, activeCat, productPageNo])
+
   useEffect(() => {
     const branchId = activeBranch?.id || 'br-001'
     setCategories([{ id: 'all', name: 'All', icon: '⊞' }])
@@ -244,12 +307,19 @@ export default function POSPage() {
             tax_rate: i.taxRate || 0,
             line_discount: Math.round(effPct * 10000) / 10000,
             line_discount_amount: Math.round(lineDiscountAmount * 100) / 100,
+            // Per-line batch split. For tracked items CartRow keeps this in
+            // sync with the auto FIFO/FEFO flow (or the operator's manual
+            // split saved via the BatchAllocationModal). Untracked items
+            // skip this and the backend falls through to aggregate stock.
+            batch_allocation: toApiPayload(i.batchAllocation),
           }
         }),
         discount: disc,
         payment_mode: paymentMethod,
         notes: store.notes,
       })
+
+      const soldItemIds = cart.map((i) => i.id)
 
       setLastSale({
         number: result.number,
@@ -264,6 +334,13 @@ export default function POSPage() {
 
       setShowComplete(true)
       store.clearCart()
+      // Drop cached batch lists for sold lines — quantities changed server-side.
+      setBatchListByItem((prev) => {
+        const next = { ...prev }
+        soldItemIds.forEach((id) => { delete next[id] })
+        return next
+      })
+      await refreshProductStock()
       toast.success(`Sale ${result.number} completed!`)
     } catch (err) {
       console.error('Failed to complete sale:', err)
@@ -454,6 +531,10 @@ export default function POSPage() {
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
                       availableStock: p.available_stock ?? 0,
+                      // Carry batch-tracking flags forward so CartRow knows
+                      // whether to render the source batch picker.
+                      batchTracking: Boolean(p.batch_tracking),
+                      expiryTracking: Boolean(p.expiry_tracking),
                     })
                     toast.success(p.name, { duration: 800 })
                   }
@@ -601,10 +682,14 @@ export default function POSPage() {
                     <CartRow
                       key={item.id}
                       item={item}
+                      branchId={activeBranch?.id}
                       onQtyChange={(qty) => store.updateQty(item.id, qty)}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
+                      onAllocationChange={(alloc, custom) => store.setLineBatchAllocation(item.id, alloc, custom)}
+                      onEditAllocation={(payload) => setAllocEditor(payload)}
+                      onBatchesLoaded={(itemId, rows) => setBatchListByItem((m) => ({ ...m, [itemId]: rows }))}
                       disableDiscount={hasBillLevelDiscount || !can('pos.discount')}
                     />
                   ))}
@@ -694,6 +779,68 @@ export default function POSPage() {
           ))
         )}
       </Modal>
+
+      {/* Leave-with-cart Confirm Modal — fires whenever the operator clicks a
+          sidebar link / nav button while the cart still has lines. The
+          useNavigationBlocker hook stashes the resume callback in pendingNav;
+          we either invoke it (Leave) or drop it (Stay). */}
+      <Modal
+        open={!!pendingNav}
+        onClose={() => setPendingNav(null)}
+        title="Leave POS with items in cart?"
+        icon="🛒"
+        size="sm"
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setPendingNav(null)}>Stay on POS</button>
+          <button className="btn btn-ghost" onClick={() => {
+            store.holdBill()
+            const proceed = pendingNav
+            setPendingNav(null)
+            toast('Bill held')
+            proceed?.()
+          }}>Hold & Leave</button>
+          <button className="btn btn-danger" onClick={() => {
+            store.clearCart()
+            const proceed = pendingNav
+            setPendingNav(null)
+            proceed?.()
+          }}>Discard & Leave</button>
+        </>}
+      >
+        <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+          You have <strong>{cart.length} item{cart.length === 1 ? '' : 's'}</strong> in the
+          cart{customer ? <> for <strong>{customer.name}</strong></> : ''}. Leaving without
+          completing the sale will lose this cart.
+          <div style={{ marginTop: 10, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+            Tip: <strong>Hold &amp; Leave</strong> parks the bill in the Hold list so you can resume it later.
+          </div>
+        </div>
+      </Modal>
+
+      {/* Batch Allocation Editor — opened from a tracked cart row's ✎ button.
+          Splits a single line's qty across any combination of source batches;
+          backend consumes them in this exact order on Complete Sale. */}
+      <BatchAllocationModal
+        open={!!allocEditor}
+        onClose={() => setAllocEditor(null)}
+        item={allocEditor ? {
+          name: allocEditor.item.name,
+          emoji: allocEditor.item.emoji,
+          expiry_tracking: allocEditor.item.expiryTracking || allocEditor.item.expiry_tracking,
+        } : null}
+        qty={allocEditor?.item?.qty || 0}
+        batches={allocEditor?.batches || (allocEditor ? batchListByItem[allocEditor.item.id] || [] : [])}
+        allocation={allocEditor?.allocation || []}
+        strategyLabel={
+          allocEditor?.item?.expiryTracking || allocEditor?.item?.expiry_tracking ? 'FEFO' : 'FIFO'
+        }
+        onSave={(next) => {
+          if (!allocEditor) return
+          store.setLineBatchAllocation(allocEditor.item.id, next, /* custom */ true)
+          setAllocEditor(null)
+          toast.success('Batch split saved')
+        }}
+      />
 
       {/* Sale Complete Modal */}
       <Modal open={showComplete} onClose={() => setShowComplete(false)} title="Sale Completed!" icon="✅" size="md">

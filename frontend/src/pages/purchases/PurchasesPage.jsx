@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { purchasesAPI, vendorsAPI, branchesAPI, itemsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
+import { validateBatchDates } from '@/utils/batchDates'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import NewBillModal from './NewBillModal'
@@ -46,7 +47,7 @@ export default function PurchasesPage() {
   const [payAmt, setPayAmt]     = useState('')
   const [payRef, setPayRef]     = useState('')
 
-  const [newBill, setNewBill]   = useState({ vendorId: '', branchId: '', billDate: new Date().toISOString().split('T')[0], dueDate: '', items: [{ itemId: '', qty: '', cost: '' }], discount: 0, notes: '' })
+  const [newBill, setNewBill]   = useState({ vendorId: '', branchId: '', billDate: new Date().toISOString().split('T')[0], dueDate: '', items: [{ itemId: '', qty: '', cost: '', batchNumber: '', mfgDate: '', expiryDate: '' }], discount: 0, notes: '' })
   const patchBill = (k, v) => setNewBill((b) => ({ ...b, [k]: v }))
   const patchBillItem = (i, k, v) => setNewBill((b) => ({ ...b, items: b.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }))
 
@@ -185,6 +186,19 @@ export default function PurchasesPage() {
     const billItems = newBill.items.filter((i) => i.itemId && i.qty)
     if (billItems.length === 0) { toast.error('Add at least one item'); return }
 
+    for (const i of billItems) {
+      const item = items.find((x) => x.id === i.itemId)
+      if (!item?.batch_tracking) continue
+      const { ok, errors } = validateBatchDates(
+        { mfgDate: i.mfgDate, expiryDate: i.expiryDate },
+        { requireExpiry: Boolean(item.expiry_tracking) },
+      )
+      if (!ok) {
+        toast.error(`${item.name}: ${errors[0]}`)
+        return
+      }
+    }
+
     try {
       const mapped = billItems.map((i) => {
         const item = items.find((x) => x.id === i.itemId)
@@ -192,9 +206,14 @@ export default function PurchasesPage() {
           item_id: i.itemId,
           name: item?.name || '',
           qty: Number(i.qty),
-          cost: Number(i.cost || item?.costPrice || 0),
-          tax_rate: item?.taxRate || 0,
-          line_total: Number(i.qty) * Number(i.cost || item?.costPrice || 0),
+          cost: Number(i.cost || item?.cost_price || item?.costPrice || 0),
+          tax_rate: item?.tax_rate ?? item?.taxRate ?? 0,
+          line_total: Number(i.qty) * Number(i.cost || item?.cost_price || item?.costPrice || 0),
+          // Batch metadata — only set when the picked item is tracked. The
+          // backend ignores these fields for untracked items.
+          batch_number: item?.batch_tracking ? (i.batchNumber || undefined) : undefined,
+          mfg_date:     item?.batch_tracking ? (i.mfgDate     || undefined) : undefined,
+          expiry_date:  item?.batch_tracking ? (i.expiryDate  || undefined) : undefined,
         }
       })
 
@@ -212,7 +231,7 @@ export default function PurchasesPage() {
       loadMasters()
       toast.success('Purchase bill created successfully')
       setShowNewBill(false)
-      setNewBill({ vendorId: '', branchId: '', billDate: new Date().toISOString().split('T')[0], dueDate: '', items: [{ itemId: '', qty: '', cost: '' }], discount: 0, notes: '' })
+      setNewBill({ vendorId: '', branchId: '', billDate: new Date().toISOString().split('T')[0], dueDate: '', items: [{ itemId: '', qty: '', cost: '', batchNumber: '', mfgDate: '', expiryDate: '' }], discount: 0, notes: '' })
     } catch (err) {
       console.error('Failed to save bill:', err)
       toast.error('Failed to create purchase bill')
@@ -235,8 +254,8 @@ export default function PurchasesPage() {
           name: i.name || item?.name || '',
           original_qty: Number(i.originalQty || 0),
           return_qty: Number(i.returnQty),
-          cost: Number(i.cost || item?.costPrice || 0),
-          tax_rate: item?.taxRate || 0,
+          cost: Number(i.cost || item?.cost_price || item?.costPrice || 0),
+          tax_rate: item?.tax_rate ?? item?.taxRate ?? 0,
         }
       })
 
@@ -540,7 +559,7 @@ export default function PurchasesPage() {
         newBill={newBill}
         patchBill={patchBill}
         patchBillItem={patchBillItem}
-        addItem={() => setNewBill((b) => ({ ...b, items: [...b.items, { itemId: '', qty: '', cost: '' }] }))}
+        addItem={() => setNewBill((b) => ({ ...b, items: [...b.items, { itemId: '', qty: '', cost: '', batchNumber: '', mfgDate: '', expiryDate: '' }] }))}
         removeItem={(i) => setNewBill((b) => ({ ...b, items: b.items.filter((_, idx) => idx !== i) }))}
         vendors={vendors}
         branches={branches}

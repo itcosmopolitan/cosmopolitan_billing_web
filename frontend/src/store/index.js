@@ -63,6 +63,16 @@ const normalizeCartItem = (raw) => {
     hsnCode: raw.hsnCode || raw.hsn_code || '',
     availableStock: Number(raw.availableStock ?? raw.available_stock) || 0,
     taxRate: Number(raw.taxRate ?? raw.tax_rate) || 0,
+    // Batch-tracking metadata. `*_tracking` flags drive whether CartRow
+    // renders the picker at all. `batchAllocation` is the per-line split
+    // across source batches; defaults to auto FIFO/FEFO computed by CartRow
+    // once it loads the batch list. `batchAllocationCustom` flips to true
+    // when the operator hand-edits via the modal — that locks the split
+    // until they change qty, which resets it back to auto.
+    batchTracking: Boolean(raw.batchTracking ?? raw.batch_tracking),
+    expiryTracking: Boolean(raw.expiryTracking ?? raw.expiry_tracking),
+    batchAllocation: Array.isArray(raw.batchAllocation) ? raw.batchAllocation : [],
+    batchAllocationCustom: Boolean(raw.batchAllocationCustom),
   })
 }
 
@@ -160,15 +170,22 @@ export const usePOSStore = create((set, get) => ({
     const existing = cart.find((i) => i.id === product.id)
     if (existing) {
       set({
+        // Mirror updateQty's reset of `batchAllocationCustom`. Without it, a
+        // cashier who manually split the batch allocation and then re-clicked
+        // the product card would keep the stale custom flag — CartRow's
+        // auto-effect would refuse to re-balance for the bumped qty and the
+        // backend would later 400 with "Allocation sum does not match line qty".
         cart: cart.map((i) =>
-          i.id === product.id ? applyLineCalc({ ...i, qty: i.qty + 1 }) : i
+          i.id === product.id
+            ? applyLineCalc({ ...i, qty: i.qty + 1, batchAllocationCustom: false })
+            : i
         ),
       })
     } else {
       set({
         cart: [
           ...cart,
-          applyLineCalc({
+          normalizeCartItem({
             ...product,
             qty: 1,
             lineDiscountType: product.lineDiscountType || 'pct',
@@ -179,12 +196,32 @@ export const usePOSStore = create((set, get) => ({
     }
   },
 
+  // Replace a tracked line's batch split. `custom` flips the lock — `true`
+  // when the operator saved a manual edit in the modal, `false` (or
+  // omitted) when CartRow auto-rebuilds the allocation from FIFO/FEFO. The
+  // distinction lets CartRow's effect skip re-auto-allocating while the
+  // operator's manual split is still valid for the current qty.
+  setLineBatchAllocation: (id, allocation, custom = false) => set((s) => ({
+    cart: s.cart.map((i) => (
+      i.id === id
+        ? { ...i, batchAllocation: allocation || [], batchAllocationCustom: !!custom }
+        : i
+    )),
+  })),
+
   removeItem: (id) => set((s) => ({ cart: s.cart.filter((i) => i.id !== id) })),
 
   updateQty: (id, qty) => {
     if (qty <= 0) { get().removeItem(id); return }
     set((s) => ({
-      cart: s.cart.map((i) => (i.id === id ? applyLineCalc({ ...i, qty }) : i)),
+      // Clearing `batchAllocationCustom` lets CartRow's effect re-run the
+      // auto-FIFO/FEFO split for the new qty. Without this, a custom split
+      // for qty=13 would silently mismatch when qty becomes 18.
+      cart: s.cart.map((i) => (
+        i.id === id
+          ? applyLineCalc({ ...i, qty, batchAllocationCustom: false })
+          : i
+      )),
     }))
   },
 

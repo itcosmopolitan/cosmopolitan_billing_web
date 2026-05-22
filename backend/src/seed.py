@@ -30,6 +30,7 @@ from src.models import (
     Category,
     Customer,
     Item,
+    ItemBatch,
     ItemStock,
     Organisation,
     PurchaseBill,
@@ -152,34 +153,97 @@ async def seed():
             db.add(c)
 
         # ── Items + Stock ─────────────────────────────────────────────────────
+        # Tracking flags drive FIFO / FEFO behavior:
+        #   batch=True, expiry=True  → FEFO (perishables: dairy, butter, milk,
+        #     bread-style snacks). Sales/transfers consume nearest expiry
+        #     first; near-expiry tab surfaces these.
+        #   batch=True, expiry=False → FIFO (lot-tracked dry goods where we
+        #     care about vendor lot but no shelf-life: e.g. cereal, atta).
+        #   batch=False              → legacy aggregate stock only.
         items_data = [
-            ("pr-001","Basmati Rice 5kg",        "GR-001","8901234560001","cat-001","India Gate","Pack",     240, 299,  0, "1006",50,"🌾",{"br-001":145,"br-002":62,"br-003":38,"br-004":24,"br-005":320}),
-            ("pr-002","Toor Dal 1kg",             "GR-002","8901234560002","cat-001","Tata Sampann","Pack",  120, 148,  5, "0713",60,"🫘",{"br-001":220,"br-002":145,"br-003":88,"br-004":66,"br-005":480}),
-            ("pr-003","Sunflower Oil 1L",         "OIL-001","8901234560003","cat-002","Fortune","Bottle",    118, 148,  5, "1512",40,"🫙",{"br-001":88,"br-002":56,"br-003":34,"br-004":12,"br-005":240}),
-            ("pr-004","Parle-G 800g",             "SN-001","8901234560004","cat-004","Parle","Pack",          38,  50, 18, "1905",80,"🍪",{"br-001":340,"br-002":280,"br-003":190,"br-004":120,"br-005":600}),
-            ("pr-005","Amul Butter 500g",         "DY-001","8901234560005","cat-003","Amul","Pack",          118, 150, 12, "0405",30,"🧈",{"br-001":62,"br-002":44,"br-003":28,"br-004":18,"br-005":120}),
-            ("pr-006","Aashirvaad Atta 5kg",      "GR-003","8901234560006","cat-001","ITC","Pack",           195, 240,  0, "1101",40,"🌾",{"br-001":92,"br-002":68,"br-003":44,"br-004":30,"br-005":280}),
-            ("pr-007","Maggi Noodles 12pk",       "SN-002","8901234560007","cat-004","Nestlé","Pack",        150, 192, 18, "1902",50,"🍜",{"br-001":160,"br-002":110,"br-003":72,"br-004":44,"br-005":360}),
-            ("pr-008","Surf Excel 1kg",           "HH-001","8901234560008","cat-006","HUL","Pack",           128, 160, 18, "3402",25,"🧼",{"br-001":8,"br-002":14,"br-003":5,"br-004":22,"br-005":180}),
-            ("pr-009","Haldiram Bhujia 200g",     "SN-003","8901234560009","cat-004","Haldiram","Pack",       44,  60, 18, "2106",60,"🥜",{"br-001":280,"br-002":210,"br-003":140,"br-004":95,"br-005":500}),
-            ("pr-010","Coconut Oil 500ml",        "OIL-002","8901234560010","cat-002","Parachute","Bottle",  142, 180,  5, "1513",30,"🥥",{"br-001":12,"br-002":28,"br-003":40,"br-004":18,"br-005":200}),
-            ("pr-011","Horlicks 500g",            "BV-001","8901234560011","cat-005","GlaxoSmithKline","Jar",218, 280, 18, "2202",20,"🥛",{"br-001":45,"br-002":30,"br-003":18,"br-004":24,"br-005":120}),
-            ("pr-012","Dettol Soap 4pk",          "PC-001","8901234560012","cat-007","Reckitt","Pack",        95, 120, 18, "3401",30,"🧴",{"br-001":95,"br-002":74,"br-003":48,"br-004":36,"br-005":240}),
-            ("pr-013","Amul Milk 1L Packet",      "DY-002","8901234560013","cat-003","Amul","Litre",          56,  68,  0, "0401",100,"🥛",{"br-001":180,"br-002":140,"br-003":90,"br-004":70,"br-005":400}),
-            ("pr-014","Colgate MaxFresh 150g",    "PC-002","8901234560014","cat-007","Colgate","Tube",        72,  92, 18, "3306",40,"🦷",{"br-001":64,"br-002":48,"br-003":32,"br-004":44,"br-005":200}),
-            ("pr-015","Nescafé Classic 50g",      "BV-002","8901234560015","cat-005","Nestlé","Jar",         148, 188, 18, "2101",20,"☕",{"br-001":38,"br-002":26,"br-003":16,"br-004":20,"br-005":140}),
-            ("pr-016","Chana Dal 1kg",            "GR-004","8901234560016","cat-001","Local","Pack",          88, 110,  5, "0713",40,"🫘",{"br-001":4,"br-002":8,"br-003":2,"br-004":6,"br-005":350}),
+            # (id, name, sku, barcode, cat, brand, unit, cost, price, tax, hsn, reorder, emoji, batch, expiry, stock_map)
+            ("pr-001","Basmati Rice 5kg",        "GR-001","8901234560001","cat-001","India Gate","Pack",     240, 299,  0, "1006",50,"🌾", True,  False, {"br-001":145,"br-002":62,"br-003":38,"br-004":24,"br-005":320}),
+            ("pr-002","Toor Dal 1kg",             "GR-002","8901234560002","cat-001","Tata Sampann","Pack",  120, 148,  5, "0713",60,"🫘", True,  False, {"br-001":220,"br-002":145,"br-003":88,"br-004":66,"br-005":480}),
+            ("pr-003","Sunflower Oil 1L",         "OIL-001","8901234560003","cat-002","Fortune","Bottle",    118, 148,  5, "1512",40,"🫙", True,  True,  {"br-001":88,"br-002":56,"br-003":34,"br-004":12,"br-005":240}),
+            ("pr-004","Parle-G 800g",             "SN-001","8901234560004","cat-004","Parle","Pack",          38,  50, 18, "1905",80,"🍪", True,  True,  {"br-001":340,"br-002":280,"br-003":190,"br-004":120,"br-005":600}),
+            ("pr-005","Amul Butter 500g",         "DY-001","8901234560005","cat-003","Amul","Pack",          118, 150, 12, "0405",30,"🧈", True,  True,  {"br-001":62,"br-002":44,"br-003":28,"br-004":18,"br-005":120}),
+            ("pr-006","Aashirvaad Atta 5kg",      "GR-003","8901234560006","cat-001","ITC","Pack",           195, 240,  0, "1101",40,"🌾", True,  False, {"br-001":92,"br-002":68,"br-003":44,"br-004":30,"br-005":280}),
+            ("pr-007","Maggi Noodles 12pk",       "SN-002","8901234560007","cat-004","Nestlé","Pack",        150, 192, 18, "1902",50,"🍜", True,  True,  {"br-001":160,"br-002":110,"br-003":72,"br-004":44,"br-005":360}),
+            ("pr-008","Surf Excel 1kg",           "HH-001","8901234560008","cat-006","HUL","Pack",           128, 160, 18, "3402",25,"🧼", False, False, {"br-001":8,"br-002":14,"br-003":5,"br-004":22,"br-005":180}),
+            ("pr-009","Haldiram Bhujia 200g",     "SN-003","8901234560009","cat-004","Haldiram","Pack",       44,  60, 18, "2106",60,"🥜", True,  True,  {"br-001":280,"br-002":210,"br-003":140,"br-004":95,"br-005":500}),
+            ("pr-010","Coconut Oil 500ml",        "OIL-002","8901234560010","cat-002","Parachute","Bottle",  142, 180,  5, "1513",30,"🥥", True,  True,  {"br-001":12,"br-002":28,"br-003":40,"br-004":18,"br-005":200}),
+            ("pr-011","Horlicks 500g",            "BV-001","8901234560011","cat-005","GlaxoSmithKline","Jar",218, 280, 18, "2202",20,"🥛", True,  True,  {"br-001":45,"br-002":30,"br-003":18,"br-004":24,"br-005":120}),
+            ("pr-012","Dettol Soap 4pk",          "PC-001","8901234560012","cat-007","Reckitt","Pack",        95, 120, 18, "3401",30,"🧴", False, False, {"br-001":95,"br-002":74,"br-003":48,"br-004":36,"br-005":240}),
+            ("pr-013","Amul Milk 1L Packet",      "DY-002","8901234560013","cat-003","Amul","Litre",          56,  68,  0, "0401",100,"🥛",True,  True,  {"br-001":180,"br-002":140,"br-003":90,"br-004":70,"br-005":400}),
+            ("pr-014","Colgate MaxFresh 150g",    "PC-002","8901234560014","cat-007","Colgate","Tube",        72,  92, 18, "3306",40,"🦷", False, False, {"br-001":64,"br-002":48,"br-003":32,"br-004":44,"br-005":200}),
+            ("pr-015","Nescafé Classic 50g",      "BV-002","8901234560015","cat-005","Nestlé","Jar",         148, 188, 18, "2101",20,"☕", True,  True,  {"br-001":38,"br-002":26,"br-003":16,"br-004":20,"br-005":140}),
+            ("pr-016","Chana Dal 1kg",            "GR-004","8901234560016","cat-001","Local","Pack",          88, 110,  5, "0713",40,"🫘", True,  False, {"br-001":4,"br-002":8,"br-003":2,"br-004":6,"br-005":350}),
         ]
+
+        # Per-item batch splits. Each entry is (fraction, mfg_offset_days,
+        # expiry_offset_days, vendor_id). Tracked items split their seeded
+        # stock across these batches so the demo dataset has rich FIFO/FEFO
+        # behavior on day one (some near-expiry, some fresh, multiple lots).
+        from datetime import date
+        from datetime import timedelta as _td
+
+        BATCH_TEMPLATE = [
+            # (label, fraction, received_offset_days, mfg_offset_days, expiry_offset_days)
+            ("A", 0.35,  -85, -90,  15),   # oldest stock — close to expiry
+            ("B", 0.40,  -45, -50,  60),   # mid lot
+            ("C", 0.25,  -10, -12, 180),   # freshest lot
+        ]
+        today_date = date.today()
+
+        def _date(offset_days: int) -> str:
+            return (today_date + _td(days=offset_days)).strftime("%Y-%m-%d")
+
         for row in items_data:
-            pid, name, sku, barcode, cat_id, brand, unit, cost, price, tax, hsn, reorder, emoji, stock_map = row
+            (pid, name, sku, barcode, cat_id, brand, unit, cost, price, tax,
+             hsn, reorder, emoji, batch_tracking, expiry_tracking, stock_map) = row
             item = Item(
                 id=pid, name=name, sku=sku, barcode=barcode, category_id=cat_id, brand=brand,
                 unit=unit, cost_price=cost, selling_price=price, tax_rate=tax,
-                hsn_code=hsn, reorder_level=reorder, emoji=emoji, active=True,
+                hsn_code=hsn, reorder_level=reorder, emoji=emoji,
+                batch_tracking=batch_tracking, expiry_tracking=expiry_tracking,
+                active=True,
             )
             db.add(item)
             for br_id, qty in stock_map.items():
                 db.add(ItemStock(id=str(uuid.uuid4()), item_id=pid, branch_id=br_id, quantity=qty))
+                if not batch_tracking or qty <= 0:
+                    continue
+                # Split the per-branch quantity across the 3 templated batches,
+                # rounding so we still sum to exactly qty.
+                allocated = 0
+                splits = []
+                for idx, (lbl, frac, recv, mfg, exp) in enumerate(BATCH_TEMPLATE):
+                    if idx == len(BATCH_TEMPLATE) - 1:
+                        chunk = qty - allocated  # last one takes the remainder
+                    else:
+                        chunk = int(round(qty * frac))
+                    if chunk <= 0:
+                        continue
+                    allocated += chunk
+                    splits.append((lbl, chunk, recv, mfg, exp))
+                for lbl, chunk, recv, mfg, exp in splits:
+                    db.add(ItemBatch(
+                        id=str(uuid.uuid4()),
+                        item_id=pid,
+                        branch_id=br_id,
+                        batch_number=f"{sku}-{lbl}-{(today_date.year)}",
+                        mfg_date=_date(mfg) if expiry_tracking else None,
+                        expiry_date=_date(exp) if expiry_tracking else None,
+                        quantity=chunk,
+                        initial_qty=chunk,
+                        cost_price=cost,
+                        vendor_id=None,
+                        source_type="opening",
+                        source_ref=pid,
+                        received_date=_date(recv),
+                        notes=f"Seeded opening lot {lbl}",
+                        active=True,
+                    ))
 
         # ── Customers ─────────────────────────────────────────────────────────
         customers = [
@@ -462,6 +526,7 @@ async def seed():
         await db.commit()
         print("✅  Database seeded successfully!")
         print("    Branches: 5  |  Items: 16  |  Stock entries: 80")
+        print("    Batches  : ~3 lots per branch per tracked item (FIFO/FEFO ready)")
         print(f"    Customers: 6 |  Vendors: 6 |  Users: 6  |  Roles: {len(SYSTEM_ROLES)}")
         print("    Invoices: 7  |  Bills: 6   |  Transfers: 3")
         print("    Cash entries: 8  |  Audit logs: 8")

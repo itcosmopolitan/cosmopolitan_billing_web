@@ -204,6 +204,43 @@ class ItemStock(Base):
     branch = relationship("Branch", back_populates="stock")
 
 
+# ─── Item Batch (FIFO / FEFO lot tracking) ───────────────────────────────────
+# A *batch* (a.k.a. lot) is a stock parcel of a single Item at a single Branch
+# that shares a vendor/cost/expiry profile. Used to drive FIFO (consume oldest
+# received first) and FEFO (consume nearest expiry first) issue strategies.
+#
+# Invariant: SUM(item_batches.quantity WHERE item_id=I AND branch_id=B) should
+# track item_stock.quantity for tracked items. We don't enforce it with a DB
+# trigger — instead, src.routes._atomic helpers update both together inside the
+# same transaction. Untracked items (`Item.batch_tracking == False`) skip the
+# batch table entirely; their stock lives only on item_stock.
+class ItemBatch(Base):
+    __tablename__ = "item_batches"
+    id            = Column(String, primary_key=True)
+    item_id       = Column(String, ForeignKey("items.id"), nullable=False)
+    branch_id     = Column(String, ForeignKey("branches.id"), nullable=False)
+    batch_number  = Column(String, nullable=False)         # vendor lot # or auto
+    mfg_date      = Column(String)                          # YYYY-MM-DD
+    expiry_date   = Column(String)                          # YYYY-MM-DD
+    quantity      = Column(Integer, default=0)              # remaining
+    initial_qty   = Column(Integer, default=0)              # received qty
+    cost_price    = Column(Float, default=0)
+    vendor_id     = Column(String, nullable=True)
+    # `source_type` records how this batch came into existence so the audit
+    # trail in the UI can label rows (Opening, Purchase, Transfer, Adjustment,
+    # Manual). `source_ref` is the originating doc id (bill, transfer, etc.).
+    source_type   = Column(String, default="manual")
+    source_ref    = Column(String, nullable=True)
+    received_date = Column(String)                          # YYYY-MM-DD
+    notes         = Column(Text)
+    active        = Column(Boolean, default=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    item   = relationship("Item")
+    branch = relationship("Branch")
+
+
 # ─── Customer ─────────────────────────────────────────────────────────────────
 class Customer(Base):
     __tablename__ = "customers"
@@ -436,6 +473,21 @@ class TransferLineItem(Base):
     item_id     = Column(String, ForeignKey("items.id"), nullable=False)
     item_name   = Column(String)
     qty         = Column(Integer, default=0)
+    # Operator-picked source batch hint set at create time. Honored on
+    # approval if the batch still has stock; otherwise FIFO/FEFO kicks in.
+    preferred_batch_id = Column(String, nullable=True)
+    # Operator-set explicit per-line split (TEXT-encoded JSON list of
+    # {batch_id, qty}). When present at approve time, those batches are
+    # consumed in that exact order instead of FIFO/FEFO. The Create Transfer
+    # UI writes this; the cleaner per-batch view in detail uses
+    # `batch_allocation` below.
+    requested_allocation = Column(Text, nullable=True)
+    # Persisted batch consumption manifest, populated on approve. JSON-encoded
+    # list of {batch_id, batch_number, consumed, expiry_date, ...}. Used by
+    # receive() to recreate batches at the destination and by the UI to show
+    # the operator which lots were drawn from source. Stored as TEXT so we
+    # don't depend on JSON column support in older SQLite builds.
+    batch_allocation = Column(Text, nullable=True)
 
     transfer = relationship("StockTransfer", back_populates="items")
 

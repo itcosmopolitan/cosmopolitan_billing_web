@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,12 +18,31 @@ from src.models import (
     SaleLineItem,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.routes._atomic import add_payment_atomic, adjust_stock_atomic
+from src.routes._atomic import (
+    add_payment_atomic,
+    adjust_stock_atomic,
+    consume_batches_atomic,
+    is_tracked,
+)
 from src.security import require_perm
 
 router = APIRouter()
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
+class BatchAllocationEntry(BaseModel):
+    """One entry of an explicit per-line batch split: take `qty` units from
+    `batch_id`. Sum of entries must equal the line's qty.
+
+    `qty > 0` is enforced at the schema layer — without it, a payload like
+    `[{qty: 15}, {qty: -5}]` would arithmetically sum to 10 (matching a
+    line qty of 10), pass the backend sum-check, but only actually drain
+    the first batch by 15 while the aggregate stock is decremented by 10,
+    silently corrupting the SUM(batches) == item_stock invariant.
+    """
+    batch_id: str
+    qty: int = Field(..., gt=0)
+
+
 class LineItemIn(BaseModel):
     item_id: Optional[str] = None
     name: str
@@ -32,6 +51,13 @@ class LineItemIn(BaseModel):
     tax_rate: float = 0
     line_discount: float = 0
     line_discount_amount: float = 0
+    # ── Batch sourcing (precedence: allocation > batch_id > auto FIFO/FEFO) ──
+    # `batch_allocation`: full split set by the cashier in the cart UI when
+    # the qty spans multiple lots. Backend consumes exactly these in order.
+    # `batch_id`: legacy single-batch shortcut from earlier versions of the
+    # API. Treated as a one-entry allocation when allocation is absent.
+    batch_allocation: Optional[List[BatchAllocationEntry]] = None
+    batch_id: Optional[str] = None
 
 class SaleCreate(BaseModel):
     customer_id: Optional[str] = None
@@ -489,27 +515,85 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
             line_total=line_net,
         )
         db.add(li)
-        # Auto-deduct stock atomically (single UPDATE; no read-modify-write
-        # race). Allow oversell-to-zero rather than 400-erroring on
-        # insufficient stock so a manager can override after the fact.
+        # Stock side-effect. For tracked items we walk batches in FEFO order
+        # (when the item also tracks expiry) or FIFO otherwise; for untracked
+        # items we fall back to the legacy aggregate deduction. Insufficient
+        # stock => clamp to zero rather than fail the sale (the POS can
+        # oversell; audit log will pick it up in Phase 4 hardening).
         if item.item_id:
-            try:
-                await adjust_stock_atomic(
-                    db,
-                    item_id=item.item_id,
-                    branch_id=data.branch_id,
-                    delta=-item.qty,
+            tracked, expiry_tracked = await is_tracked(db, item.item_id)
+            if tracked:
+                strategy = "fefo" if expiry_tracked else "fifo"
+                # Cashier UI sends an explicit allocation when the line spans
+                # multiple batches. Convert pydantic models → plain dicts for
+                # the atomic helper.
+                explicit = (
+                    [e.model_dump() for e in item.batch_allocation]
+                    if item.batch_allocation else None
                 )
-            except ValueError:
-                # Insufficient stock — clamp to zero rather than fail the sale.
-                # Audit log will pick this up in Phase 4 hardening.
-                await db.execute(
-                    text(
-                        "UPDATE item_stock SET quantity = 0 "
-                        "WHERE item_id = :i AND branch_id = :b"
-                    ),
-                    {"i": item.item_id, "b": data.branch_id},
-                )
+                consumed_ok = False
+                try:
+                    await consume_batches_atomic(
+                        db,
+                        item_id=item.item_id,
+                        branch_id=data.branch_id,
+                        qty=item.qty,
+                        strategy=strategy,
+                        preferred_batch_id=item.batch_id,
+                        explicit_allocation=explicit,
+                    )
+                    consumed_ok = True
+                except ValueError:
+                    # Stale explicit allocation (another cashier drained a batch,
+                    # wrong branch, inactive lot, etc.) is common at POS — retry
+                    # once with auto FIFO/FEFO before the destructive clamp.
+                    if explicit:
+                        try:
+                            await consume_batches_atomic(
+                                db,
+                                item_id=item.item_id,
+                                branch_id=data.branch_id,
+                                qty=item.qty,
+                                strategy=strategy,
+                                preferred_batch_id=item.batch_id,
+                                explicit_allocation=None,
+                            )
+                            consumed_ok = True
+                        except ValueError:
+                            pass
+                if not consumed_ok:
+                    # Genuine shortage — drain whatever batches we have, then
+                    # zero the aggregate (POS allows oversell-to-zero).
+                    await db.execute(
+                        text(
+                            "UPDATE item_batches SET quantity = 0 "
+                            "WHERE item_id = :i AND branch_id = :b"
+                        ),
+                        {"i": item.item_id, "b": data.branch_id},
+                    )
+                    await db.execute(
+                        text(
+                            "UPDATE item_stock SET quantity = 0 "
+                            "WHERE item_id = :i AND branch_id = :b"
+                        ),
+                        {"i": item.item_id, "b": data.branch_id},
+                    )
+            else:
+                try:
+                    await adjust_stock_atomic(
+                        db,
+                        item_id=item.item_id,
+                        branch_id=data.branch_id,
+                        delta=-item.qty,
+                    )
+                except ValueError:
+                    await db.execute(
+                        text(
+                            "UPDATE item_stock SET quantity = 0 "
+                            "WHERE item_id = :i AND branch_id = :b"
+                        ),
+                        {"i": item.item_id, "b": data.branch_id},
+                    )
 
     await db.commit()
     await db.refresh(inv)

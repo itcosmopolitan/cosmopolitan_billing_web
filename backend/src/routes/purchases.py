@@ -8,10 +8,11 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.models import PurchaseBill, PurchaseLineItem, ReturnLineItem, Vendor, VendorReturn
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.routes._atomic import adjust_stock_atomic
+from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked
 from src.security import require_perm
 
 router = APIRouter()
@@ -23,6 +24,13 @@ class PurchaseLine(BaseModel):
     qty: int
     cost: float
     tax_rate: float = 0
+    # Optional batch metadata captured at receipt time. Used when the item has
+    # batch_tracking enabled — every receipt for a tracked item creates an
+    # ItemBatch row tagged with this metadata (auto-generates a batch number
+    # if the operator left it blank).
+    batch_number: Optional[str] = None
+    mfg_date:     Optional[str] = None
+    expiry_date:  Optional[str] = None
 
 class PurchaseCreate(BaseModel):
     vendor_id: str
@@ -216,15 +224,44 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db)):
             line_total=round(item.qty * item.cost, 2),
         )
         db.add(li)
-        # Auto-update stock atomically (single UPDATE; creates the stock row
-        # if missing). Replaces a read-modify-write race.
+        # Stock side-effect: tracked items create a new batch (carrying vendor
+        # lot, mfg/expiry), untracked items just bump the aggregate counter.
+        # Both code paths atomically update item_stock so reports stay correct.
         if item.item_id:
-            await adjust_stock_atomic(
-                db,
-                item_id=item.item_id,
-                branch_id=data.branch_id,
-                delta=item.qty,
-            )
+            tracked, expiry_tracked = await is_tracked(db, item.item_id)
+            if tracked:
+                date_errs = validate_batch_dates(
+                    mfg_date=item.mfg_date,
+                    expiry_date=item.expiry_date,
+                    received_date=data.date or today,
+                    require_expiry=expiry_tracked,
+                )
+                if date_errs:
+                    raise HTTPException(
+                        400,
+                        f"{item.name}: {'; '.join(date_errs)}",
+                    )
+                await add_batch_atomic(
+                    db,
+                    item_id=item.item_id,
+                    branch_id=data.branch_id,
+                    qty=item.qty,
+                    batch_number=item.batch_number,
+                    mfg_date=item.mfg_date,
+                    expiry_date=item.expiry_date,
+                    cost_price=float(item.cost or 0),
+                    vendor_id=data.vendor_id,
+                    source_type="purchase",
+                    source_ref=bill.id,
+                    received_date=data.date or today,
+                )
+            else:
+                await adjust_stock_atomic(
+                    db,
+                    item_id=item.item_id,
+                    branch_id=data.branch_id,
+                    delta=item.qty,
+                )
 
     await db.commit()
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
