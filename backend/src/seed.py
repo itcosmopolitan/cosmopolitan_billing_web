@@ -40,6 +40,7 @@ from src.models import (
     StockTransfer,
     TransferLineItem,
     User,
+    UserBranch,
     Vendor,
 )
 from src.security import hash_password
@@ -97,15 +98,44 @@ async def seed():
         # role_id links to the system role rows added above; the legacy `role`
         # enum column is kept in sync until Phase 3 drops it.
         users = [
-            User(id="usr-001", name="Suresh Anand", email="suresh@srimurugan.com",  hashed_password=hp("admin123"),    role="super_admin",       role_id="role-super-admin",       branch_id=None,    avatar="SA", active=True),
-            User(id="usr-002", name="Kavitha R.",   email="kavitha@srimurugan.com", hashed_password=hp("kavitha123"),  role="branch_manager",    role_id="role-branch-manager",    branch_id="br-001", avatar="KR", active=True),
-            User(id="usr-003", name="Arjun M.",     email="arjun@srimurugan.com",   hashed_password=hp("arjun123"),    role="cashier",           role_id="role-cashier",           branch_id="br-001", avatar="AM", active=True),
-            User(id="usr-004", name="Deepa S.",     email="deepa@srimurugan.com",   hashed_password=hp("deepa123"),    role="inventory_manager", role_id="role-inventory-manager", branch_id="br-002", avatar="DS", active=True),
-            User(id="usr-005", name="Prakash V.",   email="prakash@srimurugan.com", hashed_password=hp("prakash123"),  role="finance",           role_id="role-finance",           branch_id=None,     avatar="PV", active=False),
-            User(id="usr-006", name="Mohan K.",     email="mohan@srimurugan.com",   hashed_password=hp("mohan123"),    role="branch_manager",    role_id="role-branch-manager",    branch_id="br-002", avatar="MK", active=True),
+            # Demo users intentionally have must_change_password=False so the
+            # seeded credentials work straight away for testing / demos / CI.
+            # Real users created via POST /users/ default to True (forced
+            # change on first login).
+            # Every demo user now has an EXPLICIT branch list — the legacy
+            # "all_branches=True implies access to all branches" UI was
+            # removed 2026-05-18 sixth session. Suresh (super-admin) and
+            # Prakash (finance) get all 5 current branches enumerated. If a
+            # 6th branch is created later, they must be explicitly granted
+            # access (intentional — explicit > implicit).
+            User(id="usr-001", name="Suresh Anand", email="suresh@srimurugan.com",  hashed_password=hp("admin123"),    role="super_admin",       role_id="role-super-admin",       branch_id="br-001", avatar="SA", active=True,  must_change_password=False, all_branches=False),
+            User(id="usr-002", name="Kavitha R.",   email="kavitha@srimurugan.com", hashed_password=hp("kavitha123"),  role="branch_manager",    role_id="role-branch-manager",    branch_id="br-001", avatar="KR", active=True,  must_change_password=False, all_branches=False),
+            User(id="usr-003", name="Arjun M.",     email="arjun@srimurugan.com",   hashed_password=hp("arjun123"),    role="cashier",           role_id="role-cashier",           branch_id="br-001", avatar="AM", active=True,  must_change_password=False, all_branches=False),
+            User(id="usr-004", name="Deepa S.",     email="deepa@srimurugan.com",   hashed_password=hp("deepa123"),    role="inventory_manager", role_id="role-inventory-manager", branch_id="br-002", avatar="DS", active=True,  must_change_password=False, all_branches=False),
+            User(id="usr-005", name="Prakash V.",   email="prakash@srimurugan.com", hashed_password=hp("prakash123"),  role="finance",           role_id="role-finance",           branch_id="br-001", avatar="PV", active=False, must_change_password=False, all_branches=False),
+            User(id="usr-006", name="Mohan K.",     email="mohan@srimurugan.com",   hashed_password=hp("mohan123"),    role="branch_manager",    role_id="role-branch-manager",    branch_id="br-002", avatar="MK", active=True,  must_change_password=False, all_branches=False),
         ]
         for u in users:
             db.add(u)
+
+        # ── User ↔ Branch assignments (multi-branch, 2026-05-18) ──────────────
+        # Suresh + Prakash get every branch enumerated (replaces the previous
+        # all_branches=True shortcut). Single-branch staff (Kavitha, Arjun,
+        # Mohan) get one row each. Deepa (inventory_manager) keeps her two
+        # rows to demo the multi-branch UI out of the box: br-002 retail +
+        # br-005 warehouse.
+        ALL_BRANCH_IDS = ["br-001", "br-002", "br-003", "br-004", "br-005"]
+        user_branches = (
+            [UserBranch(user_id="usr-001", branch_id=b) for b in ALL_BRANCH_IDS]
+            + [UserBranch(user_id="usr-002", branch_id="br-001")]
+            + [UserBranch(user_id="usr-003", branch_id="br-001")]
+            + [UserBranch(user_id="usr-004", branch_id="br-002")]
+            + [UserBranch(user_id="usr-004", branch_id="br-005")]
+            + [UserBranch(user_id="usr-005", branch_id=b) for b in ALL_BRANCH_IDS]
+            + [UserBranch(user_id="usr-006", branch_id="br-002")]
+        )
+        for ub in user_branches:
+            db.add(ub)
 
         # ── Categories ────────────────────────────────────────────────────────
         cats = [

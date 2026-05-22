@@ -3,10 +3,11 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { authAPI, branchesAPI, permissionsAPI } from '@/api'
 import { fetchAllList } from '@/utils/pagination'
-import { RequireAuth, RequirePerm } from '@/auth/guards'
+import { RequireAuth, RequirePasswordSet, RequirePerm } from '@/auth/guards'
 import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
 import LoginPage from '@/pages/auth/LoginPage'
+import ChangePasswordPage from '@/pages/auth/ChangePasswordPage'
 
 import Dashboard     from '@/pages/dashboard/Dashboard'
 import POSPage       from '@/pages/pos/POSPage'
@@ -118,11 +119,25 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* /change-password sits OUTSIDE the RequirePasswordSet wrap on purpose
+          — that's the one route users with must_change_password=true need to
+          reach. RequireAuth still applies, so visiting it without a JWT
+          bounces to /login. */}
+      <Route
+        path="/change-password"
+        element={
+          <RequireAuth>
+            <ChangePasswordPage />
+          </RequireAuth>
+        }
+      />
       <Route
         path="/*"
         element={
           <RequireAuth>
-            <AppShell />
+            <RequirePasswordSet>
+              <AppShell />
+            </RequirePasswordSet>
           </RequireAuth>
         }
       />

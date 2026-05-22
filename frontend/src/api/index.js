@@ -46,6 +46,12 @@ export const authAPI = {
   login:  (email, password) => api.post('/auth/login', { email, password }),
   logout: ()                => api.post('/auth/logout'),
   me:     ()                => api.get('/auth/me'),
+  // Self-serve password change. Requires old password (defense against
+  // stolen sessions, and the input the forced-first-login flow uses).
+  // On success the backend clears must_change_password and returns
+  // { message, must_change_password: false }.
+  changePassword: (oldPassword, newPassword) =>
+    api.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────

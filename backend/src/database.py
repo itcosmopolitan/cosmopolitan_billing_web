@@ -45,6 +45,17 @@ async def get_db():
 # (table, column, ddl_type) — ddl_type is what SQLite ALTER TABLE expects.
 _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("users", "role_id", "VARCHAR"),
+    # Force-password-change-on-first-login flag (added 2026-05-18 with the
+    # admin Add User redesign). Existing users default to 0 (false) so the
+    # migration doesn't disrupt anyone; new users created via POST /users/
+    # explicitly get 1 (true) until they self-change via /auth/change-password.
+    ("users", "must_change_password", "BOOLEAN DEFAULT 0 NOT NULL"),
+    # Multi-branch user assignment (added 2026-05-18 with the Add User
+    # multi-select). When 1, the user has access to all branches and the
+    # `user_branches` join is empty. The `user_branches` table itself is
+    # created by Base.metadata.create_all() in init_schema() — no DDL entry
+    # needed here for new tables, only for additive columns on existing ones.
+    ("users", "all_branches", "BOOLEAN DEFAULT 0 NOT NULL"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.

@@ -33,6 +33,15 @@ export default function LoginPage() {
       // access — this is a cheap call).
       const catalog = await permissionsAPI.catalog().catch(() => undefined)
       setSession({ user, permissions: user.permissions || [], permCatalog: catalog })
+      // Admin-created accounts (or admin-reset ones) land here with a temp
+      // password and must change it before doing anything else. The
+      // RequirePasswordSet guard would also catch this on any other route,
+      // but routing directly here is friendlier than a redirect flash.
+      if (user.must_change_password) {
+        toast('Please set a new password to continue', { icon: '🔐' })
+        navigate('/change-password', { replace: true })
+        return
+      }
       toast.success(`Welcome back, ${user.name}!`)
       navigate('/dashboard')
     } catch (err) {

@@ -28,6 +28,23 @@ repos:
         files: ^backend/src/.*\.py$
         args: [--fix]
 
+  # Backend — import smoke. Confirms `from src.main import app` succeeds, which
+  # catches the entire class of "missing import / typo / top-level exception"
+  # bugs in any backend module at commit time. Would have caught ISS-011's
+  # missing-symbol ImportError before the commit landed.
+  #
+  # `pass_filenames: false` because we don't iterate per file — one import
+  # check covers the whole package. `files:` scopes the hook to backend
+  # Python edits so it doesn't re-run on every commit.
+  - repo: local
+    hooks:
+      - id: backend-import-smoke
+        name: backend import smoke (from src.main import app)
+        entry: bash -c 'cd backend && exec python -c "from src.main import app; print(\"OK:\", app.title)"' --
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
   # Frontend — eslint (config in frontend/.eslintrc.cjs). Runs the workspace's
   # pinned eslint binary so we don't depend on a global install.
   #

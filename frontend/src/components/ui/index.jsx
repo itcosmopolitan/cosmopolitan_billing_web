@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
 export function Modal({ open, onClose, title, children, footer, size = 'md', icon }) {
@@ -232,11 +233,19 @@ export function SectionHeader({ title, subtitle, children }) {
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
 export function Card({ title, titleRight, children, bodyPadding = true, style }) {
+  // Wrap string/number titles in an <h4> for a11y + visual consistency. When
+  // the caller passes a React element (e.g. a SegmentedToggle in the title
+  // slot), render it as-is — h4 nesting an interactive widget is invalid
+  // HTML and confuses screen readers. The caller is responsible for any
+  // wrapping its element needs.
+  const titleIsText = typeof title === 'string' || typeof title === 'number'
   return (
     <div className="card" style={style}>
       {title && (
         <div className="card-header">
-          <h4 style={{ flex: 1, margin: 0 }}>{title}</h4>
+          {titleIsText
+            ? <h4 style={{ flex: 1, margin: 0 }}>{title}</h4>
+            : <div style={{ flex: 1, display: 'flex', alignItems: 'center', minWidth: 0 }}>{title}</div>}
           {titleRight}
         </div>
       )}
@@ -292,6 +301,581 @@ export function Tag({ children, color }) {
 
 export { PaginationBar } from './PaginationBar'
 export { SortableHeader } from './SortableHeader'
+
+// ─── Segmented Toggle ────────────────────────────────────────────────────────
+// Pill-style segmented control. Use when picking between a small number of
+// mutually-exclusive options (Users/Roles, payment modes, period selectors).
+// Options is an array of {id, label} or array of strings.
+//
+//   <SegmentedToggle
+//     value={subTab}
+//     onChange={setSubTab}
+//     options={[{id:'users', label:'Users'}, {id:'roles', label:'Roles'}]}
+//   />
+export function SegmentedToggle({ value, onChange, options, ariaLabel }) {
+  const opts = options.map((o) => (typeof o === 'string' ? { id: o, label: o } : o))
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      style={{
+        display: 'inline-flex',
+        padding: 4,
+        gap: 2,
+        background: 'var(--bg-raised)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 999,
+      }}
+    >
+      {opts.map((o) => {
+        const active = o.id === value
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(o.id)}
+            style={{
+              padding: '6px 18px',
+              border: 'none',
+              borderRadius: 999,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              fontSize: 13,
+              fontWeight: 500,
+              background: active ? 'var(--accent)' : 'transparent',
+              color: active ? '#fff' : 'var(--text-muted)',
+              transition: 'background 0.15s, color 0.15s',
+            }}
+          >
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── MultiSelect ──────────────────────────────────────────────────────────────
+// Office-style checkbox-popover multi-select. Click the trigger to open a
+// panel of checkboxes; the first row is "Select all" which bulk-toggles
+// every option. The trigger button summarises the current selection
+// ("N of M selected") so admins don't need to open the popover to know the
+// count — opening it reveals the per-row checkmarks for the detail.
+//
+// Search:
+//   When `options.length >= 8`, a sticky search input appears at the top
+//   of the popover. Case-insensitive substring match on `option.label`.
+//   "Select all" then operates on the FILTERED set only — Excel / Google
+//   Sheets / Slack convention. The current selection outside the filter is
+//   left untouched.
+//
+// Props:
+//   options:     [{ id, label }]            — full pickable set
+//   value:       [id, id, ...]              — currently selected ids
+//   onChange:    (newIds[]) => void
+//   placeholder: string                     — trigger label when nothing selected
+//   disabled:    boolean                    — gray-out + ignore interactions
+//
+// Popover rendering note:
+//   The popover is portaled to document.body with position:fixed so it
+//   escapes any ancestor `overflow: hidden|auto` clipping (e.g. when used
+//   inside a Modal whose `.modal` has `overflow-y: auto`). Coordinates are
+//   computed from the trigger's getBoundingClientRect() and re-computed on
+//   scroll (capture, to catch nested scroll containers) + window resize.
+//   Auto-flips above the trigger when there's not enough room below.
+//
+// Accessibility:
+//   - Trigger is a button with `aria-expanded` / `aria-haspopup="listbox"`.
+//   - Panel has `role="listbox"` with `aria-multiselectable`.
+//   - Each row is a `<label>` wrapping a real `<input type="checkbox">`,
+//     so screen readers and keyboard users get native behavior.
+//   - Escape or outside-click closes the panel. Native tab order works.
+
+// Visible bounds for the popover. Anything taller than this is internally
+// scrollable; the placement logic picks above-vs-below based on this.
+const POPOVER_MAX_H = 260
+const POPOVER_GAP   = 4   // px between trigger edge and popover edge
+const VIEWPORT_PAD  = 8   // px from viewport edge so popover never sits flush
+
+export function MultiSelect({ options, value, onChange, placeholder = 'Choose…', disabled = false }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H })
+  const triggerRef = useRef(null)
+  const popoverRef = useRef(null)
+  const searchRef = useRef(null)
+
+  const valueSet = new Set(value || [])
+
+  // Filtered view of options (case-insensitive label substring match).
+  // The "Select all" checkbox + indeterminate state operate on this set —
+  // matches the Excel / Google Sheets / Slack convention where filter +
+  // select-all combine intuitively (type "warehouse" then tick "Select all"
+  // = tick every Warehouse-matching branch, leaving the rest untouched).
+  const q = search.trim().toLowerCase()
+  const filteredOptions = q
+    ? options.filter((o) => (o.label || '').toLowerCase().includes(q))
+    : options
+  const filteredSelectedCount = filteredOptions.reduce(
+    (n, o) => n + (valueSet.has(o.id) ? 1 : 0), 0,
+  )
+  const allChecked = filteredOptions.length > 0
+    && filteredSelectedCount === filteredOptions.length
+  const someChecked = !allChecked && filteredSelectedCount > 0
+
+  // Compute popover position relative to the viewport. Flips above the
+  // trigger when the space below is too small AND there's more room above.
+  // Clamps maxHeight to whichever side it ends up on. Pure function of the
+  // trigger rect — safe to call from layout/scroll/resize handlers.
+  const reposition = () => {
+    const el = triggerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PAD
+    const spaceAbove = rect.top - VIEWPORT_PAD
+    const flipUp = spaceBelow < Math.min(POPOVER_MAX_H, 160) && spaceAbove > spaceBelow
+    const maxHeight = Math.max(120, Math.min(POPOVER_MAX_H, flipUp ? spaceAbove : spaceBelow))
+    setCoords({
+      top: flipUp
+        ? Math.max(VIEWPORT_PAD, rect.top - maxHeight - POPOVER_GAP)
+        : rect.bottom + POPOVER_GAP,
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+    })
+  }
+
+  // Position synchronously on open so the popover never paints in the
+  // wrong place even for one frame.
+  useLayoutEffect(() => {
+    if (open) reposition()
+  }, [open])
+
+  // Outside-click + Escape close + scroll/resize repositioning. Listeners
+  // only attach while open. `scroll` uses capture so nested scrollable
+  // ancestors (e.g. the modal-body) also trigger repositioning.
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => {
+      const inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
+      const inPopover = popoverRef.current && popoverRef.current.contains(e.target)
+      if (!inTrigger && !inPopover) setOpen(false)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
+
+  // Auto-focus the search box when the popover opens so the user can start
+  // typing immediately. Runs in useLayoutEffect on `open` change so focus
+  // lands before the browser paints (no flash of "trigger still focused").
+  useLayoutEffect(() => {
+    if (open && searchRef.current) {
+      searchRef.current.focus()
+    }
+  }, [open])
+
+  // Clear the search term when the popover closes, so re-opening shows the
+  // full list. Stash inside an effect rather than the close handlers so
+  // every close path (Escape, outside-click, disabled flip) clears it.
+  useEffect(() => {
+    if (!open) setSearch('')
+  }, [open])
+
+  const toggle = (id) => {
+    if (disabled) return
+    onChange(valueSet.has(id)
+      ? (value || []).filter((v) => v !== id)
+      : [...(value || []), id])
+  }
+
+  // "Select all" toggles only the FILTERED set. When all visible options
+  // are already selected → unselect them (leave selections outside the
+  // filter untouched). Otherwise add every visible option to the selection.
+  const toggleAll = () => {
+    if (disabled) return
+    const filteredIds = new Set(filteredOptions.map((o) => o.id))
+    if (allChecked) {
+      onChange((value || []).filter((id) => !filteredIds.has(id)))
+    } else {
+      const merged = new Set(value || [])
+      filteredOptions.forEach((o) => merged.add(o.id))
+      onChange([...merged])
+    }
+  }
+
+  const triggerLabel = (value || []).length === 0
+    ? placeholder
+    : `${(value || []).length} of ${options.length} selected`
+
+  const popover = open ? createPortal(
+    <div
+      ref={popoverRef}
+      role="listbox"
+      aria-multiselectable="true"
+      style={{
+        position: 'fixed',
+        top: coords.top,
+        left: coords.left,
+        width: coords.width,
+        maxHeight: coords.maxHeight,
+        overflowY: 'auto',
+        // Modal overlay is z-index 1000; popover needs to sit above it.
+        zIndex: 1100,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+        padding: 4,
+      }}
+    >
+      {options.length === 0 ? (
+        <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+          No options available
+        </div>
+      ) : (
+        <>
+          {/* Sticky search header so the input + Select-all stay visible while
+              scrolling the option list. Visible only when there are enough
+              options to make scrolling likely (>=8) — otherwise it's noise. */}
+          {options.length >= 8 && (
+            <div style={{
+              position: 'sticky', top: 0, zIndex: 1,
+              background: 'var(--bg-surface)',
+              padding: '2px 2px 4px',
+              borderBottom: '1px solid var(--border-subtle)',
+              marginBottom: 2,
+            }}>
+              <input
+                ref={searchRef}
+                type="text"
+                placeholder="Search…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="form-input"
+                style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </div>
+          )}
+
+          {filteredOptions.length === 0 ? (
+            <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+              No matches for &ldquo;{search}&rdquo;
+            </div>
+          ) : (
+            <>
+              <label
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '8px 10px', cursor: 'pointer', borderRadius: 4,
+                  fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+                  background: allChecked ? 'var(--bg-raised)' : 'transparent',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-raised)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = allChecked ? 'var(--bg-raised)' : 'transparent' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  ref={(el) => { if (el) el.indeterminate = someChecked }}
+                  onChange={toggleAll}
+                />
+                <span>
+                  Select all ({filteredOptions.length}
+                  {q && filteredOptions.length !== options.length ? ' matching' : ''})
+                </span>
+              </label>
+              <div style={{ height: 1, background: 'var(--border-subtle)', margin: '2px 0' }} />
+              {filteredOptions.map((o) => {
+                const checked = valueSet.has(o.id)
+                return (
+                  <label
+                    key={o.id}
+                    role="option"
+                    aria-selected={checked}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '8px 10px', cursor: 'pointer', borderRadius: 4,
+                      fontSize: 12.5, color: 'var(--text-primary)',
+                      background: checked ? 'var(--bg-raised)' : 'transparent',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-raised)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = checked ? 'var(--bg-raised)' : 'transparent' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(o.id)}
+                    />
+                    <span>{o.label}</span>
+                  </label>
+                )
+              })}
+            </>
+          )}
+        </>
+      )}
+    </div>,
+    document.body,
+  ) : null
+
+  return (
+    <div
+      style={{
+        opacity: disabled ? 0.55 : 1,
+        pointerEvents: disabled ? 'none' : 'auto',
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="form-input"
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          textAlign: 'left', cursor: disabled ? 'not-allowed' : 'pointer',
+          color: (value || []).length === 0 ? 'var(--text-muted)' : 'var(--text-primary)',
+          width: '100%',
+        }}
+      >
+        <span>{triggerLabel}</span>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8 }}>▾</span>
+      </button>
+      {popover}
+    </div>
+  )
+}
+
+// ─── TruncatedChipList ───────────────────────────────────────────────────────
+// Display a list of labels as inline chips, capped at `maxVisible`. When the
+// list overflows, an interactive "+N more" pill appears at the end; clicking
+// it opens a portaled popover that shows ALL items in a scrollable list
+// with a sticky search input. View-only — no checkboxes, no selection.
+//
+// Use for read-only table cells where a row's "tags" / "branches" /
+// "categories" can be long enough to dominate the row visually. Pair with
+// MultiSelect for the edit path; the two share the same portal + auto-flip
+// + outside-click / Escape close behavior (intentionally duplicated rather
+// than extracted into a shared hook — single second consumer doesn't yet
+// justify the abstraction; revisit when a third floating UI lands).
+//
+// Props:
+//   items:        [{ id, label }]  — full list to display
+//   maxVisible:   number           — chips before "+N more" appears (default 5)
+//   chipStyle:    object           — optional overrides for inline chip CSS
+//   popoverTitle: string           — small heading at the top of the popover
+//                                     (default "All items")
+
+const POPOVER_MAX_H_TR = 280
+const POPOVER_GAP_TR   = 4
+const VIEWPORT_PAD_TR  = 8
+const SEARCH_THRESHOLD = 8  // matches MultiSelect — only show search above this many items
+
+const DEFAULT_CHIP_STYLE = {
+  padding: '2px 8px',
+  borderRadius: 20,
+  fontSize: 11,
+  fontWeight: 500,
+  background: 'var(--bg-raised)',
+  color: 'var(--text-secondary)',
+  border: '1px solid var(--border-subtle)',
+  whiteSpace: 'nowrap',
+}
+
+export function TruncatedChipList({ items, maxVisible = 5, chipStyle, popoverTitle = 'All items' }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H_TR })
+  const triggerRef = useRef(null)
+  const popoverRef = useRef(null)
+  const searchRef = useRef(null)
+
+  const safeItems = Array.isArray(items) ? items : []
+  const visible = safeItems.slice(0, maxVisible)
+  const overflowCount = Math.max(0, safeItems.length - maxVisible)
+
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? safeItems.filter((it) => (it.label || '').toLowerCase().includes(q))
+    : safeItems
+
+  const reposition = () => {
+    const el = triggerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PAD_TR
+    const spaceAbove = rect.top - VIEWPORT_PAD_TR
+    const flipUp = spaceBelow < Math.min(POPOVER_MAX_H_TR, 180) && spaceAbove > spaceBelow
+    const maxHeight = Math.max(140, Math.min(POPOVER_MAX_H_TR, flipUp ? spaceAbove : spaceBelow))
+    // Anchor popover's right edge to the trigger's right edge — feels natural
+    // since the "+N more" pill is at the end of the chip strip. Clamp left
+    // so it doesn't fall off the screen for narrow viewports.
+    const width = 280
+    const right = rect.right
+    const left = Math.max(VIEWPORT_PAD_TR, right - width)
+    setCoords({
+      top: flipUp
+        ? Math.max(VIEWPORT_PAD_TR, rect.top - maxHeight - POPOVER_GAP_TR)
+        : rect.bottom + POPOVER_GAP_TR,
+      left,
+      width,
+      maxHeight,
+    })
+  }
+
+  useLayoutEffect(() => {
+    if (open) reposition()
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (open && searchRef.current) searchRef.current.focus()
+  }, [open])
+
+  useEffect(() => {
+    if (!open) setSearch('')
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => {
+      const inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
+      const inPopover = popoverRef.current && popoverRef.current.contains(e.target)
+      if (!inTrigger && !inPopover) setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open])
+
+  const mergedChipStyle = { ...DEFAULT_CHIP_STYLE, ...(chipStyle || {}) }
+
+  const popover = open ? createPortal(
+    <div
+      ref={popoverRef}
+      role="listbox"
+      aria-label={popoverTitle}
+      style={{
+        position: 'fixed',
+        top: coords.top,
+        left: coords.left,
+        width: coords.width,
+        maxHeight: coords.maxHeight,
+        overflowY: 'auto',
+        zIndex: 1100,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+        padding: 4,
+      }}
+    >
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 1,
+        background: 'var(--bg-surface)',
+        padding: '6px 8px 8px',
+        borderBottom: '1px solid var(--border-subtle)',
+        marginBottom: 4,
+      }}>
+        <div style={{
+          fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+          textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: safeItems.length >= SEARCH_THRESHOLD ? 6 : 0,
+        }}>
+          {popoverTitle} ({safeItems.length})
+        </div>
+        {safeItems.length >= SEARCH_THRESHOLD && (
+          <input
+            ref={searchRef}
+            type="text"
+            placeholder="Search…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="form-input"
+            style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        )}
+      </div>
+      {filtered.length === 0 ? (
+        <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+          No matches for &ldquo;{search}&rdquo;
+        </div>
+      ) : (
+        filtered.map((it) => (
+          <div
+            key={it.id}
+            role="option"
+            style={{
+              padding: '7px 10px', fontSize: 12.5,
+              color: 'var(--text-primary)', borderRadius: 4,
+            }}
+          >
+            {it.label}
+          </div>
+        ))
+      )}
+    </div>,
+    document.body,
+  ) : null
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+      {visible.map((it) => (
+        <span key={it.id} style={mergedChipStyle}>{it.label}</span>
+      ))}
+      {overflowCount > 0 && (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-label={`Show all ${safeItems.length} ${popoverTitle.toLowerCase()}`}
+          style={{
+            padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+            background: 'transparent',
+            color: 'var(--accent)',
+            border: '1px solid var(--accent)',
+            cursor: 'pointer', whiteSpace: 'nowrap',
+            fontFamily: 'inherit',
+          }}
+        >
+          +{overflowCount} more
+        </button>
+      )}
+      {popover}
+    </div>
+  )
+}
 
 // ─── Inline Bar Chart ─────────────────────────────────────────────────────────
 export function BarList({ items, valueFormatter = (v) => v, color = 'var(--accent)' }) {
