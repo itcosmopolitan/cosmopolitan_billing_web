@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
+from src.document_numbering import allocate_number
 from src.models import (
     InvoiceStatus,
     Quotation,
@@ -342,10 +343,9 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have name and positive quantity")
 
-    # Generate quotation number
-    result = await db.execute(select(func.count(Quotation.id)))
-    quote_count = result.scalar() or 0
-    quote_num = f"QT-{datetime.now().year}-{str(quote_count + 1).zfill(4)}"
+    quote_num = await allocate_number(
+        db, "quotation", branch_id=data.branch_id
+    )
 
     # Calculate totals
     subtotal = sum(i.qty * i.price for i in data.items)
@@ -483,9 +483,9 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
     paid      = total if data.payment_mode not in ("credit",) else 0.0
     status    = "paid" if paid >= total else "pending"
 
-    # Sequential-ish number
-    count = (await db.execute(select(func.count(SaleInvoice.id)))).scalar() or 0
-    inv_num = f"INV-{datetime.now().year}-{2000 + count}"
+    inv_num = await allocate_number(
+        db, "sales_invoice", branch_id=data.branch_id
+    )
 
     inv = SaleInvoice(
         id=str(uuid.uuid4()), number=inv_num,

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
+from src.document_numbering import allocate_number
 from src.models import Branch, StockTransfer, TransferLineItem
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import (
@@ -139,9 +140,9 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
     if data.from_branch_id == data.to_branch_id:
         raise HTTPException(400, "Source and destination branches must differ")
     tid = str(uuid.uuid4())
-    # Sequential-ish ref number — single COUNT(*) query, no result thrown away.
-    count = int((await db.execute(select(func.count(StockTransfer.id)))).scalar() or 0)
-    ref = f"TRF-{datetime.now().year}-{str(count + 42).zfill(3)}"
+    ref = await allocate_number(
+        db, "stock_transfer", branch_id=data.from_branch_id
+    )
 
     # Fetch branch names
     from_branch_result = await db.execute(select(Branch).where(Branch.id == data.from_branch_id))

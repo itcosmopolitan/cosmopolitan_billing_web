@@ -83,6 +83,7 @@ async def init_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _bootstrap_system_roles(conn)
+        await _bootstrap_document_numbering(conn)
         await _backfill_role_ids(conn)
 
 
@@ -127,6 +128,25 @@ async def _ensure_columns(conn) -> None:
         if column in existing:
             continue
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+
+
+async def _bootstrap_document_numbering(conn) -> None:
+    """Idempotently seed document numbering templates for existing databases."""
+    from src.document_numbering import DEFAULT_NUMBERING
+
+    rows = (await conn.execute(text("SELECT doc_type FROM document_numbering"))).fetchall()
+    existing = {r[0] for r in rows}
+    for cfg in DEFAULT_NUMBERING:
+        if cfg["doc_type"] in existing:
+            continue
+        await conn.execute(
+            text(
+                "INSERT INTO document_numbering "
+                "(doc_type, label, prefix, format, scope, next_seq) "
+                "VALUES (:doc_type, :label, :prefix, :format, :scope, :next_seq)"
+            ),
+            cfg,
+        )
 
 
 async def _backfill_role_ids(conn) -> None:

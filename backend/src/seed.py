@@ -23,12 +23,14 @@ from src import config
 config.load()
 
 from src.database import Base, get_async_session, get_engine
+from src.document_numbering import DEFAULT_NUMBERING
 from src.models import (
     AuditLog,
     Branch,
     CashEntry,
     Category,
     Customer,
+    DocumentNumbering,
     Item,
     ItemBatch,
     ItemStock,
@@ -75,6 +77,16 @@ async def seed():
             state_code="33",
             financial_year="Apr-Mar",
         ))
+
+        for cfg in DEFAULT_NUMBERING:
+            db.add(DocumentNumbering(
+                doc_type=cfg["doc_type"],
+                label=cfg["label"],
+                prefix=cfg["prefix"],
+                format=cfg["format"],
+                scope=cfg["scope"],
+                next_seq=cfg["next_seq"],
+            ))
 
         # ── Branches ──────────────────────────────────────────────────────────
         branches = [

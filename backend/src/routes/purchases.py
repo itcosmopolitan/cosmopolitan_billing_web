@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
+from src.document_numbering import allocate_number
 from src.models import PurchaseBill, PurchaseLineItem, ReturnLineItem, Vendor, VendorReturn
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked
@@ -193,9 +194,9 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db)):
     tax_total = sum(i.qty * i.cost * i.tax_rate / 100 for i in data.items)
     total     = subtotal + tax_total - data.discount
 
-    count_res = await db.execute(select(func.count(PurchaseBill.id)))
-    count = count_res.scalar() or 0
-    bill_num = f"PUR-{datetime.now().year}-{400 + count:04d}"
+    bill_num = await allocate_number(
+        db, "purchase_bill", branch_id=data.branch_id
+    )
 
     bill = PurchaseBill(
         id=str(uuid.uuid4()), number=bill_num,

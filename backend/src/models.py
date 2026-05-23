@@ -524,6 +524,28 @@ class StockAdjustment(Base):
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
+# ─── Document Numbering ─────────────────────────────────────────────────────────
+class DocumentNumbering(Base):
+    """Per document-type numbering template (Settings → Document Numbering)."""
+    __tablename__ = "document_numbering"
+    doc_type  = Column(String, primary_key=True)
+    label     = Column(String, nullable=False)
+    prefix    = Column(String, nullable=False, default="")
+    format    = Column(String, nullable=False, default="{PREFIX}-{YYYY}-####")
+    scope     = Column(String, nullable=False, default="per_branch")  # per_branch | centralised
+    next_seq  = Column(Integer, default=1)  # seed for new counters
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DocumentNumberCounter(Base):
+    """Running sequence per doc_type (+ branch when scope is per_branch)."""
+    __tablename__ = "document_number_counters"
+    id         = Column(String, primary_key=True)  # "{doc_type}:" or "{doc_type}:{branch_id}"
+    doc_type   = Column(String, nullable=False)
+    branch_id  = Column(String, nullable=True)
+    next_seq   = Column(Integer, default=1)
+
+
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 class AuditLog(Base):
     __tablename__ = "audit_logs"

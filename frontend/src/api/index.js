@@ -187,3 +187,9 @@ export const rolesAPI = {
 export const permissionsAPI = {
   catalog: () => api.get('/permissions/catalog'),
 }
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+export const settingsAPI = {
+  listNumbering: () => api.get('/settings/numbering'),
+  updateNumbering: (docType, data) => api.put(`/settings/numbering/${docType}`, data),
+}
