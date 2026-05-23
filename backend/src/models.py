@@ -59,6 +59,8 @@ class Organisation(Base):
     state_code    = Column(String, default="33")
     financial_year= Column(String, default="Apr-Mar")
     logo_url      = Column(String)
+    # inclusive = shelf prices include GST (default); exclusive = tax added at checkout
+    tax_pricing_mode = Column(String, default="inclusive")
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
@@ -77,6 +79,18 @@ class Branch(Base):
 
     stock      = relationship("ItemStock", back_populates="branch")
     cash_entries = relationship("CashEntry", back_populates="branch")
+
+
+# ─── Tax Rate ─────────────────────────────────────────────────────────────────
+class TaxRate(Base):
+    __tablename__ = "tax_rates"
+    id         = Column(String, primary_key=True)
+    rate       = Column(Float, nullable=False)
+    label      = Column(String, nullable=False)
+    examples   = Column(Text, default="")
+    active     = Column(Boolean, default=True)
+    is_system  = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ─── Role ─────────────────────────────────────────────────────────────────────

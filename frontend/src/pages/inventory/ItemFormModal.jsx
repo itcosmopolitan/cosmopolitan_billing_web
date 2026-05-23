@@ -12,8 +12,11 @@ import { todayISO } from '@/utils/batchDates'
  * picker copy so the operator sees which behavior they're enabling.
  */
 export default function ItemFormModal({
-  open, onClose, editing, editWasTracked, form, patchForm, onSave, categories,
+  open, onClose, editing, editWasTracked, form, patchForm, onSave, categories, taxRates = [],
 }) {
+  const rateOptions = taxRates.length > 0
+    ? taxRates.filter((t) => t.active !== false).map((t) => t.rate)
+    : [0, 8]
   const showBatchOpening = !editing && form.batch_tracking && Number(form.opening_stock) > 0
   const strategyHint = !form.batch_tracking
     ? 'Aggregate stock only — no batch / expiry tracking.'
@@ -64,7 +67,7 @@ export default function ItemFormModal({
       <FormRow>
         <FormGroup label="GST Rate">
           <select className="form-input" value={form.tax_rate} onChange={(e) => patchForm('tax_rate', e.target.value)}>
-            {[0, 5, 12, 18, 28].map((r) => <option key={r} value={r}>{r}%</option>)}
+            {rateOptions.map((r) => <option key={r} value={r}>{r}%</option>)}
           </select>
         </FormGroup>
         <FormGroup label="HSN Code"><input className="form-input" value={form.hsn_code} onChange={(e) => patchForm('hsn_code', e.target.value)} placeholder="e.g. 1006" /></FormGroup>

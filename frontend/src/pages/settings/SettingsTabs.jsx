@@ -9,15 +9,17 @@
  */
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { TAX_RATES } from '@/utils/seedData'
-import { settingsAPI } from '@/api'
+import { settingsAPI, taxRatesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
+import { useAppStore } from '@/store'
 import { Card, AlertBar, Tag, Modal, FormGroup, FormRow } from '@/components/ui'
 
 const SCOPE_LABELS = {
   per_branch: 'Per Branch',
   centralised: 'Centralised',
 }
+
+const EMPTY_TAX_FORM = { rate: '', label: '', examples: '' }
 
 /** Client-side preview — mirrors backend `render_number`. */
 function previewFormat(prefix, formatStr, seq) {
@@ -32,44 +34,244 @@ function previewFormat(prefix, formatStr, seq) {
 }
 
 export function TaxConfigTab() {
+  const can = useCan()
+  const taxPricingMode = useAppStore((s) => s.taxPricingMode)
+  const setTaxPricingMode = useAppStore((s) => s.setTaxPricingMode)
+  const [rates, setRates] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [settingsLoading, setSettingsLoading] = useState(true)
+  const [savingMode, setSavingMode] = useState(false)
+  const [showModal, setShowModal] = useState(false)
+  const [editing, setEditing] = useState(null)
+  const [form, setForm] = useState(EMPTY_TAX_FORM)
+  const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  const loadRates = useCallback(async () => {
+    try {
+      setLoading(true)
+      const data = await taxRatesAPI.list()
+      setRates(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error(err)
+      setRates([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadRates() }, [loadRates])
+
+  useEffect(() => {
+    taxRatesAPI.getSettings()
+      .then((s) => setTaxPricingMode(s?.tax_pricing_mode || 'inclusive'))
+      .catch((err) => console.error(err))
+      .finally(() => setSettingsLoading(false))
+  }, [setTaxPricingMode])
+
+  const toggleTaxPricingMode = async () => {
+    const next = taxPricingMode === 'inclusive' ? 'exclusive' : 'inclusive'
+    setSavingMode(true)
+    try {
+      const res = await taxRatesAPI.updateSettings({ tax_pricing_mode: next })
+      setTaxPricingMode(res?.tax_pricing_mode || next)
+      toast.success(`Pricing set to ${next === 'inclusive' ? 'tax inclusive' : 'tax exclusive'}`)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSavingMode(false)
+    }
+  }
+
+  const openCreate = () => {
+    setEditing(null)
+    setForm(EMPTY_TAX_FORM)
+    setShowModal(true)
+  }
+
+  const openEdit = (tax) => {
+    setEditing(tax)
+    setForm({
+      rate: String(tax.rate),
+      label: tax.label,
+      examples: tax.examples || '',
+    })
+    setShowModal(true)
+  }
+
+  const saveTax = async () => {
+    const rate = Number(form.rate)
+    if (Number.isNaN(rate) || rate < 0 || rate > 100) {
+      toast.error('Enter a valid rate between 0 and 100')
+      return
+    }
+    if (!form.label.trim()) {
+      toast.error('Label is required')
+      return
+    }
+    const payload = {
+      rate,
+      label: form.label.trim(),
+      examples: form.examples.trim(),
+    }
+    try {
+      if (editing) {
+        await taxRatesAPI.update(editing.id, payload)
+        toast.success('Tax rate updated')
+      } else {
+        await taxRatesAPI.create(payload)
+        toast.success('Tax rate created')
+      }
+      setShowModal(false)
+      setEditing(null)
+      setForm(EMPTY_TAX_FORM)
+      await loadRates()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const deleteTax = async (tax) => {
+    if (tax.is_system) {
+      toast.error('Default tax rates cannot be deleted')
+      return
+    }
+    if (!window.confirm(`Delete "${tax.label}" (${tax.rate}%)?`)) return
+    try {
+      await taxRatesAPI.delete(tax.id)
+      toast.success('Tax rate deleted')
+      await loadRates()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
   return (
     <>
       <AlertBar type="blue" icon="ℹ" style={{ marginBottom: 16 }}>
         Tax rates are used for invoice calculations and GST reports only. Cosmopolitan Pro does not file returns or integrate with government portals.
       </AlertBar>
-      <Card title="GST Rate Configuration" bodyPadding={false}>
-        <table className="data-table">
-          <thead><tr><th>Rate</th><th>Description</th><th>HSN Examples</th><th>Applicable To</th><th></th></tr></thead>
-          <tbody>
-            {TAX_RATES.map((r) => (
-              <tr key={r.rate}>
-                <td><span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>{r.rate}%</span></td>
-                <td><span style={{ fontWeight: 500 }}>{r.label}</span></td>
-                <td style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'DM Mono' }}>{r.examples.split(',')[0]}</td>
-                <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.examples}</td>
-                <td><button className="btn btn-ghost btn-xs">Edit</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-      <div style={{ height: 16 }} />
-      <Card title="Other Tax Settings">
-        {[
-          { label: 'Tax Inclusive Pricing', desc: 'Show prices inclusive of GST at POS', value: 'Off' },
-          { label: 'Auto-calculate GST on purchases', desc: 'Apply tax rates automatically on purchase entry', value: 'On' },
-          { label: 'Show HSN Code on invoices', desc: 'Print HSN/SAC codes on sales invoices', value: 'On' },
-          { label: 'CGST + SGST split on invoices', desc: 'Show tax breakup as CGST and SGST separately', value: 'On' },
-        ].map((r) => (
-          <div key={r.label} style={{ display: 'flex', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border-subtle)' }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text-primary)' }}>{r.label}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{r.desc}</div>
-            </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => toast('Toggle setting')}>{r.value}</button>
+      <Card
+        title="GST Rate Configuration"
+        titleRight={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {can('settings.edit') ? (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={toggleTaxPricingMode}
+                disabled={settingsLoading || savingMode}
+                title={taxPricingMode === 'inclusive'
+                  ? 'Shelf prices include tax'
+                  : 'Tax added at checkout'}
+              >
+                {settingsLoading ? '…' : (taxPricingMode === 'inclusive' ? 'Tax inclusive' : 'Tax exclusive')}
+              </button>
+            ) : (
+              <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-secondary)' }}>
+                {taxPricingMode === 'inclusive' ? 'Tax inclusive' : 'Tax exclusive'}
+              </span>
+            )}
+            {can('settings.edit') && (
+              <button className="btn btn-primary btn-sm" onClick={openCreate}>+ Add Tax Rate</button>
+            )}
           </div>
-        ))}
+        }
+        bodyPadding={false}
+      >
+        {loading ? (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            Loading tax rates…
+          </div>
+        ) : rates.length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            No tax rates configured. Add 0% and 8% or create custom rates.
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="text-right">Rate</th>
+                <th>Description</th>
+                <th>Applicable To</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rates.filter((r) => r.active !== false).map((r) => (
+                <tr key={r.id}>
+                  <td className="text-right">
+                    <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>
+                      {r.rate}%
+                    </span>
+                  </td>
+                  <td><span style={{ fontWeight: 500 }}>{r.label}</span></td>
+                  <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.examples || '—'}</td>
+                  <td>
+                    {can('settings.edit') && (
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        <button className="btn btn-ghost btn-xs" onClick={() => openEdit(r)}>Edit</button>
+                        {!r.is_system && (
+                          <button className="btn btn-danger btn-xs" onClick={() => deleteTax(r)}>Delete</button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
+
+      <Modal
+        open={showModal}
+        onClose={() => { setShowModal(false); setEditing(null) }}
+        title={editing ? 'Edit Tax Rate' : 'Add Tax Rate'}
+        icon="🧾"
+        size="sm"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => { setShowModal(false); setEditing(null) }}>Cancel</button>
+            <button className="btn btn-primary" onClick={saveTax}>{editing ? 'Save Changes' : 'Create Tax Rate'}</button>
+          </>
+        }
+      >
+        <FormRow>
+          <FormGroup label="Rate (%)" required>
+            <input
+              className="form-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={form.rate}
+              onChange={(e) => pf('rate', e.target.value)}
+              disabled={!!editing?.is_system}
+            />
+          </FormGroup>
+          <FormGroup label="Label" required>
+            <input
+              className="form-input"
+              value={form.label}
+              onChange={(e) => pf('label', e.target.value)}
+              placeholder="e.g. GST 8%"
+            />
+          </FormGroup>
+        </FormRow>
+        <FormGroup label="Applicable To (optional)">
+          <textarea
+            className="form-input"
+            style={{ height: 72 }}
+            value={form.examples}
+            onChange={(e) => pf('examples', e.target.value)}
+            placeholder="Describe which products use this rate"
+          />
+        </FormGroup>
+        {editing?.is_system && (
+          <AlertBar type="blue" icon="ℹ">
+            Default rates (0% and 8%) cannot be deleted. You can edit the label and description.
+          </AlertBar>
+        )}
+      </Modal>
     </>
   )
 }

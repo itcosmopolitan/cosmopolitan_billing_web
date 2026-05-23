@@ -55,9 +55,9 @@ export function Receipt({ sale, branch }) {
         </table>
         <div class="divider"></div>
         <table>
-          <tr><td>Subtotal</td><td class="right">₹${(sale.subtotal || 0).toLocaleString('en-IN')}</td></tr>
+          <tr><td>Taxable amount</td><td class="right">₹${(sale.subtotal || 0).toLocaleString('en-IN')}</td></tr>
           ${(sale.discount || 0) > 0 ? `<tr><td>Discount</td><td class="right">-₹${sale.discount.toLocaleString('en-IN')}</td></tr>` : ''}
-          <tr><td>GST</td><td class="right">₹${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-IN')}</td></tr>
+          <tr><td>Tax amount</td><td class="right">₹${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-IN')}</td></tr>
           <tr class="total-row"><td>TOTAL</td><td class="right">₹${(sale.total || 0).toLocaleString('en-IN')}</td></tr>
           <tr><td>Payment</td><td class="right">${(sale.paymentMode || sale.payment_mode || 'cash').toUpperCase()}</td></tr>
         </table>
@@ -83,9 +83,9 @@ export function Receipt({ sale, branch }) {
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
       `─────────────────\n` +
-      `Subtotal: ₹${(sale.subtotal || 0).toLocaleString('en-IN')}\n` +
+      `Taxable amount: ₹${(sale.subtotal || 0).toLocaleString('en-IN')}\n` +
       (sale.discount ? `Discount: -₹${sale.discount.toLocaleString('en-IN')}\n` : '') +
-      `GST: ₹${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-IN')}\n` +
+      `Tax amount: ₹${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-IN')}\n` +
       `*TOTAL: ₹${(sale.total || 0).toLocaleString('en-IN')}*\n` +
       `Payment: ${(sale.paymentMode || sale.payment_mode || '').toUpperCase()}\n\n` +
       `Thank you for your purchase! 🙏`
@@ -134,7 +134,7 @@ export function Receipt({ sale, branch }) {
 
         <div style={{ borderTop: '1px dashed #999', margin: '6px 0' }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-          <span>Subtotal</span><span>{fmt(sale.subtotal)}</span>
+          <span>Taxable amount</span><span>{fmt(sale.subtotal)}</span>
         </div>
         {(sale.discount || 0) > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#e00' }}>
@@ -142,7 +142,7 @@ export function Receipt({ sale, branch }) {
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-          <span>GST</span><span>{fmt(sale.taxTotal || sale.tax_total)}</span>
+          <span>Tax amount</span><span>{fmt(sale.taxTotal || sale.tax_total)}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 14, marginTop: 4, paddingTop: 4, borderTop: '1px dashed #999' }}>
           <span>TOTAL</span><span>{fmt(sale.total)}</span>

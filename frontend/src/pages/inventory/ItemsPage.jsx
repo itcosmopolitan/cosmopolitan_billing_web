@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { itemsAPI } from '@/api'
+import { itemsAPI, taxRatesAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
@@ -24,7 +24,7 @@ const TABS = [
 
 const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', categoryId: '', brand: '',
-  unit: 'Pcs', cost_price: '', selling_price: '', tax_rate: '18',
+  unit: 'Pcs', cost_price: '', selling_price: '', tax_rate: '8',
   hsn_code: '', reorder_level: '10', opening_stock: '0', active: true,
   batch_tracking: false, expiry_tracking: false, emoji: '📦',
   opening_batch_number: '', opening_mfg_date: '', opening_expiry_date: '',
@@ -70,6 +70,7 @@ export default function ItemsPage() {
   const [itemSortOrder, setItemSortOrder] = useState('asc')
   const [loading, setLoading]   = useState(true)
   const [categories, setCategories] = useState([])
+  const [taxRates, setTaxRates] = useState([])
 
   // Client-side sort because the page fetches all items at once via
   // fetchAllList and paginates locally. If/when this switches to true
@@ -112,6 +113,12 @@ export default function ItemsPage() {
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
+
+  useEffect(() => {
+    taxRatesAPI.list()
+      .then((data) => setTaxRates(Array.isArray(data) ? data : []))
+      .catch((err) => console.error('Failed to load tax rates:', err))
+  }, [])
 
   useEffect(() => {
     setItemSkip(0)
@@ -565,6 +572,7 @@ export default function ItemsPage() {
         patchForm={patchForm}
         onSave={saveItem}
         categories={categories}
+        taxRates={taxRates}
       />
 
       {/* Stock Adjustment Modal — batch-aware. For tracked items we show the

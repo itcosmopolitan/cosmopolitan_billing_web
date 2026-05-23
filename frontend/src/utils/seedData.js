@@ -174,10 +174,8 @@ export const ROLES = {
 }
 
 export const TAX_RATES = [
-  { rate: 0,  label: 'Exempt (0%)',  examples: 'Rice, wheat, pulses, fresh vegetables' },
-  { rate: 5,  label: 'GST 5%',       examples: 'Edible oils, sugar, tea, coffee (unroasted)' },
-  { rate: 12, label: 'GST 12%',      examples: 'Butter, ghee, cheese, processed food' },
-  { rate: 18, label: 'GST 18%',      examples: 'Biscuits, chips, beverages, toiletries' },
+  { rate: 0, label: 'Exempt (0%)', examples: 'Essential goods, fresh produce, unprocessed staples' },
+  { rate: 8, label: 'GST 8%',      examples: 'Standard taxable goods and provisions' },
 ]
 
 // Sales trend data (last 14 days)

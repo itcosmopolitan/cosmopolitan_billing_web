@@ -61,6 +61,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("transfer_line_items", "preferred_batch_id",   "VARCHAR"),
     ("transfer_line_items", "requested_allocation", "TEXT"),
     ("transfer_line_items", "batch_allocation",     "TEXT"),
+    ("organisations", "tax_pricing_mode", "VARCHAR DEFAULT 'inclusive'"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.
@@ -84,6 +85,7 @@ async def init_schema() -> None:
         await _ensure_columns(conn)
         await _bootstrap_system_roles(conn)
         await _bootstrap_document_numbering(conn)
+        await _bootstrap_default_tax_rates(conn)
         await _backfill_role_ids(conn)
 
 
@@ -146,6 +148,30 @@ async def _bootstrap_document_numbering(conn) -> None:
                 "VALUES (:doc_type, :label, :prefix, :format, :scope, :next_seq)"
             ),
             cfg,
+        )
+
+
+async def _bootstrap_default_tax_rates(conn) -> None:
+    """Idempotently insert 0% and 8% default tax rates."""
+    from src.tax_defaults import DEFAULT_TAX_RATES
+
+    rows = (await conn.execute(text("SELECT id FROM tax_rates"))).fetchall()
+    existing = {r[0] for r in rows}
+    for tid, rate, label, examples, is_system in DEFAULT_TAX_RATES:
+        if tid in existing:
+            continue
+        await conn.execute(
+            text(
+                "INSERT INTO tax_rates (id, rate, label, examples, active, is_system) "
+                "VALUES (:id, :rate, :label, :examples, 1, :is_system)"
+            ),
+            {
+                "id": tid,
+                "rate": rate,
+                "label": label,
+                "examples": examples,
+                "is_system": 1 if is_system else 0,
+            },
         )
 
 

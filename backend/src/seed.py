@@ -41,6 +41,7 @@ from src.models import (
     SaleInvoice,
     SaleLineItem,
     StockTransfer,
+    TaxRate,
     TransferLineItem,
     User,
     UserBranch,
@@ -48,6 +49,7 @@ from src.models import (
 )
 from src.security import hash_password
 from src.system_roles import SYSTEM_ROLES
+from src.tax_defaults import DEFAULT_TAX_RATES
 
 
 def hp(pw: str) -> str:
@@ -76,6 +78,7 @@ async def seed():
             website="www.srimurugan.com",
             state_code="33",
             financial_year="Apr-Mar",
+            tax_pricing_mode="inclusive",
         ))
 
         for cfg in DEFAULT_NUMBERING:
@@ -105,6 +108,13 @@ async def seed():
                 id=rid, key=key, label=label, color=color,
                 description=desc, permissions=perms,
                 is_system=True, active=True,
+            ))
+
+        # ── Tax rates (0% and 8% defaults) ────────────────────────────────────
+        for tid, rate, label, examples, is_system in DEFAULT_TAX_RATES:
+            db.add(TaxRate(
+                id=tid, rate=rate, label=label, examples=examples,
+                active=True, is_system=is_system,
             ))
 
         # ── Users ─────────────────────────────────────────────────────────────

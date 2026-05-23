@@ -6,6 +6,7 @@ import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
+import { calcCartTotals } from '@/utils/taxCalc'
 import { PRODUCTS, CUSTOMERS } from '@/utils/seedData'
 import { Modal } from '@/components/ui'
 import { Receipt } from '@/components/Receipt'
@@ -81,7 +82,8 @@ export default function POSPage() {
   const skipSearchEffectRef = useRef(true)
 
   const store = usePOSStore()
-  const { activeBranch } = useAppStore()
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const taxPricingMode = useAppStore((s) => s.taxPricingMode)
   const { cart, customer, discountPct, discountAmt, heldBills, paymentMethod } = store
 
   // Guard route changes when the cart has unsaved lines. We stash the
@@ -284,9 +286,8 @@ export default function POSPage() {
 
     setCompleting(true)
     try {
-      const sub = store.getSubtotal()
-      const tax = store.getTaxTotal()
-      const disc = store.getDiscount()
+      const totals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
+      const { netSubtotal: sub, taxTotal: tax, discount: disc } = totals
 
       // Call API to create sale
       const result = await salesAPI.create({
@@ -350,12 +351,14 @@ export default function POSPage() {
     }
   }
 
-  const subtotal = store.getSubtotal()
-  const tax = store.getTaxTotal()
-  const discount = store.getDiscount()
-  const total = store.getTotal()
-  const lineListGross = cart.reduce((s, i) => s + i.qty * i.price, 0)
-  const lineSavings = Math.max(0, lineListGross - subtotal)
+  const cartTotals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
+  const {
+    netSubtotal: subtotal,
+    taxTotal: tax,
+    discount,
+    total,
+    mode: taxMode,
+  } = cartTotals
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
 
@@ -724,24 +727,28 @@ export default function POSPage() {
           </div>
         )}
 
-        {/* Totals */}
+        {/* Totals — item prices include tax; show taxable base and tax extracted */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-raised)' }}>
-          {lineSavings > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--green)' }}>
-              <span>Line discounts</span><span style={{ fontFamily: 'DM Mono' }}>−{fmt(lineSavings)}</span>
+          {taxMode === 'inclusive' && cart.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+              Item amounts include tax
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 5 }}>
-            <span>Subtotal (after line discounts)</span><span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
-          </div>
+          {cart.length > 0 && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 5 }}>
+                <span>Taxable amount</span><span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 10 }}>
+                <span>Tax amount</span><span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
+              </div>
+            </>
+          )}
           {discount > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--green)' }}>
-              <span>Discount</span><span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+              <span>Bill discount</span><span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 10 }}>
-            <span>GST</span><span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
-          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 700, paddingTop: 10, borderTop: '1px solid var(--border-default)', marginBottom: 12 }}>
             <span>Total</span>
             <span style={{ fontFamily: 'DM Mono', color: 'var(--accent)' }}>{fmt(total)}</span>

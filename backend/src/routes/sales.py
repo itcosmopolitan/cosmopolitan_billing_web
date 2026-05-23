@@ -10,8 +10,10 @@ from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number
+from src.tax_calc import line_tax_amount, line_taxable_amount, normalize_tax_pricing_mode
 from src.models import (
     InvoiceStatus,
+    Organisation,
     Quotation,
     QuotationLineItem,
     QuotationStatus,
@@ -466,20 +468,28 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
-    # Line net (pre-tax) after line_discount (percentage off list line gross)
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    tax_mode = normalize_tax_pricing_mode(
+        org_row.tax_pricing_mode if org_row else None
+    )
+    # Line amount after line discount; tax extracted or added per org pricing mode.
     line_rows = []
     for i in data.items:
         gross = round(i.qty * i.price, 2)
         line_disc_amt = max(0.0, min(gross, round(i.line_discount_amount or 0, 2)))
         if line_disc_amt > 0:
-            line_net = round(gross - line_disc_amt, 2)
+            line_amount = round(gross - line_disc_amt, 2)
         else:
-            line_net = round(gross * (1 - i.line_discount / 100), 2)
-        line_tax = round(line_net * (i.tax_rate / 100), 2)
-        line_rows.append((i, line_net, line_tax))
-    subtotal  = sum(r[1] for r in line_rows)
-    tax_total = sum(r[2] for r in line_rows)
-    total     = round(subtotal + tax_total - data.discount, 2)
+            line_amount = round(gross * (1 - i.line_discount / 100), 2)
+        line_tax = line_tax_amount(line_amount, i.tax_rate, tax_mode)
+        line_taxable = line_taxable_amount(line_amount, i.tax_rate, tax_mode)
+        line_rows.append((i, line_amount, line_taxable, line_tax))
+    subtotal  = sum(r[2] for r in line_rows)
+    tax_total = sum(r[3] for r in line_rows)
+    if tax_mode == "inclusive":
+        total = round(sum(r[1] for r in line_rows) - data.discount, 2)
+    else:
+        total = round(subtotal + tax_total - data.discount, 2)
     paid      = total if data.payment_mode not in ("credit",) else 0.0
     status    = "paid" if paid >= total else "pending"
 
@@ -506,13 +516,13 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db)):
     )
     db.add(inv)
 
-    for item, line_net, _line_tax in line_rows:
+    for item, _line_amount, line_taxable, _line_tax in line_rows:
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=item.item_id, name=item.name,
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
-            line_total=line_net,
+            line_total=line_taxable,
         )
         db.add(li)
         # Stock side-effect. For tracked items we walk batches in FEFO order

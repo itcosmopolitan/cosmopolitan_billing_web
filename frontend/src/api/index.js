@@ -193,3 +193,14 @@ export const settingsAPI = {
   listNumbering: () => api.get('/settings/numbering'),
   updateNumbering: (docType, data) => api.put(`/settings/numbering/${docType}`, data),
 }
+
+// ─── Tax rates ───────────────────────────────────────────────────────────────
+export const taxRatesAPI = {
+  list:   ()         => api.get('/taxes/'),
+  get:    (id)       => api.get(`/taxes/${id}`),
+  create: (data)     => api.post('/taxes/', data),
+  update: (id, data) => api.put(`/taxes/${id}`, data),
+  delete: (id)       => api.delete(`/taxes/${id}`),
+  getSettings:    () => api.get('/taxes/settings'),
+  updateSettings: (data) => api.patch('/taxes/settings', data),
+}
