@@ -3,21 +3,17 @@
  * two-stage flow but against a PurchaseBill instead of a SaleInvoice.
  *
  * Stage 1: operator types the bill number, clicks Load → backend
- *   resolves the bill + items.
- * Stage 2: per-line return qty inputs (capped by original qty), reason,
- *   notes. Submit posts to /purchases/returns/.
+ *   resolves the bill + items. We ALSO fetch every existing vendor
+ *   return for that bill and sum return_qty per bill_line_id, so the
+ *   Returnable column reflects cumulative prior returns.
+ * Stage 2: per-line return qty inputs (capped at returnable = original −
+ *   already-returned), reason, notes. Submit posts to /purchases/returns/.
  *
- * Backend (routes/purchases.create_return) handles the stock side-effect:
- * tracked items get a NEW batch via add_batch_atomic (source_type='return'
- * if added) or aggregate adjustment via adjust_stock_atomic, and the
- * `credited_amount` is computed against the bill's paid_amount.
- *
- * Today we don't track "already-returned-per-bill-line" (vendor returns
- * don't carry bill_line_id like sales returns do). The cap is just the
- * original qty from the bill — a second return on the same line could
- * over-return. Acceptable for the MVP per user feedback; sales had this
- * tracking added in PR2 and we can mirror later if vendor returns become
- * higher-volume.
+ * 2026-05-25: added per-line cumulative cap (parity with sales returns).
+ * The backend ALSO validates server-side via _already_returned_for_bill;
+ * the frontend cap is just defence-in-depth + immediate UX feedback.
+ * Each return line now sends `bill_line_id` so the backend matcher is
+ * precise (falls back to item_id+name for legacy callers).
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
@@ -30,6 +26,10 @@ const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Dam
 export default function VendorReturnFormModal({ open, onClose, onSaved }) {
   const [billNumber, setBillNumber] = useState('')
   const [bill, setBill] = useState(null)
+  // 2026-05-25: alreadyReturned tally — { [bill_line_id]: total_returned_qty }
+  // populated from a list-and-sum over all existing returns for this
+  // bill. Backend has the same map server-side; this is the UX mirror.
+  const [alreadyReturned, setAlreadyReturned] = useState({})
   const [returnQtys, setReturnQtys] = useState({})    // { [bill_line_id]: number }
   const [reason, setReason] = useState('Defective')
   const [notes, setNotes] = useState('')
@@ -41,6 +41,7 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
     if (open) {
       setBillNumber('')
       setBill(null)
+      setAlreadyReturned({})
       setReturnQtys({})
       setReason('Defective')
       setNotes('')
@@ -59,13 +60,8 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
         limit: 5,
       })
       const items = listRes?.items || []
-      // 2026-05-24: exact-match only — parity with sales/ReturnFormModal.
-      // The previous `|| items[0]` fallback would silently process a return
-      // against the wrong bill if the operator typed a prefix like
-      // "PUR-2026-04" and the search returned several bills. Forcing
-      // exact match prevents the wrong-bill-return class of mistake.
-      // Copy buttons next to bill numbers on the Bills tab (PurchasesPage)
-      // let the operator grab the exact string without retyping.
+      // Exact-match only — parity with sales/ReturnFormModal. Operator-
+      // typed prefixes no longer process a return against the wrong bill.
       const match = items.find(
         (b) => (b.number || '').toLowerCase() === billNumber.trim().toLowerCase(),
       )
@@ -80,6 +76,19 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
       const initial = {}
       for (const li of full.items || []) initial[li.id] = 0
       setReturnQtys(initial)
+      // Sum prior returns per bill_line_id. There's no dedicated endpoint
+      // for this; list-and-sum is the lightest implementation (same as
+      // sales/ReturnFormModal). Filter client-side to this bill.
+      const allReturns = (await purchasesAPI.returns.list({ limit: 500 }))?.items || []
+      const tally = {}
+      for (const r of allReturns) {
+        if (r.billId !== full.id) continue
+        for (const li of r.items || []) {
+          if (!li.billLineId) continue
+          tally[li.billLineId] = (tally[li.billLineId] || 0) + Number(li.returnQty || 0)
+        }
+      }
+      setAlreadyReturned(tally)
     } catch (err) {
       console.error('Failed to load bill:', err)
     } finally {
@@ -87,9 +96,14 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
     }
   }
 
+  const remainingFor = (line) => {
+    const prior = alreadyReturned[line.id] || 0
+    return Math.max(0, Number(line.qty || 0) - prior)
+  }
+
   const setQtyFor = (line, raw) => {
-    const cap = Number(line.qty || 0)
-    const v = Math.max(0, Math.min(cap, Math.floor(Number(raw) || 0)))
+    const remaining = remainingFor(line)
+    const v = Math.max(0, Math.min(remaining, Math.floor(Number(raw) || 0)))
     setReturnQtys((cur) => ({ ...cur, [line.id]: v }))
   }
 
@@ -126,6 +140,9 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
     const items = (bill.items || [])
       .filter((li) => (returnQtys[li.id] || 0) > 0)
       .map((li) => ({
+        // bill_line_id is the precise matcher — backend uses it to
+        // sum prior returns per line. Always present for fresh bills.
+        bill_line_id: li.id,
         item_id: li.itemId || null,
         name: li.name,
         original_qty: li.qty,
@@ -222,6 +239,7 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
                 <tr>
                   <th>Item</th>
                   <th style={{ width: 80, textAlign: 'right' }}>Received</th>
+                  <th style={{ width: 95, textAlign: 'right' }}>Returnable</th>
                   <th style={{ width: 90, textAlign: 'right' }}>Return Qty</th>
                   <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
                   <th style={{ width: 100, textAlign: 'right' }}>Line Total</th>
@@ -230,22 +248,32 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
               <tbody>
                 {(bill.items || []).map((li) => {
                   const cap = Number(li.qty || 0)
+                  const remaining = remainingFor(li)
                   const q = returnQtys[li.id] || 0
                   const lineGross = q * Number(li.cost || 0)
                   const lineWithTax = lineGross * (1 + Number(li.taxRate || 0) / 100)
-                  const disabled = cap === 0
+                  // Disabled when nothing left to return. Distinguishes
+                  // "fully returned" rows (greyed + label) from "ok to
+                  // return" rows.
+                  const disabled = remaining === 0
                   return (
                     <tr key={li.id} style={disabled ? { opacity: 0.5 } : null}>
                       <td>
                         <div style={{ fontSize: 13, fontWeight: 500 }}>{li.name}</div>
+                        {disabled && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Fully returned</div>
+                        )}
                       </td>
                       <td className="text-right mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>{cap}</td>
+                      <td className="text-right mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        {remaining}
+                      </td>
                       <td className="text-right">
                         <input
                           className="form-input"
                           type="number"
                           min={0}
-                          max={cap}
+                          max={remaining}
                           value={q}
                           disabled={disabled}
                           onChange={(e) => setQtyFor(li, e.target.value)}

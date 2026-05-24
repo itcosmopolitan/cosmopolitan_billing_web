@@ -1,11 +1,12 @@
 /**
  * VendorPicker — strict typeahead used inside BillFormModal +
- * PurchaseOrderFormModal to pick a real vendor. Mirror of CustomerPicker
- * — same UX, same shape, swap in /vendors/ instead of /customers/.
+ * PurchaseOrderFormModal + VendorPaymentFormModal. Mirror of
+ * CustomerPicker — same UX, swap in /vendors/ instead of /customers/.
  *
- * STRICT: no free-form fallback. Operator must pick from existing
- * vendors (create one via Vendors page if missing). Bills + POs always
- * need a real vendor — anonymous purchases don't exist as a workflow.
+ * Popover positioning (2026-05-25):
+ *   Dropdown is portaled to document.body with position:fixed so it
+ *   escapes any ancestor `overflow: auto` clipping (Modal body in our
+ *   case). Same pattern as CustomerPicker + MultiSelect.
  *
  * Props:
  *   • value     — null | { id, name }
@@ -13,32 +14,70 @@
  *   • onClear() — back to unselected
  *   • disabled  — view mode
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { vendorsAPI } from '@/api'
 import { unwrapPaged } from '@/utils/pagination'
 
 const DEBOUNCE_MS = 250
 const PAGE_SIZE = 30
+const POPOVER_MAX_H = 240
+const POPOVER_GAP = 4
+const VIEWPORT_PAD = 8
 
 export default function VendorPicker({ value, onPick, onClear, disabled = false }) {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
-  const wrapperRef = useRef(null)
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H })
+  const triggerRef = useRef(null)
+  const popoverRef = useRef(null)
 
-  // Close on outside click.
+  const reposition = () => {
+    const el = triggerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PAD
+    const spaceAbove = rect.top - VIEWPORT_PAD
+    const flipUp = spaceBelow < Math.min(POPOVER_MAX_H, 160) && spaceAbove > spaceBelow
+    const maxHeight = Math.max(120, Math.min(POPOVER_MAX_H, flipUp ? spaceAbove : spaceBelow))
+    setCoords({
+      top: flipUp
+        ? Math.max(VIEWPORT_PAD, rect.top - maxHeight - POPOVER_GAP)
+        : rect.bottom + POPOVER_GAP,
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+    })
+  }
+
+  useLayoutEffect(() => {
+    if (open) reposition()
+  }, [open])
+
   useEffect(() => {
-    function onDoc(e) {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
-        setOpen(false)
-      }
+    if (!open) return undefined
+    function onDown(e) {
+      const inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
+      const inPopover = popoverRef.current && popoverRef.current.contains(e.target)
+      if (!inTrigger && !inPopover) setOpen(false)
     }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
+    function onKey(e) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open])
 
-  // Debounced search. Fetches only when open AND nothing selected.
   useEffect(() => {
     if (value) return
     if (!open) return
@@ -69,7 +108,6 @@ export default function VendorPicker({ value, onPick, onClear, disabled = false 
     }
   }, [search, open, value])
 
-  // Selected state — locked name + × clear button.
   if (value) {
     return (
       <div
@@ -129,9 +167,95 @@ export default function VendorPicker({ value, onPick, onClear, disabled = false 
     )
   }
 
-  // Unselected — typeahead + dropdown.
+  const popover = open && !disabled ? createPortal(
+    <div
+      ref={popoverRef}
+      style={{
+        position: 'fixed',
+        top: coords.top,
+        left: coords.left,
+        width: coords.width,
+        maxHeight: coords.maxHeight,
+        overflowY: 'auto',
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 6,
+        zIndex: 10000,
+        boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+      }}
+    >
+      {loading && (
+        <div style={{ padding: 10, color: 'var(--text-muted)', fontSize: 12 }}>
+          Searching…
+        </div>
+      )}
+      {!loading && results.length === 0 && (
+        <div style={{ padding: 10, color: 'var(--text-muted)', fontSize: 12 }}>
+          {search
+            ? `No vendors match "${search}". Add via the Vendors page.`
+            : 'No vendors found. Add via the Vendors page.'}
+        </div>
+      )}
+      {!loading &&
+        results.map((v) => {
+          const hintParts = []
+          if (v.phone) hintParts.push(v.phone)
+          if (v.gst_in) hintParts.push(v.gst_in)
+          const hint = hintParts.join(' · ')
+          return (
+            <div
+              key={v.id}
+              role="option"
+              tabIndex={0}
+              onClick={() => {
+                onPick(v)
+                setSearch('')
+                setOpen(false)
+              }}
+              style={{
+                padding: '8px 10px',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 12,
+                borderBottom: '1px solid var(--border-subtle)',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-bg)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+            >
+              <span
+                style={{
+                  color: 'var(--text-primary)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flex: 1,
+                }}
+              >
+                {v.name}
+              </span>
+              {hint && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--text-muted)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {hint}
+                </span>
+              )}
+            </div>
+          )
+        })}
+    </div>,
+    document.body,
+  ) : null
+
   return (
-    <div ref={wrapperRef} style={{ position: 'relative' }}>
+    <div ref={triggerRef} style={{ position: 'relative' }}>
       <input
         className="form-input"
         placeholder="Search vendors…"
@@ -144,94 +268,7 @@ export default function VendorPicker({ value, onPick, onClear, disabled = false 
         disabled={disabled}
         autoComplete="off"
       />
-      {open && !disabled && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border-default)',
-            borderRadius: 6,
-            marginTop: 4,
-            maxHeight: 240,
-            overflowY: 'auto',
-            zIndex: 100,
-            boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
-          }}
-        >
-          {loading && (
-            <div style={{ padding: 10, color: 'var(--text-muted)', fontSize: 12 }}>
-              Searching…
-            </div>
-          )}
-          {!loading && results.length === 0 && (
-            <div style={{ padding: 10, color: 'var(--text-muted)', fontSize: 12 }}>
-              {search
-                ? `No vendors match "${search}". Add via the Vendors page.`
-                : 'No vendors found. Add via the Vendors page.'}
-            </div>
-          )}
-          {!loading &&
-            results.map((v) => {
-              // Hint priority: phone is most-identifying (operator usually
-              // has it from the AP file). GSTIN added when present for
-              // B2B compliance.
-              const hintParts = []
-              if (v.phone) hintParts.push(v.phone)
-              if (v.gst_in) hintParts.push(v.gst_in)
-              const hint = hintParts.join(' · ')
-              return (
-                <div
-                  key={v.id}
-                  role="option"
-                  tabIndex={0}
-                  onClick={() => {
-                    onPick(v)
-                    setSearch('')
-                    setOpen(false)
-                  }}
-                  style={{
-                    padding: '8px 10px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    gap: 12,
-                    borderBottom: '1px solid var(--border-subtle)',
-                    fontSize: 13,
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-bg)' }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                >
-                  <span
-                    style={{
-                      color: 'var(--text-primary)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      flex: 1,
-                    }}
-                  >
-                    {v.name}
-                  </span>
-                  {hint && (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--text-muted)',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {hint}
-                    </span>
-                  )}
-                </div>
-              )
-            })}
-        </div>
-      )}
+      {popover}
     </div>
   )
 }

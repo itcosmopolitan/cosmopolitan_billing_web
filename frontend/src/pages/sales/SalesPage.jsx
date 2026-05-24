@@ -12,6 +12,7 @@ import QuoteFormModal from './QuoteFormModal'
 import OrderFormModal from './OrderFormModal'
 import ReturnFormModal from './ReturnFormModal'
 import ConvertToInvoiceModal from './ConvertToInvoiceModal'
+import PaymentFormModal from './PaymentFormModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
 // reachable via Invoices tab + payment_mode filter. Sales Orders + Returns
@@ -22,6 +23,10 @@ const TABS = [
   { id: 'orders',    label: 'Sales Orders' },
   { id: 'quotes',    label: 'Quotations' },
   { id: 'returns',   label: 'Credit Notes / Returns' },
+  // 2026-05-24: standalone Payments record — lists every payment ever
+  // recorded (single-invoice via the row Pay button OR multi-invoice
+  // via + New Payment). See PaymentFormModal for the create flow.
+  { id: 'payments',  label: 'Payments' },
 ]
 
 // 2026-05-24: per-line discount can be expressed as % or ₹ in the
@@ -110,6 +115,7 @@ export default function SalesPage() {
   const [orderSortOrder, setOrderSortOrder] = useState('desc')
   const [orderListVersion, setOrderListVersion] = useState(0)
   const [retListVersion, setRetListVersion] = useState(0)
+  const [payListVersion, setPayListVersion] = useState(0)
 
   const [loading, setLoading]   = useState(true)
   const [branches, setBranches] = useState([])
@@ -152,6 +158,15 @@ export default function SalesPage() {
   // New Return modal — fully self-contained (manages its own state); we
   // only flip the open flag.
   const [showReturnForm, setShowReturnForm] = useState(false)
+  // Payments tab state + new-payment modal trigger.
+  const [showPayForm, setShowPayForm] = useState(false)
+  const [payments, setPayments] = useState([])
+  const [payTotal, setPayTotal] = useState(0)
+  const [paySkip, setPaySkip] = useState(0)
+  const [payLimit, setPayLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [paySortBy, setPaySortBy] = useState('created_at')
+  const [paySortOrder, setPaySortOrder] = useState('desc')
+  const [payDetail, setPayDetail] = useState(null)
 
   // Reusable convert-to-invoice prompt. `convertSource` carries which SO
   // (or future intent) is being converted so the modal can show the
@@ -324,6 +339,35 @@ export default function SalesPage() {
     })()
     return () => { cancelled = true }
   }, [tab, retSkip, retLimit, retSortBy, retSortOrder, retListVersion])
+
+  // Payments tab — paged list backed by GET /sales/payments/. Covers
+  // payments recorded via BOTH entry points (multi-invoice + Pay button
+  // on the Invoices tab).
+  useEffect(() => {
+    if (tab !== 'payments') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await salesAPI.payments.list({
+          skip: paySkip,
+          limit: payLimit,
+          sort_by: paySortBy,
+          sort_order: paySortOrder,
+        })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setPayments(items || [])
+          setPayTotal(total)
+        }
+      } catch {
+        if (!cancelled) {
+          setPayments([])
+          setPayTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, payListVersion])
 
   // Tab-aware sort handler for the four list tabs in this page. Each tab
   // owns its own sortBy/sortOrder pair; the closure picks them up.
@@ -872,6 +916,76 @@ export default function SalesPage() {
         confirming={converting}
       />
 
+      <PaymentFormModal
+        open={showPayForm}
+        onClose={() => setShowPayForm(false)}
+        onSaved={() => {
+          setPayListVersion((v) => v + 1)
+          setSalesListVersion((v) => v + 1)   // invoices may have flipped to paid/partial
+        }}
+      />
+
+      {/* Payment detail (read-only) — shows allocations + credit. */}
+      <Modal
+        open={!!payDetail}
+        onClose={() => setPayDetail(null)}
+        title={payDetail ? `Payment — ${payDetail.number}` : 'Payment'}
+        icon="💰"
+        size="md"
+        footer={<button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>}
+      >
+        {payDetail && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+              {[
+                { label: 'Customer', value: payDetail.customerName || 'Walk-in' },
+                { label: 'Date', value: payDetail.date },
+                { label: 'Method', value: payDetail.paymentMode
+                  ? <Chip status={payDetail.paymentMode} label={String(payDetail.paymentMode).replace('_', ' ').toUpperCase()} />
+                  : '—' },
+                { label: 'Reference', value: payDetail.paymentRef || '—' },
+                { label: 'Total Amount', value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(payDetail.totalAmount)}</span> },
+                { label: 'Credit Applied', value: (payDetail.creditApplied || 0) > 0
+                  ? <span className="mono" style={{ color: 'var(--amber)' }}>{fmt(payDetail.creditApplied)}</span>
+                  : <span style={{ color: 'var(--text-muted)' }}>—</span> },
+              ].map((r) => (
+                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>
+              Allocations
+            </div>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Invoice #</th>
+                  <th className="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(payDetail.allocations || []).map((a) => (
+                  <tr key={a.id}>
+                    <td><CopyableId value={a.invoiceNumber} label={a.invoiceNumber} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                    <td className="text-right mono">{fmt(a.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {payDetail.notes && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Notes</div>
+                <div style={{ fontSize: 13, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6 }}>
+                  {payDetail.notes}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
+
       {/* Credit Purchases tab removed 2026-05-23 (Sales Phase 1). */}
 
       {tab === 'returns' && (
@@ -934,6 +1048,75 @@ export default function SalesPage() {
               limit={retLimit}
               onSkipChange={setRetSkip}
               onLimitChange={setRetLimit}
+            />
+          </Card>
+        </>
+      )}
+
+      {tab === 'payments' && (
+        <>
+          {/* 2026-05-24: Payments tab. The "+ New Payment" button opens
+              the multi-invoice picker modal. Single-invoice payments
+              still happen via the row Pay button on the Invoices tab —
+              both write paths create CustomerPayment rows so this list
+              is complete regardless of entry point. */}
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            {can('invoices.edit') && (
+              <button className="btn btn-primary btn-sm" onClick={() => setShowPayForm(true)}>
+                + New Payment
+              </button>
+            )}
+          </div>
+          <Card bodyPadding={false}>
+            {payments.length === 0 ? (
+              <EmptyState icon="💰" title="No payments yet" desc="Record a payment to see it here." />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableHeader label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
+                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                    <SortableHeader label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
+                    <SortableHeader label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                    <th>Invoices</th>
+                    <SortableHeader label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
+                    <th className="text-right">Credit Applied</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.map((p) => {
+                    const allocCount = p.invoiceCount ?? (p.allocations?.length || 0)
+                    return (
+                      <tr key={p.id}>
+                        <td><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                        <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.customerName || 'Walk-in'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
+                        <td>{p.paymentMode
+                          ? <Chip status={p.paymentMode} label={String(p.paymentMode).replace('_', ' ').toUpperCase()} />
+                          : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                        <td>
+                          <Tag>{allocCount} {allocCount === 1 ? 'invoice' : 'invoices'}</Tag>
+                        </td>
+                        <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
+                        <td className="text-right mono" style={{ color: (p.creditApplied || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>
+                          {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : '—'}
+                        </td>
+                        <td>
+                          <button className="btn btn-ghost btn-xs" onClick={() => setPayDetail(p)}>View</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+            <PaginationBar
+              total={payTotal}
+              skip={paySkip}
+              limit={payLimit}
+              onSkipChange={setPaySkip}
+              onLimitChange={setPayLimit}
             />
           </Card>
         </>

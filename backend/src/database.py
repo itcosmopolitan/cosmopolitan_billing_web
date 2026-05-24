@@ -291,6 +291,13 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("purchase_bills", "payment_mode", "VARCHAR"),
     # 2026-05-24: per-line discount on purchase bills (percent).
     ("purchase_line_items", "discount", "FLOAT DEFAULT 0 NOT NULL"),
+    # 2026-05-25: link vendor return lines back to the originating bill
+    # line. Lets the backend reject over-returning (cumulative return_qty
+    # across all returns for this bill > bill_line.qty). Nullable so
+    # legacy return rows still load; the create_return validation
+    # gracefully falls back to (item_id, name) matching when the column
+    # is null. Parity with sales_return_line_items.invoice_line_id.
+    ("return_line_items", "bill_line_id", "VARCHAR"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.

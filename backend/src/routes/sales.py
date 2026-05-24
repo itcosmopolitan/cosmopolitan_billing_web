@@ -14,6 +14,8 @@ from src.tax_calc import line_tax_amount, line_taxable_amount, normalize_tax_pri
 from src.models import (
     AuditLog,
     Customer,
+    CustomerPayment,
+    CustomerPaymentAllocation,
     InvoiceStatus,
     Organisation,
     Quotation,
@@ -777,7 +779,14 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
                 f"or assign a customer first to capture the ₹{credit_applied} excess as credit",
             )
         # Customer set — bump credit_balance + audit log.
-        from src.models import AuditLog, Customer
+        # 2026-05-25: NEVER re-import Customer / AuditLog here. Both are
+        # already imported at the top of the file. A local import inside
+        # this conditional branch makes `Customer` a LOCAL variable for
+        # the entire function (Python scoping), so the retrofit code
+        # below that uses `Customer` in the credit_applied=0 path hits
+        # `UnboundLocalError` because the local was never assigned. The
+        # bug looked like a generic 500 on every legacy single-invoice
+        # payment without overpay. (Discovered 2026-05-25.)
         cust_row = await db.execute(
             select(Customer).where(Customer.id == pre_row.customer_id)
         )
@@ -802,6 +811,52 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
                 ip_address=None,
             ))
 
+    # 2026-05-24: also write a CustomerPayment + 1 allocation so the
+    # legacy single-invoice flow shows up in the new Payments tab.
+    # Same data as the per-invoice update — just a parallel record for
+    # reporting. Generated number uses the same PAY-YYYY-NNNN pattern as
+    # the multi-invoice flow so payment numbers are contiguous regardless
+    # of entry point.
+    #
+    # 2026-05-25: simplified — earlier version tried to reuse the `cust`
+    # variable from the credit-bump block above, but that variable is
+    # only assigned when credit_applied > 0. Defensive scoping was
+    # confusing readers (and easy to break). Now always look up the
+    # customer name fresh (cheap — one indexed query). Walk-in invoices
+    # (no customer_id) get "Walk-in" without a query.
+    pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+    if pre_row.customer_id:
+        cust_name_row = await db.execute(
+            select(Customer.name).where(Customer.id == pre_row.customer_id)
+        )
+        resolved_customer_name = cust_name_row.scalar() or "—"
+    else:
+        resolved_customer_name = "Walk-in"
+
+    pay = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+        customer_id=pre_row.customer_id,  # nullable for walk-ins
+        customer_name=resolved_customer_name,
+        branch_id=None,                   # not surfaced in single-invoice payload
+        branch_name=None,
+        date=datetime.now().strftime("%Y-%m-%d"),
+        total_amount=round(float(data.amount), 2),
+        payment_mode=data.mode,
+        payment_ref=data.ref or "",
+        notes=None,
+        credit_applied=round(credit_applied, 2),
+        created_by="Staff",
+    )
+    db.add(pay)
+    db.add(CustomerPaymentAllocation(
+        id=str(uuid.uuid4()),
+        payment_id=pay.id,
+        invoice_id=invoice_id,
+        invoice_number=pre_row.number,
+        amount=round(float(data.amount), 2),
+    ))
+
     await db.commit()
     return {
         "status": "paid" if balance <= 0 else "partial",
@@ -810,6 +865,274 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
         "credit_applied": credit_applied,
         "customer_credit_balance": customer_credit_after,
     }
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MULTI-INVOICE PAYMENTS (2026-05-24)
+# ═════════════════════════════════════════════════════════════════════════════
+# Operator picks a customer → fetches their pending/partial invoices →
+# selects 1+ and records ONE payment that allocates across them.
+#
+# Same Payment model + table backs BOTH this endpoint and the single-
+# invoice path (POST /{invoice_id}/payment). The Payments tab in the
+# Sales UI shows every payment regardless of entry point.
+#
+# IMPORTANT: trailing slash on /payments/ is load-bearing (mirrors
+# /returns/ + /orders/ — see follow-up 11 in WORKSHEET.md). Without
+# it, /payments would match /{invoice_id} and 404 as "Invoice not found".
+
+
+class PaymentAllocationIn(BaseModel):
+    invoice_id: str
+    amount: float = Field(..., gt=0)
+
+
+class CustomerPaymentCreate(BaseModel):
+    customer_id: str           # required — picker is strict
+    date: Optional[str] = None
+    payment_mode: PaymentMode  # reuse the same Literal as SaleCreate
+    payment_ref: Optional[str] = None
+    notes: Optional[str] = None
+    allocations: List[PaymentAllocationIn] = Field(..., min_length=1)
+    branch_id: Optional[str] = None
+    branch_name: Optional[str] = None
+    created_by: Optional[str] = "Staff"
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, v):
+        return _coerce_payment_mode_value(v)
+
+
+def _payment_dict(p, allocations=None):
+    d = {
+        "id": p.id, "number": p.number,
+        "customerId": p.customer_id,
+        "customerName": p.customer_name or "Walk-in",
+        "branchId": p.branch_id, "branchName": p.branch_name,
+        "date": p.date,
+        "totalAmount": p.total_amount,
+        "paymentMode": p.payment_mode,
+        "paymentRef": p.payment_ref,
+        "notes": p.notes,
+        "creditApplied": p.credit_applied or 0,
+        "createdBy": p.created_by,
+    }
+    if allocations is not None:
+        d["allocations"] = [{
+            "id": a.id,
+            "invoiceId": a.invoice_id,
+            "invoiceNumber": a.invoice_number,
+            "amount": a.amount,
+        } for a in allocations]
+        d["invoiceCount"] = len(allocations)
+    return d
+
+
+# ─── PAYMENTS: LIST ──────────────────────────────────────────────────────────
+@router.get("/payments/", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_payments(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    customer_id: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    search: Optional[str] = None,           # match payment number or customer name
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    conds = []
+    if customer_id:
+        conds.append(CustomerPayment.customer_id == customer_id)
+    if payment_mode:
+        conds.append(CustomerPayment.payment_mode == payment_mode)
+    if date_from:
+        conds.append(CustomerPayment.date >= date_from)
+    if date_to:
+        conds.append(CustomerPayment.date <= date_to)
+    if search:
+        s = f"%{search}%"
+        conds.append(or_(
+            CustomerPayment.number.ilike(s),
+            CustomerPayment.customer_name.ilike(s),
+        ))
+    base = and_(*conds) if conds else True
+    total = int((await db.execute(select(func.count(CustomerPayment.id)).where(base))).scalar() or 0)
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    sort_expr = resolve_sort(
+        sort_by, sort_order,
+        {
+            "number": CustomerPayment.number,
+            "customer_name": CustomerPayment.customer_name,
+            "date": CustomerPayment.date,
+            "total_amount": CustomerPayment.total_amount,
+            "payment_mode": CustomerPayment.payment_mode,
+            "created_at": CustomerPayment.created_at,
+        },
+        default_key="created_at", default_order="desc",
+    )
+    q = (
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(base)
+        .order_by(sort_expr)
+        .offset(sk)
+        .limit(lim)
+    )
+    rows = (await db.execute(q)).scalars().all()
+    out = [_payment_dict(p, p.allocations) for p in rows]
+    return paged(out, total, sk, lim)
+
+
+# ─── PAYMENTS: GET ───────────────────────────────────────────────────────────
+@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("invoices.view"))])
+async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(CustomerPayment.id == payment_id)
+    )
+    p = res.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Payment not found")
+    return _payment_dict(p, p.allocations)
+
+
+# ─── PAYMENTS: CREATE (multi-invoice) ────────────────────────────────────────
+@router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("invoices.edit"))])
+async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends(get_db)):
+    """Record a payment that may apply to MULTIPLE invoices in one go.
+
+    Validation chain:
+      1. Customer exists.
+      2. Every referenced invoice exists.
+      3. Every invoice belongs to this customer (rejects cross-customer
+         allocations + walk-in invoices — those don't have customer_id).
+      4. Every invoice has balance > 0 (no already-paid + no cancelled).
+      5. Each allocation amount > 0 (Pydantic guards via Field(gt=0)).
+
+    Allocation semantics:
+      • allocation.amount > invoice.balance — the excess routes to
+        customer.credit_balance + accumulates in the Payment's
+        credit_applied. Inline UI warning preview ("Excess ₹X credited")
+        keeps the operator informed before submit.
+      • Per-invoice update: paid_amount += min(amount, balance);
+        status = paid|partial; payment_mode = data.payment_mode.
+
+    Returns: { id, number, total_amount, credit_applied, allocations_count }.
+    """
+    # 1. Customer must exist (UI's CustomerPicker is strict but defence
+    #    in depth — direct API hits get rejected too).
+    cust = (await db.execute(
+        select(Customer).where(Customer.id == data.customer_id)
+    )).scalar_one_or_none()
+    if not cust:
+        raise HTTPException(404, "Customer not found")
+
+    # 2 + 3. Load all referenced invoices in one query.
+    invoice_ids = [a.invoice_id for a in data.allocations]
+    if len(set(invoice_ids)) != len(invoice_ids):
+        raise HTTPException(400, "Duplicate invoice in allocations")
+    inv_rows = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id.in_(invoice_ids))
+    )).scalars().all()
+    if len(inv_rows) != len(invoice_ids):
+        raise HTTPException(400, "One or more invoices not found")
+    inv_by_id = {inv.id: inv for inv in inv_rows}
+    for inv in inv_rows:
+        if inv.customer_id != data.customer_id:
+            raise HTTPException(
+                400,
+                f"Invoice {inv.number} does not belong to {cust.name}",
+            )
+        # 4. Status check — skip cancelled + already-paid.
+        st = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+        if st == "cancelled":
+            raise HTTPException(400, f"Invoice {inv.number} is cancelled")
+        balance = max(0.0, float(inv.total or 0) - float(inv.paid_amount or 0))
+        if balance <= 0:
+            raise HTTPException(400, f"Invoice {inv.number} already settled")
+
+    # 5. Apply allocations + accumulate credit. We update each invoice's
+    #    paid_amount + payment_mode + status. The SQLAlchemy session
+    #    commit at the end is atomic — partial failures roll back.
+    total_credit = 0.0
+    total_amount = 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        inv_total = float(inv.total or 0)
+        inv_paid = float(inv.paid_amount or 0)
+        balance = max(0.0, inv_total - inv_paid)
+        applied = min(float(a.amount), balance)
+        excess = max(0.0, float(a.amount) - balance)
+        new_paid = round(inv_paid + applied, 2)
+        inv.paid_amount = new_paid
+        inv.payment_mode = data.payment_mode
+        inv.status = "paid" if new_paid >= inv_total else "partial"
+        total_credit += excess
+        total_amount += float(a.amount)
+
+    # Bump customer.credit_balance + audit log if any excess.
+    if total_credit > 0:
+        cur_credit = float(cust.credit_balance or 0)
+        cust.credit_balance = round(cur_credit + total_credit, 2)
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=None,  # multi-invoice; specific invoice ref doesn't fit
+            detail=(
+                f"Multi-invoice payment overpayment: +₹{round(total_credit, 2)} "
+                f"credited to {cust.name} (was ₹{cur_credit:.2f}, "
+                f"now ₹{cust.credit_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+
+    # Create the Payment record + per-allocation rows.
+    count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+    pay_num = f"PAY-{datetime.now().year}-{1000 + count:04d}"
+    payment = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=pay_num,
+        customer_id=data.customer_id,
+        customer_name=cust.name,
+        branch_id=data.branch_id,
+        branch_name=data.branch_name,
+        date=data.date or today,
+        total_amount=round(total_amount, 2),
+        payment_mode=data.payment_mode,
+        payment_ref=data.payment_ref or "",
+        notes=data.notes,
+        credit_applied=round(total_credit, 2),
+        created_by=data.created_by or "Staff",
+    )
+    db.add(payment)
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=payment.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=round(float(a.amount), 2),
+        ))
+
+    await db.commit()
+    return {
+        "id": payment.id,
+        "number": pay_num,
+        "total_amount": round(total_amount, 2),
+        "credit_applied": round(total_credit, 2),
+        "allocations_count": len(data.allocations),
+    }
+
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/cancel", dependencies=[Depends(require_perm("invoices.cancel"))])

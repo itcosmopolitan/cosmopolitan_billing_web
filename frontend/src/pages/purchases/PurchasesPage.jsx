@@ -30,13 +30,16 @@ import BillFormModal from './BillFormModal'
 import PurchaseOrderFormModal from './PurchaseOrderFormModal'
 import ConvertPOToBillModal from './ConvertPOToBillModal'
 import VendorReturnFormModal from './VendorReturnFormModal'
+import VendorPaymentFormModal from './VendorPaymentFormModal'
 
 const TABS = [
-  { id: 'bills',   label: 'Purchase Bills' },
-  { id: 'orders',  label: 'Purchase Orders' },
+  { id: 'bills',    label: 'Purchase Bills' },
+  { id: 'orders',   label: 'Purchase Orders' },
   // GRN tab dropped 2026-05-24 — was a re-skin of bills with no
   // separate model. The Vendor Returns tab now sits in the slot.
-  { id: 'returns', label: 'Vendor Returns' },
+  { id: 'returns',  label: 'Vendor Returns' },
+  // 2026-05-24: standalone Payments record — mirror of sales /payments.
+  { id: 'payments', label: 'Payments' },
 ]
 
 // Mirror of routes/purchases.py PaymentMode + sales VALID_PAYMENT_MODES.
@@ -102,6 +105,16 @@ export default function PurchasesPage() {
   const [retLimit, setRetLimit] = useState(DEFAULT_PAGE_SIZE)
   const [retSortBy, setRetSortBy] = useState('created_at')
   const [retSortOrder, setRetSortOrder] = useState('desc')
+
+  // Payments state
+  const [payments, setPayments] = useState([])
+  const [payTotal, setPayTotal] = useState(0)
+  const [paySkip, setPaySkip] = useState(0)
+  const [payLimit, setPayLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [paySortBy, setPaySortBy] = useState('created_at')
+  const [paySortOrder, setPaySortOrder] = useState('desc')
+  const [showPayForm, setShowPayForm] = useState(false)
+  const [payDetail, setPayDetail] = useState(null)
 
   // Masters (only vendors — for the filter dropdown). Items + branches
   // are no longer loaded as masters; pickers do their own paginated
@@ -182,6 +195,14 @@ export default function PurchasesPage() {
     ;(async () => {
       try {
         setLoading(true)
+        // 2026-05-25: dropped the silent `branch_id: activeBranchId`
+        // filter. Sales doesn't filter its invoices by active branch
+        // either — and an operator at Branch A who can't see Branch B's
+        // payables is a hidden-data trap. Branch is still IMPLICIT at
+        // create time (openCreateBill snapshots activeBranchId), but
+        // the list now shows every branch's bills. Future: an explicit
+        // Branch filter dropdown alongside Vendor/Status if anyone wants
+        // per-branch scoping.
         const raw = await purchasesAPI.list({
           skip: billSkip,
           limit: billLimit,
@@ -190,7 +211,6 @@ export default function PurchasesPage() {
           search: search || undefined,
           status: statusF || undefined,
           vendor_id: vendorF || undefined,
-          branch_id: activeBranchId,
         })
         const { items, total, summary } = unwrapPaged(raw)
         if (!cancelled) {
@@ -211,9 +231,9 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, billSkip, billLimit, search, statusF, vendorF, listVersion, billSortBy, billSortOrder, activeBranchId])
+  }, [tab, billSkip, billLimit, search, statusF, vendorF, listVersion, billSortBy, billSortOrder])
 
-  // Orders list
+  // Orders list — same no-branch-filter policy as bills (see above).
   useEffect(() => {
     if (tab !== 'orders') return
     let cancelled = false
@@ -227,7 +247,6 @@ export default function PurchasesPage() {
           search: search || undefined,
           status: statusF || undefined,
           vendor_id: vendorF || undefined,
-          branch_id: activeBranchId,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -243,7 +262,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, orderSkip, orderLimit, search, statusF, vendorF, listVersion, orderSortBy, orderSortOrder, activeBranchId])
+  }, [tab, orderSkip, orderLimit, search, statusF, vendorF, listVersion, orderSortBy, orderSortOrder])
 
   // Returns list
   useEffect(() => {
@@ -271,6 +290,33 @@ export default function PurchasesPage() {
     })()
     return () => { cancelled = true }
   }, [tab, retSkip, retLimit, listVersion, retSortBy, retSortOrder])
+
+  // Payments list
+  useEffect(() => {
+    if (tab !== 'payments') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await purchasesAPI.payments.list({
+          skip: paySkip,
+          limit: payLimit,
+          sort_by: paySortBy,
+          sort_order: paySortOrder,
+        })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setPayments(items || [])
+          setPayTotal(total)
+        }
+      } catch {
+        if (!cancelled) {
+          setPayments([])
+          setPayTotal(0)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, listVersion])
 
   // Prefill payment amount when the modal opens — same UX as
   // SalesPage's record-payment flow.
@@ -762,6 +808,67 @@ export default function PurchasesPage() {
         </>
       )}
 
+      {/* ── PAYMENTS ──────────────────────────────────────────────── */}
+      {tab === 'payments' && (
+        <>
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            {can('purchases.edit') && (
+              <button className="btn btn-primary btn-sm" onClick={() => setShowPayForm(true)}>
+                + New Payment
+              </button>
+            )}
+          </div>
+          <Card bodyPadding={false}>
+            {payments.length === 0 ? (
+              <EmptyState icon="💸" title="No payments yet" desc="Record a vendor payment to see it here." />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableHeader label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
+                    <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                    <SortableHeader label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
+                    <SortableHeader label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                    <th>Bills</th>
+                    <SortableHeader label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
+                    <th>Reference</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.map((p) => {
+                    const allocCount = p.billCount ?? (p.allocations?.length || 0)
+                    return (
+                      <tr key={p.id}>
+                        <td><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                        <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.vendorName || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
+                        <td>{p.paymentMode
+                          ? <Chip status={p.paymentMode} label={String(p.paymentMode).replace('_', ' ').toUpperCase()} />
+                          : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                        <td><span style={{ fontSize: 12 }}>{allocCount} {allocCount === 1 ? 'bill' : 'bills'}</span></td>
+                        <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || '—'}</td>
+                        <td>
+                          <button className="btn btn-ghost btn-xs" onClick={() => setPayDetail(p)}>View</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+            <PaginationBar
+              total={payTotal}
+              skip={paySkip}
+              limit={payLimit}
+              onSkipChange={setPaySkip}
+              onLimitChange={setPayLimit}
+            />
+          </Card>
+        </>
+      )}
+
       {/* ── Bill Detail Modal ─────────────────────────────────────── */}
       <Modal open={!!showDetail} onClose={() => setShowDetail(null)} title={`Purchase Bill — ${showDetail?.number}`} icon="📋" size="lg"
         footer={<>
@@ -907,6 +1014,72 @@ export default function PurchasesPage() {
         onClose={() => setShowNewReturn(false)}
         onSaved={() => setListVersion((v) => v + 1)}
       />
+
+      {/* ── Payment Form ──────────────────────────────────────────── */}
+      <VendorPaymentFormModal
+        open={showPayForm}
+        onClose={() => setShowPayForm(false)}
+        onSaved={() => setListVersion((v) => v + 1)}
+      />
+
+      {/* ── Payment Detail (read-only) ────────────────────────────── */}
+      <Modal
+        open={!!payDetail}
+        onClose={() => setPayDetail(null)}
+        title={payDetail ? `Payment — ${payDetail.number}` : 'Payment'}
+        icon="💸"
+        size="md"
+        footer={<button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>}
+      >
+        {payDetail && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+              {[
+                { label: 'Vendor', value: payDetail.vendorName || '—' },
+                { label: 'Date', value: payDetail.date },
+                { label: 'Method', value: payDetail.paymentMode
+                  ? <Chip status={payDetail.paymentMode} label={String(payDetail.paymentMode).replace('_', ' ').toUpperCase()} />
+                  : '—' },
+                { label: 'Reference', value: payDetail.paymentRef || '—' },
+                { label: 'Total Amount', value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(payDetail.totalAmount)}</span> },
+                { label: 'Created By', value: payDetail.createdBy || '—' },
+              ].map((r) => (
+                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>
+              Allocations
+            </div>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Bill #</th>
+                  <th className="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(payDetail.allocations || []).map((a) => (
+                  <tr key={a.id}>
+                    <td><CopyableId value={a.billNumber} label={a.billNumber} style={{ color: 'var(--purple)', fontSize: 12 }} /></td>
+                    <td className="text-right mono">{fmt(a.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {payDetail.notes && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Notes</div>
+                <div style={{ fontSize: 13, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6 }}>
+                  {payDetail.notes}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
 
       {/* ── Return Detail ─────────────────────────────────────────── */}
       <Modal open={!!returnDetail} onClose={() => setReturnDetail(null)} title={`Vendor Return — ${returnDetail?.number}`} icon="↩️" size="lg"

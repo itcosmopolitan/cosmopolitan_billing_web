@@ -130,6 +130,16 @@ export const salesAPI = {
     // body shape — see ConvertToInvoiceIn / SalesReturnCreate in routes/sales.py
     create: (data)   => api.post('/sales/returns/', data),
   },
+  // 2026-05-24: multi-invoice payments — operator picks a customer,
+  // selects pending invoices, allocates an amount per invoice. Backend
+  // also writes a CustomerPayment row when the legacy single-invoice
+  // POST /sales/{id}/payment endpoint runs, so this list reflects every
+  // payment regardless of entry point. Trailing slash same rationale.
+  payments: {
+    list:   (params) => api.get('/sales/payments/', { params }),
+    get:    (id)     => api.get(`/sales/payments/${id}`),
+    create: (data)   => api.post('/sales/payments/', data),
+  },
   quotations: {
     list:    (params) => api.get('/sales/quotations/', { params }),
     get:     (id)     => api.get(`/sales/quotations/${id}`),
@@ -168,7 +178,13 @@ export const purchasesAPI = {
     get:     (id)     => api.get(`/purchases/returns/${id}`),
     create:  (data)   => api.post('/purchases/returns/', data),
     approve: (id)     => api.post(`/purchases/returns/${id}/approve`),
-  }
+  },
+  // Multi-bill vendor payments — mirror of salesAPI.payments.
+  payments: {
+    list:   (params) => api.get('/purchases/payments/', { params }),
+    get:    (id)     => api.get(`/purchases/payments/${id}`),
+    create: (data)   => api.post('/purchases/payments/', data),
+  },
 }
 
 // ─── Customers ────────────────────────────────────────────────────────────────

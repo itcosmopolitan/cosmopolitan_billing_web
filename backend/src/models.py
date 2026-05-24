@@ -691,6 +691,47 @@ class PurchaseOrderLineItem(Base):
     item  = relationship("Item")
 
 
+# ─── Vendor Payment ──────────────────────────────────────────────────────────
+# Mirror of CustomerPayment for the purchase side. See CustomerPayment for
+# the design rationale (multi-bill payments, retrofit path, etc.).
+# Difference from the sales side: there's no `credit_applied` field today —
+# vendors don't have a credit_balance equivalent. If an operator overpays
+# a vendor (rare but possible), the new endpoint rejects with 400 ("reduce
+# amount"). Future "vendor advance" feature would add a credit-balance
+# column on Vendor and an analogous credit_applied here.
+class VendorPayment(Base):
+    __tablename__ = "vendor_payments"
+    id              = Column(String, primary_key=True)
+    number          = Column(String, unique=True, nullable=False)  # VPAY-YYYY-NNNN
+    vendor_id       = Column(String, ForeignKey("vendors.id"), nullable=False)
+    vendor_name     = Column(String)
+    branch_id       = Column(String, ForeignKey("branches.id"), nullable=True)
+    branch_name     = Column(String)
+    date            = Column(String, nullable=False)
+    total_amount    = Column(Float, default=0)
+    payment_mode    = Column(String, nullable=False)
+    payment_ref     = Column(String)
+    notes           = Column(Text)
+    created_by      = Column(String)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    vendor      = relationship("Vendor")
+    allocations = relationship("VendorPaymentAllocation", back_populates="payment", cascade="all, delete-orphan")
+
+
+class VendorPaymentAllocation(Base):
+    __tablename__ = "vendor_payment_allocations"
+    id          = Column(String, primary_key=True)
+    payment_id  = Column(String, ForeignKey("vendor_payments.id"), nullable=False)
+    bill_id     = Column(String, ForeignKey("purchase_bills.id"), nullable=False)
+    bill_number = Column(String)
+    amount      = Column(Float, default=0)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    payment = relationship("VendorPayment", back_populates="allocations")
+    bill    = relationship("PurchaseBill")
+
+
 # ─── Vendor Returns ────────────────────────────────────────────────────────────
 class VendorReturn(Base):
     __tablename__ = "vendor_returns"
@@ -725,6 +766,11 @@ class ReturnLineItem(Base):
     )
     id            = Column(String, primary_key=True)
     return_id     = Column(String, ForeignKey("vendor_returns.id"), nullable=False)
+    # 2026-05-25: link back to the originating bill line so the backend
+    # can enforce "cumulative return_qty ≤ bill_line.qty" across multiple
+    # returns on the same bill. Parity with SalesReturnLineItem.invoice_line_id.
+    # Nullable for legacy returns created before this column existed.
+    bill_line_id  = Column(String, ForeignKey("purchase_line_items.id"), nullable=True)
     item_id       = Column(String, ForeignKey("items.id"), nullable=True)
     name          = Column(String, nullable=False)
     original_qty  = Column(Integer)  # Qty from original purchase
@@ -808,6 +854,72 @@ class SalesReturnLineItem(Base):
 
     sales_return = relationship("SalesReturn", back_populates="line_items")
     item         = relationship("Item")
+
+
+# ─── Customer Payment ────────────────────────────────────────────────────────
+# A standalone Payment row recorded when a customer pays one OR MORE invoices
+# in a single transaction (cash handover, single UPI, single bank transfer,
+# etc.). Mirrors how real-world AR is reconciled — the customer doesn't
+# typically write a separate cheque per invoice.
+#
+# Two write paths both create a CustomerPayment row:
+#   1. POST /sales/payments/ — new flow (pick customer → pick invoices →
+#      record one payment across them).
+#   2. POST /sales/{invoice_id}/payment — legacy single-invoice flow (the
+#      "Pay" button on the Invoices tab still hits this). Creates a Payment
+#      with exactly one allocation. Retained so the existing per-row Pay
+#      ergonomics stay and the Payments tab is COMPLETE (every payment ever
+#      recorded, regardless of entry point, shows up).
+#
+# Overpayment: if the operator allocates more than an invoice's balance,
+# the excess routes to customer.credit_balance + we capture how much was
+# credited in `credit_applied`. Same semantics as the existing single-
+# invoice overpay handling. For walk-in invoices (customer_id=null on the
+# invoice), the existing 400 "reduce amount or assign a customer" rule
+# still applies — walk-in payments via either path can't overpay.
+#
+# `customer_id` is nullable here ONLY for legacy single-invoice payments
+# against walk-in invoices via path #2. The new multi-invoice flow
+# requires a customer up front (the picker is strict).
+class CustomerPayment(Base):
+    __tablename__ = "customer_payments"
+    id              = Column(String, primary_key=True)
+    number          = Column(String, unique=True, nullable=False)  # PAY-YYYY-NNNN
+    customer_id     = Column(String, ForeignKey("customers.id"), nullable=True)
+    customer_name   = Column(String, default="Walk-in")
+    branch_id       = Column(String, ForeignKey("branches.id"), nullable=True)
+    branch_name     = Column(String)
+    date            = Column(String, nullable=False)
+    # Sum of allocations.amount + credit_applied. The operator's typed
+    # total. Validated server-side against the allocation sum.
+    total_amount    = Column(Float, default=0)
+    payment_mode    = Column(String, nullable=False)  # PaymentMode literal
+    payment_ref     = Column(String)                  # UTR / cheque # / transaction id
+    notes           = Column(Text)
+    # Excess routed to customer.credit_balance for non-walk-in customers.
+    # 0 for exact-amount payments. Always ≥ 0.
+    credit_applied  = Column(Float, default=0)
+    created_by      = Column(String)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    customer    = relationship("Customer")
+    allocations = relationship("CustomerPaymentAllocation", back_populates="payment", cascade="all, delete-orphan")
+
+
+class CustomerPaymentAllocation(Base):
+    __tablename__ = "customer_payment_allocations"
+    id             = Column(String, primary_key=True)
+    payment_id     = Column(String, ForeignKey("customer_payments.id"), nullable=False)
+    invoice_id     = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
+    invoice_number = Column(String)  # denormalised for list views (avoids JOINs)
+    # Amount actually APPLIED to this invoice (capped at the invoice's
+    # balance at time of payment). Excess that operator typed > balance
+    # rolls up into the parent payment's credit_applied, not here.
+    amount         = Column(Float, default=0)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+    payment = relationship("CustomerPayment", back_populates="allocations")
+    invoice = relationship("SaleInvoice")
 
 
 # ─── Stock Transfer ───────────────────────────────────────────────────────────

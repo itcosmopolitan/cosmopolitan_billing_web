@@ -20,6 +20,8 @@ from src.models import (
     ReturnLineItem,
     User,
     Vendor,
+    VendorPayment,
+    VendorPaymentAllocation,
     VendorReturn,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
@@ -393,6 +395,36 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     b.payment_ref = data.ref or b.payment_ref
     b.payment_mode = data.mode
     b.status = "paid" if b.paid_amount >= b.total else "partial"
+
+    # 2026-05-24: also write a VendorPayment + 1 allocation row so the
+    # Payments tab in the Purchases UI shows every payment regardless
+    # of entry point (single-bill via Pay button OR multi-bill via the
+    # new Payments tab). Mirrors the sales side. `applied` (not amount)
+    # is recorded since vendor overpayments are silently clamped.
+    pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+    pay = VendorPayment(
+        id=str(uuid.uuid4()),
+        number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+        vendor_id=b.vendor_id,
+        vendor_name=b.vendor_name,
+        branch_id=b.branch_id,
+        branch_name=b.branch_name,
+        date=datetime.now().strftime("%Y-%m-%d"),
+        total_amount=round(applied, 2),
+        payment_mode=data.mode,
+        payment_ref=data.ref or "",
+        notes=None,
+        created_by="Staff",
+    )
+    db.add(pay)
+    db.add(VendorPaymentAllocation(
+        id=str(uuid.uuid4()),
+        payment_id=pay.id,
+        bill_id=b.id,
+        bill_number=b.number,
+        amount=round(applied, 2),
+    ))
+
     await db.commit()
     return {
         "status": b.status,
@@ -426,8 +458,233 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"status": "cancelled"}
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MULTI-BILL PAYMENTS (2026-05-24)
+# ═════════════════════════════════════════════════════════════════════════════
+# Mirror of sales /payments/ flow. See routes/sales.py for the design
+# rationale + write-path retrofit details. Differences from the sales
+# side: no overpay-to-credit (vendors don't have a credit_balance field
+# yet — overpayment is rejected with 400).
+
+
+class PaymentAllocationIn(BaseModel):
+    bill_id: str
+    amount: float = Field(..., gt=0)
+
+
+class VendorPaymentCreate(BaseModel):
+    vendor_id: str
+    date: Optional[str] = None
+    payment_mode: PaymentMode
+    payment_ref: Optional[str] = None
+    notes: Optional[str] = None
+    allocations: List[PaymentAllocationIn] = Field(..., min_length=1)
+    branch_id: Optional[str] = None
+    branch_name: Optional[str] = None
+    created_by: Optional[str] = "Staff"
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, v):
+        return _coerce_payment_mode_value(v)
+
+
+def _vendor_payment_dict(p, allocations=None):
+    d = {
+        "id": p.id, "number": p.number,
+        "vendorId": p.vendor_id, "vendorName": p.vendor_name,
+        "branchId": p.branch_id, "branchName": p.branch_name,
+        "date": p.date,
+        "totalAmount": p.total_amount,
+        "paymentMode": p.payment_mode,
+        "paymentRef": p.payment_ref,
+        "notes": p.notes,
+        "createdBy": p.created_by,
+    }
+    if allocations is not None:
+        d["allocations"] = [{
+            "id": a.id,
+            "billId": a.bill_id,
+            "billNumber": a.bill_number,
+            "amount": a.amount,
+        } for a in allocations]
+        d["billCount"] = len(allocations)
+    return d
+
+
+# ─── PAYMENTS: LIST ─────────────────────────────────────────────────────────
+@router.get("/payments/", dependencies=[Depends(require_perm("purchases.view"))])
+async def list_payments(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    vendor_id: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    conds = []
+    if vendor_id:
+        conds.append(VendorPayment.vendor_id == vendor_id)
+    if payment_mode:
+        conds.append(VendorPayment.payment_mode == payment_mode)
+    if date_from:
+        conds.append(VendorPayment.date >= date_from)
+    if date_to:
+        conds.append(VendorPayment.date <= date_to)
+    if search:
+        s = f"%{search}%"
+        conds.append(or_(
+            VendorPayment.number.ilike(s),
+            VendorPayment.vendor_name.ilike(s),
+        ))
+    base = and_(*conds) if conds else True
+    total = int((await db.execute(select(func.count(VendorPayment.id)).where(base))).scalar() or 0)
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    sort_expr = resolve_sort(
+        sort_by, sort_order,
+        {
+            "number": VendorPayment.number,
+            "vendor_name": VendorPayment.vendor_name,
+            "date": VendorPayment.date,
+            "total_amount": VendorPayment.total_amount,
+            "payment_mode": VendorPayment.payment_mode,
+            "created_at": VendorPayment.created_at,
+        },
+        default_key="created_at", default_order="desc",
+    )
+    q = (
+        select(VendorPayment)
+        .options(selectinload(VendorPayment.allocations))
+        .where(base)
+        .order_by(sort_expr)
+        .offset(sk)
+        .limit(lim)
+    )
+    rows = (await db.execute(q)).scalars().all()
+    out = [_vendor_payment_dict(p, p.allocations) for p in rows]
+    return paged(out, total, sk, lim)
+
+
+# ─── PAYMENTS: GET ──────────────────────────────────────────────────────────
+@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("purchases.view"))])
+async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(VendorPayment)
+        .options(selectinload(VendorPayment.allocations))
+        .where(VendorPayment.id == payment_id)
+    )
+    p = res.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Payment not found")
+    return _vendor_payment_dict(p, p.allocations)
+
+
+# ─── PAYMENTS: CREATE (multi-bill) ──────────────────────────────────────────
+@router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("purchases.edit"))])
+async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(get_db)):
+    """Record a payment to a vendor across one or more bills.
+
+    Differs from the sales /payments/ flow in one respect: there's no
+    vendor.credit_balance yet, so overpayment (allocation.amount > bill
+    balance) is REJECTED with a 400. If we add a "vendor advance"
+    feature later, this is where the credit_applied logic would land.
+    """
+    vendor = (await db.execute(
+        select(Vendor).where(Vendor.id == data.vendor_id)
+    )).scalar_one_or_none()
+    if not vendor:
+        raise HTTPException(404, "Vendor not found")
+
+    bill_ids = [a.bill_id for a in data.allocations]
+    if len(set(bill_ids)) != len(bill_ids):
+        raise HTTPException(400, "Duplicate bill in allocations")
+    bill_rows = (await db.execute(
+        select(PurchaseBill).where(PurchaseBill.id.in_(bill_ids))
+    )).scalars().all()
+    if len(bill_rows) != len(bill_ids):
+        raise HTTPException(400, "One or more bills not found")
+    bill_by_id = {b.id: b for b in bill_rows}
+    for b in bill_rows:
+        if b.vendor_id != data.vendor_id:
+            raise HTTPException(
+                400,
+                f"Bill {b.number} does not belong to {vendor.name}",
+            )
+        st = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
+        if st == "cancelled":
+            raise HTTPException(400, f"Bill {b.number} is cancelled")
+        balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+        if balance <= 0:
+            raise HTTPException(400, f"Bill {b.number} already settled")
+
+    # Validate every allocation ≤ balance (overpayment rejected).
+    for a in data.allocations:
+        b = bill_by_id[a.bill_id]
+        balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+        if a.amount > balance + 1e-9:
+            raise HTTPException(
+                400,
+                f"Allocation of ₹{a.amount} exceeds {b.number}'s balance ₹{round(balance, 2)}",
+            )
+
+    # Apply.
+    total_amount = 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for a in data.allocations:
+        b = bill_by_id[a.bill_id]
+        b.paid_amount = round(float(b.paid_amount or 0) + float(a.amount), 2)
+        b.payment_mode = data.payment_mode
+        b.status = "paid" if b.paid_amount >= float(b.total or 0) else "partial"
+        total_amount += float(a.amount)
+
+    count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+    pay_num = f"VPAY-{datetime.now().year}-{1000 + count:04d}"
+    payment = VendorPayment(
+        id=str(uuid.uuid4()),
+        number=pay_num,
+        vendor_id=data.vendor_id,
+        vendor_name=vendor.name,
+        branch_id=data.branch_id,
+        branch_name=data.branch_name,
+        date=data.date or today,
+        total_amount=round(total_amount, 2),
+        payment_mode=data.payment_mode,
+        payment_ref=data.payment_ref or "",
+        notes=data.notes,
+        created_by=data.created_by or "Staff",
+    )
+    db.add(payment)
+    for a in data.allocations:
+        b = bill_by_id[a.bill_id]
+        db.add(VendorPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=payment.id,
+            bill_id=b.id,
+            bill_number=b.number,
+            amount=round(float(a.amount), 2),
+        ))
+
+    await db.commit()
+    return {
+        "id": payment.id,
+        "number": pay_num,
+        "total_amount": round(total_amount, 2),
+        "allocations_count": len(data.allocations),
+    }
+
+
 # ─── VENDOR RETURNS ────────────────────────────────────────────────────────────
 class ReturnLine(BaseModel):
+    # 2026-05-25: bill_line_id is the preferred matcher when the
+    # frontend has it (always for fresh returns; absent on legacy /
+    # API-only callers). Backend falls back to (item_id, name) lookup.
+    bill_line_id: Optional[str] = None
     item_id: Optional[str] = None
     name: str
     original_qty: int
@@ -441,6 +698,29 @@ class VendorReturnCreate(BaseModel):
     reason: str
     items: List[ReturnLine]
     notes: Optional[str] = None
+
+
+async def _already_returned_for_bill(
+    db: AsyncSession, bill_id: str
+) -> dict[str, int]:
+    """Sum return_qty per bill_line_id across all VendorReturns for this
+    bill. Used to validate that a new return's per-line qty plus the
+    cumulative prior returns doesn't exceed the original bill line's qty.
+
+    Returns {bill_line_id: total_returned_qty}. Legacy rows without
+    bill_line_id are excluded — caller falls back to (item_id, name)
+    matching for those.
+    """
+    res = await db.execute(
+        select(
+            ReturnLineItem.bill_line_id,
+            func.coalesce(func.sum(ReturnLineItem.return_qty), 0),
+        )
+        .join(VendorReturn, ReturnLineItem.return_id == VendorReturn.id)
+        .where(VendorReturn.bill_id == bill_id)
+        .group_by(ReturnLineItem.bill_line_id)
+    )
+    return {row[0]: int(row[1]) for row in res.all() if row[0]}
 
 @router.get("/returns/", dependencies=[Depends(require_perm("purchases.view"))])
 async def list_returns(
@@ -512,19 +792,88 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
 async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get_db)):
+    """Process a vendor return against an existing bill.
+
+    2026-05-25 changes:
+      • Per-line cumulative cap — matches sales returns. Rejects when
+        new return_qty + already-returned-from-prior-returns > bill
+        line's original qty. Was previously possible to return the same
+        bill twice with the full qty (over-return).
+      • Status defaults to `paid` (terminal / processed). The legacy
+        `pending → approve` workflow was artificial — a vendor return
+        is a recorded event, not a 2-step approval. Existing pending
+        rows in the DB can still be approved via /returns/{id}/approve
+        for backwards compat, but new rows skip that step.
+      • Per-line resolution prefers `bill_line_id` (sent by the new
+        VendorReturnFormModal); falls back to (item_id, name) matching
+        for legacy / API-only callers.
+    """
     bill_result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == data.bill_id))
     bill = bill_result.scalar_one_or_none()
     if not bill:
         raise HTTPException(404, "Bill not found")
+    bill_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
+    if bill_status == "cancelled":
+        raise HTTPException(400, "Bill is cancelled — cannot return against it")
+
+    # Load the bill's line items so we can resolve each return line to
+    # a specific bill_line + enforce the per-line cap.
+    bill_li_res = await db.execute(
+        select(PurchaseLineItem).where(PurchaseLineItem.bill_id == data.bill_id)
+    )
+    bill_lines = bill_li_res.scalars().all()
+    bill_line_by_id = {bl.id: bl for bl in bill_lines}
+    # (item_id, name) is the fallback key for legacy callers that don't
+    # carry bill_line_id. Skip lines with no item_id (free-typed legacy
+    # bill lines can't be reliably matched).
+    bill_line_by_item = {
+        (bl.item_id, bl.name): bl
+        for bl in bill_lines
+        if bl.item_id
+    }
+
+    # Cumulative prior returns per bill line, summed across every
+    # existing vendor return for THIS bill.
+    already_returned = await _already_returned_for_bill(db, data.bill_id)
+
+    # Validate every requested return line + collect the resolved
+    # (return_line_in, bill_line, line_net, line_tax) tuples so we
+    # don't have to re-resolve in the persistence loop below.
+    return_rows = []
+    subtotal = 0.0
+    tax_total = 0.0
+    for r in data.items:
+        if r.return_qty <= 0:
+            raise HTTPException(400, f"{r.name}: return qty must be > 0")
+        # Resolve which bill line we're returning against.
+        bill_line = None
+        if r.bill_line_id and r.bill_line_id in bill_line_by_id:
+            bill_line = bill_line_by_id[r.bill_line_id]
+        elif r.item_id and (r.item_id, r.name) in bill_line_by_item:
+            bill_line = bill_line_by_item[(r.item_id, r.name)]
+        if not bill_line:
+            raise HTTPException(
+                400,
+                f"{r.name}: no matching line on bill {bill.number}",
+            )
+        prior = already_returned.get(bill_line.id, 0)
+        remaining = max(0, int(bill_line.qty or 0) - prior)
+        if r.return_qty > remaining:
+            raise HTTPException(
+                400,
+                f"{r.name}: only {remaining} returnable "
+                f"({bill_line.qty} received, {prior} already returned)",
+            )
+        line_net = round(r.return_qty * r.cost, 2)
+        line_tax = round(line_net * (r.tax_rate / 100), 2)
+        return_rows.append((r, bill_line, line_net, line_tax))
+        subtotal += line_net
+        tax_total += line_tax
 
     today = datetime.now().strftime("%Y-%m-%d")
     count_res = await db.execute(select(func.count(VendorReturn.id)))
     count = count_res.scalar() or 0
     return_num = f"RET-{datetime.now().year}-{300 + count:04d}"
-
-    subtotal = sum(i.return_qty * i.cost for i in data.items)
-    tax_total = sum(i.return_qty * i.cost * i.tax_rate / 100 for i in data.items)
-    total = subtotal + tax_total
 
     vendor_result = await db.execute(select(Vendor).where(Vendor.id == data.vendor_id))
     vendor = vendor_result.scalar_one_or_none()
@@ -542,25 +891,28 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
         reason=data.reason,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
-        total=round(total, 2),
-        status="pending",
+        total=round(subtotal + tax_total, 2),
+        # 2026-05-25: vendor returns now land as `paid` (= processed /
+        # terminal). The /returns/{id}/approve endpoint stays for legacy
+        # data but isn't used by the new UI.
+        status="paid",
         notes=data.notes,
     )
     db.add(ret)
 
-    for item in data.items:
-        li = ReturnLineItem(
+    for r, bill_line, _ln, _lt in return_rows:
+        db.add(ReturnLineItem(
             id=str(uuid.uuid4()),
             return_id=ret.id,
-            item_id=item.item_id,
-            name=item.name,
-            original_qty=item.original_qty,
-            return_qty=item.return_qty,
-            cost=item.cost,
-            tax_rate=item.tax_rate,
-            line_total=round(item.return_qty * item.cost, 2),
-        )
-        db.add(li)
+            bill_line_id=bill_line.id,
+            item_id=r.item_id,
+            name=r.name,
+            original_qty=r.original_qty,
+            return_qty=r.return_qty,
+            cost=r.cost,
+            tax_rate=r.tax_rate,
+            line_total=round(r.return_qty * r.cost, 2),
+        ))
 
     await db.commit()
     await db.refresh(ret)
@@ -596,6 +948,12 @@ def _return_dict(r, items=None):
             d["items"] = items
         else:
             d["items"] = [{
+                "id": i.id,
+                # 2026-05-25: billLineId + itemId added so the frontend's
+                # VendorReturnFormModal.loadBill can sum prior returns
+                # per bill line and cap the Returnable cell correctly.
+                "billLineId": getattr(i, "bill_line_id", None),
+                "itemId": i.item_id,
                 "name": i.name, "originalQty": i.original_qty,
                 "returnQty": i.return_qty, "cost": i.cost,
                 "taxRate": i.tax_rate, "lineTotal": i.line_total,
