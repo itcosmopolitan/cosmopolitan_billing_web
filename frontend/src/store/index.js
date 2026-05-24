@@ -308,6 +308,10 @@ export const usePOSStore = create((set, get) => ({
     if (!bill) return
     // Migration for held bills created before Sales Phase 1:
     //   • Legacy `paymentMethod: 'credit'`  → unchecked, no method
+    //     (pre-2026-05-25 'credit' meant "no payment". Post-cutover
+    //     it's a real method — but legacy held bills predate that.
+    //     Held bills are in-memory only so this branch is harmless
+    //     after the first page reload.)
     //   • Legacy `paymentMethod: <other>`   → checked + that method
     //   • Missing fields entirely (very old) → unchecked, no method
     let resumedReceived = false

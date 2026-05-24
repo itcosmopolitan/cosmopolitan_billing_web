@@ -296,8 +296,26 @@ export default function POSPage() {
     // method MUST be picked. Backend would 422 on null mode + paid_amount
     // anyway, but inline feedback is friendlier.
     if (paymentReceived && !paymentMethod) {
-      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer)')
+      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer / Credit)')
       return
+    }
+
+    // 2026-05-25: credit-mode safety gates. The dropdown disables the
+    // option for walk-ins + when balance is insufficient, but a stale
+    // selection (e.g. operator picked credit then changed customers)
+    // could slip through. Re-check at submit.
+    if (paymentReceived && paymentMethod === 'credit') {
+      if (!customer?.id) {
+        toast.error('Credit mode requires a customer — pick one or change the method')
+        return
+      }
+      const avail = Number(customer.credit_balance || 0)
+      if (avail < total) {
+        toast.error(
+          `Insufficient credit — ₹${avail.toFixed(2)} available, ₹${total.toFixed(2)} needed`,
+        )
+        return
+      }
     }
 
     // Walk-in + unchecked = unpaid invoice with nobody to follow up with.
@@ -379,6 +397,18 @@ export default function POSPage() {
       })
 
       setShowComplete(true)
+      // 2026-05-25: refresh local customer credit_balance after a
+      // credit-mode sale so the next cart sees the updated balance.
+      // Cheap optimistic update — backend already debited atomically.
+      if (paymentReceived && paymentMethod === 'credit' && customer?.id) {
+        const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
+        store.setCustomer({ ...customer, credit_balance: newBalance })
+        // Also refresh the master customers list so the dropdown reflects
+        // the new balance for subsequent cart selections.
+        setCustomers((prev) => prev.map((c) =>
+          c.id === customer.id ? { ...c, credit_balance: newBalance } : c
+        ))
+      }
       store.clearCart()
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
@@ -688,6 +718,20 @@ export default function POSPage() {
             <option value="">Walk-in Customer</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          {/* 2026-05-25: surface available credit when a customer is
+              picked. Single source of truth — the credit option in the
+              method dropdown also shows the same number, but the chip is
+              always visible regardless of payment-received state. */}
+          {customer?.id && Number(customer.credit_balance || 0) > 0 && (
+            <span style={{
+              fontSize: 11, padding: '3px 8px',
+              borderRadius: 10, background: 'rgba(46,184,92,0.12)',
+              color: 'var(--green)', fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }} title="Available customer credit (overpayments + refunded returns)">
+              💰 ₹{Number(customer.credit_balance || 0).toFixed(2)} credit
+            </span>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={() => store.clearCart()} style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>✕</button>
         </div>
 
@@ -826,18 +870,49 @@ export default function POSPage() {
               <span>Payment received?</span>
             </label>
             {paymentReceived && (
-              <select
-                className="form-input"
-                value={paymentMethod || ''}
-                onChange={(e) => store.setPaymentMethod(e.target.value || null)}
-                style={{ marginTop: 6, fontSize: 13 }}
-              >
-                <option value="" disabled>Select method…</option>
-                <option value="cash">💵 Cash</option>
-                <option value="card">💳 Card</option>
-                <option value="upi">📱 UPI</option>
-                <option value="bank_transfer">🏦 Bank Transfer</option>
-              </select>
+              <>
+                <select
+                  className="form-input"
+                  value={paymentMethod || ''}
+                  onChange={(e) => store.setPaymentMethod(e.target.value || null)}
+                  style={{ marginTop: 6, fontSize: 13 }}
+                >
+                  <option value="" disabled>Select method…</option>
+                  <option value="cash">💵 Cash</option>
+                  <option value="card">💳 Card</option>
+                  <option value="upi">📱 UPI</option>
+                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                  {/* 2026-05-25: credit mode. Hidden entirely for walk-ins
+                      (no customer → no credit account). When a customer is
+                      picked, disabled when their available credit < cart
+                      total. Backend rejects with 400 on the same condition
+                      as a safety net. */}
+                  {customer?.id && (
+                    <option
+                      value="credit"
+                      disabled={Number(customer.credit_balance || 0) < total}
+                    >
+                      🏦 Customer Credit (₹{Number(customer.credit_balance || 0).toFixed(2)} available)
+                      {Number(customer.credit_balance || 0) < total ? ' — insufficient' : ''}
+                    </option>
+                  )}
+                </select>
+                {/* Inline warning when operator picked credit but it's
+                    short of the cart total. We block the sale at submit
+                    time too — this is just early feedback. */}
+                {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
+                  <div style={{
+                    marginTop: 6, padding: '8px 10px',
+                    border: '1px solid var(--amber)', borderRadius: 6,
+                    background: 'rgba(245,166,35,0.08)',
+                    fontSize: 11.5, color: 'var(--amber)', lineHeight: 1.5,
+                  }}>
+                    ⚠ Available credit (₹{Number(customer.credit_balance || 0).toFixed(2)}) is
+                    less than the cart total (₹{Number(total).toFixed(2)}). Pick a different
+                    method or reduce the cart. Split-payment with credit isn&apos;t supported.
+                  </div>
+                )}
+              </>
             )}
             {!paymentReceived && (
               <div style={{

@@ -31,6 +31,7 @@ import PurchaseOrderFormModal from './PurchaseOrderFormModal'
 import ConvertPOToBillModal from './ConvertPOToBillModal'
 import VendorReturnFormModal from './VendorReturnFormModal'
 import VendorPaymentFormModal from './VendorPaymentFormModal'
+import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 const TABS = [
   { id: 'bills',    label: 'Purchase Bills' },
@@ -123,6 +124,102 @@ export default function PurchasesPage() {
 
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
+
+  // 2026-05-25: bulk-delete state. Same shape as SalesPage — one
+  // shared selectedIds Set scoped to the active tab, plus modal +
+  // blocked-rows + submitting flags. See BulkDeleteConfirmModal.
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteBlocked, setDeleteBlocked] = useState([])
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    setSelectedIds(new Set())
+    setDeleteBlocked([])
+  }, [tab])
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const tabRows = () => {
+    if (tab === 'bills')    return bills
+    if (tab === 'orders')   return orders
+    if (tab === 'returns')  return returns
+    if (tab === 'payments') return payments
+    return []
+  }
+
+  const toggleSelectAll = () => {
+    const rows = tabRows()
+    if (selectedIds.size === rows.length && rows.length > 0) setSelectedIds(new Set())
+    else setSelectedIds(new Set(rows.map((r) => r.id)))
+  }
+
+  const selectedItemsForModal = () => {
+    const rows = tabRows().filter((r) => selectedIds.has(r.id))
+    return rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      vendorName: r.vendorName,
+      total: r.total ?? r.totalAmount,
+      status: r.status,
+    }))
+  }
+
+  const submitBulkDelete = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setDeleting(true)
+    setDeleteBlocked([])
+    try {
+      let res
+      if (tab === 'bills')         res = await purchasesAPI.bulkDelete.bills(ids)
+      else if (tab === 'orders')   res = await purchasesAPI.bulkDelete.orders(ids)
+      else if (tab === 'returns')  res = await purchasesAPI.bulkDelete.returns(ids)
+      else if (tab === 'payments') res = await purchasesAPI.bulkDelete.payments(ids)
+      const count = res?.data?.count || res?.count || ids.length
+      const extras = []
+      const stock = res?.data?.stock_removed ?? res?.stock_removed
+      if (stock) extras.push(`${stock} stock units removed`)
+      const extraMsg = extras.length ? ` (${extras.join(', ')})` : ''
+      toast.success(`Deleted ${count} ${tab.replace(/s$/, '')}${count === 1 ? '' : 's'}${extraMsg}`)
+      setSelectedIds(new Set())
+      setDeleteOpen(false)
+      setListVersion((v) => v + 1)
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      if (detail && Array.isArray(detail.blocked)) {
+        setDeleteBlocked(detail.blocked)
+      } else {
+        console.error('Bulk delete failed:', err)
+      }
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const reversalLinesForTab = () => {
+    const n = selectedIds.size
+    const plural = (label) => `${n} ${label}${n === 1 ? '' : 's'}`
+    if (tab === 'bills') {
+      return [
+        `${plural('bill')} removed`,
+        'Stock removed for each line; batches deleted (only if untouched)',
+        'Blocked if any batch was already consumed by sales or transfers',
+        'Audit log entries written',
+      ]
+    }
+    if (tab === 'orders')   return [`${plural('purchase order')} removed`, 'No stock or money changes (POs are intent-only)', 'Audit log entries written']
+    if (tab === 'returns')  return [`${plural('return')} removed`, 'No stock or money changes (vendor returns currently inert)', 'Audit log entries written']
+    if (tab === 'payments') return [`${plural('payment')} removed`, 'Bill paid_amount + status reverted per allocation', 'Audit log entries written']
+    return [`${plural('item')} removed`]
+  }
 
   // Modals + sub-state
   const [showDetail, setShowDetail] = useState(null)
@@ -551,6 +648,16 @@ export default function PurchasesPage() {
   return (
     <div className="page-container">
       <SectionHeader title="Purchase Management" subtitle="Vendor bills, purchase orders, and payments">
+        {selectedIds.size > 0 && can('purchases.delete') && (
+          <>
+            <button className="btn btn-danger btn-sm" onClick={() => setDeleteOpen(true)}>
+              🗑 Delete {selectedIds.size} selected
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSelectedIds(new Set())}>
+              Clear
+            </button>
+          </>
+        )}
         <button className="btn btn-secondary btn-sm" onClick={() => {
           const exportData = bills.map(b => ({
             'Bill Number': b.number || b.id,
@@ -601,6 +708,15 @@ export default function PurchasesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < bills.length }}
+                        checked={bills.length > 0 && selectedIds.size === bills.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Bill #" sortKey="number" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} />
                     <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} />
                     <SortableHeader label="Date" sortKey="date" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k, 'desc')} />
@@ -619,7 +735,15 @@ export default function PurchasesPage() {
                     const canPay = b.status !== 'paid' && b.status !== 'cancelled'
                     const canCancel = b.status !== 'paid' && b.status !== 'cancelled'
                     return (
-                      <tr key={b.id}>
+                      <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(b.id)}
+                            onChange={() => toggleSelect(b.id)}
+                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                          />
+                        </td>
                         <td><CopyableId value={b.number} label={b.number} style={{ color: 'var(--purple)', fontSize: 12 }} /></td>
                         <td><div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{b.vendorName || 'N/A'}</div></td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.date}</td>
@@ -680,6 +804,15 @@ export default function PurchasesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < orders.length }}
+                        checked={orders.length > 0 && selectedIds.size === orders.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="PO #" sortKey="number" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                     <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                     <SortableHeader label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
@@ -694,7 +827,15 @@ export default function PurchasesPage() {
                     const isConverted = o.status === 'converted'
                     const isCancelled = o.status === 'cancelled'
                     return (
-                      <tr key={o.id}>
+                      <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(o.id)}
+                            onChange={() => toggleSelect(o.id)}
+                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                          />
+                        </td>
                         <td><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         <td><div style={{ fontWeight: 500, fontSize: 13 }}>{o.vendorName || 'N/A'}</div></td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
@@ -769,6 +910,15 @@ export default function PurchasesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < returns.length }}
+                        checked={returns.length > 0 && selectedIds.size === returns.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Return #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
                     <SortableHeader label="Bill #" sortKey="bill_number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
                     <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
@@ -781,7 +931,15 @@ export default function PurchasesPage() {
                 </thead>
                 <tbody>
                   {returns.map((r) => (
-                    <tr key={r.id}>
+                    <tr key={r.id} style={selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : null}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(r.id)}
+                          onChange={() => toggleSelect(r.id)}
+                          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                        />
+                      </td>
                       <td><CopyableId value={r.number} label={r.number} style={{ color: 'var(--pink)', fontSize: 12 }} /></td>
                       <td><CopyableId value={r.billNumber} label={r.billNumber} style={{ color: 'var(--purple)', fontSize: 12 }} /></td>
                       <td style={{ fontWeight: 500, fontSize: 13 }}>{r.vendorName}</td>
@@ -825,6 +983,15 @@ export default function PurchasesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < payments.length }}
+                        checked={payments.length > 0 && selectedIds.size === payments.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
                     <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
                     <SortableHeader label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
@@ -839,7 +1006,15 @@ export default function PurchasesPage() {
                   {payments.map((p) => {
                     const allocCount = p.billCount ?? (p.allocations?.length || 0)
                     return (
-                      <tr key={p.id}>
+                      <tr key={p.id} style={selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : null}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(p.id)}
+                            onChange={() => toggleSelect(p.id)}
+                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                          />
+                        </td>
                         <td><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.vendorName || '—'}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
@@ -1112,6 +1287,23 @@ export default function PurchasesPage() {
           </>
         )}
       </Modal>
+
+      {/* 2026-05-25: bulk-delete confirmation. Mirror of SalesPage. */}
+      <BulkDeleteConfirmModal
+        open={deleteOpen}
+        onClose={() => { setDeleteOpen(false); setDeleteBlocked([]) }}
+        onConfirm={submitBulkDelete}
+        entityLabel={
+          tab === 'bills'    ? 'bill' :
+          tab === 'orders'   ? 'purchase order' :
+          tab === 'returns'  ? 'vendor return' :
+          tab === 'payments' ? 'payment' : 'item'
+        }
+        items={selectedItemsForModal()}
+        blocked={deleteBlocked}
+        submitting={deleting}
+        reversalLines={reversalLinesForTab()}
+      />
     </div>
   )
 }

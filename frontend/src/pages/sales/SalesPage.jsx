@@ -13,6 +13,7 @@ import OrderFormModal from './OrderFormModal'
 import ReturnFormModal from './ReturnFormModal'
 import ConvertToInvoiceModal from './ConvertToInvoiceModal'
 import PaymentFormModal from './PaymentFormModal'
+import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
 // reachable via Invoices tab + payment_mode filter. Sales Orders + Returns
@@ -158,6 +159,128 @@ export default function SalesPage() {
   // New Return modal — fully self-contained (manages its own state); we
   // only flip the open flag.
   const [showReturnForm, setShowReturnForm] = useState(false)
+  // 2026-05-25: bulk-delete state. One shared selection map keyed by
+  // the tab name (so switching tabs doesn't bleed selections). The
+  // modal opens against the CURRENT tab when "Delete N" is clicked.
+  // Blocked rows from a 400 response are surfaced in the modal's
+  // alert; the operator deselects + retries.
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteBlocked, setDeleteBlocked] = useState([])
+  const [deleting, setDeleting] = useState(false)
+
+  // Reset selection when the tab changes — different rows, different scope.
+  useEffect(() => {
+    setSelectedIds(new Set())
+    setDeleteBlocked([])
+  }, [tab])
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const tabRows = () => {
+    if (tab === 'invoices') return invoices
+    if (tab === 'orders')   return orders
+    if (tab === 'quotes')   return quotations
+    if (tab === 'returns')  return returns
+    if (tab === 'payments') return payments
+    return []
+  }
+
+  const toggleSelectAll = () => {
+    const rows = tabRows()
+    if (selectedIds.size === rows.length && rows.length > 0) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(rows.map((r) => r.id)))
+    }
+  }
+
+  // Items array passed to BulkDeleteConfirmModal — shape varies per
+  // entity but the modal only reads number / customerName / total / status.
+  const selectedItemsForModal = () => {
+    const rows = tabRows().filter((r) => selectedIds.has(r.id))
+    return rows.map((r) => ({
+      id: r.id,
+      number: r.number,
+      customerName: r.customerName || r.vendorName,
+      total: r.total ?? r.totalAmount,
+      status: r.status || (r.paymentMode ? String(r.paymentMode).toUpperCase() : undefined),
+    }))
+  }
+
+  // Submit handler — picks the right API per current tab. Backend
+  // returns 400 with `detail.blocked` if any row's guard fires. On
+  // success the list refreshes via the appropriate version bumper.
+  const submitBulkDelete = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setDeleting(true)
+    setDeleteBlocked([])
+    try {
+      let res
+      if (tab === 'invoices') {
+        res = await salesAPI.bulkDelete.invoices(ids)
+        setSalesListVersion((v) => v + 1)
+      } else if (tab === 'orders') {
+        res = await salesAPI.bulkDelete.orders(ids)
+        setOrderListVersion((v) => v + 1)
+      } else if (tab === 'quotes') {
+        res = await salesAPI.bulkDelete.quotations(ids)
+        setQuoteListVersion((v) => v + 1)
+      } else if (tab === 'returns') {
+        res = await salesAPI.bulkDelete.returns(ids)
+        setRetListVersion((v) => v + 1)
+      } else if (tab === 'payments') {
+        res = await salesAPI.bulkDelete.payments(ids)
+        setPayListVersion((v) => v + 1)
+      }
+      const count = res?.count || ids.length
+      const extras = []
+      if (res?.stock_restored) extras.push(`${res.stock_restored} stock units restored`)
+      if (res?.credit_refunded) extras.push(`${fmt(res.credit_refunded)} credit refunded`)
+      const extraMsg = extras.length ? ` (${extras.join(', ')})` : ''
+      toast.success(`Deleted ${count} ${tab === 'invoices' ? 'invoice' : tab.replace(/s$/, '')}${count === 1 ? '' : 's'}${extraMsg}`)
+      setSelectedIds(new Set())
+      setDeleteOpen(false)
+    } catch (err) {
+      // Backend's 400 carries the per-row blocked list inside detail.
+      const detail = err?.response?.data?.detail
+      if (detail && Array.isArray(detail.blocked)) {
+        setDeleteBlocked(detail.blocked)
+      } else {
+        console.error('Bulk delete failed:', err)
+      }
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // Reversal preview lines for the confirm modal — entity-specific copy.
+  const reversalLinesForTab = () => {
+    const n = selectedIds.size
+    const plural = (label) => `${n} ${label}${n === 1 ? '' : 's'}`
+    if (tab === 'invoices') {
+      return [
+        `${plural('invoice')} removed`,
+        'Stock restored on each invoice line (aggregate add-back)',
+        'Credit-mode payments refund customer credit balance',
+        'Audit log entries written per deletion',
+      ]
+    }
+    if (tab === 'orders') return [`${plural('sales order')} removed`, 'No stock or credit changes (SOs are intent-only)', 'Audit log entries written']
+    if (tab === 'quotes') return [`${plural('quotation')} removed`, 'No downstream effects', 'Audit log entries written']
+    if (tab === 'returns') return [`${plural('return')} removed`, 'Credit refunds revoked from customer balance (if any)', 'Audit log entries written']
+    if (tab === 'payments') return [`${plural('payment')} removed`, 'Invoice paid_amount + status reverted per allocation', 'Credit-mode payments restore credit balance', 'Audit log entries written']
+    return [`${plural('item')} removed`]
+  }
+
   // Payments tab state + new-payment modal trigger.
   const [showPayForm, setShowPayForm] = useState(false)
   const [payments, setPayments] = useState([])
@@ -699,6 +822,19 @@ export default function SalesPage() {
   return (
     <div className="page-container">
       <SectionHeader title="Sales Management" subtitle="Invoices, orders, quotations, and customer payments">
+        {/* 2026-05-25: Delete N selected — appears only when the operator
+            has ticked rows in the active tab. Single button serves all
+            5 tabs; submitBulkDelete picks the right API based on `tab`. */}
+        {selectedIds.size > 0 && can('invoices.delete') && (
+          <>
+            <button className="btn btn-danger btn-sm" onClick={() => setDeleteOpen(true)}>
+              🗑 Delete {selectedIds.size} selected
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSelectedIds(new Set())}>
+              Clear
+            </button>
+          </>
+        )}
         <button className="btn btn-secondary btn-sm" onClick={() => {
           const exportData = invoices.map(i => ({
             'Invoice Number': i.number || i.id,
@@ -749,6 +885,15 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < invoices.length }}
+                        checked={invoices.length > 0 && selectedIds.size === invoices.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Invoice #" sortKey="number" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
                     <SortableHeader label="Customer" sortKey="customer_name" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                     <SortableHeader label="Branch" sortKey="branch_id" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
@@ -763,7 +908,15 @@ export default function SalesPage() {
                 </thead>
                 <tbody>
                   {invoices.map((inv) => (
-                    <tr key={inv.id}>
+                    <tr key={inv.id} style={selectedIds.has(inv.id) ? { background: 'var(--accent-bg)' } : null}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(inv.id)}
+                          onChange={() => toggleSelect(inv.id)}
+                          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                        />
+                      </td>
                       <td><CopyableId value={inv.number} label={inv.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                       <td>
                         <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{inv.customerName || 'Walk-in'}</div>
@@ -816,6 +969,15 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < quotations.length }}
+                        checked={quotations.length > 0 && selectedIds.size === quotations.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Quote #" sortKey="number" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                     <SortableHeader label="Customer" sortKey="customer_name" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
                     <SortableHeader label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
@@ -827,7 +989,15 @@ export default function SalesPage() {
                 </thead>
                 <tbody>
                   {quotations.map((q) => (
-                    <tr key={q.id}>
+                    <tr key={q.id} style={selectedIds.has(q.id) ? { background: 'var(--accent-bg)' } : null}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(q.id)}
+                          onChange={() => toggleSelect(q.id)}
+                          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                        />
+                      </td>
                       <td><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                       <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
@@ -925,6 +1095,26 @@ export default function SalesPage() {
         }}
       />
 
+      {/* 2026-05-25: bulk-delete confirm modal — single instance,
+          re-rendered per tab. The submit handler routes to the right
+          API based on the current tab. */}
+      <BulkDeleteConfirmModal
+        open={deleteOpen}
+        onClose={() => { setDeleteOpen(false); setDeleteBlocked([]) }}
+        onConfirm={submitBulkDelete}
+        entityLabel={
+          tab === 'invoices' ? 'invoice' :
+          tab === 'orders'   ? 'sales order' :
+          tab === 'quotes'   ? 'quotation' :
+          tab === 'returns'  ? 'credit note' :
+          tab === 'payments' ? 'payment' : 'item'
+        }
+        items={selectedItemsForModal()}
+        blocked={deleteBlocked}
+        submitting={deleting}
+        reversalLines={reversalLinesForTab()}
+      />
+
       {/* Payment detail (read-only) — shows allocations + credit. */}
       <Modal
         open={!!payDetail}
@@ -1008,6 +1198,15 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < returns.length }}
+                        checked={returns.length > 0 && selectedIds.size === returns.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Credit Note #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
                     <SortableHeader label="Invoice" sortKey="invoice_number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
                     <SortableHeader label="Customer" sortKey="customer_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
@@ -1021,7 +1220,15 @@ export default function SalesPage() {
                 </thead>
                 <tbody>
                   {returns.map((r) => (
-                    <tr key={r.id}>
+                    <tr key={r.id} style={selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : null}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(r.id)}
+                          onChange={() => toggleSelect(r.id)}
+                          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                        />
+                      </td>
                       <td><CopyableId value={r.number} label={r.number} style={{ color: 'var(--red)', fontSize: 12 }} /></td>
                       <td><CopyableId value={r.invoiceNumber} label={r.invoiceNumber} style={{ fontSize: 12 }} /></td>
                       <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{r.customerName || 'Walk-in'}</td>
@@ -1074,6 +1281,15 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < payments.length }}
+                        checked={payments.length > 0 && selectedIds.size === payments.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
                     <SortableHeader label="Customer" sortKey="customer_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
                     <SortableHeader label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
@@ -1088,7 +1304,15 @@ export default function SalesPage() {
                   {payments.map((p) => {
                     const allocCount = p.invoiceCount ?? (p.allocations?.length || 0)
                     return (
-                      <tr key={p.id}>
+                      <tr key={p.id} style={selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : null}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(p.id)}
+                            onChange={() => toggleSelect(p.id)}
+                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                          />
+                        </td>
                         <td><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.customerName || 'Walk-in'}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
@@ -1146,6 +1370,15 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < orders.length }}
+                        checked={orders.length > 0 && selectedIds.size === orders.length}
+                        onChange={toggleSelectAll}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                    </th>
                     <SortableHeader label="Order #" sortKey="number" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                     <SortableHeader label="Customer" sortKey="customer_name" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                     <SortableHeader label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
@@ -1160,7 +1393,15 @@ export default function SalesPage() {
                     const isConverted = o.status === 'converted'
                     const isCancelled = o.status === 'cancelled'
                     return (
-                      <tr key={o.id}>
+                      <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(o.id)}
+                            onChange={() => toggleSelect(o.id)}
+                            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                          />
+                        </td>
                         <td><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{o.customerName || 'Walk-in'}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>

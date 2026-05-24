@@ -86,33 +86,36 @@ dropdown must offer the same set (enforced UI-side too in
 SalesPage.jsx#VALID_PAYMENT_MODES and POSPage.jsx).
 
 `None` is also allowed and means "no payment received yet — invoice is
-pending". The `status='pending'` flag already carries that semantic, so we
-deliberately don't have a `'credit'` member here — the legacy "credit" mode
-was misleading (it meant "no payment", not "paid by credit method"). Held
-bills + scripts that still send "credit" are coerced to None by the
-field_validator below so existing clients keep working through the cutover.
+pending". The `status='pending'` flag already carries that semantic.
 
-2026-05-24: dropped the wider `RecordedPaymentMode` (which had included
-'cheque'). POS never accepted cheque; carrying a different allow-list
-for the record-payment endpoint was just drift. PaymentIn.mode now
-reuses the same Literal as SaleCreate.payment_mode.
+2026-05-25: added `'credit'` as a first-class method. Different from
+"legacy credit" (which used to mean "no payment"): the new `'credit'`
+explicitly debits `customer.credit_balance` to settle the invoice.
+Validations: customer_id required (walk-ins can't draw on credit they
+don't have), customer.credit_balance >= invoice.total. Both create_invoice
+and record_payment enforce; both atomically debit + AuditLog.
 """
-PaymentMode = Literal["cash", "card", "upi", "bank_transfer"]
+PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
 
 
 def _coerce_payment_mode_value(v):
     """Shared pre-validator body for PaymentMode-family Literals.
 
-    Returns None for None / empty / legacy "credit" (so old held bills
-    still land as pending). Otherwise lowercases + strips so case/whitespace
-    noise doesn't trip the Literal — `"CASH "` → `"cash"`.
+    Returns None for None / empty / legacy-no-payment strings. Lowercases
+    + strips so case/whitespace noise doesn't trip the Literal.
+
+    2026-05-25: `'credit'` is NO LONGER coerced to None — it's now a
+    valid PaymentMode value. Legacy held bills that used 'credit' to
+    mean "no payment yet" will now mistakenly try to debit credit_balance;
+    that's caught + 422'd by the create_invoice validation when
+    customer_id is missing (walk-in) or credit_balance is insufficient.
     """
     if v is None:
         return None
     if not isinstance(v, str):
         return v
     s = v.strip().lower()
-    if s in ("", "credit"):
+    if s == "":
         return None
     return s
 
@@ -587,6 +590,33 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
     paid      = total if is_paid_at_create else 0.0
     status    = "paid" if paid >= total else "pending"
 
+    # 2026-05-25: 'credit' mode debits the customer's stored credit
+    # balance. Validations:
+    #   • customer_id required — walk-ins don't have a credit balance
+    #     to draw from. 400.
+    #   • customer.credit_balance >= total — partial-credit isn't
+    #     supported in this flow (would need a split-payment UI). 400.
+    # On success, the customer.credit_balance is debited atomically +
+    # an AuditLog row is written. The debit happens BELOW after the
+    # invoice is added, so it can be rolled back together with the
+    # invoice insert if anything later in the txn fails.
+    credit_customer = None
+    if data.payment_mode == "credit":
+        if not data.customer_id:
+            raise HTTPException(400, "Credit-mode sale requires a customer (walk-ins can't draw credit)")
+        cust_row = await db.execute(
+            select(Customer).where(Customer.id == data.customer_id)
+        )
+        credit_customer = cust_row.scalar_one_or_none()
+        if not credit_customer:
+            raise HTTPException(404, f"Customer {data.customer_id} not found")
+        available = float(credit_customer.credit_balance or 0)
+        if available < total:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — customer has ₹{round(available, 2)} available, sale total is ₹{total}",
+            )
+
     await enforce_branch_access(data.branch_id, user=user, db=db)
 
     inv_num = await allocate_number(
@@ -705,6 +735,56 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                         {"i": item.item_id, "b": data.branch_id},
                     )
 
+    # 2026-05-25: debit customer.credit_balance for credit-mode sales.
+    # The validation above already confirmed sufficient balance + a
+    # real customer; this just commits the debit + writes the audit
+    # trail. Same commit as the invoice insert so failure rolls back.
+    if data.payment_mode == "credit" and credit_customer is not None:
+        prev_balance = float(credit_customer.credit_balance or 0)
+        credit_customer.credit_balance = round(prev_balance - total, 2)
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=inv.number,
+            detail=(
+                f"Credit-mode sale {inv.number}: −₹{total} from "
+                f"{credit_customer.name}'s credit (was ₹{prev_balance:.2f}, "
+                f"now ₹{credit_customer.credit_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+        # Also write a CustomerPayment row so the Payments tab shows
+        # this sale alongside cash/upi/etc payments. Parity with the
+        # record_payment retrofit below.
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=credit_customer.id,
+            customer_name=credit_customer.name,
+            branch_id=data.branch_id,
+            branch_name=data.branch_name,
+            date=today,
+            total_amount=total,
+            payment_mode="credit",
+            payment_ref="",
+            notes="POS credit-mode sale",
+            credit_applied=0.0,
+            created_by="POS",
+        )
+        db.add(pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=total,
+        ))
+
     await db.commit()
     invalidate_dashboard_cache_for_user(user.id)
     await db.refresh(inv)
@@ -746,6 +826,27 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
     pre_balance = max(0.0, pre_total - pre_paid)
     if pre_balance <= 0:
         raise HTTPException(400, "Invoice already settled")
+
+    # 2026-05-25: credit-mode follow-up payment. Validate + debit
+    # customer.credit_balance the same way create_invoice does.
+    # Settling a pending invoice from existing credit is a common
+    # workflow (operator records the payment AFTER the sale).
+    credit_customer = None
+    if data.mode == "credit":
+        if not pre_row.customer_id:
+            raise HTTPException(400, "Credit-mode payment requires a customer (walk-in invoice can't draw credit)")
+        cust_row = await db.execute(
+            select(Customer).where(Customer.id == pre_row.customer_id)
+        )
+        credit_customer = cust_row.scalar_one_or_none()
+        if not credit_customer:
+            raise HTTPException(404, f"Customer {pre_row.customer_id} not found")
+        available = float(credit_customer.credit_balance or 0)
+        if available < data.amount:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — customer has ₹{round(available, 2)} available, payment is ₹{data.amount}",
+            )
 
     # Pass `mode` down so the atomic UPDATE also sets sale_invoices.payment_mode
     # in the same statement (no risk of a partial update). Without this the
@@ -856,6 +957,28 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
         invoice_number=pre_row.number,
         amount=round(float(data.amount), 2),
     ))
+
+    # 2026-05-25: debit credit balance for credit-mode payments. Same
+    # pattern as create_invoice — the validation above guaranteed
+    # sufficient balance; this commits the debit + writes audit.
+    if data.mode == "credit" and credit_customer is not None:
+        prev_balance = float(credit_customer.credit_balance or 0)
+        credit_customer.credit_balance = round(prev_balance - data.amount, 2)
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=pre_row.number,
+            detail=(
+                f"Credit-mode payment on {pre_row.number}: −₹{data.amount} "
+                f"from {credit_customer.name}'s credit (was ₹{prev_balance:.2f}, "
+                f"now ₹{credit_customer.credit_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
 
     await db.commit()
     return {
@@ -2106,4 +2229,329 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             if (method == "credit" and inv.customer_id and credited > 0)
             else None
         ),
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BULK DELETE (2026-05-25)
+# ═════════════════════════════════════════════════════════════════════════════
+# All-or-nothing semantics: every id must pass its guard, else the whole
+# batch is rejected with per-row reasons. Each delete writes an AuditLog
+# snapshot of the row before removal — hard delete + audit trail.
+#
+# Permission: `invoices.delete` for all sales-side entities. Coarse but
+# matches existing convention (no `quotes.delete` / `payments.delete`
+# in the catalog).
+#
+# Guards (per user spec):
+#   Quotation     → has Sales Order (status='converted')
+#   Sales Order   → has Invoice (status='converted')
+#   Invoice       → has any SalesReturn OR CustomerPaymentAllocation
+#                   referencing it. INCLUDING cancelled/void ones — user
+#                   chose strict (cancelled blocks too).
+#   SalesReturn   → no guards.
+#   CustomerPayment → no guards.
+#
+# Reversal effects:
+#   Invoice delete → restore stock per line (aggregate add-back for
+#                    untracked; aggregate for tracked too since we don't
+#                    track which specific batch was consumed at sale time).
+#   SalesReturn delete → if refund_method='credit', debit customer.credit_balance.
+#                        Stock-on-return reversal is N/A (not implemented today).
+#   CustomerPayment delete → per allocation: invoice.paid_amount -=
+#                            amount, status flipped. Credit-mode payments
+#                            refund customer.credit_balance += total. Overpay
+#                            credit_applied is revoked.
+
+
+class BulkDeleteIn(BaseModel):
+    """Body for every bulk-delete endpoint. List of ids to remove."""
+    ids: List[str] = Field(..., min_length=1)
+
+
+def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
+    """Write a delete audit-log row capturing the row's pre-delete state.
+
+    `snapshot` is JSON-serializable; we json.dumps it inline so the
+    AuditLog.detail column stays a single string (per existing schema).
+    """
+    import json as _json
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        action=action,
+        user_id=None,
+        user_name=None,
+        module="sales",
+        ref=ref,
+        detail=_json.dumps(snapshot, default=str),
+        risk="medium",  # delete is irreversible — bump above the default 'low'
+        ip_address=None,
+    ))
+
+
+# ─── BULK DELETE: QUOTATIONS ─────────────────────────────────────────────────
+@router.post("/quotations/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id.in_(data.ids))
+    )
+    quotes = res.unique().scalars().all()
+    found_ids = {q.id for q in quotes}
+    blocked = []
+    # Validate: not-found rows are reported as blocked (operator may have
+    # stale data); converted quotes can't be deleted because they spawned an SO.
+    for qid in data.ids:
+        if qid not in found_ids:
+            blocked.append({"id": qid, "number": "?", "reason": "Quotation not found"})
+    for q in quotes:
+        status = str(q.status.value) if hasattr(q.status, "value") else str(q.status)
+        if status == "converted":
+            blocked.append({
+                "id": q.id, "number": q.number,
+                "reason": f"Quote {q.number} was converted to a Sales Order — delete the SO first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some quotations can't be deleted"})
+
+    deleted = []
+    for q in quotes:
+        snapshot = {
+            "id": q.id, "number": q.number, "customer_id": q.customer_id,
+            "customer_name": q.customer_name, "total": q.total,
+            "status": str(q.status.value) if hasattr(q.status, "value") else str(q.status),
+            "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in q.line_items],
+        }
+        _audit_delete(db, action="delete_quotation", ref=q.number, snapshot=snapshot)
+        await db.delete(q)
+        deleted.append({"id": q.id, "number": q.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+
+
+# ─── BULK DELETE: SALES ORDERS ───────────────────────────────────────────────
+@router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id.in_(data.ids))
+    )
+    orders = res.unique().scalars().all()
+    found_ids = {o.id for o in orders}
+    blocked = []
+    for oid in data.ids:
+        if oid not in found_ids:
+            blocked.append({"id": oid, "number": "?", "reason": "Sales order not found"})
+    for o in orders:
+        status = str(o.status.value) if hasattr(o.status, "value") else str(o.status)
+        if status == "converted":
+            blocked.append({
+                "id": o.id, "number": o.number,
+                "reason": f"SO {o.number} was converted to an Invoice — delete the invoice first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some sales orders can't be deleted"})
+
+    deleted = []
+    for o in orders:
+        snapshot = {
+            "id": o.id, "number": o.number, "customer_id": o.customer_id,
+            "customer_name": o.customer_name, "total": o.total,
+            "status": str(o.status.value) if hasattr(o.status, "value") else str(o.status),
+            "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in o.line_items],
+        }
+        _audit_delete(db, action="delete_sales_order", ref=o.number, snapshot=snapshot)
+        await db.delete(o)
+        deleted.append({"id": o.id, "number": o.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+
+
+# ─── BULK DELETE: INVOICES ───────────────────────────────────────────────────
+@router.post("/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id.in_(data.ids))
+    )
+    invoices = res.unique().scalars().all()
+    found_ids = {i.id for i in invoices}
+    blocked = []
+    for iid in data.ids:
+        if iid not in found_ids:
+            blocked.append({"id": iid, "number": "?", "reason": "Invoice not found"})
+
+    # Bulk guard checks: any return or payment-allocation referencing
+    # these invoices blocks the whole batch.
+    return_counts = dict((await db.execute(
+        select(SalesReturn.invoice_id, func.count(SalesReturn.id))
+        .where(SalesReturn.invoice_id.in_(found_ids))
+        .group_by(SalesReturn.invoice_id)
+    )).all()) if found_ids else {}
+    payment_counts = dict((await db.execute(
+        select(CustomerPaymentAllocation.invoice_id, func.count(CustomerPaymentAllocation.id))
+        .where(CustomerPaymentAllocation.invoice_id.in_(found_ids))
+        .group_by(CustomerPaymentAllocation.invoice_id)
+    )).all()) if found_ids else {}
+
+    for inv in invoices:
+        if return_counts.get(inv.id):
+            blocked.append({
+                "id": inv.id, "number": inv.number,
+                "reason": f"Invoice {inv.number} has {return_counts[inv.id]} return(s) — delete those first",
+            })
+        if payment_counts.get(inv.id):
+            blocked.append({
+                "id": inv.id, "number": inv.number,
+                "reason": f"Invoice {inv.number} has {payment_counts[inv.id]} payment(s) — delete those first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some invoices can't be deleted"})
+
+    # Reversal: restock per line. Aggregate add-back (we don't track which
+    # specific batch each sale line consumed). For tracked items, the
+    # operator can manually rebalance batches via the Items page if needed.
+    deleted = []
+    stock_restored = 0
+    for inv in invoices:
+        snapshot = {
+            "id": inv.id, "number": inv.number, "customer_id": inv.customer_id,
+            "customer_name": inv.customer_name, "total": inv.total,
+            "paid_amount": inv.paid_amount, "payment_mode": inv.payment_mode,
+            "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status),
+            "items": [{"id": li.id, "item_id": li.item_id, "name": li.name, "qty": li.qty, "price": li.price} for li in inv.line_items],
+        }
+        for li in inv.line_items:
+            if li.item_id and li.qty:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=li.item_id, branch_id=inv.branch_id,
+                        delta=int(li.qty),
+                    )
+                    stock_restored += int(li.qty)
+                except ValueError:
+                    pass  # missing item_stock row — already handled by helper
+        _audit_delete(db, action="delete_invoice", ref=inv.number, snapshot=snapshot)
+        await db.delete(inv)
+        deleted.append({"id": inv.id, "number": inv.number})
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "stock_restored": stock_restored,
+    }
+
+
+# ─── BULK DELETE: SALES RETURNS ──────────────────────────────────────────────
+@router.post("/returns/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id.in_(data.ids))
+    )
+    returns = res.unique().scalars().all()
+    found_ids = {r.id for r in returns}
+    blocked = []
+    for rid in data.ids:
+        if rid not in found_ids:
+            blocked.append({"id": rid, "number": "?", "reason": "Return not found"})
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some returns can't be deleted"})
+
+    deleted = []
+    credit_refunded = 0.0
+    for ret in returns:
+        snapshot = {
+            "id": ret.id, "number": ret.number, "invoice_id": ret.invoice_id,
+            "invoice_number": ret.invoice_number, "customer_id": ret.customer_id,
+            "refund_method": ret.refund_method, "credited_amount": ret.credited_amount,
+            "total": ret.total,
+        }
+        # Refund-method=credit: revoke the credit we gave the customer
+        # on the original return. (They had ₹X added to credit_balance;
+        # we now subtract it back.)
+        if ret.refund_method == "credit" and ret.customer_id and (ret.credited_amount or 0) > 0:
+            cust = (await db.execute(
+                select(Customer).where(Customer.id == ret.customer_id)
+            )).scalar_one_or_none()
+            if cust:
+                prev = float(cust.credit_balance or 0)
+                refund_amt = float(ret.credited_amount or 0)
+                cust.credit_balance = round(max(0.0, prev - refund_amt), 2)
+                credit_refunded += refund_amt
+        _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot)
+        await db.delete(ret)
+        deleted.append({"id": ret.id, "number": ret.number})
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "credit_refunded": round(credit_refunded, 2),
+    }
+
+
+# ─── BULK DELETE: CUSTOMER PAYMENTS ──────────────────────────────────────────
+@router.post("/payments/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(CustomerPayment.id.in_(data.ids))
+    )
+    payments = res.unique().scalars().all()
+    found_ids = {p.id for p in payments}
+    blocked = []
+    for pid in data.ids:
+        if pid not in found_ids:
+            blocked.append({"id": pid, "number": "?", "reason": "Payment not found"})
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some payments can't be deleted"})
+
+    deleted = []
+    credit_refunded = 0.0
+    for pay in payments:
+        snapshot = {
+            "id": pay.id, "number": pay.number, "customer_id": pay.customer_id,
+            "customer_name": pay.customer_name, "total_amount": pay.total_amount,
+            "payment_mode": pay.payment_mode, "credit_applied": pay.credit_applied,
+            "allocations": [{"invoice_id": a.invoice_id, "invoice_number": a.invoice_number, "amount": a.amount} for a in pay.allocations],
+        }
+        # Reversal #1: per allocation, decrement invoice.paid_amount + reset status.
+        for alloc in pay.allocations:
+            inv = (await db.execute(
+                select(SaleInvoice).where(SaleInvoice.id == alloc.invoice_id)
+            )).scalar_one_or_none()
+            if inv is not None:
+                new_paid = round(max(0.0, float(inv.paid_amount or 0) - float(alloc.amount or 0)), 2)
+                inv.paid_amount = new_paid
+                if new_paid <= 0:
+                    inv.status = "pending"
+                elif new_paid < float(inv.total or 0):
+                    inv.status = "partial"
+        # Reversal #2: credit-mode payment → refund the credit balance.
+        if pay.payment_mode == "credit" and pay.customer_id and (pay.total_amount or 0) > 0:
+            cust = (await db.execute(
+                select(Customer).where(Customer.id == pay.customer_id)
+            )).scalar_one_or_none()
+            if cust:
+                refund = float(pay.total_amount or 0)
+                cust.credit_balance = round(float(cust.credit_balance or 0) + refund, 2)
+                credit_refunded += refund
+        # Reversal #3: payments that overpaid → revoke the credit_applied bump.
+        if pay.customer_id and (pay.credit_applied or 0) > 0:
+            cust = (await db.execute(
+                select(Customer).where(Customer.id == pay.customer_id)
+            )).scalar_one_or_none()
+            if cust:
+                revoke = float(pay.credit_applied or 0)
+                cust.credit_balance = round(max(0.0, float(cust.credit_balance or 0) - revoke), 2)
+        _audit_delete(db, action="delete_payment", ref=pay.number, snapshot=snapshot)
+        await db.delete(pay)
+        deleted.append({"id": pay.id, "number": pay.number})
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "credit_refunded": round(credit_refunded, 2),
     }

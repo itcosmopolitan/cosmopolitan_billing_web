@@ -12,6 +12,8 @@ from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.document_numbering import allocate_number
 from src.models import (
+    AuditLog,
+    ItemBatch,
     PurchaseBill,
     PurchaseLineItem,
     PurchaseOrder,
@@ -1419,3 +1421,267 @@ async def convert_order_to_bill(
         "status": bill_status,
         "total": bill.total,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BULK DELETE (2026-05-25)
+# ═════════════════════════════════════════════════════════════════════════════
+# Mirror of sales bulk-delete. All-or-nothing + audit-log snapshot.
+# Permission: `purchases.delete`.
+#
+# Guards:
+#   PurchaseOrder → has Bill (status='converted'). Cancelled still blocks
+#                   if linked to a bill (user chose strict).
+#   PurchaseBill  → has VendorReturn OR VendorPaymentAllocation.
+#                 → has batch with quantity < initial_qty (consumed). The
+#                   bill created those batches via add_batch_atomic; if
+#                   anything's been sold/transferred from them, the bill
+#                   can't be safely removed.
+#   VendorReturn  → no guards (stock-on-return is N/A today).
+#   VendorPayment → no guards.
+#
+# Reversal effects:
+#   Bill delete → remove batches the bill created (only if untouched),
+#                 decrement aggregate stock for untracked items.
+#   VendorReturn delete → no money / stock movement (vendor returns don't
+#                         currently affect either).
+#   VendorPayment delete → per allocation: bill.paid_amount -= amount,
+#                          status flipped back.
+
+
+class BulkDeleteIn(BaseModel):
+    ids: List[str] = Field(..., min_length=1)
+
+
+def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
+    """Audit-log snapshot for bulk-delete operations. Mirror of the sales-
+    side helper. `snapshot` is JSON-serialised inline."""
+    import json as _json
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        action=action,
+        user_id=None,
+        user_name=None,
+        module="purchases",
+        ref=ref,
+        detail=_json.dumps(snapshot, default=str),
+        risk="medium",
+        ip_address=None,
+    ))
+
+
+# ─── BULK DELETE: PURCHASE ORDERS ────────────────────────────────────────────
+@router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
+async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.line_items))
+        .where(PurchaseOrder.id.in_(data.ids))
+    )
+    orders = res.unique().scalars().all()
+    found_ids = {o.id for o in orders}
+    blocked = []
+    for oid in data.ids:
+        if oid not in found_ids:
+            blocked.append({"id": oid, "number": "?", "reason": "Purchase order not found"})
+    for o in orders:
+        status = str(o.status.value) if hasattr(o.status, "value") else str(o.status)
+        if status == "converted":
+            blocked.append({
+                "id": o.id, "number": o.number,
+                "reason": f"PO {o.number} was converted to a Bill — delete the bill first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some purchase orders can't be deleted"})
+
+    deleted = []
+    for o in orders:
+        snapshot = {
+            "id": o.id, "number": o.number, "vendor_id": o.vendor_id,
+            "vendor_name": o.vendor_name, "total": o.total,
+            "status": str(o.status.value) if hasattr(o.status, "value") else str(o.status),
+            "items": [{"id": li.id, "name": li.name, "qty": li.qty, "cost": li.cost} for li in o.line_items],
+        }
+        _audit_delete(db, action="delete_purchase_order", ref=o.number, snapshot=snapshot)
+        await db.delete(o)
+        deleted.append({"id": o.id, "number": o.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+
+
+# ─── BULK DELETE: BILLS ──────────────────────────────────────────────────────
+@router.post("/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
+async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(PurchaseBill)
+        .options(selectinload(PurchaseBill.line_items))
+        .where(PurchaseBill.id.in_(data.ids))
+    )
+    bills = res.unique().scalars().all()
+    found_ids = {b.id for b in bills}
+    blocked = []
+    for bid in data.ids:
+        if bid not in found_ids:
+            blocked.append({"id": bid, "number": "?", "reason": "Bill not found"})
+
+    # Downstream-row guards: any return or payment-allocation blocks.
+    return_counts = dict((await db.execute(
+        select(VendorReturn.bill_id, func.count(VendorReturn.id))
+        .where(VendorReturn.bill_id.in_(found_ids))
+        .group_by(VendorReturn.bill_id)
+    )).all()) if found_ids else {}
+    payment_counts = dict((await db.execute(
+        select(VendorPaymentAllocation.bill_id, func.count(VendorPaymentAllocation.id))
+        .where(VendorPaymentAllocation.bill_id.in_(found_ids))
+        .group_by(VendorPaymentAllocation.bill_id)
+    )).all()) if found_ids else {}
+
+    # Batch-consumption guard: if any batch this bill spawned has
+    # quantity < initial_qty, something was sold/transferred from it.
+    # Safe-delete would corrupt stock counts.
+    bill_batches = (await db.execute(
+        select(ItemBatch).where(ItemBatch.source_ref.in_(found_ids))
+    )).scalars().all() if found_ids else []
+    consumed_bill_ids = {
+        b.source_ref for b in bill_batches
+        if (b.quantity or 0) < (b.initial_qty or 0)
+    }
+
+    for bill in bills:
+        if return_counts.get(bill.id):
+            blocked.append({
+                "id": bill.id, "number": bill.number,
+                "reason": f"Bill {bill.number} has {return_counts[bill.id]} vendor return(s) — delete those first",
+            })
+        if payment_counts.get(bill.id):
+            blocked.append({
+                "id": bill.id, "number": bill.number,
+                "reason": f"Bill {bill.number} has {payment_counts[bill.id]} payment(s) — delete those first",
+            })
+        if bill.id in consumed_bill_ids:
+            blocked.append({
+                "id": bill.id, "number": bill.number,
+                "reason": f"Bill {bill.number} has batches with consumed stock — can't safely remove",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some bills can't be deleted"})
+
+    # Reversal: for each bill, remove the batches it created (only the
+    # ones with full initial qty) + decrement aggregate stock.
+    deleted = []
+    stock_removed = 0
+    for bill in bills:
+        snapshot = {
+            "id": bill.id, "number": bill.number, "vendor_id": bill.vendor_id,
+            "vendor_name": bill.vendor_name, "total": bill.total,
+            "paid_amount": bill.paid_amount, "payment_mode": bill.payment_mode,
+            "status": str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status),
+            "items": [{"id": li.id, "item_id": li.item_id, "name": li.name, "qty": li.qty, "cost": li.cost} for li in bill.line_items],
+        }
+        # Remove this bill's batches from item_batches; track which
+        # (item, branch) pairs need aggregate stock adjustment.
+        bbatches = [b for b in bill_batches if b.source_ref == bill.id]
+        for b in bbatches:
+            stock_removed += int(b.quantity or 0)
+            await db.delete(b)
+        # For untracked items on the bill (no batch row), decrement
+        # aggregate item_stock directly.
+        for li in bill.line_items:
+            if not li.item_id or not li.qty:
+                continue
+            # Was this line's item batch-tracked? Cheap check: if there
+            # was a batch in bbatches for this item_id, we already
+            # handled it via the batch delete above.
+            had_batch = any(b.item_id == li.item_id for b in bbatches)
+            if not had_batch:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=li.item_id, branch_id=bill.branch_id,
+                        delta=-int(li.qty),
+                    )
+                    stock_removed += int(li.qty)
+                except ValueError:
+                    pass  # missing stock row — no-op
+        _audit_delete(db, action="delete_purchase_bill", ref=bill.number, snapshot=snapshot)
+        await db.delete(bill)
+        deleted.append({"id": bill.id, "number": bill.number})
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "stock_removed": stock_removed,
+    }
+
+
+# ─── BULK DELETE: VENDOR RETURNS ─────────────────────────────────────────────
+@router.post("/returns/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
+async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(VendorReturn)
+        .options(selectinload(VendorReturn.line_items))
+        .where(VendorReturn.id.in_(data.ids))
+    )
+    returns = res.unique().scalars().all()
+    found_ids = {r.id for r in returns}
+    blocked = []
+    for rid in data.ids:
+        if rid not in found_ids:
+            blocked.append({"id": rid, "number": "?", "reason": "Return not found"})
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some returns can't be deleted"})
+
+    deleted = []
+    for ret in returns:
+        snapshot = {
+            "id": ret.id, "number": ret.number, "bill_id": ret.bill_id,
+            "bill_number": ret.bill_number, "vendor_id": ret.vendor_id,
+            "total": ret.total, "credited_amount": ret.credited_amount,
+        }
+        _audit_delete(db, action="delete_vendor_return", ref=ret.number, snapshot=snapshot)
+        await db.delete(ret)
+        deleted.append({"id": ret.id, "number": ret.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+
+
+# ─── BULK DELETE: VENDOR PAYMENTS ────────────────────────────────────────────
+@router.post("/payments/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
+async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(VendorPayment)
+        .options(selectinload(VendorPayment.allocations))
+        .where(VendorPayment.id.in_(data.ids))
+    )
+    payments = res.unique().scalars().all()
+    found_ids = {p.id for p in payments}
+    blocked = []
+    for pid in data.ids:
+        if pid not in found_ids:
+            blocked.append({"id": pid, "number": "?", "reason": "Payment not found"})
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some payments can't be deleted"})
+
+    deleted = []
+    for pay in payments:
+        snapshot = {
+            "id": pay.id, "number": pay.number, "vendor_id": pay.vendor_id,
+            "vendor_name": pay.vendor_name, "total_amount": pay.total_amount,
+            "payment_mode": pay.payment_mode,
+            "allocations": [{"bill_id": a.bill_id, "bill_number": a.bill_number, "amount": a.amount} for a in pay.allocations],
+        }
+        # Per allocation: decrement bill.paid_amount + reset status.
+        for alloc in pay.allocations:
+            bill = (await db.execute(
+                select(PurchaseBill).where(PurchaseBill.id == alloc.bill_id)
+            )).scalar_one_or_none()
+            if bill is not None:
+                new_paid = round(max(0.0, float(bill.paid_amount or 0) - float(alloc.amount or 0)), 2)
+                bill.paid_amount = new_paid
+                if new_paid <= 0:
+                    bill.status = "pending"
+                elif new_paid < float(bill.total or 0):
+                    bill.status = "partial"
+        _audit_delete(db, action="delete_vendor_payment", ref=pay.number, snapshot=snapshot)
+        await db.delete(pay)
+        deleted.append({"id": pay.id, "number": pay.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}

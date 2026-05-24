@@ -140,6 +140,16 @@ export const salesAPI = {
     get:    (id)     => api.get(`/sales/payments/${id}`),
     create: (data)   => api.post('/sales/payments/', data),
   },
+  // 2026-05-25: bulk-delete endpoints. All-or-nothing semantics:
+  // backend returns 400 with { detail: { blocked: [...], message } }
+  // if any row is blocked. On success: { deleted: [...], count, ... }.
+  bulkDelete: {
+    invoices:   (ids) => api.post('/sales/bulk-delete', { ids }),
+    orders:     (ids) => api.post('/sales/orders/bulk-delete', { ids }),
+    quotations: (ids) => api.post('/sales/quotations/bulk-delete', { ids }),
+    returns:    (ids) => api.post('/sales/returns/bulk-delete', { ids }),
+    payments:   (ids) => api.post('/sales/payments/bulk-delete', { ids }),
+  },
   quotations: {
     list:    (params) => api.get('/sales/quotations/', { params }),
     get:     (id)     => api.get(`/sales/quotations/${id}`),
@@ -184,6 +194,13 @@ export const purchasesAPI = {
     list:   (params) => api.get('/purchases/payments/', { params }),
     get:    (id)     => api.get(`/purchases/payments/${id}`),
     create: (data)   => api.post('/purchases/payments/', data),
+  },
+  // Bulk delete — same shape as salesAPI.bulkDelete.
+  bulkDelete: {
+    bills:    (ids) => api.post('/purchases/bulk-delete', { ids }),
+    orders:   (ids) => api.post('/purchases/orders/bulk-delete', { ids }),
+    returns:  (ids) => api.post('/purchases/returns/bulk-delete', { ids }),
+    payments: (ids) => api.post('/purchases/payments/bulk-delete', { ids }),
   },
 }
 

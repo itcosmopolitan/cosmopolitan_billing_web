@@ -15,11 +15,16 @@ SYSTEM_ROLES: list[tuple[str, str, str, str, str, list[str]]] = [
         ["*"]),
     ("role-branch-manager",    "branch_manager",    "Branch Manager",     "blue",
         "Manage branch operations, sales, and inventory.",
+        # 2026-05-25: added `purchases.*` so branch managers can record +
+        # delete bills, POs, vendor returns, and vendor payments. Was a
+        # gap — they had invoices.* but no purchases at all, so the new
+        # bulk-delete UX wouldn't work for them on the purchases side.
         ["dashboard.*", "pos.*", "invoices.*",
          "items.view", "items.edit", "items.adjust", "items.export",
          "transfers.create", "transfers.approve", "transfers.delete",
          "adjustments.view", "adjustments.create", "adjustments.approve", "adjustments.delete",
          "customers.*", "vendors.view",
+         "purchases.*",
          "cash.view", "cash.edit",
          "reports.*"]),
     ("role-cashier",           "cashier",           "Cashier",            "teal",
