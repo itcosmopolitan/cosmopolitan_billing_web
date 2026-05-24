@@ -299,6 +299,82 @@ export function Tag({ children, color }) {
   )
 }
 
+// ─── CopyableId ───────────────────────────────────────────────────────────────
+// Renders a human-readable identifier (invoice #, bill #, PO #, etc.) next to
+// a small click-to-copy icon. Used in list rows where operators frequently
+// need to paste the ID into another field (e.g. the Returns flow which
+// requires an exact bill / invoice number).
+//
+// Behavior:
+//   • Click the icon → copies `value` to clipboard + fires a toast.
+//   • Falls back to legacy `document.execCommand('copy')` on browsers that
+//     don't expose `navigator.clipboard` (most importantly: any HTTP-served
+//     dev environment in older Edge / Safari, where `navigator.clipboard`
+//     is undefined despite the user being on a secure-ish context).
+//
+// Props:
+//   • value    — string to copy (also displayed as the visible text by default)
+//   • label    — optional alternative display text (e.g. shorter ellipsised form)
+//   • style    — passed to the wrapper for color / font tweaks
+//   • iconOnly — hide the visible text; only the icon button shows. Useful
+//                in tight cells where the ID is rendered elsewhere already.
+export function CopyableId({ value, label, style, iconOnly = false }) {
+  const handleCopy = async (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!value) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(String(value))
+      } else {
+        // Fallback for non-secure-context dev runs.
+        const ta = document.createElement('textarea')
+        ta.value = String(value)
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      // Dynamic import keeps react-hot-toast out of the primitive's
+      // import surface — callers that don't import toast elsewhere
+      // don't pay for it just by mounting a Card with a CopyableId.
+      const { default: toast } = await import('react-hot-toast')
+      toast.success(`Copied ${label || value}`, { duration: 1500 })
+    } catch (err) {
+      console.error('Copy failed:', err)
+    }
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...style }}>
+      {!iconOnly && <span className="mono">{label || value}</span>}
+      <button
+        type="button"
+        onClick={handleCopy}
+        title={`Copy ${value}`}
+        aria-label={`Copy ${value}`}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--text-muted)',
+          cursor: 'pointer',
+          padding: '2px 4px',
+          borderRadius: 4,
+          fontSize: 11,
+          lineHeight: 1,
+          opacity: 0.6,
+          transition: 'opacity 0.12s, color 0.12s',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--accent)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--text-muted)' }}
+      >
+        ⧉
+      </button>
+    </span>
+  )
+}
+
 export { PaginationBar } from './PaginationBar'
 export { SortableHeader } from './SortableHeader'
 export { default as RowActionsMenu } from './RowActionsMenu'

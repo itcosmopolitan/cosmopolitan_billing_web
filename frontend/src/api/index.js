@@ -100,13 +100,47 @@ export const salesAPI = {
   create:  (data)   => api.post('/sales/', data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
-  returns: (params) => api.get('/sales/returns', { params }),
-  creditPurchases: (params) => api.get('/sales/credit/purchases', { params }),
+  // creditPurchases endpoint removed 2026-05-23 (Sales Phase 1) — see
+  // ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md. The same data is
+  // available via salesAPI.list({ payment_mode: 'credit' }) if needed.
+
+  // Sales Phase 1 PR 2 (2026-05-23): real Sales Orders + Sales Returns
+  // (real, persisted — replaces the SAMPLE_RETURNS hardcoded list).
+  orders: {
+    list:         (params)        => api.get('/sales/orders/', { params }),
+    get:          (id)            => api.get(`/sales/orders/${id}`),
+    create:       (data)          => api.post('/sales/orders/', data),
+    // PR 2 follow-up (2026-05-23): full replace of editable fields +
+    // items. Server rejects with 400 when the SO is in a terminal status
+    // (converted / cancelled) — UI hides the Edit affordance for those.
+    update:       (id, data)      => api.put(`/sales/orders/${id}`, data),
+    updateStatus: (id, status)    => api.patch(`/sales/orders/${id}/status`, null, { params: { status } }),
+    // body = { payment_received: bool, payment_mode: string|null, notes: string|null }
+    convert:      (id, body)      => api.post(`/sales/orders/${id}/convert`, body),
+  },
+  returns: {
+    // 2026-05-24: trailing slash on list + create is LOAD-BEARING.
+    // The backend registers `/{invoice_id}` BEFORE `/returns/`; without
+    // the trailing slash, `/sales/returns` matches `/{invoice_id}` with
+    // invoice_id="returns" → 404 "Invoice not found" toast firing on
+    // every visit to the Returns tab. The same pattern as `/orders/` +
+    // `/quotations/` (both use trailing slash).
+    list:   (params) => api.get('/sales/returns/', { params }),
+    get:    (id)     => api.get(`/sales/returns/${id}`),
+    // body shape — see ConvertToInvoiceIn / SalesReturnCreate in routes/sales.py
+    create: (data)   => api.post('/sales/returns/', data),
+  },
   quotations: {
     list:    (params) => api.get('/sales/quotations/', { params }),
     get:     (id)     => api.get(`/sales/quotations/${id}`),
     create:  (data)   => api.post('/sales/quotations/', data),
-    updateStatus: (id, status) => api.patch(`/sales/quotations/${id}/status`, { status }),
+    // PR 2 follow-up (2026-05-23): full edit. Server rejects 400 when
+    // the quote is in a terminal status (accepted / converted / rejected).
+    update:  (id, data) => api.put(`/sales/quotations/${id}`, data),
+    updateStatus:   (id, status) => api.patch(`/sales/quotations/${id}/status`, { status }),
+    // PR 2: convert quotation → sales order (server copies prices verbatim
+    // + marks the quote `accepted`). Returns the new SO's id + number.
+    convertToOrder: (id)         => api.post(`/sales/quotations/${id}/convert-to-order`),
   },
 }
 
@@ -116,6 +150,19 @@ export const purchasesAPI = {
   get:     (id)     => api.get(`/purchases/${id}`),
   create:  (data)   => api.post('/purchases/', data),
   payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
+  // 2026-05-24: cancel endpoint added. Sales has the equivalent.
+  // Bills are immutable — only Record Payment + Cancel are allowed.
+  cancel:  (id)     => api.post(`/purchases/${id}/cancel`),
+  // Purchase Orders — mirror of salesAPI.orders. PO is the intent doc;
+  // convert spawns a bill (which is what moves stock + creates batches).
+  orders: {
+    list:         (params) => api.get('/purchases/orders/',          { params }),
+    get:          (id)     => api.get(`/purchases/orders/${id}`),
+    create:       (data)   => api.post('/purchases/orders/', data),
+    update:       (id, data) => api.put(`/purchases/orders/${id}`, data),
+    updateStatus: (id, status) => api.patch(`/purchases/orders/${id}/status`, { status }),
+    convert:      (id, body) => api.post(`/purchases/orders/${id}/convert`, body),
+  },
   returns: {
     list:    (params) => api.get('/purchases/returns/', { params }),
     get:     (id)     => api.get(`/purchases/returns/${id}`),

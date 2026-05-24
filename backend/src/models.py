@@ -51,6 +51,38 @@ class QuotationStatus(str, enum.Enum):
     expired  = "expired"
 
 
+class SalesOrderStatus(str, enum.Enum):
+    """Sales Order lifecycle. Mirrors QuotationStatus shape so the convert
+    flows feel consistent. `converted` is terminal — once an SO has spawned
+    an invoice, its line items / totals are locked and the SO can't be
+    edited or re-converted."""
+    draft     = "draft"
+    confirmed = "confirmed"
+    converted = "converted"
+    cancelled = "cancelled"
+
+
+class PurchaseOrderStatus(str, enum.Enum):
+    """Purchase Order lifecycle. Mirrors SalesOrderStatus exactly — the
+    semantics are symmetric (intent → confirmed → spawned-into-bill →
+    cancelled). Kept as a separate enum (rather than re-using
+    SalesOrderStatus) so the two domains can evolve independently if
+    purchase workflows grow new states (e.g. `approved_pending_receipt`).
+    """
+    draft     = "draft"
+    confirmed = "confirmed"
+    converted = "converted"
+    cancelled = "cancelled"
+
+
+class SalesReturnStatus(str, enum.Enum):
+    """SalesReturn lifecycle. Created in `processed` immediately (returns
+    are atomic — stock + credit / refund happens at create time). `void`
+    exists for future "undo a return" support but isn't writable yet."""
+    processed = "processed"
+    void      = "void"
+
+
 # ─── Organisation ─────────────────────────────────────────────────────────────
 class Organisation(Base):
     __tablename__ = "organisations"
@@ -307,6 +339,14 @@ class Customer(Base):
     branch_id       = Column(String, ForeignKey("branches.id"))
     credit_limit    = Column(Float, default=0)
     outstanding     = Column(Float, default=0)
+    # Money we owe the customer (always ≥0). Two write paths today:
+    #   • Overpayment on a customer invoice (excess routed here)
+    #   • PR 2: Sales return with refund_method='credit'
+    # Read paths: Customers table, Credit Notes tab. v1 only running total;
+    # full ledger (CustomerCreditEntry) is deferred — every change writes an
+    # AuditLog row so the trail exists in the audit module either way. See
+    # ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
+    credit_balance  = Column(Float, default=0, nullable=False)
     total_purchases = Column(Float, default=0)
     type            = Column(String, default="retail")  # retail | wholesale
     active          = Column(Boolean, default=True)
@@ -353,7 +393,13 @@ class SaleInvoice(Base):
     discount      = Column(Float, default=0)
     total         = Column(Float, default=0)
     paid_amount   = Column(Float, default=0)
-    payment_mode  = Column(String, default="cash")
+    # 2026-05-23 (Sales Phase 1): payment_mode is intentionally nullable
+    # with no Python-side default. None means "no payment recorded yet"
+    # (invoice sits in status='pending'). The allow-list of non-null
+    # values is enforced by Pydantic — see PaymentMode Literal in
+    # routes/sales.py. Setting `default="cash"` here used to clobber
+    # explicit `None` values during INSERT, masking the unpaid state.
+    payment_mode  = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.paid)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
@@ -490,6 +536,56 @@ class QuotationLineItem(Base):
     item      = relationship("Item", back_populates="quotation_lines")
 
 
+# ─── Sales Order ──────────────────────────────────────────────────────────────
+# Intent-to-invoice: lets a customer (or salesperson) reserve a basket of
+# items + agreed prices that will become an invoice later. No stock side-
+# effect on creation — the stock deduction happens at convert time, same
+# code path as POS sales (consume_batches_atomic for tracked, adjust_stock_
+# atomic for untracked). When converted, status → converted and the SO is
+# locked (no further edits, no re-convert). `converted_invoice_id` is a
+# back-pointer to the spawned invoice so the UI can link to it.
+class SalesOrder(Base):
+    __tablename__ = "sales_orders"
+    id                   = Column(String, primary_key=True)
+    number               = Column(String, unique=True, nullable=False)
+    customer_id          = Column(String, ForeignKey("customers.id"), nullable=True)
+    customer_name        = Column(String, default="Walk-in")
+    branch_id            = Column(String, ForeignKey("branches.id"), nullable=False)
+    branch_name          = Column(String)
+    created_by           = Column(String)
+    date                 = Column(String, nullable=False)
+    expected_date        = Column(String)          # when the customer expects fulfilment
+    subtotal             = Column(Float, default=0)
+    tax_total            = Column(Float, default=0)
+    discount             = Column(Float, default=0)
+    total                = Column(Float, default=0)
+    status               = Column(SAEnum(SalesOrderStatus), default=SalesOrderStatus.draft)
+    # Set when status flips to `converted`. Used by the UI to render a
+    # "View invoice" link on the SO row. Nullable until conversion.
+    converted_invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=True)
+    notes                = Column(Text)
+    created_at           = Column(DateTime, default=datetime.utcnow)
+
+    customer   = relationship("Customer")
+    line_items = relationship("SalesOrderLineItem", back_populates="order", cascade="all, delete-orphan")
+
+
+class SalesOrderLineItem(Base):
+    __tablename__ = "sales_order_line_items"
+    id         = Column(String, primary_key=True)
+    order_id   = Column(String, ForeignKey("sales_orders.id"), nullable=False)
+    item_id    = Column(String, ForeignKey("items.id"), nullable=True)
+    name       = Column(String, nullable=False)
+    qty        = Column(Integer, default=1)
+    price      = Column(Float, default=0)
+    tax_rate   = Column(Float, default=0)
+    discount   = Column(Float, default=0)
+    line_total = Column(Float, default=0)
+
+    order = relationship("SalesOrder", back_populates="line_items")
+    item  = relationship("Item")
+
+
 # ─── Purchase Bill ────────────────────────────────────────────────────────────
 class PurchaseBill(Base):
     __tablename__ = "purchase_bills"
@@ -507,6 +603,13 @@ class PurchaseBill(Base):
     total         = Column(Float, default=0)
     paid_amount   = Column(Float, default=0)
     payment_ref   = Column(String)
+    # 2026-05-24: parity with SaleInvoice.payment_mode. Captured when the
+    # operator records a vendor payment so the Bills tab can show the
+    # method. Nullable (None = no payment yet → status='pending'). Allow-
+    # list enforced server-side via the PaymentMode Literal in
+    # routes/purchases.py (same 4 values as the POS side: cash / card /
+    # upi / bank_transfer).
+    payment_mode  = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.pending)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
@@ -528,10 +631,64 @@ class PurchaseLineItem(Base):
     qty        = Column(Integer, default=1)
     cost       = Column(Float, default=0)
     tax_rate   = Column(Float, default=0)
+    # 2026-05-24: per-line discount (percent). Parity with
+    # SaleLineItem.discount + SalesOrderLineItem.discount.
+    discount   = Column(Float, default=0)
     line_total = Column(Float, default=0)
 
     bill = relationship("PurchaseBill", back_populates="line_items")
     item = relationship("Item", back_populates="purchase_lines")
+
+
+# ─── Purchase Order ──────────────────────────────────────────────────────────
+# Mirror of SalesOrder. Captures the operator's intent to buy from a
+# vendor before a bill is cut. Stock is NOT touched at create / edit —
+# only at convert time, when the PO spawns a PurchaseBill and the bill's
+# create flow handles the receipt-side stock adjustments + batch creation
+# (same path POSPage uses for sales). See routes/purchases.convert_order_to_bill.
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+    id                = Column(String, primary_key=True)
+    number            = Column(String, unique=True, nullable=False)  # PO-YYYY-NNNN
+    vendor_id         = Column(String, ForeignKey("vendors.id"), nullable=False)
+    vendor_name       = Column(String)
+    branch_id         = Column(String, ForeignKey("branches.id"), nullable=False)
+    branch_name       = Column(String)
+    created_by        = Column(String)
+    date              = Column(String, nullable=False)
+    expected_date     = Column(String)              # when the goods are expected
+    subtotal          = Column(Float, default=0)
+    tax_total         = Column(Float, default=0)
+    discount          = Column(Float, default=0)
+    total             = Column(Float, default=0)
+    status            = Column(SAEnum(PurchaseOrderStatus), default=PurchaseOrderStatus.draft)
+    # Set when status flips to `converted`. The UI uses this to render a
+    # "View bill" link on the PO row. Nullable until conversion.
+    converted_bill_id = Column(String, ForeignKey("purchase_bills.id"), nullable=True)
+    notes             = Column(Text)
+    created_at        = Column(DateTime, default=datetime.utcnow)
+
+    vendor     = relationship("Vendor")
+    line_items = relationship("PurchaseOrderLineItem", back_populates="order", cascade="all, delete-orphan")
+
+
+class PurchaseOrderLineItem(Base):
+    __tablename__ = "purchase_order_line_items"
+    id         = Column(String, primary_key=True)
+    order_id   = Column(String, ForeignKey("purchase_orders.id"), nullable=False)
+    item_id    = Column(String, ForeignKey("items.id"), nullable=True)
+    name       = Column(String, nullable=False)
+    qty        = Column(Integer, default=1)
+    # PO captures `cost` (what we'll pay the vendor), matching PurchaseLineItem.
+    # Sales side stores `price`; the field name asymmetry is intentional and
+    # matches the domain language.
+    cost       = Column(Float, default=0)
+    tax_rate   = Column(Float, default=0)
+    discount   = Column(Float, default=0)           # percent (matches SO convention)
+    line_total = Column(Float, default=0)
+
+    order = relationship("PurchaseOrder", back_populates="line_items")
+    item  = relationship("Item")
 
 
 # ─── Vendor Returns ────────────────────────────────────────────────────────────
@@ -578,6 +735,79 @@ class ReturnLineItem(Base):
 
     return_note = relationship("VendorReturn", back_populates="line_items")
     item = relationship("Item")
+
+
+# ─── Sales Return / Credit Note ───────────────────────────────────────────────
+# Customer-side return. ALWAYS linked to a SaleInvoice (invoice_id is
+# nullable=False) — open-ended "I'm returning something with no proof of
+# purchase" is out of scope. Multiple returns against the same invoice are
+# allowed; the create endpoint validates each line against
+# (original_qty - Σ already returned across other SalesReturns for the
+# same invoice + same item_id).
+#
+# Refund handling:
+#   • refund_method='cash'       → operator gave cash from drawer; no
+#     customer.credit_balance change (cash entry tracked separately, out
+#     of scope for now).
+#   • refund_method='credit'     → customer.credit_balance += credited_amount.
+#     Walk-in invoices reject 'credit' (no customer to credit) — the API
+#     forces 'cash' for walk-ins.
+#   • refund_method='adjustment' → no money moves; reduces the invoice's
+#     outstanding balance instead. Useful for "return on a partially-paid
+#     invoice where the return amount exceeds what they've paid so far"
+#     (the excess stays as a balance reduction rather than a cash refund).
+#
+# Stock side-effect: restocks happen at the invoice's branch (where the
+# sale was made), not necessarily the operator's current branch. For
+# tracked items, restocks create a single per-(item,branch) "Returns"
+# batch via add_batch_atomic with source_type='return'.
+class SalesReturn(Base):
+    __tablename__ = "sales_returns"
+    id              = Column(String, primary_key=True)
+    number          = Column(String, unique=True, nullable=False)  # CN-YYYY-NNNN
+    invoice_id      = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
+    invoice_number  = Column(String)              # denormalised for list views
+    customer_id     = Column(String, ForeignKey("customers.id"), nullable=True)  # mirrors invoice
+    customer_name   = Column(String, default="Walk-in")
+    branch_id       = Column(String, ForeignKey("branches.id"), nullable=False)  # mirrors invoice
+    branch_name     = Column(String)
+    date            = Column(String, nullable=False)
+    reason          = Column(String)              # free text — Damaged / Wrong Item / etc.
+    refund_method   = Column(String, default="cash")  # cash | credit | adjustment
+    subtotal        = Column(Float, default=0)
+    tax_total       = Column(Float, default=0)
+    total           = Column(Float, default=0)
+    # How much actually got refunded to the customer (cash or credit).
+    # For partially-paid invoices, this is capped at the paid_amount —
+    # excess return value reduces the invoice's outstanding balance.
+    credited_amount = Column(Float, default=0)
+    status          = Column(SAEnum(SalesReturnStatus), default=SalesReturnStatus.processed)
+    notes           = Column(Text)
+    created_by      = Column(String)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+    invoice    = relationship("SaleInvoice")
+    customer   = relationship("Customer")
+    line_items = relationship("SalesReturnLineItem", back_populates="sales_return", cascade="all, delete-orphan")
+
+
+class SalesReturnLineItem(Base):
+    __tablename__ = "sales_return_line_items"
+    id            = Column(String, primary_key=True)
+    return_id     = Column(String, ForeignKey("sales_returns.id"), nullable=False)
+    # Links back to the original invoice line (item_id can be null for
+    # legacy invoices where the line was free-typed without a catalog id).
+    invoice_line_id = Column(String, ForeignKey("sale_line_items.id"), nullable=True)
+    item_id       = Column(String, ForeignKey("items.id"), nullable=True)
+    name          = Column(String, nullable=False)
+    original_qty  = Column(Integer)                # qty on the original invoice line
+    return_qty    = Column(Integer, default=1)
+    price         = Column(Float, default=0)       # price at time of original sale
+    tax_rate      = Column(Float, default=0)
+    line_total    = Column(Float, default=0)       # incl. tax
+
+    sales_return = relationship("SalesReturn", back_populates="line_items")
+    item         = relationship("Item")
 
 
 # ─── Stock Transfer ───────────────────────────────────────────────────────────

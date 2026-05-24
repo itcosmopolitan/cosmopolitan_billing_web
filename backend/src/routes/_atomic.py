@@ -445,27 +445,91 @@ async def add_payment_atomic(
     *,
     invoice_id: str,
     amount: float,
-) -> Optional[tuple[float, float]]:
-    """Add `amount` to `sale_invoices.paid_amount`, clamped to `total`.
-    Returns (new_paid_amount, balance) or None if the invoice doesn't exist.
+    mode: Optional[str] = None,
+) -> Optional[tuple[float, float, float]]:
+    """Apply `amount` to `sale_invoices.paid_amount`.
 
-    The clamp + comparison happens in one statement; concurrent partial
-    payments can no longer race past the total.
+    Returns `(new_paid_amount, balance, credit_applied)` or None when the
+    invoice doesn't exist.
+
+      • new_paid_amount  — paid_amount after this call (clamped to `total`)
+      • balance          — `max(0, total - new_paid_amount)`
+      • credit_applied   — `max(0, amount - amount_actually_applied_to_invoice)`
+                            > 0 only when amount > balance. Caller decides
+                            what to do with it (route to customer credit or
+                            reject for walk-ins).
+
+    Optional `mode` — when provided, also updates `sale_invoices.payment_mode`
+    to this value in the SAME atomic UPDATE. The caller is expected to have
+    already validated `mode` against the allow-list (Pydantic Literal in
+    PaymentIn). We accept any string here to keep the helper unopinionated;
+    bad values would only land here if a caller bypassed Pydantic.
+
+    Why overwrite (not append)? The invoice has a single `payment_mode`
+    column — there's no payments-history table yet. The most useful semantic
+    for a single-value column is "method of the most recent payment", which
+    matches what the operator just did. For mixed-method invoices the column
+    will reflect the last action — full history is a Phase-N feature.
+
+    Sales Phase 1 (2026-05-23): the previous `MIN(total, paid + amt)` clamp
+    silently swallowed overpayment. We now clamp the invoice the same way
+    (so a single invoice never goes "over-paid") but ALSO report the excess
+    via `credit_applied`. The caller (`routes/sales.record_payment`) routes
+    excess to `customer.credit_balance` when a customer is set, or 400s
+    otherwise. The single-statement UPDATE keeps concurrent partial payments
+    race-safe on the invoice row.
+
+    2026-05-24: added `mode` parameter. Previously, paying a pending
+    invoice (created with `payment_mode=None`) left the mode column null
+    forever — the Sales > Invoices "Mode" cell would render as em-dash
+    even after the operator picked cash/upi/etc. via Record Payment.
     """
     if amount <= 0:
         return None
 
-    # MIN(total, paid_amount + :amt) prevents overpayment race.
-    await db.execute(
-        text(
-            "UPDATE sale_invoices "
-            "SET paid_amount = MIN(total, paid_amount + :amt), "
-            "    status = CASE WHEN MIN(total, paid_amount + :amt) >= total "
-            "                  THEN 'paid' ELSE 'partial' END "
-            "WHERE id = :id"
-        ),
-        {"amt": amount, "id": invoice_id},
+    # Read current state first — we need the pre-update paid+total to compute
+    # how much of `amount` actually landed on the invoice vs spilled into
+    # credit. Could be combined with the UPDATE via RETURNING in pg, but
+    # SQLite is the current target; two round-trips is acceptable.
+    pre = await db.execute(
+        select(SaleInvoice.paid_amount, SaleInvoice.total).where(SaleInvoice.id == invoice_id)
     )
+    pre_row = pre.first()
+    if not pre_row:
+        return None
+    pre_paid = float(pre_row.paid_amount or 0)
+    total = float(pre_row.total or 0)
+    pre_balance = max(0.0, total - pre_paid)
+    applied = min(amount, pre_balance)
+    credit_applied = round(max(0.0, amount - applied), 2)
+
+    # MIN(total, paid + :amt) keeps the invoice itself from going over-paid
+    # even under concurrent partial payments. When `mode` is provided, also
+    # set payment_mode in the same statement so the UI Mode column reflects
+    # the method just used.
+    if mode is not None:
+        await db.execute(
+            text(
+                "UPDATE sale_invoices "
+                "SET paid_amount = MIN(total, paid_amount + :amt), "
+                "    payment_mode = :mode, "
+                "    status = CASE WHEN MIN(total, paid_amount + :amt) >= total "
+                "                  THEN 'paid' ELSE 'partial' END "
+                "WHERE id = :id"
+            ),
+            {"amt": amount, "mode": mode, "id": invoice_id},
+        )
+    else:
+        await db.execute(
+            text(
+                "UPDATE sale_invoices "
+                "SET paid_amount = MIN(total, paid_amount + :amt), "
+                "    status = CASE WHEN MIN(total, paid_amount + :amt) >= total "
+                "                  THEN 'paid' ELSE 'partial' END "
+                "WHERE id = :id"
+            ),
+            {"amt": amount, "id": invoice_id},
+        )
     row = await db.execute(
         select(SaleInvoice.paid_amount, SaleInvoice.total).where(SaleInvoice.id == invoice_id)
     )
@@ -473,5 +537,4 @@ async def add_payment_atomic(
     if not r:
         return None
     paid = float(r.paid_amount or 0)
-    total = float(r.total or 0)
-    return paid, round(total - paid, 2)
+    return paid, round(total - paid, 2), credit_applied

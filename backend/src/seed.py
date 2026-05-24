@@ -45,6 +45,10 @@ from src.models import (
     SaleLineItem,
     AdjustmentRequest,
     AdjustmentStatus,
+    SalesOrder,  # noqa: F401  PR 2: ensure Base.metadata sees these
+    SalesOrderLineItem,  # noqa: F401  so `create_all` makes the new tables
+    SalesReturn,  # noqa: F401  on a fresh DB.
+    SalesReturnLineItem,  # noqa: F401
     StockTransfer,
     TaxRate,
     TransferLineItem,
@@ -384,7 +388,11 @@ async def seed():
                 "id":"inv-004","number":"INV-2024-1844","customer_id":"cu-004","customer_name":"Anand Traders",
                 "branch_id":"br-001","branch_name":"Male","cashier":"Kavitha R.","date":"2024-04-16",
                 "subtotal":17920,"tax_total":296,"discount":200,"total":18016,"paid_amount":0,
-                "payment_mode":"credit","status":"pending","notes":"Net 30 days",
+                # 2026-05-23: dropped legacy "credit" payment_mode here —
+                # status='pending' already says "not yet paid". The
+                # PaymentMode Literal in routes/sales.py no longer accepts
+                # "credit" on new writes (see SaleCreate).
+                "payment_mode":None,"status":"pending","notes":"Net 30 days",
                 "items":[
                     {"id":"si-004a","item_id":"pr-006","name":"Aashirvaad Atta 5kg","qty":50,"price":240,"tax_rate":0,"line_total":12000},
                     {"id":"si-004b","item_id":"pr-003","name":"Sunflower Oil 1L","qty":40,"price":148,"tax_rate":5,"line_total":5920},
@@ -403,7 +411,10 @@ async def seed():
                 "id":"inv-006","number":"INV-2024-1842","customer_id":"cu-004","customer_name":"Anand Traders",
                 "branch_id":"br-001","branch_name":"Male","cashier":"Arjun M.","date":"2024-04-15",
                 "subtotal":44700,"tax_total":740,"discount":400,"total":45040,"paid_amount":20000,
-                "payment_mode":"partial","status":"partial","notes":"Balance ₹25,040 due May 1",
+                # 2026-05-23: "partial" was never a valid payment_mode (it's a
+                # status). The 20k advance was made in cash; the remaining
+                # 25,040 is captured by status='partial' + paid_amount<total.
+                "payment_mode":"cash","status":"partial","notes":"Balance ₹25,040 due May 1",
                 "items":[
                     {"id":"si-006a","item_id":"pr-001","name":"Basmati Rice 5kg","qty":100,"price":299,"tax_rate":0,"line_total":29900},
                     {"id":"si-006b","item_id":"pr-002","name":"Toor Dal 1kg","qty":100,"price":148,"tax_rate":5,"line_total":14800},
@@ -413,7 +424,7 @@ async def seed():
                 "id":"inv-007","number":"INV-2024-1840","customer_id":"cu-006","customer_name":"Krishnan Stores",
                 "branch_id":"br-002","branch_name":"Addu","cashier":"Deepa S.","date":"2024-04-04",
                 "subtotal":3800,"tax_total":684,"discount":0,"total":4484,"paid_amount":0,
-                "payment_mode":"credit","status":"overdue","notes":"Overdue 12 days",
+                "payment_mode":None,"status":"overdue","notes":"Overdue 12 days",
                 "items":[
                     {"id":"si-007a","item_id":"pr-004","name":"Parle-G 800g","qty":40,"price":50,"tax_rate":18,"line_total":2000},
                     {"id":"si-007b","item_id":"pr-009","name":"Haldiram Bhujia 200g","qty":30,"price":60,"tax_rate":18,"line_total":1800},

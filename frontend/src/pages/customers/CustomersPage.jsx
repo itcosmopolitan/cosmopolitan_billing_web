@@ -67,6 +67,11 @@ export default function CustomersPage() {
           branchId: c.branch_id,
           creditLimit: c.credit_limit,
           outstanding: c.outstanding || 0,
+          // Sales Phase 1 (2026-05-23): money we owe the customer
+          // (overpayments + return refunds-as-credit). Separate from
+          // `outstanding` — both can be non-zero. Display only here;
+          // applying credit to an invoice is manual in v1.
+          creditBalance: c.credit_balance || 0,
           totalPurchases: c.total_purchases || 0,
         }))
         setCustomers(mapped)
@@ -188,6 +193,11 @@ export default function CustomersPage() {
                 <th>Branch</th>
                 <SortableHeader label="Credit Limit" sortKey="credit_limit" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
+                {/* Sales Phase 1 (2026-05-23): money we owe the customer.
+                    Read-only display; applying credit is manual in v1. Not
+                    server-side sortable yet (would need backend allow-list
+                    update) — defer to PR 2 if anyone asks. */}
+                <th className="text-right" style={{textAlign:'right'}}>Credit</th>
                 <th style={{width:100}}>Credit Used</th>
                 <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 <th>Status</th>
@@ -211,6 +221,9 @@ export default function CustomersPage() {
                     <td style={{ fontSize:12 }}>{branches.find(b=>b.id===c.branchId)?.name || c.branchId}</td>
                     <td className="text-right mono">{fmt(c.creditLimit)}</td>
                     <td className="text-right mono" style={{ color: c.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(c.outstanding)}</td>
+                    <td className="text-right mono" style={{ color: c.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {c.creditBalance > 0 ? fmt(c.creditBalance) : '—'}
+                    </td>
                     <td>
                       <ProgressBar value={pct} color={pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : 'var(--green)'} />
                       <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:2 }}>{Math.round(pct)}%</div>

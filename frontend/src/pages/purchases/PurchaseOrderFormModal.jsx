@@ -1,29 +1,27 @@
 /**
- * Quotation modal — Create / Edit / View in one component. Mirrors the
- * shape of OrderFormModal (same editingNumber + readOnly props) so the
- * two intents feel identical to operators. Stateless — parent owns
- * `quoteForm` and the patcher; we just render the controls.
+ * Purchase Order modal — Create / Edit / View in one component.
+ * Mirror of sales/OrderFormModal so the two flows feel identical.
  *
- *   • Create:  editingNumber=null, readOnly=false  → "Create Quotation"
- *   • Edit:    editingNumber=<#>,  readOnly=false  → "Edit Quotation — <#>"
- *   • View:    editingNumber=<#>,  readOnly=true   → "Quotation — <#>"
+ *   • Create:  editingNumber=null, readOnly=false  → "Create Purchase Order"
+ *   • Edit:    editingNumber=<#>,  readOnly=false  → "Edit Purchase Order — <#>"
+ *   • View:    editingNumber=<#>,  readOnly=true   → "Purchase Order — <#>"
  *
- * View mode is used for terminal-status quotes (accepted / converted /
- * rejected) where editing would orphan downstream SOs/invoices that were
- * created from the original prices.
+ * No stock side-effect at create / edit — the PO is intent-only; stock
+ * moves only when convert is invoked (which spawns a PurchaseBill,
+ * which is what creates batches via add_batch_atomic).
  *
- * 2026-05-24: Item Name input replaced with InventoryItemPicker. See
- * OrderFormModal for the rationale + legacy-row handling notes — the
- * implementation here is the same.
+ * Branch is implicit (operator's active branch from Topbar) — no inline
+ * branch picker, matching the sales SO modal. Vendor uses the strict
+ * VendorPicker; items use the shared InventoryItemPicker.
  */
 import { fmt } from '@/utils/helpers'
 import { Modal, FormGroup } from '@/components/ui'
-import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
+import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
+import VendorPicker from './VendorPicker'
 
-// Same as OrderFormModal — supports per-line discount in % or ₹ via
-// the inline lineDiscountType flag. See OrderFormModal for the full
-// rationale + the toggle UX.
+// Same shape as sales/OrderFormModal — supports % or ₹ per-line discount
+// via lineDiscountType. Backend stores percent only (parent's save mapper
+// converts ₹ → % before POST).
 function lineDiscountAmount(it, gross) {
   const raw = Math.max(0, Number(it.lineDiscount || 0))
   if (it.lineDiscountType === '₹') return Math.min(gross, raw)
@@ -34,59 +32,63 @@ function computeTotals(items) {
   let gross = 0
   let discount = 0
   items.forEach((it) => {
-    const g = Number(it.qty || 0) * Number(it.price || 0)
+    // Note: purchase lines use `cost`, not `price`. Same math, different name.
+    const g = Number(it.qty || 0) * Number(it.cost || 0)
     gross += g
     discount += lineDiscountAmount(it, g)
   })
   return { gross, discount, total: Math.max(0, gross - discount) }
 }
 
-export default function QuoteFormModal({
+export default function PurchaseOrderFormModal({
   open,
   onClose,
   onSave,
-  quoteForm,
-  pqf,
-  // `branches` prop dropped 2026-05-24 (see OrderFormModal note).
+  poForm,
+  ppof,                     // patcher: (key, value) => setForm({...form, [key]: value})
   saving = false,
   editingNumber = null,
   readOnly = false,
 }) {
   const isEdit = !!editingNumber
   const title = readOnly
-    ? `Quotation — ${editingNumber}`
+    ? `Purchase Order — ${editingNumber}`
     : isEdit
-      ? `Edit Quotation — ${editingNumber}`
-      : 'Create Quotation'
+      ? `Edit Purchase Order — ${editingNumber}`
+      : 'Create Purchase Order'
   const saveLabel = saving
     ? (isEdit ? 'Saving…' : 'Creating…')
     : (isEdit ? 'Save Changes' : 'Create')
 
-  const pickedIds = quoteForm.items.map((it) => it.item_id).filter(Boolean)
+  const pickedIds = poForm.items.map((it) => it.item_id).filter(Boolean)
 
   const handlePick = (i, inv) => {
-    const next = [...quoteForm.items]
+    const next = [...poForm.items]
     next[i] = {
       ...next[i],
       item_id: inv.id,
       name: inv.name,
-      price: inv.selling_price,
+      // Purchase context: prefer the item's `cost_price` (what we usually
+      // pay the vendor) over `selling_price`. Operator can override per
+      // line if this vendor quoted a different rate.
+      cost: inv.cost_price ?? inv.selling_price ?? 0,
       taxRate: inv.tax_rate || 0,
     }
-    pqf('items', next)
+    ppof('items', next)
   }
 
   const handleClear = (i) => {
-    const next = [...quoteForm.items]
+    const next = [...poForm.items]
     next[i] = { ...next[i], item_id: null, name: '' }
-    pqf('items', next)
+    ppof('items', next)
   }
 
-  // See OrderFormModal#toggleDiscountType — same auto-conversion logic.
+  // Toggle discount unit on a row — auto-converts the value so the
+  // EFFECTIVE discount stays constant. Identical logic to sales/OrderFormModal.
   const toggleDiscountType = (i) => {
-    const next = [...quoteForm.items]
+    const next = [...poForm.items]
     const it = next[i]
-    const gross = Number(it.qty || 0) * Number(it.price || 0)
+    const gross = Number(it.qty || 0) * Number(it.cost || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
     const wasAmount = it.lineDiscountType === '₹'
     let newVal
@@ -100,16 +102,17 @@ export default function QuoteFormModal({
       lineDiscount: Math.round(newVal * 100) / 100,
       lineDiscountType: wasAmount ? '%' : '₹',
     }
-    pqf('items', next)
+    ppof('items', next)
   }
 
-  const totals = computeTotals(quoteForm.items)
+  const totals = computeTotals(poForm.items)
 
   return (
     <Modal
       open={open}
       onClose={saving ? () => {} : onClose}
       title={title}
+      icon="📦"
       size="lg"
       footer={
         <>
@@ -124,47 +127,44 @@ export default function QuoteFormModal({
         </>
       }
     >
-      {/* 2026-05-24: same simplification as OrderFormModal — Branch +
-          cart-Discount removed from the header. Quote-specific second
-          field is Valid Until. */}
+      {/* Header: Vendor + Expected Date. Branch is implicit. */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <FormGroup label="Customer" required>
-          <CustomerPicker
+        <FormGroup label="Vendor" required>
+          <VendorPicker
             disabled={readOnly}
-            value={quoteForm.customerId
-              ? { id: quoteForm.customerId, name: quoteForm.customerName }
+            value={poForm.vendorId
+              ? { id: poForm.vendorId, name: poForm.vendorName }
               : null}
-            onPick={(c) => {
-              pqf('customerId', c.id)
-              pqf('customerName', c.name)
+            onPick={(v) => {
+              ppof('vendorId', v.id)
+              ppof('vendorName', v.name)
             }}
             onClear={() => {
-              pqf('customerId', '')
-              pqf('customerName', '')
+              ppof('vendorId', '')
+              ppof('vendorName', '')
             }}
           />
         </FormGroup>
-        <FormGroup label="Valid Until">
+        <FormGroup label="Expected Date">
           <input className="form-input" type="date" disabled={readOnly}
-            value={quoteForm.validUntil} onChange={e => pqf('validUntil', e.target.value)} />
+            value={poForm.expectedDate}
+            onChange={e => ppof('expectedDate', e.target.value)} />
         </FormGroup>
       </div>
+
       <FormGroup label="Items" required>
-        {/* 2026-05-24: same column changes as OrderFormModal — Tax % out,
-            per-line Discount in, 95px right-aligned numeric columns
-            (native number spinner hidden globally; see globals.css). */}
         <table className="data-table" style={{ marginBottom: 12 }}>
           <thead>
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 95, textAlign: 'right' }}>Price</th>
+              <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
               {!readOnly && <th style={{ width: 60 }} />}
             </tr>
           </thead>
           <tbody>
-            {quoteForm.items.map((it, i) => {
+            {poForm.items.map((it, i) => {
               const pickerValue = it.item_id
                 ? { id: it.item_id, name: it.name }
                 : (it.name ? { id: null, name: it.name } : null)
@@ -174,7 +174,7 @@ export default function QuoteFormModal({
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
                     <InventoryItemPicker
-                      branchId={quoteForm.branchId}
+                      branchId={poForm.branchId}
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}
@@ -182,16 +182,24 @@ export default function QuoteFormModal({
                       excludeIds={otherPickedIds}
                     />
                   </td>
-                  <td><input className="form-input" type="number" disabled={readOnly} style={numInputStyle}
-                    value={it.qty} onChange={e => { const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n) }} /></td>
-                  <td><input className="form-input" type="number" disabled={readOnly} style={numInputStyle}
-                    value={it.price} onChange={e => { const n = [...quoteForm.items]; n[i].price = e.target.value; pqf('items', n) }} /></td>
+                  <td>
+                    <input className="form-input" type="number" disabled={readOnly}
+                      style={numInputStyle}
+                      value={it.qty}
+                      onChange={e => { const n = [...poForm.items]; n[i].qty = e.target.value; ppof('items', n) }} />
+                  </td>
+                  <td>
+                    <input className="form-input" type="number" disabled={readOnly}
+                      style={numInputStyle}
+                      value={it.cost}
+                      onChange={e => { const n = [...poForm.items]; n[i].cost = e.target.value; ppof('items', n) }} />
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: 4 }}>
                       <input className="form-input" type="number" disabled={readOnly}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
-                        onChange={e => { const n = [...quoteForm.items]; n[i].lineDiscount = e.target.value; pqf('items', n) }} />
+                        onChange={e => { const n = [...poForm.items]; n[i].lineDiscount = e.target.value; ppof('items', n) }} />
                       <button
                         type="button"
                         disabled={readOnly}
@@ -204,8 +212,10 @@ export default function QuoteFormModal({
                     </div>
                   </td>
                   {!readOnly && (
-                    <td><button className="btn btn-danger btn-xs"
-                      onClick={() => pqf('items', quoteForm.items.filter((_, j) => j !== i))}>Remove</button></td>
+                    <td>
+                      <button className="btn btn-danger btn-xs"
+                        onClick={() => ppof('items', poForm.items.filter((_, j) => j !== i))}>Remove</button>
+                    </td>
                   )}
                 </tr>
               )
@@ -214,13 +224,13 @@ export default function QuoteFormModal({
         </table>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
-            onClick={() => pqf('items', [...quoteForm.items, { item_id: null, name: '', qty: 1, price: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>+ Add Item</button>
+            onClick={() => ppof('items', [...poForm.items, { item_id: null, name: '', qty: 1, cost: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>
+            + Add Item
+          </button>
         )}
       </FormGroup>
 
-      {/* Totals strip — same shape as OrderFormModal. Discount row only
-          renders when at least one line has a non-zero discount. */}
-      {quoteForm.items.length > 0 && (
+      {poForm.items.length > 0 && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
           <div style={{ minWidth: 240 }}>
             <div style={totalsRowStyle}>
@@ -243,7 +253,7 @@ export default function QuoteFormModal({
 
       <FormGroup label="Notes">
         <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-          value={quoteForm.notes} onChange={e => pqf('notes', e.target.value)} />
+          value={poForm.notes} onChange={e => ppof('notes', e.target.value)} />
       </FormGroup>
     </Modal>
   )
@@ -258,14 +268,10 @@ const totalsRowStyle = {
 }
 const totalsLabelStyle = { color: 'var(--text-muted)' }
 const totalsValueStyle = { color: 'var(--text-primary)' }
-
-// See OrderFormModal — same right-aligned + tabular-numerals style.
 const numInputStyle = {
   textAlign: 'right',
   fontVariantNumeric: 'tabular-nums',
 }
-
-// See OrderFormModal#discountToggleStyle — same %/₹ toggle.
 const discountToggleStyle = {
   width: 32,
   padding: 0,

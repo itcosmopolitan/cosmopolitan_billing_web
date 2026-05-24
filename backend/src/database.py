@@ -284,6 +284,13 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("invoice_template_settings", "footer_note", "TEXT DEFAULT ''"),
     ("item_branch_config", "cost_price", "FLOAT"),
     ("stock_adjustments", "request_id", "VARCHAR"),
+    # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
+    # `outstanding` so the two intents don't sign-flip on each other.
+    ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
+    # 2026-05-24: parity with sale_invoices.payment_mode on vendor bills.
+    ("purchase_bills", "payment_mode", "VARCHAR"),
+    # 2026-05-24: per-line discount on purchase bills (percent).
+    ("purchase_line_items", "discount", "FLOAT DEFAULT 0 NOT NULL"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.

@@ -87,7 +87,12 @@ export default function POSPage() {
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const taxPricingMode = useAppStore((s) => s.taxPricingMode)
-  const { cart, customer, discountPct, discountAmt, heldBills, paymentMethod } = store
+  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod } = store
+  // Walk-in + unchecked-payment is the "operator forgot a customer on an
+  // unpaid invoice" case — there's no-one to follow up with for collection.
+  // We surface this exactly once per Complete-Sale attempt via this ref so
+  // the operator can either add a customer or confirm they really mean it.
+  const walkinUnpaidWarnedRef = useRef(false)
 
   // Guard route changes when the cart has unsaved lines. We stash the
   // resume-callback in state so a custom Modal (rather than window.confirm)
@@ -287,6 +292,29 @@ export default function POSPage() {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
 
+    // Sales Phase 1 validation: when "Payment received?" is checked, a
+    // method MUST be picked. Backend would 422 on null mode + paid_amount
+    // anyway, but inline feedback is friendlier.
+    if (paymentReceived && !paymentMethod) {
+      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer)')
+      return
+    }
+
+    // Walk-in + unchecked = unpaid invoice with nobody to follow up with.
+    // Warn the operator exactly ONCE per attempt; the second click
+    // (within the same cart) lets the sale through. Reset the flag on
+    // cart clear so the next sale gets a fresh warning.
+    if (!paymentReceived && !customer?.id && !walkinUnpaidWarnedRef.current) {
+      walkinUnpaidWarnedRef.current = true
+      toast(
+        'Walk-in + unpaid: nobody to chase for collection. ' +
+        'Click again to confirm, or add a customer first.',
+        { icon: '⚠️', duration: 6000 },
+      )
+      return
+    }
+    walkinUnpaidWarnedRef.current = false
+
     setCompleting(true)
     try {
       const totals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
@@ -319,7 +347,9 @@ export default function POSPage() {
           }
         }),
         discount: disc,
-        payment_mode: paymentMethod,
+        // PR 1: null payment_mode → backend creates a pending (unpaid)
+        // invoice. Operator records payment later via Sales → Invoices.
+        payment_mode: paymentReceived ? paymentMethod : null,
         notes: store.notes,
       })
 
@@ -331,7 +361,7 @@ export default function POSPage() {
         subtotal: sub,
         taxTotal: tax,
         discount: disc,
-        method: paymentMethod,
+        method: paymentReceived ? paymentMethod : null,
         items: cart.map(i => ({
           name: i.name,
           qty: i.qty,
@@ -770,14 +800,55 @@ export default function POSPage() {
             <span style={{ fontFamily: 'DM Mono', color: 'var(--accent)' }}>{fmt(total)}</span>
           </div>
 
-          {/* Payment methods */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
-            {[{ id: 'cash', icon: '💵', label: 'Cash' }, { id: 'card', icon: '💳', label: 'Card' }, { id: 'upi', icon: '📱', label: 'UPI' }, { id: 'credit', icon: '📋', label: 'Credit' }].map((m) => (
-              <button key={m.id} onClick={() => store.setPaymentMethod(m.id)}
-                style={{ padding: '8px', borderRadius: 7, border: `1.5px solid ${paymentMethod === m.id ? 'var(--accent)' : 'var(--border-default)'}`, background: paymentMethod === m.id ? 'var(--accent-bg)' : 'transparent', color: paymentMethod === m.id ? 'var(--accent)' : 'var(--text-muted)', fontSize: 12.5, cursor: 'pointer', fontFamily: 'DM Sans,sans-serif', fontWeight: 500, transition: 'all 0.12s' }}>
-                {m.icon} {m.label}
-              </button>
-            ))}
+          {/* Sales Phase 1 (2026-05-23): two-step payment UX. The checkbox
+              is the explicit "did money change hands?" gate; the method
+              dropdown only appears + matters when checked. Unchecked →
+              backend creates a pending invoice; operator records payment
+              later from Sales → Invoices. See
+              ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md. */}
+          <div style={{ marginBottom: 10 }}>
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 10px',
+              border: `1.5px solid ${paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
+              background: paymentReceived ? 'var(--accent-bg)' : 'transparent',
+              borderRadius: 7, cursor: 'pointer',
+              fontSize: 13, fontWeight: 500,
+              color: paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
+              transition: 'all 0.12s',
+            }}>
+              <input
+                type="checkbox"
+                checked={paymentReceived}
+                onChange={(e) => store.setPaymentReceived(e.target.checked)}
+                style={{ accentColor: 'var(--accent)' }}
+              />
+              <span>Payment received?</span>
+            </label>
+            {paymentReceived && (
+              <select
+                className="form-input"
+                value={paymentMethod || ''}
+                onChange={(e) => store.setPaymentMethod(e.target.value || null)}
+                style={{ marginTop: 6, fontSize: 13 }}
+              >
+                <option value="" disabled>Select method…</option>
+                <option value="cash">💵 Cash</option>
+                <option value="card">💳 Card</option>
+                <option value="upi">📱 UPI</option>
+                <option value="bank_transfer">🏦 Bank Transfer</option>
+              </select>
+            )}
+            {!paymentReceived && (
+              <div style={{
+                marginTop: 6, padding: '6px 10px',
+                fontSize: 11, color: 'var(--text-muted)',
+                lineHeight: 1.5,
+              }}>
+                Sale will be recorded as <strong>pending</strong>. Record payment
+                from Sales → Invoices when the customer pays.
+              </div>
+            )}
           </div>
 
           <button className="btn btn-primary btn-xl" style={{ width: '100%', justifyContent: 'center', fontSize: 15, opacity: completing ? 0.6 : 1, cursor: completing ? 'not-allowed' : 'pointer' }} onClick={handleComplete} disabled={completing}>
