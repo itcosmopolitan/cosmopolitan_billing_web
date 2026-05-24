@@ -4,6 +4,7 @@ Uses pydantic-settings to load from environment variables with sensible defaults
 """
 from typing import List
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -11,7 +12,7 @@ class Settings(BaseSettings):
     """Application configuration loaded from environment variables"""
 
     # ─── Database ──────────────────────────────────────────────────────────
-    database_url: str = "sqlite+aiosqlite:///./retailos.db"
+    database_url: str = "postgresql+asyncpg://cosmo_stage_user:D9trvl8SNLJ5EAvcIzmNi0kHexyRu76K@dpg-d7lq2f0g4nts73ba3ihg-a.oregon-postgres.render.com/cosmo_stage"
 
     # ─── API Configuration ─────────────────────────────────────────────────
     api_version: str = "v1"
@@ -28,6 +29,14 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:5173"
     ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Parse CORS origins from comma-separated string or keep as list"""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     # ─── JWT Configuration ────────────────────────────────────────────────
     jwt_secret_key: str = "your-secret-key-change-in-production"

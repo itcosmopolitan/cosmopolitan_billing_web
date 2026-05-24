@@ -42,11 +42,13 @@ pip install -r requirements.txt -q
 echo [OK] Backend ready
 
 :: Seed DB if not exists
-if not exist "%~dp0backend\retailos.db" (
-    echo Seeding demo database...
-    python src/seed.py
-    echo [OK] Database seeded
-)
+:: DISABLED: Seed data insertion disabled. To seed the database manually, run:
+::   cd backend && python src/seed.py
+:: if not exist "%~dp0backend\retailos.db" (
+::     echo Seeding demo database...
+::     python src/seed.py
+::     echo [OK] Database seeded
+:: )
 
 echo.
 echo Starting services...
@@ -100,10 +102,6 @@ echo       Cosmopolitan Pro is running!
 echo  ==========================================
 echo   App:      http://localhost:3000
 echo   API Docs: http://localhost:8080/api/docs
-echo  ------------------------------------------
-echo   Login:    suresh@srimurugan.com
-echo   Password: admin123
-echo  ==========================================
 echo.
 
 :: Open browser

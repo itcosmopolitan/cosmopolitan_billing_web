@@ -183,7 +183,7 @@ class Item(Base):
     name            = Column(String, nullable=False)
     sku             = Column(String, unique=True)
     barcode         = Column(String)
-    category_id     = Column(String, ForeignKey("categories.id"))
+    category_id     = Column(String, ForeignKey("categories.id"), nullable=True)
     brand           = Column(String)
     unit            = Column(String, default="Pcs")
     cost_price      = Column(Float, default=0)

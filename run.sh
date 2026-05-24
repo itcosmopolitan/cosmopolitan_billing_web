@@ -54,13 +54,15 @@ pip3 install -r requirements.txt -q
 echo -e "${GREEN}✓ Backend dependencies installed${RESET}"
 
 # ─── Seed database ────────────────────────────────────────────────────────────
-if [ ! -f "$ROOT_DIR/backend/retailos.db" ]; then
-  echo -e "${YELLOW}Seeding demo database...${RESET}"
-  python3 src/seed.py
-  echo -e "${GREEN}✓ Database seeded with demo data${RESET}"
-else
-  echo -e "${GREEN}✓ Database exists (run 'python src/seed.py' to reseed)${RESET}"
-fi
+# DISABLED: Seed data insertion disabled. To seed the database manually, run:
+#   cd backend && python src/seed.py
+# if [ ! -f "$ROOT_DIR/backend/retailos.db" ]; then
+#   echo -e "${YELLOW}Seeding demo database...${RESET}"
+#   python3 src/seed.py
+#   echo -e "${GREEN}✓ Database seeded with demo data${RESET}"
+# else
+#   echo -e "${GREEN}✓ Database exists (run 'python src/seed.py' to reseed)${RESET}"
+# fi
 
 echo ""
 echo -e "${BOLD}Starting services...${RESET}"

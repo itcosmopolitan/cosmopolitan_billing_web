@@ -83,6 +83,7 @@ async def init_schema() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
+        await _ensure_nullable_columns(conn)
         await _bootstrap_system_roles(conn)
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
@@ -125,11 +126,34 @@ async def _ensure_columns(conn) -> None:
     """For SQLite, add any missing columns from `_ADDITIVE_COLUMNS`. No-op on
     columns that already exist."""
     for table, column, ddl_type in _ADDITIVE_COLUMNS:
-        rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
-        existing = {r[1] for r in rows}  # row[1] = column name
+        rows = (
+            await conn.execute(
+                text(f"""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = '{table}'
+                """)
+            )
+        ).fetchall()
+        existing = {r[0] for r in rows}  # row[1] = column name
         if column in existing:
             continue
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+
+
+async def _ensure_nullable_columns(conn) -> None:
+    """Ensure columns that should be nullable are nullable in existing DBs."""
+    if conn.dialect.name == "postgresql":
+        nullable = (
+            await conn.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'items' AND column_name = 'category_id'"
+                )
+            )
+        ).scalar_one_or_none()
+        if nullable == "NO":
+            await conn.execute(text("ALTER TABLE items ALTER COLUMN category_id DROP NOT NULL"))
 
 
 async def _bootstrap_document_numbering(conn) -> None:

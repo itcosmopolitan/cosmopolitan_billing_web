@@ -96,7 +96,7 @@ class ItemCreate(BaseModel):
     name: str
     sku: Optional[str] = None
     barcode: Optional[str] = None
-    category_id: str
+    category_id: Optional[str] = None
     brand: Optional[str] = None
     unit: str = "Pcs"
     cost_price: float
@@ -315,7 +315,7 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
         name=data.name,
         sku=data.sku or f"SKU-{uuid.uuid4().hex[:6].upper()}",
         barcode=data.barcode,
-        category_id=data.category_id,
+        category_id=data.category_id or None,
         brand=data.brand,
         unit=data.unit,
         cost_price=data.cost_price,
@@ -381,7 +381,7 @@ async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends
     item.name = data.name
     item.sku = data.sku or item.sku
     item.barcode = data.barcode
-    item.category_id = data.category_id
+    item.category_id = data.category_id or None
     item.brand = data.brand
     item.unit = data.unit
     item.cost_price = data.cost_price
