@@ -126,16 +126,25 @@ async def _ensure_columns(conn) -> None:
     """For SQLite, add any missing columns from `_ADDITIVE_COLUMNS`. No-op on
     columns that already exist."""
     for table, column, ddl_type in _ADDITIVE_COLUMNS:
-        rows = (
-            await conn.execute(
-                text(f"""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = '{table}'
-                """)
-            )
-        ).fetchall()
-        existing = {r[0] for r in rows}  # row[1] = column name
+        if conn.dialect.name == "sqlite":
+            rows = (
+                await conn.execute(
+                    text(f"PRAGMA table_info('{table}')")
+                )
+            ).fetchall()
+            existing = {r[1] for r in rows}
+        else:
+            rows = (
+                await conn.execute(
+                    text(f"""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = '{table}'
+                    """)
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+
         if column in existing:
             continue
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))

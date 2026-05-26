@@ -4,6 +4,9 @@ Multi-branch retail billing & POS platform
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
 
 from src import config
 from src.database import init_schema
@@ -75,3 +78,23 @@ async def startup():
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": settings.app_title, "version": settings.app_version}
+
+# ─── Frontend Static Files ───────────────────────────────────────────────────
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=FRONTEND_DIST / "assets"),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        index_path = FRONTEND_DIST / "index.html"
+
+        if index_path.exists():
+            return FileResponse(index_path)
+
+        return {"error": "Frontend not built"}
