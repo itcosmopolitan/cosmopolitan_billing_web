@@ -24,8 +24,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ---------------- Final ----------------
 WORKDIR /app
 
-RUN chmod +x run.sh
+RUN chmod +x start.sh
 
 EXPOSE 10000
 
-CMD ["./run.sh"]
+CMD ["./start.sh"]
