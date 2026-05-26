@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     """Application configuration loaded from environment variables"""
 
     # ─── Database ──────────────────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://cosmo_stage_user:D9trvl8SNLJ5EAvcIzmNi0kHexyRu76K@dpg-d7lq2f0g4nts73ba3ihg-a.oregon-postgres.render.com/cosmo_stage"
+    database_url: str = "sqlite+aiosqlite:///./retailos.db"
 
     # ─── API Configuration ─────────────────────────────────────────────────
     api_version: str = "v1"
