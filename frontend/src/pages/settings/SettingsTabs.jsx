@@ -13,6 +13,7 @@ import { settingsAPI, taxRatesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
 import { Card, AlertBar, Tag, Modal, FormGroup, FormRow } from '@/components/ui'
+import { getInvoiceConfig, saveInvoiceConfig, getColumnStructure, getColumnHeaders } from '@/utils/invoiceConfig'
 
 const SCOPE_LABELS = {
   per_branch: 'Per Branch',
@@ -20,6 +21,13 @@ const SCOPE_LABELS = {
 }
 
 const EMPTY_TAX_FORM = { rate: '', label: '', examples: '' }
+const INVOICE_CHECKBOX_GROUP_STYLE = {
+  display: 'flex',
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  columnGap: 20,
+  rowGap: 8,
+}
 
 /** Client-side preview — mirrors backend `render_number`. */
 function previewFormat(prefix, formatStr, seq) {
@@ -436,47 +444,216 @@ export function NumberingTab() {
 }
 
 export function InvoiceTemplateTab() {
+  const savedConfig = useMemo(() => getInvoiceConfig(), [])
+  const [headerStyle, setHeaderStyle] = useState(savedConfig.headerStyle)
+  const [showAttr, setShowAttr] = useState(savedConfig.showAttr)
+  const [showSize, setShowSize] = useState(savedConfig.showSize)
+  const [showDisc, setShowDisc] = useState(savedConfig.showDisc)
+  const [showHsn, setShowHsn] = useState(savedConfig.showHsn)
+  const [taxMode, setTaxMode] = useState(savedConfig.taxMode)
+  const [showCustomer, setShowCustomer] = useState(savedConfig.showCustomer)
+  const [showPayment, setShowPayment] = useState(savedConfig.showPayment)
+  const [showPrintedDate, setShowPrintedDate] = useState(savedConfig.showPrintedDate)
+  const [showStore, setShowStore] = useState(savedConfig.showStore)
+  const [showCashier, setShowCashier] = useState(savedConfig.showCashier)
+  const [footerMsg, setFooterMsg] = useState(savedConfig.footerMsg)
+  const [footerNote, setFooterNote] = useState(savedConfig.footerNote)
+
+  const sampleItems = [
+    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'MVR270.00', cgst: '0', sgst: '0', total: 'MVR270.00' },
+    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', disc: '5', qty: '2', price: 'MVR17.80', cgst: '0.90', sgst: '0.90', total: 'MVR35.60' },
+  ]
+
+  const currentConfig = useMemo(() => ({
+    headerStyle, showAttr, showSize, showDisc, showHsn, taxMode, showCustomer, showPayment, showPrintedDate, showStore, showCashier, footerMsg, footerNote
+  }), [headerStyle, showAttr, showSize, showDisc, showHsn, taxMode, showCustomer, showPayment, showPrintedDate, showStore, showCashier, footerMsg, footerNote])
+
+  const columnGrid = useMemo(() => getColumnStructure(currentConfig), [currentConfig])
+  const columnHeaders = useMemo(() => getColumnHeaders(currentConfig), [currentConfig])
+
+  const handleSave = () => {
+    saveInvoiceConfig(currentConfig)
+    toast.success('Invoice template saved!')
+  }
+
   return (
-    <div className="grid-2" style={{ alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'start' }}>
       <Card title="Invoice Template Settings">
-        {[
-          { label: 'Header',         options: ['Company name + logo','Logo only','Name only'] },
-          { label: 'Show HSN Codes', options: ['Yes','No'] },
-          { label: 'Show Item Desc', options: ['Yes','No'] },
-          { label: 'Tax Display',    options: ['CGST+SGST','Integrated GST','Total GST only'] },
-          { label: 'Footer Text',    type: 'textarea', value: 'Thank you for your business!\nGoods once sold cannot be returned.' },
-          { label: 'Terms',          type: 'textarea', value: 'Payment due within 30 days. Interest @ 2% per month on overdue.' },
-        ].map((r) => (
-          <div key={r.label} style={{ marginBottom: 12 }}>
-            <label className="form-label">{r.label}</label>
-            {r.type === 'textarea'
-              ? <textarea className="form-input" defaultValue={r.value} style={{ height: 64 }} />
-              : <select className="form-input"><option>{r.options[0]}</option>{r.options.slice(1).map((o) => <option key={o}>{o}</option>)}</select>}
+        <FormGroup label="Header Style">
+          <select className="form-input" value={headerStyle} onChange={(e) => setHeaderStyle(e.target.value)}>
+            <option value="full">Full (name, address, GST, phone)</option>
+            <option value="nameonly">Name only</option>
+            <option value="logo">Logo only</option>
+          </select>
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>Company name, address, GST ID, and phone</div>
+        </FormGroup>
+
+        <FormGroup label="Item Details to Show" required>
+          <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showAttr} onChange={(e) => setShowAttr(e.target.checked)} />
+              <span>Item attributes (color, size, etc.)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showSize} onChange={(e) => setShowSize(e.target.checked)} />
+              <span>Size column</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showDisc} onChange={(e) => setShowDisc(e.target.checked)} />
+              <span>Discount % column</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showHsn} onChange={(e) => setShowHsn(e.target.checked)} />
+              <span>HSN codes</span>
+            </label>
           </div>
-        ))}
-        <button className="btn btn-primary btn-sm" onClick={() => toast('Template settings saved')}>Save Template</button>
+        </FormGroup>
+
+        <FormGroup label="Tax Display Mode">
+          <select className="form-input" value={taxMode} onChange={(e) => setTaxMode(e.target.value)}>
+            <option value="total">Total only</option>
+            <option value="itemized">Show itemized tax breakdown</option>
+          </select>
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>Display tax information at bottom of receipt</div>
+        </FormGroup>
+
+        <FormGroup label="Header Fields">
+          <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showPrintedDate} onChange={(e) => setShowPrintedDate(e.target.checked)} />
+              <span>Show printed date & time</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showStore} onChange={(e) => setShowStore(e.target.checked)} />
+              <span>Show store name</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showCashier} onChange={(e) => setShowCashier(e.target.checked)} />
+              <span>Show cashier name</span>
+            </label>
+          </div>
+        </FormGroup>
+
+        <FormGroup label="Other Options">
+          <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showCustomer} onChange={(e) => setShowCustomer(e.target.checked)} />
+              <span>Show customer name / GSTIN</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} />
+              <span>Show payment method</span>
+            </label>
+          </div>
+        </FormGroup>
+
+        <FormGroup label="Footer Message">
+          <textarea 
+            className="form-input" 
+            value={footerMsg} 
+            onChange={(e) => setFooterMsg(e.target.value)} 
+            style={{ height: 80 }} 
+          />
+        </FormGroup>
+
+        <FormGroup label="Footer Note (Secondary)">
+          <textarea 
+            className="form-input" 
+            value={footerNote} 
+            onChange={(e) => setFooterNote(e.target.value)} 
+            style={{ height: 80 }} 
+          />
+        </FormGroup>
+
+        <button className="btn btn-primary" onClick={handleSave}>💾 Save Template Configuration</button>
       </Card>
-      <Card title="Invoice Preview">
-        <div style={{ border: '1px solid var(--border-default)', borderRadius: 10, padding: 20, fontFamily: 'DM Mono', fontSize: 11.5, background: 'var(--bg-raised)', lineHeight: 1.7 }}>
-          <div style={{ textAlign: 'center', marginBottom: 10 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>SRI MURUGAN TRADERS PVT LTD</div>
-            <div>12, Anna Nagar West, Chennai — 600 040</div>
-            <div>GSTIN: 33AAZCS1429R1Z1 | Ph: 044-2626 1234</div>
+
+      <Card title="Live Preview">
+        <div style={{ border: '1px solid var(--border-default)', borderRadius: 10, padding: 16, fontFamily: 'DM Mono, monospace', fontSize: 10.5, color: 'var(--text-primary)', background: 'var(--bg-raised)', lineHeight: 1.4, maxHeight: 600, overflowY: 'auto' }}>
+          {/* Top info line */}
+          {(showPrintedDate || showStore || showCashier) && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, fontSize: 9, marginBottom: 8, textAlign: 'center' }}>
+              {showPrintedDate && <div>Printed: 27 May 2026, 2:30 PM</div>}
+              {showStore && <div>Store: Champa Shop</div>}
+              {showCashier && <div>Cashier: Admin</div>}
+            </div>
+          )}
+
+          {/* Header */}
+          {headerStyle !== 'logo' && (
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              {(headerStyle === 'full' || headerStyle === 'nameonly') && (
+                <>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>Champa Brothers Maldives Pvt Ltd</div>
+                  {headerStyle === 'full' && (
+                    <>
+                      <div style={{ fontSize: 10 }}>LOT11155 / HULHUMALE PHASE 01</div>
+                      <div style={{ fontSize: 10 }}>PHONE : 3350000 / VIBER : 7957182</div>
+                      <div style={{ fontSize: 10 }}>TIN: 1017548GST501</div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          <div style={{ fontWeight: 700, textAlign: 'center', margin: '8px 0', fontSize: 12 }}>TAX INVOICE</div>
+          {showCustomer && <div style={{ margin: '6px 0', fontSize: 10 }}><span style={{ fontWeight: 700 }}>Bill To:</span> Sample Customer</div>}
+
+          {/* Column headers */}
+          <div style={{ display: `grid`, gridTemplateColumns: columnGrid, gap: 4, fontWeight: 700, borderBottom: '1px solid #000', paddingBottom: 4, marginBottom: 4, fontSize: 10.5 }}>
+            {columnHeaders.map((h) => (
+              <div key={h} style={{ textAlign: h === 'Item Name' ? 'left' : 'right' }}>{h}</div>
+            ))}
           </div>
-          <div style={{ textAlign: 'center', fontWeight: 700, borderTop: '1px solid var(--border-default)', borderBottom: '1px solid var(--border-default)', padding: '4px 0', margin: '8px 0' }}>TAX INVOICE</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-            <div><div>Invoice #: INV-2024-1847</div><div>Date: 16/04/2024</div></div>
-            <div><div>Customer: Rajesh Stores</div><div>GSTIN: 33ABCDE1234F1Z5</div></div>
+
+          {/* Sample rows */}
+          {sampleItems.map((item, idx) => (
+            <div key={idx} style={{ display: `grid`, gridTemplateColumns: columnGrid, gap: 4, padding: '3px 0', fontSize: 10 }}>
+              {['name', 'hsn', 'attr', 'size', 'disc', 'qty', 'price', 'total'].map((field) => {
+                if (field === 'hsn' && !showHsn) return null
+                if (field === 'attr' && !showAttr) return null
+                if (field === 'size' && !showSize) return null
+                if (field === 'disc' && !showDisc) return null
+                const value = field === 'price' ? item.price : field === 'disc' ? item.disc + '%' : item[field]
+                return (
+                  <div key={field} style={{ textAlign: ['name'].includes(field) ? 'left' : 'right' }}>
+                    {value}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+
+          <div style={{ borderTop: '1px solid #000', margin: '8px 0' }} />
+
+          {/* Totals */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
+            <div>Subtotal</div>
+            <div>MVR305.60</div>
           </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
-            <thead><tr>{['Item','Qty','Rate','GST','Amount'].map((h) => <th key={h} style={{ padding: '4px 6px', borderBottom: '1px solid var(--border-default)', textAlign: h === 'Item' ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
-            <tbody>
-              <tr>{['Basmati Rice 5kg','20','₹299','0%','₹5,980'].map((c, i) => <td key={i} style={{ padding: '3px 6px', textAlign: i === 0 ? 'left' : 'right' }}>{c}</td>)}</tr>
-            </tbody>
-          </table>
-          <div style={{ textAlign: 'right', borderTop: '1px solid var(--border-default)', paddingTop: 6 }}>
-            <div>Subtotal: ₹5,980 | CGST: ₹0 | SGST: ₹0</div>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>Total: ₹5,980</div>
+          {taxMode === 'itemized' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
+              <div>Tax (18%)</div>
+              <div>MVR27.50</div>
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontWeight: 700, fontSize: 11, marginBottom: 2 }}>
+            <div>TOTAL</div>
+            <div>MVR333.10</div>
+          </div>
+
+          {showPayment && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10 }}>
+              <div>Payment</div>
+              <div>CASH</div>
+            </div>
+          )}
+
+          <div style={{ borderTop: '1px solid #000', margin: '8px 0' }} />
+          <div style={{ textAlign: 'center', fontSize: 9.5, lineHeight: 1.5 }}>
+            <div>{footerMsg}</div>
+            <div>{footerNote}</div>
           </div>
         </div>
       </Card>
