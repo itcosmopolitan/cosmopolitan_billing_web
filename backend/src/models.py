@@ -5,7 +5,7 @@ All ORM models for the retail platform
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -78,6 +78,7 @@ class Branch(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     stock      = relationship("ItemStock", back_populates="branch")
+    item_configs = relationship("ItemBranchConfig", back_populates="branch")
     cash_entries = relationship("CashEntry", back_populates="branch")
 
 
@@ -200,9 +201,32 @@ class Item(Base):
 
     category  = relationship("Category", back_populates="items")
     stock     = relationship("ItemStock", back_populates="item")
+    branch_configs = relationship("ItemBranchConfig", back_populates="item")
     sale_lines = relationship("SaleLineItem", back_populates="item")
     purchase_lines = relationship("PurchaseLineItem", back_populates="item")
     quotation_lines = relationship("QuotationLineItem", back_populates="item")
+
+
+# ─── Item Branch Config (listing + branch price) ─────────────────────────────
+class ItemBranchConfig(Base):
+    """Per-branch listing and pricing. ``selling_price`` NULL → item default."""
+    __tablename__ = "item_branch_config"
+    __table_args__ = (
+        UniqueConstraint("item_id", "branch_id", name="uq_item_branch_config"),
+    )
+
+    id             = Column(String, primary_key=True)
+    item_id        = Column(String, ForeignKey("items.id"), nullable=False)
+    branch_id      = Column(String, ForeignKey("branches.id"), nullable=False)
+    is_available   = Column(Boolean, default=True)
+    cost_price     = Column(Float, nullable=True)
+    selling_price  = Column(Float, nullable=True)
+    reorder_level  = Column(Integer, nullable=True)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+    updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    item   = relationship("Item", back_populates="branch_configs")
+    branch = relationship("Branch", back_populates="item_configs")
 
 
 # ─── Item Stock (per branch) ──────────────────────────────────────────────────

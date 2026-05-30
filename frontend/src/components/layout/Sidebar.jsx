@@ -16,7 +16,8 @@ import { roleLabels } from '@/utils/helpers'
 const navItems = [
   { section: 'Main',      path: '/dashboard',  Icon: Icon.Dashboard,   label: 'Dashboard',       perm: 'dashboard.view' },
   { section: null,        path: '/pos',        Icon: Icon.Receipt,     label: 'POS Billing',     perm: 'pos.use' },
-  { section: 'Inventory', path: '/items',      Icon: Icon.Package,     label: 'Items & Stock',   perm: 'items.view',     badge: 4 },
+  { section: 'Inventory', path: '/item-master', Icon: Icon.List,     label: 'Item Master',     perm: 'items.view' },
+  { section: null,        path: '/items',      Icon: Icon.Package,  label: 'Items & Stock',   perm: 'items.view',     badge: 4 },
   { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view', badge: 1 },
   { section: 'Commerce',  path: '/sales',      Icon: Icon.ShoppingBag, label: 'Sales',           perm: 'invoices.view' },
   { section: null,        path: '/purchases',  Icon: Icon.Clipboard,   label: 'Purchases',       perm: 'purchases.view', badge: 5 },
