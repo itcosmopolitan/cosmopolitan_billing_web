@@ -19,10 +19,37 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res.data,
   (err) => {
-    const msg = err?.response?.data?.detail || err.message || 'Request failed'
+    const rawDetail = err?.response?.data?.detail
     const status = err?.response?.status
     const url = err?.config?.url || ''
     const isAuthEndpoint = url.startsWith('/auth/')
+
+    // Some endpoints return structured detail objects (e.g. bulk-delete
+    // returns `{blocked: [...], message: "..."}` so the caller can render
+    // per-row reasons inline). Pull `.message` out for the global toast;
+    // never call `toast.error()` with a non-string (react-hot-toast will
+    // render `[object Object]`). The original error stays attached on
+    // err.response.data.detail so the caller's catch block can still
+    // read the structured payload.
+    let msg
+    if (typeof rawDetail === 'string') {
+      msg = rawDetail
+    } else if (rawDetail && typeof rawDetail === 'object') {
+      msg = rawDetail.message || JSON.stringify(rawDetail)
+    } else {
+      msg = err.message || 'Request failed'
+    }
+
+    // 2026-05-25: bulk-delete endpoints surface a structured `{blocked,
+    // message}` body on guard failures. The caller mounts a confirm modal
+    // that lists the blocked rows + reasons inline — a global toast on
+    // top of that is just noise. Suppress it for this one shape.
+    const isBulkDeleteBlocked =
+      status === 400 &&
+      url.includes('/bulk-delete') &&
+      rawDetail && typeof rawDetail === 'object' &&
+      Array.isArray(rawDetail.blocked)
+
     if (status === 401) {
       // Always surface the message — silent redirect on 401 made wrong-password
       // login look broken (no toast, no UI change).
@@ -34,7 +61,7 @@ api.interceptors.response.use(
         const here = window.location.pathname
         if (here !== '/login') window.location.href = '/login'
       }
-    } else {
+    } else if (!isBulkDeleteBlocked) {
       toast.error(msg)
     }
     return Promise.reject(err)

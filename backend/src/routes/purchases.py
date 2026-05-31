@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -27,7 +28,13 @@ from src.models import (
     VendorReturn,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked
+from src.routes._atomic import (
+    add_batch_atomic,
+    adjust_stock_atomic,
+    consume_batches_atomic,
+    is_tracked,
+    set_batch_quantity_atomic,
+)
 from src.routes._serializers import get_user_branch_ids
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
@@ -340,20 +347,23 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
                         400,
                         f"{item.name}: {'; '.join(date_errs)}",
                     )
-                await add_batch_atomic(
-                    db,
-                    item_id=item.item_id,
-                    branch_id=data.branch_id,
-                    qty=item.qty,
-                    batch_number=item.batch_number,
-                    mfg_date=item.mfg_date,
-                    expiry_date=item.expiry_date,
-                    cost_price=float(item.cost or 0),
-                    vendor_id=data.vendor_id,
-                    source_type="purchase",
-                    source_ref=bill.id,
-                    received_date=data.date or today,
-                )
+                try:
+                    await add_batch_atomic(
+                        db,
+                        item_id=item.item_id,
+                        branch_id=data.branch_id,
+                        qty=item.qty,
+                        batch_number=item.batch_number,
+                        mfg_date=item.mfg_date,
+                        expiry_date=item.expiry_date,
+                        cost_price=float(item.cost or 0),
+                        vendor_id=data.vendor_id,
+                        source_type="purchase",
+                        source_ref=bill.id,
+                        received_date=data.date or today,
+                    )
+                except ValueError as e:
+                    raise HTTPException(400, f"{item.name}: {e}")
             else:
                 await adjust_stock_atomic(
                     db,
@@ -361,6 +371,35 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
                     branch_id=data.branch_id,
                     delta=item.qty,
                 )
+
+    # 2026-05-31: record a VendorPayment for a bill paid at creation, so the
+    # Purchases > Payments tab is a complete ledger — parity with the sales
+    # POS fix + record_payment. Previously a paid-at-create bill settled but
+    # left no payment row, so it was missing from the Payments tab.
+    if paid_at_create:
+        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        bpay = VendorPayment(
+            id=str(uuid.uuid4()),
+            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            vendor_id=bill.vendor_id,
+            vendor_name=bill.vendor_name,
+            branch_id=bill.branch_id,
+            branch_name=bill.branch_name,
+            date=data.date or today,
+            total_amount=round(paid_amount, 2),
+            payment_mode=data.payment_mode,
+            payment_ref=data.payment_ref or "",
+            notes="Bill paid at creation",
+            created_by="Staff",
+        )
+        db.add(bpay)
+        db.add(VendorPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=bpay.id,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            amount=round(paid_amount, 2),
+        ))
 
     await db.commit()
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
@@ -903,6 +942,78 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
     db.add(ret)
 
     for r, bill_line, _ln, _lt in return_rows:
+        # 2026-05-31: a vendor return SENDS GOODS BACK to the vendor, so it
+        # must DECREMENT stock at the bill's branch (previously this was a
+        # no-op — returns recorded paperwork but never moved stock).
+        #   • Tracked items → consume FEFO (expiry) / FIFO via
+        #     consume_batches_atomic; capture the ledger so deletion can
+        #     reverse the exact lots.
+        #   • Untracked items → aggregate decrement; store a sentinel ledger.
+        # Insufficient on-hand → ValueError → 400 (block). Nothing commits,
+        # so the session rolls back cleanly.
+        allocation_json = None
+        if r.item_id:
+            tracked, _expiry_tracked = await is_tracked(db, r.item_id)
+            if not tracked:
+                # Untracked: aggregate decrement, blocked if it would go < 0.
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=r.item_id, branch_id=bill.branch_id,
+                        delta=-int(r.return_qty),
+                    )
+                except ValueError:
+                    raise HTTPException(
+                        400,
+                        f"{r.name}: not enough stock on hand to return {r.return_qty} unit(s)",
+                    )
+                allocation_json = json.dumps([{"batch_id": None, "consumed": int(r.return_qty)}])
+            else:
+                # 2026-05-31: subtract from THIS BILL's own lot(s) only — the
+                # batch(es) this bill created (source_ref == bill.id). Cap is
+                # the lot's CURRENT remaining (e.g. received 100, sold 50 →
+                # only 50 returnable). FEFO order among the bill's lots if it
+                # somehow created more than one for the item.
+                bill_batches = (await db.execute(
+                    select(ItemBatch).where(
+                        ItemBatch.source_ref == bill.id,
+                        ItemBatch.item_id == r.item_id,
+                        ItemBatch.branch_id == bill.branch_id,
+                    ).order_by(ItemBatch.expiry_date.asc())
+                )).scalars().all()
+                available = sum(int(b.quantity or 0) for b in bill_batches)
+                if int(r.return_qty) > available:
+                    raise HTTPException(
+                        400,
+                        f"{r.name}: only {available} unit(s) from this bill's batch remain on "
+                        f"hand (the rest were already sold or moved)",
+                    )
+                # Build an explicit FEFO split across the bill's lots, then
+                # consume exactly those — keeps batch + aggregate atomic.
+                remaining = int(r.return_qty)
+                split = []
+                for b in bill_batches:
+                    if remaining <= 0:
+                        break
+                    take = min(int(b.quantity or 0), remaining)
+                    if take > 0:
+                        split.append({"batch_id": b.id, "qty": take})
+                        remaining -= take
+                try:
+                    ledger = await consume_batches_atomic(
+                        db,
+                        item_id=r.item_id,
+                        branch_id=bill.branch_id,
+                        qty=int(r.return_qty),
+                        explicit_allocation=split,
+                    )
+                except ValueError:
+                    raise HTTPException(
+                        400,
+                        f"{r.name}: could not subtract {r.return_qty} unit(s) from this bill's batch",
+                    )
+                allocation_json = json.dumps(
+                    [{"batch_id": e["batch_id"], "consumed": e["consumed"]} for e in ledger]
+                )
         db.add(ReturnLineItem(
             id=str(uuid.uuid4()),
             return_id=ret.id,
@@ -914,6 +1025,7 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
             cost=r.cost,
             tax_rate=r.tax_rate,
             line_total=round(r.return_qty * r.cost, 2),
+            batch_allocation=allocation_json,
         ))
 
     await db.commit()
@@ -1390,20 +1502,23 @@ async def convert_order_to_bill(
                             400,
                             f"{line.name}: {'; '.join(date_errs)}",
                         )
-                await add_batch_atomic(
-                    db,
-                    item_id=line.item_id,
-                    branch_id=po.branch_id,
-                    qty=line.qty,
-                    batch_number=recv.batch_number if recv else None,
-                    mfg_date=recv.mfg_date if recv else None,
-                    expiry_date=recv.expiry_date if recv else None,
-                    cost_price=float(line.cost or 0),
-                    vendor_id=po.vendor_id,
-                    source_type="purchase",
-                    source_ref=bill.id,
-                    received_date=today,
-                )
+                try:
+                    await add_batch_atomic(
+                        db,
+                        item_id=line.item_id,
+                        branch_id=po.branch_id,
+                        qty=line.qty,
+                        batch_number=recv.batch_number if recv else None,
+                        mfg_date=recv.mfg_date if recv else None,
+                        expiry_date=recv.expiry_date if recv else None,
+                        cost_price=float(line.cost or 0),
+                        vendor_id=po.vendor_id,
+                        source_type="purchase",
+                        source_ref=bill.id,
+                        received_date=today,
+                    )
+                except ValueError as e:
+                    raise HTTPException(400, f"{line.name}: {e}")
             else:
                 await adjust_stock_atomic(
                     db,
@@ -1411,6 +1526,33 @@ async def convert_order_to_bill(
                     branch_id=po.branch_id,
                     delta=line.qty,
                 )
+
+    # 2026-05-31: record a VendorPayment if the PO→Bill convert was paid, so
+    # the Payments tab stays a complete ledger (parity with create_bill).
+    if data.payment_received and paid > 0:
+        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        bpay = VendorPayment(
+            id=str(uuid.uuid4()),
+            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            vendor_id=bill.vendor_id,
+            vendor_name=bill.vendor_name,
+            branch_id=bill.branch_id,
+            branch_name=bill.branch_name,
+            date=today,
+            total_amount=round(paid, 2),
+            payment_mode=payment_mode,
+            payment_ref=data.payment_ref or "",
+            notes="Bill paid at PO conversion",
+            created_by="Staff",
+        )
+        db.add(bpay)
+        db.add(VendorPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=bpay.id,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            amount=round(paid, 2),
+        ))
 
     po.status = PurchaseOrderStatus.converted
     po.converted_bill_id = bill.id
@@ -1484,12 +1626,21 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
     for oid in data.ids:
         if oid not in found_ids:
             blocked.append({"id": oid, "number": "?", "reason": "Purchase order not found"})
+
+    # Guard by LIVE bill via converted_bill_id, not the `status` flag —
+    # the flag never resets, so a PO whose bill was already deleted would
+    # otherwise stay permanently blocked. Mirror of the sales-side fix.
+    bill_ptr_ids = {o.converted_bill_id for o in orders if o.converted_bill_id}
+    live_bill_ids = set()
+    if bill_ptr_ids:
+        live_bill_ids = set((await db.execute(
+            select(PurchaseBill.id).where(PurchaseBill.id.in_(bill_ptr_ids))
+        )).scalars().all())
     for o in orders:
-        status = str(o.status.value) if hasattr(o.status, "value") else str(o.status)
-        if status == "converted":
+        if o.converted_bill_id and o.converted_bill_id in live_bill_ids:
             blocked.append({
                 "id": o.id, "number": o.number,
-                "reason": f"PO {o.number} was converted to a Bill — delete the bill first",
+                "reason": f"PO {o.number} has a live Bill — delete the bill first",
             })
     if blocked:
         raise HTTPException(400, {"blocked": blocked, "message": "Some purchase orders can't be deleted"})
@@ -1578,11 +1729,23 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
             "status": str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status),
             "items": [{"id": li.id, "item_id": li.item_id, "name": li.name, "qty": li.qty, "cost": li.cost} for li in bill.line_items],
         }
-        # Remove this bill's batches from item_batches; track which
-        # (item, branch) pairs need aggregate stock adjustment.
+        # Remove this bill's batches from item_batches AND decrement the
+        # aggregate item_stock by each batch's quantity. (2026-05-31 fix:
+        # previously the batch row was deleted but the aggregate was left
+        # untouched for tracked items — only untracked items adjusted the
+        # aggregate below — so deleting a bill removed its lots from the
+        # batches view while the stock count stayed inflated.)
         bbatches = [b for b in bill_batches if b.source_ref == bill.id]
         for b in bbatches:
-            stock_removed += int(b.quantity or 0)
+            qty = int(b.quantity or 0)
+            if qty > 0:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=b.item_id, branch_id=b.branch_id, delta=-qty,
+                    )
+                    stock_removed += qty
+                except ValueError:
+                    pass  # aggregate already at/below 0 — nothing to remove
             await db.delete(b)
         # For untracked items on the bill (no batch row), decrement
         # aggregate item_stock directly.
@@ -1602,6 +1765,19 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
                     stock_removed += int(li.qty)
                 except ValueError:
                     pass  # missing stock row — no-op
+        # Orphan the parent PO (if this bill was spawned from one). We clear
+        # the dangling bill pointer so the "View bill" link doesn't 404 and
+        # the PO delete guard (which checks for a LIVE bill) lets the PO be
+        # removed. We deliberately do NOT revert status to `confirmed`:
+        # 2026-05-31 rule — a PO that was ever converted must stay locked
+        # from editing / re-converting even after its bill is deleted. The
+        # status stays `converted`, so _po_terminal() keeps blocking edits
+        # and the UI keeps showing View (not Edit / Convert).
+        parent_po = (await db.execute(
+            select(PurchaseOrder).where(PurchaseOrder.converted_bill_id == bill.id)
+        )).scalar_one_or_none()
+        if parent_po is not None:
+            parent_po.converted_bill_id = None
         _audit_delete(db, action="delete_purchase_bill", ref=bill.number, snapshot=snapshot)
         await db.delete(bill)
         deleted.append({"id": bill.id, "number": bill.number})
@@ -1630,17 +1806,57 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
         raise HTTPException(400, {"blocked": blocked, "message": "Some returns can't be deleted"})
 
     deleted = []
+    stock_restored = 0
     for ret in returns:
         snapshot = {
             "id": ret.id, "number": ret.number, "bill_id": ret.bill_id,
             "bill_number": ret.bill_number, "vendor_id": ret.vendor_id,
             "total": ret.total, "credited_amount": ret.credited_amount,
         }
+        # 2026-05-31: reverse the stock the return removed. Each line carries
+        # a `batch_allocation` ledger (see create_return). NULL = legacy
+        # return that never moved stock → skip (don't inflate stock).
+        for rl in ret.line_items:
+            if not rl.batch_allocation:
+                continue
+            try:
+                ledger = json.loads(rl.batch_allocation)
+            except (ValueError, TypeError):
+                ledger = []
+            for entry in ledger:
+                qty = int(entry.get("consumed") or 0)
+                if qty <= 0:
+                    continue
+                batch_id = entry.get("batch_id")
+                restored = False
+                if batch_id:
+                    # Add the qty back to the exact lot it was drained from.
+                    b = (await db.execute(
+                        select(ItemBatch).where(ItemBatch.id == batch_id)
+                    )).scalar_one_or_none()
+                    if b is not None:
+                        await set_batch_quantity_atomic(
+                            db, batch_id=batch_id, new_qty=int(b.quantity or 0) + qty,
+                        )
+                        restored = True
+                if not restored and rl.item_id:
+                    # Batch was deleted (or untracked sentinel) → restore the
+                    # aggregate count so totals stay correct.
+                    try:
+                        await adjust_stock_atomic(
+                            db, item_id=rl.item_id, branch_id=ret.branch_id, delta=qty,
+                        )
+                    except ValueError:
+                        pass
+                stock_restored += qty
         _audit_delete(db, action="delete_vendor_return", ref=ret.number, snapshot=snapshot)
         await db.delete(ret)
         deleted.append({"id": ret.id, "number": ret.number})
     await db.commit()
-    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "stock_restored": stock_restored,
+    }
 
 
 # ─── BULK DELETE: VENDOR PAYMENTS ────────────────────────────────────────────

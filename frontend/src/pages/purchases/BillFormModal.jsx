@@ -262,25 +262,34 @@ export default function BillFormModal({
                       {/* Batch capture row spans all 5 columns. Compact
                           inputs for lot # / mfg / expiry. */}
                       <td colSpan={5} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
-                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12 }}>
-                          <span style={{ color: 'var(--text-muted)', fontWeight: 500, minWidth: 90 }}>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', fontSize: 12 }}>
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 500, minWidth: 90, paddingBottom: 8 }}>
                             🧴 Batch capture:
                           </span>
-                          <input className="form-input" type="text"
-                            placeholder="Lot # (auto if blank)"
-                            value={it.batchNumber || ''}
-                            onChange={(e) => { const n = [...billForm.items]; n[i].batchNumber = e.target.value; pbf('items', n) }}
-                            style={{ flex: 1, fontSize: 12, padding: '6px 8px' }} />
-                          <input className="form-input" type="date"
-                            title="Mfg date"
-                            value={it.mfgDate || ''}
-                            onChange={(e) => { const n = [...billForm.items]; n[i].mfgDate = e.target.value; pbf('items', n) }}
-                            style={{ width: 145, fontSize: 12, padding: '6px 8px' }} />
-                          <input className="form-input" type="date"
-                            title={it.expiryTracking ? 'Expiry date (required)' : 'Expiry date'}
-                            value={it.expiryDate || ''}
-                            onChange={(e) => { const n = [...billForm.items]; n[i].expiryDate = e.target.value; pbf('items', n) }}
-                            style={{ width: 145, fontSize: 12, padding: '6px 8px' }} />
+                          <label style={batchFieldStyle}>
+                            <span style={batchLabelStyle}>Batch / Lot #</span>
+                            <input className="form-input" type="text"
+                              placeholder="Auto-generated if blank"
+                              value={it.batchNumber || ''}
+                              onChange={(e) => { const n = [...billForm.items]; n[i].batchNumber = e.target.value; pbf('items', n) }}
+                              style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
+                          </label>
+                          <label style={{ ...batchFieldStyle, flex: '0 0 145px' }}>
+                            <span style={batchLabelStyle}>Mfg date</span>
+                            <input className="form-input" type="date"
+                              value={it.mfgDate || ''}
+                              onChange={(e) => { const n = [...billForm.items]; n[i].mfgDate = e.target.value; pbf('items', n) }}
+                              style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
+                          </label>
+                          <label style={{ ...batchFieldStyle, flex: '0 0 145px' }}>
+                            <span style={batchLabelStyle}>
+                              Expiry date{it.expiryTracking && <span style={{ color: 'var(--red)' }}> *</span>}
+                            </span>
+                            <input className="form-input" type="date"
+                              value={it.expiryDate || ''}
+                              onChange={(e) => { const n = [...billForm.items]; n[i].expiryDate = e.target.value; pbf('items', n) }}
+                              style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
+                          </label>
                         </div>
                       </td>
                     </tr>
@@ -335,6 +344,21 @@ const totalsRowStyle = {
 }
 const totalsLabelStyle = { color: 'var(--text-muted)' }
 const totalsValueStyle = { color: 'var(--text-primary)' }
+// 2026-05-31: labeled batch-capture fields (Batch # / Mfg / Expiry).
+const batchFieldStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+  flex: 1,
+  minWidth: 0,
+}
+const batchLabelStyle = {
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: 0.3,
+  textTransform: 'uppercase',
+  color: 'var(--text-muted)',
+}
 const numInputStyle = {
   textAlign: 'right',
   fontVariantNumeric: 'tabular-nums',

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { salesAPI, branchesAPI } from '@/api'
+import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
@@ -61,7 +61,7 @@ function lineDiscountToPercent(line) {
 // "CASH" label for them anymore (the old `|| 'cash'` fallback was a lie —
 // pending invoices have no recorded method yet). Unknown / missing →
 // em-dash so it's obvious nothing was captured.
-const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'bank_transfer'])
+const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'bank_transfer', 'credit'])
 function displayPaymentMode(raw) {
   if (!raw) return '—'
   const v = String(raw).trim().toLowerCase()
@@ -86,6 +86,11 @@ export default function SalesPage() {
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
+  // 2026-05-30: customer's available credit balance, fetched when the
+  // Record Payment modal opens for a customer invoice. The invoice row
+  // doesn't carry credit_balance, so we pull it from customersAPI.get to
+  // gate + label the new "credit" payment method. null = not loaded yet.
+  const [payCustCredit, setPayCustCredit] = useState(null)
   const [invoices, setInvoices] = useState([])
   const [invoiceTotal, setInvoiceTotal] = useState(0)
   const [invSkip, setInvSkip] = useState(0)
@@ -337,6 +342,10 @@ export default function SalesPage() {
     const balance = (showPayment.total || 0) - (showPayment.paidAmount || 0)
     setPayAmt(String(Math.max(0, balance)))
     setPayRef('')
+    // Reset the method on every open so a stale 'credit' selection from a
+    // prior invoice can't carry over (the credit option may not even
+    // render for the new invoice if it's a walk-in).
+    setPayMode('bank_transfer')
   }, [showPayment])
 
   useEffect(() => {
@@ -518,6 +527,23 @@ export default function SalesPage() {
   //     with 400, but inline feedback is friendlier)
   //   • Customer overpayment is allowed and shows the credited amount in
   //     the success toast using the server's echo
+  // Fetch the customer's credit balance when the Record Payment modal
+  // opens for a customer invoice (walk-ins skip — they can't draw credit).
+  // Drives the "credit" method's availability + the "₹X available" hint.
+  useEffect(() => {
+    if (!showPayment?.customerId) { setPayCustCredit(null); return }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const c = await customersAPI.get(showPayment.customerId)
+        if (!cancelled) setPayCustCredit(Number(c?.credit_balance || 0))
+      } catch {
+        if (!cancelled) setPayCustCredit(0)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [showPayment])
+
   const recordPayment = async () => {
     const amount = Number(payAmt)
     if (!payAmt || amount <= 0) { toast.error('Enter a valid amount'); return }
@@ -527,6 +553,16 @@ export default function SalesPage() {
     if (isWalkin && amount > balance) {
       toast.error(`Walk-in invoice — reduce amount to ${fmt(balance)} or assign a customer first`)
       return
+    }
+    // 2026-05-30: credit-mode guards (mirror POS). Walk-in can't draw
+    // credit; available balance must cover the amount. Backend re-checks.
+    if (payMode === 'credit') {
+      if (isWalkin) { toast.error('Credit mode needs a customer — walk-in invoices can\'t draw credit'); return }
+      const avail = Number(payCustCredit || 0)
+      if (avail < amount) {
+        toast.error(`Insufficient credit — ${fmt(avail)} available, ${fmt(amount)} needed`)
+        return
+      }
     }
     try {
       const res = await salesAPI.payment(showPayment.id, { amount, mode: payMode, ref: payRef })
@@ -1530,6 +1566,10 @@ export default function SalesPage() {
           const amount = Number(payAmt) || 0
           const overpay = Math.max(0, amount - balance)
           const isWalkin = !showPayment.customerId
+          const creditMode = payMode === 'credit'
+          // Available stored credit. null while still loading.
+          const avail = payCustCredit
+          const creditInsufficient = !isWalkin && avail != null && avail < balance
           return (
             <>
               <AlertBar type="blue" icon="ℹ">
@@ -1541,14 +1581,16 @@ export default function SalesPage() {
                   server or trap money against an anonymous row. We lock
                   the input to the exact balance — operator can still
                   pick a payment method + reference. Customer invoices
-                  stay editable so excess routes to credit_balance. */}
+                  stay editable so excess routes to credit_balance.
+                  Credit mode also locks to the full balance — drawing
+                  partial credit / overpaying with credit is nonsensical. */}
               <FormGroup label="Amount Received (₹)" required>
                 <input
                   className="form-input"
                   type="number"
-                  value={payAmt}
+                  value={creditMode ? String(Math.max(0, balance)) : payAmt}
                   onChange={(e) => setPayAmt(e.target.value)}
-                  disabled={isWalkin}
+                  disabled={isWalkin || creditMode}
                   autoFocus={!isWalkin}
                 />
                 {isWalkin && (
@@ -1556,11 +1598,16 @@ export default function SalesPage() {
                     Locked to balance for walk-in invoices. Assign a customer to enable partial / overpayment.
                   </div>
                 )}
+                {creditMode && !isWalkin && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                    Locked to the full balance for credit settlement.
+                  </div>
+                )}
               </FormGroup>
               {/* Overpayment hint — only reachable on customer invoices
-                  now that walk-in amount is locked. Server still echoes
-                  credit_applied in the success toast. */}
-              {overpay > 0 && !isWalkin && (
+                  now that walk-in amount is locked. Suppressed in credit
+                  mode (amount is locked to balance, never overpays). */}
+              {overpay > 0 && !isWalkin && !creditMode && (
                 <AlertBar type="amber" icon="ℹ">
                   Overpayment: <strong>{fmt(overpay)}</strong> will be credited to {showPayment.customerName}
                 </AlertBar>
@@ -1568,10 +1615,22 @@ export default function SalesPage() {
               <FormGroup label="Payment Mode" required>
                 {/* Keep this list aligned with POSPage.jsx and the
                     PaymentMode Literal in backend/src/routes/sales.py.
-                    Cheque was removed 2026-05-24 to match POS exactly. */}
+                    Credit (2026-05-30) draws from the customer's stored
+                    credit_balance; hidden for walk-ins, disabled when the
+                    balance can't cover the invoice. */}
                 <select className="form-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>
                   {['cash', 'card', 'upi', 'bank_transfer'].map((m) => <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>)}
+                  {!isWalkin && (
+                    <option value="credit" disabled={creditInsufficient}>
+                      CREDIT{avail != null ? ` (${fmt(avail)} available)` : ''}{creditInsufficient ? ' — insufficient' : ''}
+                    </option>
+                  )}
                 </select>
+                {creditMode && creditInsufficient && (
+                  <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
+                    Available credit ({fmt(avail)}) is less than the balance ({fmt(balance)}). Pick another method.
+                  </div>
+                )}
               </FormGroup>
               <FormGroup label="Reference / Transaction ID">
                 <input className="form-input" value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="UTR / transaction reference" />

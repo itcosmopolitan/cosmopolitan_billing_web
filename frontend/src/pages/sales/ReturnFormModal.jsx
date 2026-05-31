@@ -26,7 +26,7 @@
  *
  * See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md for the spec.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Modal, FormGroup, AlertBar, EmptyState } from '@/components/ui'
 import { salesAPI } from '@/api'
@@ -37,6 +37,10 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
   const [invoice, setInvoice] = useState(null)         // full invoice with items + customer info
   const [alreadyReturned, setAlreadyReturned] = useState({})  // {invoice_line_id: total_returned}
   const [returnQtys, setReturnQtys] = useState({})     // {invoice_line_id: number}
+  // 2026-05-31: per-line, per-source-batch restore split.
+  // { [lineId]: { [batchId]: number } }. Only populated for tracked lines
+  // that carry a batchAllocation manifest from the invoice. Defaults FEFO.
+  const [batchAllocByLine, setBatchAllocByLine] = useState({})
   const [refundMethod, setRefundMethod] = useState('cash')
   const [reason, setReason] = useState('')
   const [notes, setNotes] = useState('')
@@ -51,11 +55,37 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
       setInvoice(null)
       setAlreadyReturned({})
       setReturnQtys({})
+      setBatchAllocByLine({})
       setRefundMethod('cash')
       setReason('')
       setNotes('')
     }
   }, [open])
+
+  // Source lots a given invoice line consumed (from the manifest the
+  // backend now stores). Empty list = untracked or legacy line (no
+  // per-batch panel; restock falls back server-side).
+  const sourceBatches = (line) => {
+    const a = line.batchAllocation
+    if (!Array.isArray(a)) return []
+    // Sort FEFO (nearest expiry first); nulls last.
+    return [...a].sort((x, y) =>
+      String(x.expiry_date || '9999-12-31').localeCompare(String(y.expiry_date || '9999-12-31')))
+  }
+
+  // Distribute `qty` across a line's source lots FEFO, capped per lot by
+  // what the invoice took (`consumed`). Returns { [batchId]: qty }.
+  const fefoDistribute = (line, qty) => {
+    const out = {}
+    let remaining = Math.max(0, Math.floor(Number(qty) || 0))
+    for (const b of sourceBatches(line)) {
+      if (remaining <= 0) break
+      const cap = Math.max(0, Number(b.consumed || 0))
+      const take = Math.min(cap, remaining)
+      if (take > 0) { out[b.batch_id] = take; remaining -= take }
+    }
+    return out
+  }
 
   const isWalkin = !invoice?.customerId
 
@@ -130,9 +160,28 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
 
   const setQtyFor = (line, raw) => {
     const remaining = remainingFor(line)
-    let v = Math.max(0, Math.min(remaining, Math.floor(Number(raw) || 0)))
+    const v = Math.max(0, Math.min(remaining, Math.floor(Number(raw) || 0)))
     setReturnQtys((cur) => ({ ...cur, [line.id]: v }))
+    // Re-seed the per-batch split FEFO whenever the line qty changes (only
+    // for tracked lines that have a source manifest).
+    if (sourceBatches(line).length > 0) {
+      setBatchAllocByLine((cur) => ({ ...cur, [line.id]: fefoDistribute(line, v) }))
+    }
   }
+
+  // Operator override for one source lot's restore qty (capped at consumed).
+  const setBatchQtyFor = (line, batch, raw) => {
+    const cap = Math.max(0, Number(batch.consumed || 0))
+    const v = Math.max(0, Math.min(cap, Math.floor(Number(raw) || 0)))
+    setBatchAllocByLine((cur) => ({
+      ...cur,
+      [line.id]: { ...(cur[line.id] || {}), [batch.batch_id]: v },
+    }))
+  }
+
+  // Sum of the per-batch split for a line (for the "X of Y" validation hint).
+  const batchAllocSum = (line) =>
+    Object.values(batchAllocByLine[line.id] || {}).reduce((s, n) => s + Number(n || 0), 0)
 
   const totals = useMemo(() => {
     if (!invoice) return { subtotal: 0, tax: 0, total: 0, anyReturned: false }
@@ -164,14 +213,33 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
       toast.error('Enter a return quantity for at least one line')
       return
     }
+    // For tracked lines with a source manifest, the per-batch split must
+    // add up to the line's return qty.
+    for (const il of invoice.items || []) {
+      const q = returnQtys[il.id] || 0
+      if (q > 0 && sourceBatches(il).length > 0 && batchAllocSum(il) !== q) {
+        toast.error(`${il.name}: per-batch restore (${batchAllocSum(il)}) must equal return qty (${q})`)
+        return
+      }
+    }
     const items = (invoice.items || [])
       .filter((il) => (returnQtys[il.id] || 0) > 0)
-      .map((il) => ({
-        invoice_line_id: il.id,
-        item_id: il.itemId || null,
-        name: il.name,
-        return_qty: returnQtys[il.id],
-      }))
+      .map((il) => {
+        const line = {
+          invoice_line_id: il.id,
+          item_id: il.itemId || null,
+          name: il.name,
+          return_qty: returnQtys[il.id],
+        }
+        // Attach the per-batch restore split for tracked lines.
+        const alloc = batchAllocByLine[il.id]
+        if (sourceBatches(il).length > 0 && alloc) {
+          line.batch_allocation = Object.entries(alloc)
+            .filter(([, qty]) => Number(qty) > 0)
+            .map(([batch_id, qty]) => ({ batch_id, qty: Number(qty) }))
+        }
+        return line
+      })
     setSubmitting(true)
     try {
       const res = await salesAPI.returns.create({
@@ -278,8 +346,13 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
                   const lineGross = q * Number(il.price || 0)
                   const lineWithTax = lineGross * (1 + Number(il.taxRate || 0) / 100)
                   const disabled = remaining === 0
+                  const batches = sourceBatches(il)
+                  const showBatchPanel = batches.length > 0 && q > 0
+                  const allocSum = batchAllocSum(il)
+                  const allocOk = allocSum === q
                   return (
-                    <tr key={il.id} style={disabled ? { opacity: 0.5 } : null}>
+                    <Fragment key={il.id}>
+                    <tr style={disabled ? { opacity: 0.5 } : null}>
                       <td>
                         <div style={{ fontSize: 13, fontWeight: 500 }}>{il.name}</div>
                         {disabled && (
@@ -306,6 +379,59 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
                         {fmt(Math.round(lineWithTax * 100) / 100)}
                       </td>
                     </tr>
+                    {showBatchPanel && (
+                      <tr>
+                        <td colSpan={5} style={{ padding: '0 0 10px 0', borderTop: 'none' }}>
+                          <div style={{
+                            border: '1px solid var(--border-subtle)', borderRadius: 8,
+                            background: 'var(--bg-raised)', padding: '10px 12px', marginLeft: 8,
+                          }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              Restore to source batches (from this invoice)
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, marginBottom: 8 }}>
+                              Defaults by expiry (FEFO). Cap per batch = qty taken from that batch on this invoice.
+                            </div>
+                            <table className="data-table" style={{ margin: 0 }}>
+                              <thead>
+                                <tr>
+                                  <th>Batch #</th>
+                                  <th style={{ width: 110 }}>Expiry</th>
+                                  <th style={{ width: 110, textAlign: 'right' }}>Taken</th>
+                                  <th style={{ width: 110, textAlign: 'right' }}>Restore Qty</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {batches.map((b) => (
+                                  <tr key={b.batch_id}>
+                                    <td className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>{b.batch_number || b.batch_id}</td>
+                                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiry_date || '—'}</td>
+                                    <td className="text-right mono" style={{ fontSize: 12 }}>{b.consumed}</td>
+                                    <td className="text-right">
+                                      <input
+                                        className="form-input"
+                                        type="number"
+                                        min={0}
+                                        max={b.consumed}
+                                        value={(batchAllocByLine[il.id]?.[b.batch_id]) ?? 0}
+                                        onChange={(e) => setBatchQtyFor(il, b, e.target.value)}
+                                        style={{ width: 90, textAlign: 'right', padding: '4px 6px' }}
+                                      />
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <div style={{ fontSize: 11, marginTop: 6, color: allocOk ? 'var(--green)' : 'var(--amber)' }}>
+                              {allocOk
+                                ? `Restoring ${allocSum} of ${q} — matches return qty ✓`
+                                : `Allocated ${allocSum} of ${q} — adjust so they match`}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   )
                 })}
               </tbody>

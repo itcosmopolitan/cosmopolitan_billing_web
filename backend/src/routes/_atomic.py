@@ -180,6 +180,25 @@ async def add_batch_atomic(
     """
     if qty <= 0:
         return None
+    # 2026-05-31: reject duplicate operator-entered batch numbers within the
+    # same (item, branch). Scoped per-branch + active-only so it doesn't
+    # false-collide. Skipped when:
+    #   • batch_number is blank → we auto-generate a unique one below.
+    #   • source_type == "transfer" → transfer-receive legitimately recreates
+    #     a lot under its original number at the destination branch.
+    provided = (batch_number or "").strip()
+    if provided and source_type != "transfer":
+        existing = (await db.execute(
+            select(ItemBatch.batch_number).where(
+                ItemBatch.item_id == item_id,
+                ItemBatch.branch_id == branch_id,
+                ItemBatch.active == True,  # noqa: E712 - SQLAlchemy expression
+            )
+        )).scalars().all()
+        if any((bn or "").strip().lower() == provided.lower() for bn in existing):
+            raise ValueError(
+                f"Batch number '{provided}' already exists for this item at this branch"
+            )
     # If the caller forgot to flip batch_tracking but is still calling this
     # helper, set it implicitly — easier to opt-in than to error out on a
     # legitimate purchase flow.

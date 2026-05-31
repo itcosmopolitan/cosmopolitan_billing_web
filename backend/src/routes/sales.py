@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -18,6 +19,7 @@ from src.models import (
     CustomerPaymentAllocation,
     InvoiceStatus,
     Organisation,
+    ItemBatch,
     Quotation,
     QuotationLineItem,
     QuotationStatus,
@@ -38,6 +40,7 @@ from src.routes._atomic import (
     adjust_stock_atomic,
     consume_batches_atomic,
     is_tracked,
+    set_batch_quantity_atomic,
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import get_user_branch_ids
@@ -672,8 +675,9 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                     if item.batch_allocation else None
                 )
                 consumed_ok = False
+                consumed_ledger = None
                 try:
-                    await consume_batches_atomic(
+                    consumed_ledger = await consume_batches_atomic(
                         db,
                         item_id=item.item_id,
                         branch_id=data.branch_id,
@@ -689,7 +693,7 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                     # once with auto FIFO/FEFO before the destructive clamp.
                     if explicit:
                         try:
-                            await consume_batches_atomic(
+                            consumed_ledger = await consume_batches_atomic(
                                 db,
                                 item_id=item.item_id,
                                 branch_id=data.branch_id,
@@ -701,6 +705,20 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                             consumed_ok = True
                         except ValueError:
                             pass
+                # 2026-05-31: persist which lots this line drew from so a
+                # return can restore stock to the SAME lots (batch-aware
+                # returns). Only the precise FIFO/FEFO/explicit path yields a
+                # ledger; the oversell-to-zero clamp below leaves it null.
+                if consumed_ledger:
+                    li.batch_allocation = json.dumps([
+                        {
+                            "batch_id": e["batch_id"],
+                            "batch_number": e.get("batch_number"),
+                            "consumed": e["consumed"],
+                            "expiry_date": e.get("expiry_date"),
+                        }
+                        for e in consumed_ledger
+                    ])
                 if not consumed_ok:
                     # Genuine shortage — drain whatever batches we have, then
                     # zero the aggregate (POS allows oversell-to-zero).
@@ -780,6 +798,37 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         db.add(CustomerPaymentAllocation(
             id=str(uuid.uuid4()),
             payment_id=pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=total,
+        ))
+
+    # 2026-05-31: record a CustomerPayment for EVERY paid-at-POS sale (cash /
+    # card / upi / bank_transfer), not just credit-mode, so the Payments tab
+    # is a complete ledger — parity with record_payment + multi-invoice
+    # payments. Previously these settled the invoice but left no payment row,
+    # so cash-paid POS invoices were missing from the Payments tab.
+    if is_paid_at_create and data.payment_mode != "credit":
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        pos_pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=inv.customer_id,
+            customer_name=inv.customer_name or "Walk-in",
+            branch_id=data.branch_id,
+            branch_name=data.branch_name,
+            date=today,
+            total_amount=total,
+            payment_mode=data.payment_mode,
+            payment_ref="",
+            notes="POS sale",
+            credit_applied=0.0,
+            created_by="POS",
+        )
+        db.add(pos_pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pos_pay.id,
             invoice_id=inv.id,
             invoice_number=inv.number,
             amount=total,
@@ -1178,6 +1227,30 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
         if balance <= 0:
             raise HTTPException(400, f"Invoice {inv.number} already settled")
 
+    # 4b. Credit-mode draw-down (2026-05-30). Settling invoices FROM the
+    #     customer's stored credit_balance. Overpayment is nonsensical here
+    #     (we'd debit credit then re-credit the excess), so each allocation
+    #     must be <= its balance, and the customer must have enough credit
+    #     to cover the full total. These invoices already belong to `cust`
+    #     (validated in step 3), so walk-in can't reach this path.
+    requested_total = sum(float(a.amount) for a in data.allocations)
+    if data.payment_mode == "credit":
+        for a in data.allocations:
+            inv = inv_by_id[a.invoice_id]
+            bal = max(0.0, float(inv.total or 0) - float(inv.paid_amount or 0))
+            if float(a.amount) > bal + 0.001:
+                raise HTTPException(
+                    400,
+                    f"Credit mode can't overpay — {inv.number} balance is ₹{round(bal, 2)}",
+                )
+        avail = float(cust.credit_balance or 0)
+        if avail + 0.001 < requested_total:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — {cust.name} has ₹{round(avail, 2)} available, "
+                f"payment totals ₹{round(requested_total, 2)}",
+            )
+
     # 5. Apply allocations + accumulate credit. We update each invoice's
     #    paid_amount + payment_mode + status. The SQLAlchemy session
     #    commit at the end is atomic — partial failures roll back.
@@ -1245,6 +1318,28 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             invoice_id=inv.id,
             invoice_number=inv.number,
             amount=round(float(a.amount), 2),
+        ))
+
+    # 2026-05-30: credit-mode debit. The settle loop above marked the
+    # invoices paid; now draw the total down from credit_balance + audit.
+    # Validated sufficient in step 4b; total_credit is 0 here (overpay was
+    # rejected for credit mode) so the overpay-bump block above is skipped.
+    if data.payment_mode == "credit":
+        cur_credit = float(cust.credit_balance or 0)
+        cust.credit_balance = round(cur_credit - total_amount, 2)
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=None,
+            detail=(
+                f"Multi-invoice credit settlement {pay_num}: −₹{round(total_amount, 2)} "
+                f"from {cust.name} (was ₹{cur_credit:.2f}, now ₹{cust.credit_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
         ))
 
     await db.commit()
@@ -1329,6 +1424,13 @@ def _inv_dict(inv, items=None):
             "name": i.name, "qty": i.qty,
             "price": i.price, "taxRate": i.tax_rate,
             "lineTotal": i.line_total,
+            # 2026-05-31: source-lot manifest so the return modal can offer
+            # per-batch restore. Parsed JSON list of {batch_id, batch_number,
+            # consumed, expiry_date}; null/absent for untracked or legacy lines.
+            "batchAllocation": (
+                json.loads(i.batch_allocation)
+                if getattr(i, "batch_allocation", None) else None
+            ),
         } for i in items]
     return d
 
@@ -1407,6 +1509,14 @@ class ConvertToInvoiceIn(BaseModel):
     line_allocations: Optional[List[ConvertLineAllocation]] = None
 
 
+class ReturnBatchAlloc(BaseModel):
+    """One entry of an explicit per-batch restore split for a return line:
+    put `qty` units back into lot `batch_id`. Sum across a line's entries
+    must equal that line's return_qty."""
+    batch_id: str
+    qty: int = Field(..., gt=0)
+
+
 class SalesReturnLineIn(BaseModel):
     # invoice_line_id is preferred (lets the backend validate against the
     # exact original line); item_id+name are accepted as fallback for
@@ -1415,6 +1525,12 @@ class SalesReturnLineIn(BaseModel):
     item_id: Optional[str] = None
     name: str
     return_qty: int = Field(..., gt=0)
+    # 2026-05-31: optional explicit per-batch restore split. When omitted,
+    # the backend distributes the return across the invoice line's source
+    # lots FEFO (nearest-expiry refilled first), capped per lot by what the
+    # invoice took from it. When present, each entry's lot must be one the
+    # invoice consumed + within its remaining cap.
+    batch_allocation: Optional[List[ReturnBatchAlloc]] = None
 
 
 class SalesReturnCreate(BaseModel):
@@ -1722,13 +1838,14 @@ async def convert_order_to_invoice(
             alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
 
     for line in so.line_items:
-        db.add(SaleLineItem(
+        li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=line.item_id, name=line.name,
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate,
             line_total=line.line_total,
-        ))
+        )
+        db.add(li)
         # Stock side-effect — same FIFO/FEFO logic as POS, same lenient
         # oversell-to-zero. Could be hoisted into a helper shared with
         # create_invoice; left inline to avoid scope creep in this PR.
@@ -1744,8 +1861,9 @@ async def convert_order_to_invoice(
                 # POS's defense-in-depth.
                 explicit = alloc_by_item.get(line.item_id)
                 consumed_ok = False
+                consumed_ledger = None
                 try:
-                    await consume_batches_atomic(
+                    consumed_ledger = await consume_batches_atomic(
                         db, item_id=line.item_id, branch_id=so.branch_id,
                         qty=line.qty, strategy=strategy,
                         explicit_allocation=explicit,
@@ -1754,7 +1872,7 @@ async def convert_order_to_invoice(
                 except ValueError:
                     if explicit:
                         try:
-                            await consume_batches_atomic(
+                            consumed_ledger = await consume_batches_atomic(
                                 db, item_id=line.item_id, branch_id=so.branch_id,
                                 qty=line.qty, strategy=strategy,
                                 explicit_allocation=None,
@@ -1762,6 +1880,17 @@ async def convert_order_to_invoice(
                             consumed_ok = True
                         except ValueError:
                             pass
+                # 2026-05-31: persist the source-lot manifest (see create_invoice).
+                if consumed_ledger:
+                    li.batch_allocation = json.dumps([
+                        {
+                            "batch_id": e["batch_id"],
+                            "batch_number": e.get("batch_number"),
+                            "consumed": e["consumed"],
+                            "expiry_date": e.get("expiry_date"),
+                        }
+                        for e in consumed_ledger
+                    ])
                 if not consumed_ok:
                     # Short on batched stock — clamp ALL of this item's
                     # batches at this branch to zero and continue. Matches
@@ -1794,6 +1923,36 @@ async def convert_order_to_invoice(
                         ),
                         {"i": line.item_id, "b": so.branch_id},
                     )
+
+    # 2026-05-31: record a CustomerPayment if the SO→Invoice convert was
+    # paid, so the Payments tab stays a complete ledger (parity with the POS
+    # create_invoice fix). Credit isn't offered on the convert dialog, so no
+    # credit_balance handling needed here.
+    if data.payment_received and paid > 0:
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        conv_pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=inv.customer_id,
+            customer_name=inv.customer_name or "Walk-in",
+            branch_id=inv.branch_id,
+            branch_name=inv.branch_name,
+            date=today,
+            total_amount=round(paid, 2),
+            payment_mode=payment_mode,
+            payment_ref="",
+            notes="Invoice paid at SO conversion",
+            credit_applied=0.0,
+            created_by="Staff",
+        )
+        db.add(conv_pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=conv_pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=round(paid, 2),
+        ))
 
     so.status = SalesOrderStatus.converted
     so.converted_invoice_id = inv.id
@@ -1855,6 +2014,7 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
         ))
 
     quote.status = QuotationStatus.converted
+    quote.converted_order_id = so.id
     await db.commit()
     return {
         "order_id": so.id,
@@ -1925,6 +2085,34 @@ async def _already_returned_for_invoice(
         .group_by(SalesReturnLineItem.invoice_line_id)
     )
     return {row[0]: int(row[1] or 0) for row in res.all()}
+
+
+async def _restored_per_batch_for_invoice_line(
+    db: AsyncSession, invoice_line_id: str
+) -> dict[str, int]:
+    """Sum of qty already restored per source batch across processed returns
+    for a given invoice line. Drives the per-batch cap so cumulative restores
+    to any one lot can't exceed what the invoice took from it. Reads the
+    `batch_allocation` ledger stored on each SalesReturnLineItem."""
+    rows = (await db.execute(
+        select(SalesReturnLineItem.batch_allocation)
+        .join(SalesReturn, SalesReturn.id == SalesReturnLineItem.return_id)
+        .where(
+            SalesReturnLineItem.invoice_line_id == invoice_line_id,
+            SalesReturn.status == SalesReturnStatus.processed,
+            SalesReturnLineItem.batch_allocation.is_not(None),
+        )
+    )).scalars().all()
+    out: dict[str, int] = {}
+    for raw in rows:
+        try:
+            for e in json.loads(raw):
+                bid = e.get("batch_id")
+                if bid:
+                    out[bid] = out.get(bid, 0) + int(e.get("restored") or 0)
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 # ─── Sales Returns: LIST ─────────────────────────────────────────────────────
@@ -2130,6 +2318,111 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
     await db.flush()  # need ret.id for the line FK
 
     for r, inv_line, line_net, _line_tax in return_rows:
+        # 2026-05-31: batch-aware restock. Restore stock to the SAME lots the
+        # invoice line consumed (preserving original expiry), capped per lot
+        # by what the invoice took, cumulative across returns. Default split
+        # is FEFO (nearest-expiry lot refilled first); operator can override
+        # via r.batch_allocation. Stored as a ledger on the return line.
+        restore_ledger = None
+        if inv_line.item_id:
+            tracked, _expiry_tracked = await is_tracked(db, inv_line.item_id)
+            if not tracked:
+                # Untracked items just bump aggregate stock.
+                await adjust_stock_atomic(
+                    db, item_id=inv_line.item_id, branch_id=inv.branch_id,
+                    delta=r.return_qty,
+                )
+            else:
+                src = []
+                if getattr(inv_line, "batch_allocation", None):
+                    try:
+                        src = json.loads(inv_line.batch_allocation)
+                    except (ValueError, TypeError):
+                        src = []
+                if not src:
+                    # No source manifest (legacy / oversold sale) — fall back
+                    # to a fresh "Returns" lot so the count still moves.
+                    await add_batch_atomic(
+                        db,
+                        item_id=inv_line.item_id,
+                        branch_id=inv.branch_id,
+                        qty=r.return_qty,
+                        cost_price=inv_line.price or 0,
+                        source_type="return",
+                        source_ref=ret.id,
+                        notes=f"Return on {inv.number}: {data.reason or 'no reason given'}",
+                    )
+                else:
+                    # Per-lot cap = consumed − already restored (cumulative).
+                    prior = await _restored_per_batch_for_invoice_line(db, inv_line.id)
+                    caps: dict[str, int] = {}
+                    fefo_order: list[tuple[str, str]] = []  # (expiry, batch_id)
+                    for e in src:
+                        bid = e.get("batch_id")
+                        if not bid:
+                            continue
+                        cap = int(e.get("consumed") or 0) - int(prior.get(bid, 0))
+                        if cap <= 0:
+                            continue
+                        caps[bid] = cap
+                        fefo_order.append((e.get("expiry_date") or "9999-12-31", bid))
+
+                    plan: dict[str, int] = {}
+                    if r.batch_allocation:
+                        # Explicit operator split — validate against caps.
+                        total = 0
+                        for a in r.batch_allocation:
+                            if a.batch_id not in caps:
+                                raise HTTPException(
+                                    400,
+                                    f"{inv_line.name}: batch {a.batch_id} is not a source lot for this line",
+                                )
+                            if a.qty > caps[a.batch_id]:
+                                raise HTTPException(
+                                    400,
+                                    f"{inv_line.name}: batch {a.batch_id} can take at most {caps[a.batch_id]} more",
+                                )
+                            plan[a.batch_id] = plan.get(a.batch_id, 0) + a.qty
+                            total += a.qty
+                        if total != r.return_qty:
+                            raise HTTPException(
+                                400,
+                                f"{inv_line.name}: per-batch split ({total}) must equal return qty ({r.return_qty})",
+                            )
+                    else:
+                        # Default FEFO across source lots, capped per lot.
+                        remaining = r.return_qty
+                        for _exp, bid in sorted(fefo_order):
+                            if remaining <= 0:
+                                break
+                            take = min(caps[bid], remaining)
+                            if take > 0:
+                                plan[bid] = take
+                                remaining -= take
+                        if remaining > 0:
+                            raise HTTPException(
+                                400,
+                                f"{inv_line.name}: only {r.return_qty - remaining} unit(s) can be "
+                                f"restored to the invoice's source batches (rest already returned)",
+                            )
+
+                    applied = []
+                    for bid, qty in plan.items():
+                        b = (await db.execute(
+                            select(ItemBatch).where(ItemBatch.id == bid)
+                        )).scalar_one_or_none()
+                        if b is not None:
+                            await set_batch_quantity_atomic(
+                                db, batch_id=bid, new_qty=int(b.quantity or 0) + qty,
+                            )
+                        else:
+                            # Source lot since deleted — keep the count correct.
+                            await adjust_stock_atomic(
+                                db, item_id=inv_line.item_id, branch_id=inv.branch_id, delta=qty,
+                            )
+                        applied.append({"batch_id": bid, "restored": qty})
+                    restore_ledger = json.dumps(applied)
+
         db.add(SalesReturnLineItem(
             id=str(uuid.uuid4()), return_id=ret.id,
             invoice_line_id=inv_line.id,
@@ -2140,32 +2433,8 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             price=inv_line.price,
             tax_rate=inv_line.tax_rate,
             line_total=line_net,
+            batch_allocation=restore_ledger,
         ))
-
-        # ── Stock restock at the invoice's branch ──
-        if inv_line.item_id:
-            tracked, _expiry_tracked = await is_tracked(db, inv_line.item_id)
-            if tracked:
-                # Single "Returns" parcel per call — gives the auditor a
-                # row with source_type='return' and source_ref=<return id>.
-                # Operator can manually consolidate via Stock Adjustment if
-                # multiple returns clutter the batches list.
-                await add_batch_atomic(
-                    db,
-                    item_id=inv_line.item_id,
-                    branch_id=inv.branch_id,
-                    qty=r.return_qty,
-                    cost_price=inv_line.price or 0,
-                    source_type="return",
-                    source_ref=ret.id,
-                    notes=f"Return on {inv.number}: {data.reason or 'no reason given'}",
-                )
-            else:
-                # Untracked items just bump aggregate stock.
-                await adjust_stock_atomic(
-                    db, item_id=inv_line.item_id, branch_id=inv.branch_id,
-                    delta=r.return_qty,
-                )
 
     # ── Money movements ──
     if method == "credit" and inv.customer_id and credited > 0:
@@ -2300,17 +2569,26 @@ async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(
     quotes = res.unique().scalars().all()
     found_ids = {q.id for q in quotes}
     blocked = []
-    # Validate: not-found rows are reported as blocked (operator may have
-    # stale data); converted quotes can't be deleted because they spawned an SO.
     for qid in data.ids:
         if qid not in found_ids:
             blocked.append({"id": qid, "number": "?", "reason": "Quotation not found"})
+
+    # Guard by LIVE dependency, not by the `status` flag. A quote is only
+    # blocked if the sales order it spawned still exists. The status flag
+    # never resets, so keying off it falsely blocked quotes whose SO had
+    # already been deleted. We resolve the back-pointers in one query, then
+    # confirm those SO rows still exist.
+    order_ptr_ids = {q.converted_order_id for q in quotes if q.converted_order_id}
+    live_order_ids = set()
+    if order_ptr_ids:
+        live_order_ids = set((await db.execute(
+            select(SalesOrder.id).where(SalesOrder.id.in_(order_ptr_ids))
+        )).scalars().all())
     for q in quotes:
-        status = str(q.status.value) if hasattr(q.status, "value") else str(q.status)
-        if status == "converted":
+        if q.converted_order_id and q.converted_order_id in live_order_ids:
             blocked.append({
                 "id": q.id, "number": q.number,
-                "reason": f"Quote {q.number} was converted to a Sales Order — delete the SO first",
+                "reason": f"Quote {q.number} has a live Sales Order — delete the SO first",
             })
     if blocked:
         raise HTTPException(400, {"blocked": blocked, "message": "Some quotations can't be deleted"})
@@ -2344,12 +2622,19 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
     for oid in data.ids:
         if oid not in found_ids:
             blocked.append({"id": oid, "number": "?", "reason": "Sales order not found"})
+
+    # Guard by LIVE invoice, not the `status` flag (see quotation guard).
+    inv_ptr_ids = {o.converted_invoice_id for o in orders if o.converted_invoice_id}
+    live_inv_ids = set()
+    if inv_ptr_ids:
+        live_inv_ids = set((await db.execute(
+            select(SaleInvoice.id).where(SaleInvoice.id.in_(inv_ptr_ids))
+        )).scalars().all())
     for o in orders:
-        status = str(o.status.value) if hasattr(o.status, "value") else str(o.status)
-        if status == "converted":
+        if o.converted_invoice_id and o.converted_invoice_id in live_inv_ids:
             blocked.append({
                 "id": o.id, "number": o.number,
-                "reason": f"SO {o.number} was converted to an Invoice — delete the invoice first",
+                "reason": f"SO {o.number} has a live Invoice — delete the invoice first",
             })
     if blocked:
         raise HTTPException(400, {"blocked": blocked, "message": "Some sales orders can't be deleted"})
@@ -2363,6 +2648,16 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
             "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in o.line_items],
         }
         _audit_delete(db, action="delete_sales_order", ref=o.number, snapshot=snapshot)
+        # Orphan the parent quote: clear its dangling back-pointer so it
+        # becomes deletable + no "View SO" link 404s. Do NOT revert status
+        # — a quote that was ever converted stays locked from editing /
+        # re-converting even after its SO is deleted (2026-05-31 rule,
+        # mirrors PO→bill). Status stays `converted`.
+        parent_quote = (await db.execute(
+            select(Quotation).where(Quotation.converted_order_id == o.id)
+        )).scalar_one_or_none()
+        if parent_quote is not None:
+            parent_quote.converted_order_id = None
         await db.delete(o)
         deleted.append({"id": o.id, "number": o.number})
     await db.commit()
@@ -2434,6 +2729,17 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                     stock_restored += int(li.qty)
                 except ValueError:
                     pass  # missing item_stock row — already handled by helper
+        # Orphan the parent SO (if this invoice was spawned from one): clear
+        # its dangling pointer so it becomes deletable + no "View invoice"
+        # link 404s. Do NOT revert status — an SO that was ever converted
+        # stays locked from editing / re-converting even after its invoice
+        # is deleted (2026-05-31 rule, mirrors PO→bill). Status stays
+        # `converted` (which _is_ the edit-blocking terminal state).
+        parent_so = (await db.execute(
+            select(SalesOrder).where(SalesOrder.converted_invoice_id == inv.id)
+        )).scalar_one_or_none()
+        if parent_so is not None:
+            parent_so.converted_invoice_id = None
         _audit_delete(db, action="delete_invoice", ref=inv.number, snapshot=snapshot)
         await db.delete(inv)
         deleted.append({"id": inv.id, "number": inv.number})
@@ -2470,6 +2776,42 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
             "refund_method": ret.refund_method, "credited_amount": ret.credited_amount,
             "total": ret.total,
         }
+        # 2026-05-31: reverse the restock the return performed. Deleting a
+        # return means the goods leave again, so subtract back from the same
+        # lots it restored (per the stored ledger). Untracked / legacy-
+        # fallback lines fall back to an aggregate decrement.
+        for rl in ret.line_items:
+            if rl.batch_allocation:
+                try:
+                    ledger = json.loads(rl.batch_allocation)
+                except (ValueError, TypeError):
+                    ledger = []
+                for entry in ledger:
+                    bid = entry.get("batch_id")
+                    qty = int(entry.get("restored") or 0)
+                    if not bid or qty <= 0:
+                        continue
+                    b = (await db.execute(
+                        select(ItemBatch).where(ItemBatch.id == bid)
+                    )).scalar_one_or_none()
+                    if b is not None:
+                        await set_batch_quantity_atomic(
+                            db, batch_id=bid, new_qty=max(0, int(b.quantity or 0) - qty),
+                        )
+                    elif rl.item_id:
+                        try:
+                            await adjust_stock_atomic(
+                                db, item_id=rl.item_id, branch_id=ret.branch_id, delta=-qty,
+                            )
+                        except ValueError:
+                            pass
+            elif rl.item_id:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=rl.item_id, branch_id=ret.branch_id, delta=-int(rl.return_qty or 0),
+                    )
+                except ValueError:
+                    pass
         # Refund-method=credit: revoke the credit we gave the customer
         # on the original return. (They had ₹X added to credit_balance;
         # we now subtract it back.)

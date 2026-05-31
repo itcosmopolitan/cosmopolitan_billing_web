@@ -12,6 +12,10 @@
  *      warning shows ("Excess ₹X will be credited to customer"); the
  *      excess accumulates into Payment.credit_applied on submit.
  *   5. Pick payment method + reference + notes → submit.
+ *      - Method "credit" (2026-05-30) settles the selected invoices FROM
+ *        the customer's stored credit_balance. Apply Amounts lock to each
+ *        row's balance (no overpay) and the allocated total must fit
+ *        within available credit. Backend debits credit_balance + audits.
  *
  * Posts to POST /sales/payments/ with:
  *   { customer_id, date, payment_mode, payment_ref, notes,
@@ -132,6 +136,25 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
     return { allocated: Math.round(allocated * 100) / 100, credit: Math.round(credit * 100) / 100, count }
   }, [invoices, checkedIds, applyById])
 
+  // 2026-05-30: credit-mode derived state. `avail` is the customer's
+  // stored credit_balance captured at pick time. In credit mode the
+  // operator settles invoices FROM that balance — no overpay allowed, and
+  // the allocated total must fit within the available credit.
+  const avail = Number(customer?.credit || 0)
+  const creditMode = paymentMode === 'credit'
+  const creditInsufficient = creditMode && totals.allocated > avail + 0.001
+
+  // Lock every Apply Amount to the row's balance when credit is chosen
+  // (overpaying with credit is nonsensical — would debit then re-credit).
+  const seedApplyToBalances = () => {
+    const seed = {}
+    invoices.forEach((inv) => {
+      const bal = Math.max(0, (inv.total || 0) - (inv.paidAmount || 0))
+      seed[inv.id] = String(bal.toFixed(2))
+    })
+    setApplyById(seed)
+  }
+
   const handleSubmit = async () => {
     if (!customer?.id) {
       toast.error('Pick a customer first')
@@ -143,6 +166,13 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
     }
     if (!paymentMode) {
       toast.error('Pick a payment method')
+      return
+    }
+    // Credit-mode guard (backend re-validates): allocated total must fit
+    // within the customer's available credit. Overpay is already prevented
+    // by locking the Apply Amount inputs to each row's balance.
+    if (creditMode && creditInsufficient) {
+      toast.error(`Insufficient credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
       return
     }
     // Per-row validation: each checked row must have a positive amount.
@@ -184,7 +214,7 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
     }
   }
 
-  const buttonDisabled = submitting || !customer || totals.count === 0 || !paymentMode
+  const buttonDisabled = submitting || !customer || totals.count === 0 || !paymentMode || creditInsufficient
 
   return (
     <Modal
@@ -208,7 +238,7 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
       <FormGroup label="Customer" required>
         <CustomerPicker
           value={customer}
-          onPick={(c) => setCustomer({ id: c.id, name: c.name })}
+          onPick={(c) => setCustomer({ id: c.id, name: c.name, credit: Number(c.credit_balance || 0) })}
           onClear={() => {
             setCustomer(null)
             setInvoices([])
@@ -310,7 +340,7 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
                             className="form-input"
                             type="number"
                             value={applyById[inv.id] || ''}
-                            disabled={!checked}
+                            disabled={!checked || creditMode}
                             onChange={(e) =>
                               setApplyById((prev) => ({ ...prev, [inv.id]: e.target.value }))
                             }
@@ -319,7 +349,7 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
                               textAlign: 'right', fontVariantNumeric: 'tabular-nums',
                             }}
                           />
-                          {excess > 0 && (
+                          {excess > 0 && !creditMode && (
                             <div style={{ fontSize: 10.5, color: 'var(--amber)', marginTop: 2 }}>
                               Excess {fmt(excess)} → credit
                             </div>
@@ -354,11 +384,36 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
                 <FormGroup label="Method" required>
-                  <select className="form-input" value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
+                  {/* Credit (2026-05-30) draws from the customer's stored
+                      credit_balance to settle the selected invoices.
+                      Disabled when the customer has no credit. Picking it
+                      locks each Apply Amount to that row's balance. */}
+                  <select
+                    className="form-input"
+                    value={paymentMode}
+                    onChange={(e) => {
+                      const m = e.target.value
+                      setPaymentMode(m)
+                      if (m === 'credit') seedApplyToBalances()
+                    }}
+                  >
                     {['cash', 'card', 'upi', 'bank_transfer'].map((m) => (
                       <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
                     ))}
+                    <option value="credit" disabled={avail <= 0}>
+                      CREDIT ({fmt(avail)} available)
+                    </option>
                   </select>
+                  {creditMode && (
+                    <div style={{
+                      fontSize: 11, marginTop: 4,
+                      color: creditInsufficient ? 'var(--amber)' : 'var(--text-muted)',
+                    }}>
+                      {creditInsufficient
+                        ? `Allocated ${fmt(totals.allocated)} exceeds available credit ${fmt(avail)}. Reduce selection.`
+                        : `Drawing ${fmt(totals.allocated)} from ${fmt(avail)} available credit.`}
+                    </div>
+                  )}
                 </FormGroup>
                 <FormGroup label="Reference">
                   <input

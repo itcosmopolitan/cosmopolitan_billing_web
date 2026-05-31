@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Modal, FormGroup, AlertBar, EmptyState } from '@/components/ui'
-import { purchasesAPI } from '@/api'
+import { purchasesAPI, itemsAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
 
 const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Damaged', 'Other']
@@ -31,6 +31,11 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
   // bill. Backend has the same map server-side; this is the UX mirror.
   const [alreadyReturned, setAlreadyReturned] = useState({})
   const [returnQtys, setReturnQtys] = useState({})    // { [bill_line_id]: number }
+  // 2026-05-31: current remaining qty in THIS bill's own lot, per line.
+  // { [bill_line_id]: number | null }. null = untracked / no bill lot found
+  // → no batch cap. A vendor return can only send back what still remains
+  // from this bill's batch (e.g. received 100, sold 50 → 50 returnable).
+  const [billLotRemaining, setBillLotRemaining] = useState({})
   const [reason, setReason] = useState('Defective')
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
@@ -43,6 +48,7 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
       setBill(null)
       setAlreadyReturned({})
       setReturnQtys({})
+      setBillLotRemaining({})
       setReason('Defective')
       setNotes('')
     }
@@ -89,6 +95,35 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
         }
       }
       setAlreadyReturned(tally)
+
+      // 2026-05-31: how much of THIS bill's own lot still remains on hand,
+      // per line. We can only return what hasn't been sold/moved since.
+      // For each unique tracked item, find the batch this bill created
+      // (sourceRef === bill.id) and read its current quantity.
+      const lotMap = {}
+      const uniqueItemIds = Array.from(
+        new Set((full.items || []).map((li) => li.itemId).filter(Boolean)))
+      const batchResults = await Promise.all(
+        uniqueItemIds.map((id) =>
+          itemsAPI.batches.list(id, { branch_id: full.branchId })
+            .then((res) => [id, res])
+            .catch(() => [id, null])),
+      )
+      const remByItem = {}
+      for (const [id, res] of batchResults) {
+        // The bill-lot cap only applies to BATCH-TRACKED items. Untracked
+        // items have no batches — the /batches endpoint still returns
+        // `res.item` (so checking `!res.item` was wrong and forced the cap
+        // to 0), so we must key off `res.item.batch_tracking`. Untracked →
+        // null = no cap (returnable is just received − prior returns).
+        if (!res || !res.item || !res.item.batch_tracking) { remByItem[id] = null; continue }
+        const lots = (res.items || []).filter((b) => b.sourceRef === full.id)
+        remByItem[id] = lots.reduce((s, b) => s + Number(b.quantity || 0), 0)
+      }
+      for (const li of full.items || []) {
+        lotMap[li.id] = li.itemId ? remByItem[li.itemId] ?? null : null
+      }
+      setBillLotRemaining(lotMap)
     } catch (err) {
       console.error('Failed to load bill:', err)
     } finally {
@@ -98,7 +133,11 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
 
   const remainingFor = (line) => {
     const prior = alreadyReturned[line.id] || 0
-    return Math.max(0, Number(line.qty || 0) - prior)
+    const byCap = Math.max(0, Number(line.qty || 0) - prior)
+    // Cap further by what's still in this bill's lot (when tracked).
+    const lot = billLotRemaining[line.id]
+    if (lot == null) return byCap
+    return Math.min(byCap, Math.max(0, Number(lot)))
   }
 
   const setQtyFor = (line, raw) => {

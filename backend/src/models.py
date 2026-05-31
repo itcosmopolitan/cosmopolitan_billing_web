@@ -423,6 +423,12 @@ class SaleLineItem(Base):
     tax_rate   = Column(Float, default=0)
     discount   = Column(Float, default=0)
     line_total = Column(Float, default=0)
+    # 2026-05-31: which batch lots this sale line consumed, so a return can
+    # restore stock to the SAME lots (preserving original expiry). JSON list
+    # of {batch_id, batch_number, consumed, expiry_date}. NULL for untracked
+    # items or sales made before this column existed. Mirrors
+    # TransferLineItem.batch_allocation.
+    batch_allocation = Column(Text)
 
     invoice = relationship("SaleInvoice", back_populates="line_items")
     item    = relationship("Item", back_populates="sale_lines")
@@ -513,6 +519,12 @@ class Quotation(Base):
     discount      = Column(Float, default=0)
     total         = Column(Float, default=0)
     status        = Column(SAEnum(QuotationStatus), default=QuotationStatus.draft)
+    # Set when status flips to `converted`. Back-pointer to the spawned
+    # SalesOrder, mirroring SalesOrder.converted_invoice_id. Used by the
+    # delete guard to tell whether a live SO still depends on this quote
+    # (status alone is insufficient — it never resets when the SO is
+    # deleted). Nullable until conversion. Added 2026-05-30.
+    converted_order_id = Column(String, ForeignKey("sales_orders.id"), nullable=True)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -778,6 +790,13 @@ class ReturnLineItem(Base):
     cost          = Column(Float, default=0)
     tax_rate      = Column(Float, default=0)
     line_total    = Column(Float, default=0)
+    # 2026-05-31: JSON ledger of the stock consumption this return line
+    # performed, so deletion can reverse the exact lots. For batch-tracked
+    # items: [{"batch_id", "consumed"}, ...] (from consume_batches_atomic).
+    # For untracked items: [{"batch_id": null, "consumed": qty}] (aggregate
+    # decrement). NULL = legacy return created before vendor returns moved
+    # stock — deletion must NOT re-add stock for those.
+    batch_allocation = Column(Text)
 
     return_note = relationship("VendorReturn", back_populates="line_items")
     item = relationship("Item")
@@ -851,6 +870,11 @@ class SalesReturnLineItem(Base):
     price         = Column(Float, default=0)       # price at time of original sale
     tax_rate      = Column(Float, default=0)
     line_total    = Column(Float, default=0)       # incl. tax
+    # 2026-05-31: which source lots this return restored stock to + how much,
+    # so the per-batch cumulative cap (≤ qty taken on the invoice) holds
+    # across multiple returns and deletion can reverse the exact lots. JSON
+    # list of {batch_id, restored}.
+    batch_allocation = Column(Text)
 
     sales_return = relationship("SalesReturn", back_populates="line_items")
     item         = relationship("Item")

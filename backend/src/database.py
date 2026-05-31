@@ -298,6 +298,23 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # gracefully falls back to (item_id, name) matching when the column
     # is null. Parity with sales_return_line_items.invoice_line_id.
     ("return_line_items", "bill_line_id", "VARCHAR"),
+    # 2026-05-31: per-line stock-consumption ledger for vendor returns, so
+    # deleting a return can reverse the exact lots it drained. JSON text;
+    # NULL for legacy returns that never moved stock (those must not be
+    # re-added on delete). See routes/purchases.create_return.
+    ("return_line_items", "batch_allocation", "TEXT"),
+    # 2026-05-31: batch-aware returns. The sale line remembers which lots it
+    # consumed; the sales-return line remembers which lots it restored to
+    # (for the per-batch cumulative cap + delete reversal). JSON text.
+    ("sale_line_items", "batch_allocation", "TEXT"),
+    ("sales_return_line_items", "batch_allocation", "TEXT"),
+    # 2026-05-30: back-pointer from a quotation to the sales order it
+    # spawned. Lets the bulk-delete guard check whether a LIVE sales
+    # order still depends on the quote (the `status='converted'` flag
+    # never resets, so it falsely blocked quote deletion even after the
+    # SO was deleted). Nullable; legacy converted quotes have NULL here
+    # and the guard treats NULL as "no live dependency".
+    ("quotations", "converted_order_id", "VARCHAR"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.

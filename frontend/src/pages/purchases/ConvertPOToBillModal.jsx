@@ -24,6 +24,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, FormGroup, AlertBar } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
+import { itemsAPI } from '@/api'
 
 export default function ConvertPOToBillModal({
   open,
@@ -41,6 +42,13 @@ export default function ConvertPOToBillModal({
   const [notes, setNotes] = useState('')
   // Per-item-id batch capture state. Shape: { [item_id]: { batchNumber, mfgDate, expiryDate } }
   const [batchByItem, setBatchByItem] = useState({})
+  // 2026-05-31: tracking flags fetched per item on open. The `lines` prop
+  // only carries { item_id, name, qty } (PO line items don't store the
+  // item-level batch_tracking / expiry_tracking flags), so without this
+  // fetch every line rendered as "Not batch-tracked". Shape:
+  // { [item_id]: { batch_tracking, expiry_tracking } }. Mirrors the lazy
+  // fetch in sales/ConvertToInvoiceModal.
+  const [flagsByItem, setFlagsByItem] = useState({})
 
   // Reset on every open so a previous attempt doesn't bleed in.
   useEffect(() => {
@@ -51,8 +59,47 @@ export default function ConvertPOToBillModal({
       setDueDate('')
       setNotes('')
       setBatchByItem({})
+      setFlagsByItem({})
     }
   }, [open])
+
+  // Fetch each unique line item's tracking flags when the modal opens.
+  // Unique by item_id so repeated SKUs cost one request.
+  //
+  // NB: uses the /items/{id}/batches endpoint (which returns the item's
+  // `batch_tracking` / `expiry_tracking` in its `item` field) rather than
+  // a single-item GET — there is NO `GET /items/{id}` route in the backend
+  // (only list / PUT / PATCH), so calling it 405s. This mirrors the sales
+  // ConvertToInvoiceModal, which uses the same batches endpoint.
+  useEffect(() => {
+    if (!open || !Array.isArray(lines) || lines.length === 0) return
+    const uniqueItemIds = Array.from(
+      new Set(lines.map((l) => l.item_id).filter(Boolean)),
+    )
+    if (uniqueItemIds.length === 0) return
+    const branchId = source?.branchId || null
+    const params = branchId ? { branch_id: branchId, include_empty: false } : {}
+    let cancelled = false
+    Promise.all(
+      uniqueItemIds.map((id) =>
+        itemsAPI.batches
+          .list(id, params)
+          .then((res) => [id, res])
+          .catch(() => [id, null]),
+      ),
+    ).then((results) => {
+      if (cancelled) return
+      const next = {}
+      for (const [id, res] of results) {
+        next[id] = {
+          batch_tracking: Boolean(res?.item?.batch_tracking),
+          expiry_tracking: Boolean(res?.item?.expiry_tracking),
+        }
+      }
+      setFlagsByItem(next)
+    })
+    return () => { cancelled = true }
+  }, [open, lines, source])
 
   const updateBatch = (item_id, key, value) => {
     setBatchByItem((prev) => ({
@@ -61,8 +108,40 @@ export default function ConvertPOToBillModal({
     }))
   }
 
+  // Resolve a line's tracking flags: prefer a flag the caller put on the
+  // line, else fall back to the per-item flags fetched on open.
+  const resolveFlags = (line) => {
+    const flags = (line.item_id && flagsByItem[line.item_id]) || {}
+    return {
+      tracked: line.batch_tracking != null
+        ? Boolean(line.batch_tracking)
+        : Boolean(flags.batch_tracking),
+      expiryTracked: line.expiry_tracking != null
+        ? Boolean(line.expiry_tracking)
+        : Boolean(flags.expiry_tracking),
+    }
+  }
+
+  // 2026-05-31: expiry is mandatory for expiry-tracked (FEFO) lines — the
+  // backend rejects a receipt without it. Block submit client-side so the
+  // operator fixes it before the round-trip; the offending field is
+  // outlined red in the render below. item_ids of FEFO lines missing expiry:
+  const missingExpiryItemIds = (Array.isArray(lines) ? lines : [])
+    .filter((line) => {
+      const { tracked, expiryTracked } = resolveFlags(line)
+      if (!tracked || !expiryTracked || !line.item_id) return false
+      const b = batchByItem[line.item_id] || {}
+      return !b.expiryDate
+    })
+    .map((line) => line.item_id)
+  const hasMissingExpiry = missingExpiryItemIds.length > 0
+
   const handleConfirm = () => {
     if (paymentReceived && !paymentMethod) {
+      return
+    }
+    // Guard: every FEFO line must carry an expiry date (backend requires it).
+    if (hasMissingExpiry) {
       return
     }
     // Build line_receipts array — only include entries where the operator
@@ -89,7 +168,7 @@ export default function ConvertPOToBillModal({
     })
   }
 
-  const buttonDisabled = confirming || (paymentReceived && !paymentMethod)
+  const buttonDisabled = confirming || (paymentReceived && !paymentMethod) || hasMissingExpiry
   const showStockSection = Array.isArray(lines) && lines.length > 0
 
   return (
@@ -98,7 +177,7 @@ export default function ConvertPOToBillModal({
       onClose={confirming ? () => {} : onClose}
       title={title}
       icon="📋"
-      size="sm"
+      size="md"
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose} disabled={confirming}>
@@ -131,7 +210,8 @@ export default function ConvertPOToBillModal({
             Batch capture
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 10 }}>
-            Enter lot # and expiry for batch-tracked items, or skip to auto-generate the lot #.
+            Enter lot # and dates for batch-tracked items, or skip to auto-generate the lot #.
+            Expiry is required for FEFO (expiry-tracked) items.
           </div>
           <div style={{
             border: '1px solid var(--border-subtle)',
@@ -140,15 +220,16 @@ export default function ConvertPOToBillModal({
             overflow: 'hidden',
           }}>
             {lines.map((line, idx) => {
-              const tracked = Boolean(line.batch_tracking)
-              const expiryTracked = Boolean(line.expiry_tracking)
+              const { tracked, expiryTracked } = resolveFlags(line)
               const b = (line.item_id && batchByItem[line.item_id]) || {}
+              // FEFO line with no expiry yet → flag the field red + block submit.
+              const expiryMissing = tracked && expiryTracked && !b.expiryDate
               return (
                 <div key={`${line.item_id || 'noid'}-${idx}`} style={{
                   padding: '10px 12px',
                   borderTop: idx === 0 ? 'none' : '1px solid var(--border-subtle)',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: tracked ? 8 : 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: tracked ? 10 : 0 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{
                         fontSize: 13, fontWeight: 500, color: 'var(--text-primary)',
@@ -168,28 +249,50 @@ export default function ConvertPOToBillModal({
                     )}
                   </div>
                   {tracked && (
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <input className="form-input" type="text"
-                        placeholder="Lot # (auto if blank)"
-                        value={b.batchNumber || ''}
-                        onChange={(e) => updateBatch(line.item_id, 'batchNumber', e.target.value)}
-                        style={{ flex: 1, fontSize: 12, padding: '6px 8px' }} />
-                      <input className="form-input" type="date"
-                        title="Mfg date"
-                        value={b.mfgDate || ''}
-                        onChange={(e) => updateBatch(line.item_id, 'mfgDate', e.target.value)}
-                        style={{ width: 140, fontSize: 12, padding: '6px 8px' }} />
-                      <input className="form-input" type="date"
-                        title={expiryTracked ? 'Expiry date (required)' : 'Expiry date'}
-                        value={b.expiryDate || ''}
-                        onChange={(e) => updateBatch(line.item_id, 'expiryDate', e.target.value)}
-                        style={{ width: 140, fontSize: 12, padding: '6px 8px' }} />
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      {/* Lot # — widest; optional (auto-generated if blank). */}
+                      <label style={{ flex: 1.6, minWidth: 0, ...fieldWrapStyle }}>
+                        <span style={fieldLabelStyle}>Lot # (optional)</span>
+                        <input className="form-input" type="text"
+                          placeholder="Auto-generated if blank"
+                          value={b.batchNumber || ''}
+                          onChange={(e) => updateBatch(line.item_id, 'batchNumber', e.target.value)}
+                          style={{ fontSize: 12, padding: '6px 8px' }} />
+                      </label>
+                      {/* Mfg date — always optional. */}
+                      <label style={{ flex: 1, minWidth: 0, ...fieldWrapStyle }}>
+                        <span style={fieldLabelStyle}>Mfg date</span>
+                        <input className="form-input" type="date"
+                          value={b.mfgDate || ''}
+                          onChange={(e) => updateBatch(line.item_id, 'mfgDate', e.target.value)}
+                          style={{ fontSize: 12, padding: '6px 8px' }} />
+                      </label>
+                      {/* Expiry date — required for FEFO (expiry-tracked) lines. */}
+                      <label style={{ flex: 1, minWidth: 0, ...fieldWrapStyle }}>
+                        <span style={fieldLabelStyle}>
+                          Expiry date{expiryTracked && (
+                            <span style={{ color: 'var(--red)' }}> * (required)</span>
+                          )}
+                        </span>
+                        <input className="form-input" type="date"
+                          value={b.expiryDate || ''}
+                          onChange={(e) => updateBatch(line.item_id, 'expiryDate', e.target.value)}
+                          style={{
+                            fontSize: 12, padding: '6px 8px',
+                            ...(expiryMissing ? { borderColor: 'var(--red)' } : {}),
+                          }} />
+                      </label>
                     </div>
                   )}
                 </div>
               )
             })}
           </div>
+          {hasMissingExpiry && (
+            <div style={{ fontSize: 11.5, color: 'var(--red)', marginTop: 8 }}>
+              ⚠ Enter an expiry date for every FEFO item before creating the bill.
+            </div>
+          )}
         </div>
       )}
 
@@ -281,4 +384,20 @@ const mutedPillStyle = {
   color: 'var(--text-muted)',
   border: '1px solid var(--border-subtle)',
   whiteSpace: 'nowrap',
+}
+
+// Per-field wrapper + caption label for the labeled batch-capture inputs
+// (2026-05-31 redesign). The caption sits above each input so the operator
+// can tell Lot # / Mfg date / Expiry date apart.
+const fieldWrapStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+}
+const fieldLabelStyle = {
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: 0.3,
+  textTransform: 'uppercase',
+  color: 'var(--text-muted)',
 }
