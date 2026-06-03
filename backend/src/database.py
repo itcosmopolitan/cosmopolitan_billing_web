@@ -234,8 +234,9 @@ async def _backfill_item_branch_config(conn) -> None:
     tables = (
         await conn.execute(
             text(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name IN ('items', 'branches', 'item_branch_config')"
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' "
+                "AND table_name IN ('items', 'branches', 'item_branch_config')"
             )
         )
     ).fetchall()
@@ -260,7 +261,7 @@ async def _backfill_item_branch_config(conn) -> None:
             text(
                 "SELECT i.id, b.id FROM items i "
                 "CROSS JOIN branches b "
-                "WHERE i.active = 1 AND b.active = 1"
+                "WHERE i.active = true AND b.active = true"
             )
         )
     ).fetchall()
@@ -269,7 +270,7 @@ async def _backfill_item_branch_config(conn) -> None:
             text(
                 "INSERT INTO item_branch_config "
                 "(id, item_id, branch_id, is_available, selling_price, reorder_level) "
-                "VALUES (:id, :item_id, :branch_id, 1, NULL, NULL)"
+                "VALUES (:id, :item_id, :branch_id, true, NULL, NULL)"
             ),
             {"id": str(uuid.uuid4()), "item_id": item_id, "branch_id": branch_id},
         )
