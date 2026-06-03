@@ -14,6 +14,7 @@ import POSPage       from '@/pages/pos/POSPage'
 import ItemsPage     from '@/pages/inventory/ItemsPage'
 import ItemMasterPage from '@/pages/inventory/ItemMasterPage'
 import NewItemPage from '@/pages/inventory/NewItemPage'
+import EditItemPage from '@/pages/inventory/EditItemPage'
 import TransfersPage from '@/pages/inventory/TransfersPage'
 import SalesPage     from '@/pages/sales/SalesPage'
 import PurchasesPage from '@/pages/purchases/PurchasesPage'
@@ -46,6 +47,7 @@ function AppShell() {
             <Route path="/pos"        element={<RequirePerm perm="pos.use"><POSPage /></RequirePerm>} />
             <Route path="/item-master" element={<RequirePerm perm="items.view"><ItemMasterPage /></RequirePerm>} />
             <Route path="/item-master/new" element={<RequirePerm perm="items.create"><NewItemPage /></RequirePerm>} />
+            <Route path="/item-master/:itemId/edit" element={<RequirePerm perm="items.edit"><EditItemPage /></RequirePerm>} />
             <Route path="/items"      element={<RequirePerm perm="items.view"><ItemsPage /></RequirePerm>} />
             <Route path="/transfers"  element={<RequirePerm perm="transfers.view"><TransfersPage /></RequirePerm>} />
             <Route path="/sales"      element={<RequirePerm perm="invoices.view"><SalesPage /></RequirePerm>} />
