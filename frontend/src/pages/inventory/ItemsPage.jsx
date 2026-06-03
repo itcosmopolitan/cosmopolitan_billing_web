@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { itemsAPI, taxRatesAPI } from '@/api'
+import { itemsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
@@ -12,11 +12,8 @@ import {
   SortableHeader, AlertBar,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
-import ItemFormModal from './ItemFormModal'
 import BatchesModal from './BatchesModal'
-import BranchConfigModal from './BranchConfigModal'
 import RowActionsMenu from './RowActionsMenu'
-import { EMPTY_ITEM } from './itemFormShared'
 
 const BRANCH_TABS = [
   { id: 'all',      label: 'All Items' },
@@ -48,14 +45,9 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [search, setSearch]     = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [branchFilter, setBranchFilter] = useState(() => activeBranch?.id || 'br-001')
-  const [branchConfigItem, setBranchConfigItem] = useState(null)
-  const [editItem, setEditItem] = useState(null)
-  // Snapshot of batch_tracking when edit opens — used to confirm destructive toggles.
-  const [editWasTracked, setEditWasTracked] = useState(false)
   const [showAdj, setShowAdj]   = useState(null)
   const [showAdjSelect, setShowAdjSelect] = useState(false)
   const [adjSelectSearch, setAdjSelectSearch] = useState('')
-  const [form, setForm]         = useState(EMPTY_ITEM)
   const [adjQty, setAdjQty]     = useState('')
   const [adjReason, setAdjReason] = useState('Physical count')
   const [adjBatches, setAdjBatches] = useState([])      // batch list when adjusting a tracked item
@@ -72,7 +64,6 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [itemSortOrder, setItemSortOrder] = useState('asc')
   const [loading, setLoading]   = useState(true)
   const [categories, setCategories] = useState([])
-  const [taxRates, setTaxRates] = useState([])
 
   // Client-side sort because the page fetches all items at once via
   // fetchAllList and paginates locally. If/when this switches to true
@@ -120,12 +111,6 @@ export default function ItemsPage({ mode = 'branch' }) {
   }, [fetchItems])
 
   useEffect(() => {
-    taxRatesAPI.list()
-      .then((data) => setTaxRates(Array.isArray(data) ? data : []))
-      .catch((err) => console.error('Failed to load tax rates:', err))
-  }, [])
-
-  useEffect(() => {
     setItemSkip(0)
   }, [search, catFilter, tab, branchFilter, isMaster])
 
@@ -153,8 +138,6 @@ export default function ItemsPage({ mode = 'branch' }) {
       loadNearExpiry()
     }
   }, [loadNearExpiry, isMaster])
-
-  const patchForm = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
   const filtered = useMemo(() => {  // eslint-disable-line react-hooks/exhaustive-deps
     let list = [...items]
@@ -214,28 +197,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   }, [items, nearExpiry, isMaster])
 
   const openEdit = (item) => {
-    setForm({
-      name: item.name,
-      sku: item.sku,
-      barcode: item.barcode,
-      categoryId: item.categoryId,
-      brand: item.brand,
-      unit: item.unit,
-      cost_price: isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
-      selling_price: isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
-      tax_rate: item.tax_rate,
-      hsn_code: item.hsn_code,
-      reorder_level: isMaster ? (item.default_reorder_level ?? item.reorder_level) : item.reorder_level,
-      opening_stock: item.available_stock,
-      emoji: item.emoji,
-      batch_tracking: item.batch_tracking || false,
-      expiry_tracking: item.expiry_tracking || false,
-      opening_batch_number: '',
-      opening_mfg_date: '',
-      opening_expiry_date: '',
-    })
-    setEditWasTracked(Boolean(item.batch_tracking))
-    setEditItem(item.id)
+    navigate(`/item-master/${item.id}/edit`)
   }
 
   // Open the stock adjustment modal. For batch-tracked items we lazily fetch
@@ -258,49 +220,6 @@ export default function ItemsPage({ mode = 'branch' }) {
       } finally {
         setAdjLoading(false)
       }
-    }
-  }
-
-  const saveItem = async () => {
-    if (!editItem) return
-    if (!form.name) { toast.error('Item name is required'); return }
-    if (!form.selling_price) { toast.error('Selling price is required'); return }
-
-    try {
-      const payload = {
-        name: form.name,
-        sku: form.sku,
-        barcode: form.barcode,
-        category_id: form.categoryId,
-        brand: form.brand,
-        unit: form.unit,
-        cost_price: Number(form.cost_price),
-        selling_price: Number(form.selling_price),
-        tax_rate: Number(form.tax_rate),
-        hsn_code: form.hsn_code,
-        reorder_level: Number(form.reorder_level),
-        emoji: form.emoji || '📦',
-        batch_tracking: form.batch_tracking,
-        expiry_tracking: form.expiry_tracking,
-        opening_stock: 0,
-        branch_id: branchFilter,
-      }
-
-      const res = await itemsAPI.update(editItem, payload)
-      const ch = res?.data?.batch_tracking_change
-      if (ch?.action === 'disabled') {
-        toast.success(`Item updated — ${ch.batches_deleted ?? 0} batch(es) removed`)
-      } else if (ch?.action === 'enabled') {
-        toast.success(`Item updated — ${ch.batches_seeded ?? 0} opening batch(es) created`)
-      } else {
-        toast.success('Item updated')
-      }
-      await fetchItems()
-      await loadNearExpiry()
-      setEditItem(null)
-    } catch (err) {
-      console.error('Failed to save item:', err)
-      toast.error('Failed to save item')
     }
   }
 
@@ -572,11 +491,6 @@ export default function ItemsPage({ mode = 'branch' }) {
                               hidden: !can('items.edit'),
                               onClick: () => openEdit(p),
                             },
-                            {
-                              label: 'Branch availability & pricing',
-                              hidden: !can('items.edit'),
-                              onClick: () => setBranchConfigItem(p),
-                            },
                           ] : [
                             {
                               label: 'Adjust stock',
@@ -607,30 +521,6 @@ export default function ItemsPage({ mode = 'branch' }) {
           disabled={loading}
         />
       </Card>
-
-      {isMaster && (
-        <>
-      <ItemFormModal
-        open={!!editItem}
-        onClose={() => setEditItem(null)}
-        editing
-        editWasTracked={editWasTracked}
-        form={form}
-        patchForm={patchForm}
-        onSave={saveItem}
-        categories={categories}
-        taxRates={taxRates}
-      />
-
-      <BranchConfigModal
-        item={branchConfigItem}
-        branches={branches.filter((b) => b.code !== 'WH')}
-        open={!!branchConfigItem}
-        onClose={() => setBranchConfigItem(null)}
-        onSaved={fetchItems}
-      />
-        </>
-      )}
 
       {!isMaster && (
         <>

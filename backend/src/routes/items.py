@@ -121,6 +121,60 @@ async def _ensure_stock_row(
     ))
 
 
+async def _stock_qty(db: AsyncSession, *, item_id: str, branch_id: str) -> int:
+    res = await db.execute(
+        select(ItemStock.quantity).where(
+            ItemStock.item_id == item_id,
+            ItemStock.branch_id == branch_id,
+        )
+    )
+    return int(res.scalar() or 0)
+
+
+async def _seed_opening_stock(
+    db: AsyncSession,
+    *,
+    item: Item,
+    branch_id: str,
+    qty: int,
+    cost_price: float,
+    batch_number: Optional[str] = None,
+    mfg_date: Optional[str] = None,
+    expiry_date: Optional[str] = None,
+) -> None:
+    """Add opening qty at a branch (create or edit). Tracked → new batch lot; untracked → bump stock."""
+    if qty <= 0:
+        return
+    await _ensure_stock_row(db, item_id=item.id, branch_id=branch_id)
+    if item.batch_tracking:
+        _raise_batch_date_errors(validate_batch_dates(
+            mfg_date=mfg_date,
+            expiry_date=expiry_date,
+            require_expiry=bool(item.expiry_tracking),
+        ))
+        await add_batch_atomic(
+            db,
+            item_id=item.id,
+            branch_id=branch_id,
+            qty=int(qty),
+            batch_number=batch_number,
+            mfg_date=mfg_date,
+            expiry_date=expiry_date,
+            cost_price=cost_price,
+            source_type="opening",
+            source_ref=item.id,
+            received_date=mfg_date or None,
+        )
+    else:
+        current = await _stock_qty(db, item_id=item.id, branch_id=branch_id)
+        await set_stock_atomic(
+            db,
+            item_id=item.id,
+            branch_id=branch_id,
+            new_qty=current + int(qty),
+        )
+
+
 def _raise_batch_date_errors(errors: list[str]) -> None:
     if errors:
         raise HTTPException(400, "; ".join(errors))
@@ -469,45 +523,6 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
 
     configs = data.branch_configs
 
-    async def _seed_opening_at_branch(
-        branch_id: str,
-        qty: int,
-        *,
-        cost_price: float,
-        batch_number: Optional[str] = None,
-        mfg_date: Optional[str] = None,
-        expiry_date: Optional[str] = None,
-    ) -> None:
-        if qty <= 0:
-            return
-        await _ensure_stock_row(db, item_id=item.id, branch_id=branch_id)
-        if data.batch_tracking:
-            _raise_batch_date_errors(validate_batch_dates(
-                mfg_date=mfg_date,
-                expiry_date=expiry_date,
-                require_expiry=bool(data.expiry_tracking),
-            ))
-            await add_batch_atomic(
-                db,
-                item_id=item.id,
-                branch_id=branch_id,
-                qty=int(qty),
-                batch_number=batch_number,
-                mfg_date=mfg_date,
-                expiry_date=expiry_date,
-                cost_price=cost_price,
-                source_type="opening",
-                source_ref=item.id,
-                received_date=mfg_date or None,
-            )
-        else:
-            await set_stock_atomic(
-                db,
-                item_id=item.id,
-                branch_id=branch_id,
-                new_qty=int(qty),
-            )
-
     if configs:
         seeded_any = False
         for bc in configs:
@@ -524,9 +539,11 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
             if bc.is_available:
                 await _ensure_stock_row(db, item_id=item.id, branch_id=bc.branch_id)
             if bc.is_available and int(bc.opening_stock or 0) > 0:
-                await _seed_opening_at_branch(
-                    bc.branch_id,
-                    int(bc.opening_stock),
+                await _seed_opening_stock(
+                    db,
+                    item=item,
+                    branch_id=bc.branch_id,
+                    qty=int(bc.opening_stock),
                     cost_price=branch_cost,
                     batch_number=bc.opening_batch_number,
                     mfg_date=bc.opening_mfg_date,
@@ -537,9 +554,11 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
             # Listed branches exist at zero stock; legacy top-level opening still
             # supported when every branch row has opening_stock = 0.
             if data.opening_stock and data.opening_stock > 0:
-                await _seed_opening_at_branch(
-                    data.branch_id,
-                    int(data.opening_stock),
+                await _seed_opening_stock(
+                    db,
+                    item=item,
+                    branch_id=data.branch_id,
+                    qty=int(data.opening_stock),
                     cost_price=float(data.cost_price),
                     batch_number=data.opening_batch_number,
                     mfg_date=data.opening_mfg_date,
@@ -557,9 +576,11 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
         )
         await _ensure_stock_row(db, item_id=item.id, branch_id=data.branch_id)
         if data.opening_stock and data.opening_stock > 0:
-            await _seed_opening_at_branch(
-                data.branch_id,
-                int(data.opening_stock),
+            await _seed_opening_stock(
+                db,
+                item=item,
+                branch_id=data.branch_id,
+                qty=int(data.opening_stock),
                 cost_price=float(data.cost_price),
                 batch_number=data.opening_batch_number,
                 mfg_date=data.opening_mfg_date,
@@ -691,6 +712,18 @@ async def update_item_branches(
         )
         if bc.is_available:
             await _ensure_stock_row(db, item_id=item_id, branch_id=bc.branch_id)
+        if bc.is_available and int(bc.opening_stock or 0) > 0:
+            branch_cost = effective_cost_price(item.cost_price, bc.cost_price)
+            await _seed_opening_stock(
+                db,
+                item=item,
+                branch_id=bc.branch_id,
+                qty=int(bc.opening_stock),
+                cost_price=branch_cost,
+                batch_number=bc.opening_batch_number,
+                mfg_date=bc.opening_mfg_date,
+                expiry_date=bc.opening_expiry_date,
+            )
 
     await db.commit()
     return {"message": "Branch configuration updated"}

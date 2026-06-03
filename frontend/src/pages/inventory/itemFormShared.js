@@ -1,11 +1,8 @@
-import { validateBatchDates } from '@/utils/batchDates'
-
 export const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', categoryId: '', brand: '',
   unit: 'Pcs', cost_price: '', selling_price: '', tax_rate: '8',
-  hsn_code: '', reorder_level: '10', opening_stock: '0', active: true,
+  hsn_code: '', reorder_level: '10', active: true,
   batch_tracking: false, expiry_tracking: false, emoji: '📦',
-  opening_batch_number: '', opening_mfg_date: '', opening_expiry_date: '',
 }
 
 let rowSeq = 0
@@ -13,8 +10,8 @@ let rowSeq = 0
 export const retailBranches = (branches) =>
   (branches || []).filter((b) => b.code !== 'WH')
 
-/** One editable branch row on the New Item page. */
-export const createBranchRow = (branch = null) => {
+/** One editable branch row on create / edit pages. */
+export const createBranchRow = (branch = null, overrides = {}) => {
   rowSeq += 1
   return {
     _rowId: `br-row-${rowSeq}-${Date.now()}`,
@@ -23,14 +20,45 @@ export const createBranchRow = (branch = null) => {
     is_available: true,
     cost_price: '',
     selling_price: '',
-    opening_stock: '',
-    opening_batch_number: '',
-    opening_mfg_date: '',
-    opening_expiry_date: '',
+    reorder_level: '',
+    available_stock: 0,
+    ...overrides,
   }
 }
 
-export function validateNewItem(form, branchConfigs) {
+/** Map GET /items/{id}/branches row → form row (edit, listed only). */
+export const branchRowFromApi = (br) => createBranchRow(
+  { id: br.branch_id, name: br.branch_name },
+  {
+    is_available: true,
+    cost_price: br.cost_price ?? '',
+    selling_price: br.selling_price ?? '',
+    reorder_level: br.reorder_level ?? '',
+    available_stock: br.available_stock ?? 0,
+  },
+)
+
+export function formFromItem(item) {
+  return {
+    name: item.name || '',
+    sku: item.sku || '',
+    barcode: item.barcode || '',
+    categoryId: item.categoryId || '',
+    brand: item.brand || '',
+    unit: item.unit || 'Pcs',
+    cost_price: item.default_cost_price ?? item.cost_price ?? '',
+    selling_price: item.default_selling_price ?? item.selling_price ?? '',
+    tax_rate: item.tax_rate ?? '8',
+    hsn_code: item.hsn_code || '',
+    reorder_level: item.default_reorder_level ?? item.reorder_level ?? '10',
+    emoji: item.emoji || '📦',
+    batch_tracking: Boolean(item.batch_tracking),
+    expiry_tracking: Boolean(item.expiry_tracking),
+    active: item.active !== false,
+  }
+}
+
+export function validateItemForm(form, branchConfigs) {
   if (!form.name) return { ok: false, error: 'Item name is required' }
   if (!form.selling_price) return { ok: false, error: 'Selling price is required' }
 
@@ -48,22 +76,21 @@ export function validateNewItem(form, branchConfigs) {
     return { ok: false, error: 'Each branch can only be added once' }
   }
 
-  for (const bc of listed) {
-    const qty = Number(bc.opening_stock) || 0
-    if (qty > 0 && form.batch_tracking) {
-      const { ok, errors } = validateBatchDates(
-        { mfgDate: bc.opening_mfg_date, expiryDate: bc.opening_expiry_date },
-        { requireExpiry: Boolean(form.expiry_tracking) },
-      )
-      if (!ok) return { ok: false, error: `${bc.branch_name}: ${errors[0]}` }
-    }
-  }
-
   return { ok: true }
 }
 
-export function buildCreatePayload(form, branchConfigs, branchFilter) {
-  const payload = {
+function branchConfigFields(bc) {
+  return {
+    branch_id: bc.branch_id,
+    is_available: true,
+    cost_price: bc.cost_price === '' || bc.cost_price == null ? null : Number(bc.cost_price),
+    selling_price: bc.selling_price === '' || bc.selling_price == null ? null : Number(bc.selling_price),
+    reorder_level: bc.reorder_level === '' || bc.reorder_level == null ? null : Number(bc.reorder_level),
+  }
+}
+
+export function buildCatalogPayload(form, branchFilter) {
+  return {
     name: form.name,
     sku: form.sku,
     barcode: form.barcode,
@@ -81,24 +108,35 @@ export function buildCreatePayload(form, branchConfigs, branchFilter) {
     opening_stock: 0,
     branch_id: branchFilter,
   }
+}
 
+export function buildCreatePayload(form, branchConfigs, branchFilter) {
+  const payload = buildCatalogPayload(form, branchFilter)
   const listed = branchConfigs.filter((bc) => bc.branch_id)
   if (listed.length > 0) {
-    payload.branch_configs = listed.map((bc) => ({
-      branch_id: bc.branch_id,
-      is_available: true,
-      cost_price: bc.cost_price === '' || bc.cost_price == null
-        ? null
-        : Number(bc.cost_price),
-      selling_price: bc.selling_price === '' || bc.selling_price == null
-        ? null
-        : Number(bc.selling_price),
-      opening_stock: Number(bc.opening_stock) || 0,
-      opening_batch_number: bc.opening_batch_number || undefined,
-      opening_mfg_date: bc.opening_mfg_date || undefined,
-      opening_expiry_date: bc.opening_expiry_date || undefined,
-    }))
+    payload.branch_configs = listed.map(branchConfigFields)
+  }
+  return payload
+}
+
+/** Branch matrix for PUT /items/{id}/branches — includes unlisted branches removed from the grid. */
+export function buildBranchUpdatePayload(branchConfigs, previouslyListedIds = []) {
+  const currentIds = new Set(branchConfigs.filter((bc) => bc.branch_id).map((bc) => bc.branch_id))
+  const branches = branchConfigs
+    .filter((bc) => bc.branch_id)
+    .map(branchConfigFields)
+
+  for (const id of previouslyListedIds) {
+    if (!currentIds.has(id)) {
+      branches.push({
+        branch_id: id,
+        is_available: false,
+        cost_price: null,
+        selling_price: null,
+        reorder_level: null,
+      })
+    }
   }
 
-  return payload
+  return { branches }
 }

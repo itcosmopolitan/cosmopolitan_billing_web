@@ -1,9 +1,7 @@
 import { FormGroup, FormRow, AlertBar } from '@/components/ui'
 import BranchPricingSection from './BranchPricingSection'
 
-/**
- * Shared item form fields — used on the New Item page and in the edit modal.
- */
+/** Shared catalog + branch fields for New / Edit Item pages. */
 export default function ItemFormFields({
   form,
   patchForm,
@@ -14,15 +12,17 @@ export default function ItemFormFields({
   branches = [],
   branchConfigs = [],
   onBranchConfigsChange,
+  branchSectionMode = 'create',
 }) {
+  const showBranchSection = Boolean(onBranchConfigsChange) && branchSectionMode !== 'hidden'
   const rateOptions = taxRates.length > 0
     ? taxRates.filter((t) => t.active !== false).map((t) => t.rate)
     : [0, 8]
   const strategyHint = !form.batch_tracking
-    ? 'Untracked — opening qty updates branch stock directly.'
+    ? 'Untracked — set stock per branch from Items & Stock.'
     : form.expiry_tracking
-      ? 'FEFO — each opening lot needs batch details; nearest expiry consumed first.'
-      : 'FIFO — each opening lot needs batch details; oldest received consumed first.'
+      ? 'FEFO — add batches per branch from Items & Stock; nearest expiry consumed first.'
+      : 'FIFO — add batches per branch from Items & Stock; oldest received consumed first.'
 
   return (
     <>
@@ -107,24 +107,16 @@ export default function ItemFormFields({
         )}
       </div>
 
-      {!editing && onBranchConfigsChange && (
+      {showBranchSection && (
         <BranchPricingSection
+          mode={branchSectionMode}
           branches={branches}
           branchConfigs={branchConfigs}
           defaultCost={form.cost_price}
           defaultPrice={form.selling_price}
           defaultReorder={form.reorder_level}
-          batchTracking={Boolean(form.batch_tracking)}
-          expiryTracking={Boolean(form.expiry_tracking)}
           onChange={onBranchConfigsChange}
         />
-      )}
-
-      {editing && (
-        <AlertBar type="blue" icon="🏪">
-          Branch availability, pricing, and stock changes are managed from the row <strong>⋮</strong> menu
-          or from <strong>Items &amp; Stock</strong> for adjustments.
-        </AlertBar>
       )}
     </>
   )
