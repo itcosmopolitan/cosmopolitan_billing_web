@@ -71,6 +71,8 @@ export const itemsAPI = {
   update:  (id, data) => api.put(`/items/${id}`, data),
   adjust:  (data)   => api.post('/items/adjust', data),
   delete:  (id)     => api.delete(`/items/${id}`),
+  getBranches:    (id) => api.get(`/items/${id}/branches`),
+  updateBranches: (id, data) => api.put(`/items/${id}/branches`, data),
   // Batch / lot tracking (FIFO + FEFO inventory). `listBatches` returns
   // batches ordered nearest-expiry first; `createBatch` adds a new lot and
   // also bumps the per-branch stock counter; `patchBatch` edits metadata

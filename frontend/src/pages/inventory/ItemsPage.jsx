@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { itemsAPI, taxRatesAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
-import { validateBatchDates } from '@/utils/batchDates'
 import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
   FormGroup, KPICard, EmptyState, Tag, PaginationBar,
@@ -14,21 +14,21 @@ import {
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import ItemFormModal from './ItemFormModal'
 import BatchesModal from './BatchesModal'
+import BranchConfigModal from './BranchConfigModal'
+import RowActionsMenu from './RowActionsMenu'
+import { EMPTY_ITEM } from './itemFormShared'
 
-const TABS = [
+const BRANCH_TABS = [
   { id: 'all',      label: 'All Items' },
   { id: 'low',      label: 'Low Stock' },
   { id: 'expiry',   label: 'Near Expiry' },
   { id: 'inactive', label: 'Inactive' },
 ]
 
-const EMPTY_ITEM = {
-  name: '', sku: '', barcode: '', categoryId: '', brand: '',
-  unit: 'Pcs', cost_price: '', selling_price: '', tax_rate: '8',
-  hsn_code: '', reorder_level: '10', opening_stock: '0', active: true,
-  batch_tracking: false, expiry_tracking: false, emoji: '📦',
-  opening_batch_number: '', opening_mfg_date: '', opening_expiry_date: '',
-}
+const MASTER_TABS = [
+  { id: 'all',      label: 'All Items' },
+  { id: 'inactive', label: 'Inactive' },
+]
 
 // Strategy label / hint used in the stock-adjust modal so the operator
 // understands which batches will be touched when they reduce stock without
@@ -38,7 +38,9 @@ const trackingLabel = (item) => {
   return item.expiry_tracking ? 'FEFO (nearest expiry first)' : 'FIFO (oldest received first)'
 }
 
-export default function ItemsPage() {
+export default function ItemsPage({ mode = 'branch' }) {
+  const isMaster = mode === 'master'
+  const navigate = useNavigate()
   const can = useCan()
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
@@ -46,7 +48,7 @@ export default function ItemsPage() {
   const [search, setSearch]     = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [branchFilter, setBranchFilter] = useState(() => activeBranch?.id || 'br-001')
-  const [showAdd, setShowAdd]   = useState(false)
+  const [branchConfigItem, setBranchConfigItem] = useState(null)
   const [editItem, setEditItem] = useState(null)
   // Snapshot of batch_tracking when edit opens — used to confirm destructive toggles.
   const [editWasTracked, setEditWasTracked] = useState(false)
@@ -89,7 +91,10 @@ export default function ItemsPage() {
   const fetchItems = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await fetchAllList(itemsAPI.list, { branch_id: branchFilter })
+      const params = isMaster
+        ? { master_mode: true, branch_id: branchFilter }
+        : { branch_id: branchFilter, listed_only: true }
+      const data = await fetchAllList(itemsAPI.list, params)
       setItems(data || [])
       if (data && data.length > 0) {
         const uniqueCats = [...new Set(data.map((item) => item.categoryId))]
@@ -108,7 +113,7 @@ export default function ItemsPage() {
     } finally {
       setLoading(false)
     }
-  }, [branchFilter])
+  }, [branchFilter, isMaster])
 
   useEffect(() => {
     fetchItems()
@@ -122,7 +127,7 @@ export default function ItemsPage() {
 
   useEffect(() => {
     setItemSkip(0)
-  }, [search, catFilter, tab, branchFilter])
+  }, [search, catFilter, tab, branchFilter, isMaster])
 
   // Refresh the near-expiry roll-up when the relevant filters change. We
   // keep it on a separate effect so toggling tabs doesn't re-fetch the full
@@ -144,8 +149,10 @@ export default function ItemsPage() {
   }, [branchFilter, nearExpiryDays])
 
   useEffect(() => {
-    loadNearExpiry()
-  }, [loadNearExpiry])
+    if (!isMaster) {
+      loadNearExpiry()
+    }
+  }, [loadNearExpiry, isMaster])
 
   const patchForm = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -153,8 +160,8 @@ export default function ItemsPage() {
     let list = [...items]
     if (search)     list = list.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(search.toLowerCase())) || (p.barcode && p.barcode.includes(search)))
     if (catFilter)  list = list.filter((p) => p.categoryId === catFilter)
-    if (tab === 'low')      list = list.filter((p) => p.available_stock > 0 && p.available_stock <= p.reorder_level)
-    if (tab === 'expiry') {
+    if (tab === 'low' && !isMaster)      list = list.filter((p) => p.available_stock > 0 && p.available_stock <= p.reorder_level)
+    if (tab === 'expiry' && !isMaster) {
       // Items that own at least one batch in the near-expiry rollup. The
       // `Near Expiry` table below shows the actual lot rows; this filter
       // just narrows the item table to items the operator should look at.
@@ -181,30 +188,31 @@ export default function ItemsPage() {
       return String(av).localeCompare(String(bv)) * dir
     })
     return list
-  }, [items, search, catFilter, tab, itemSortBy, itemSortOrder, nearExpiry])
+  }, [items, search, catFilter, tab, itemSortBy, itemSortOrder, nearExpiry, isMaster])
 
   const pageRows = useMemo(() => {
     return filtered.slice(itemSkip, itemSkip + itemLimit)
   }, [filtered, itemSkip, itemLimit])
 
-  const totals = useMemo(() => ({
-    items:    items.length,
-    low:      items.filter((p) => p.available_stock > 0 && p.available_stock <= p.reorder_level).length,
-    outStock: items.filter((p) => p.available_stock === 0).length,
-    stockVal: items.reduce((sum, p) => sum + (p.available_stock || 0) * (p.cost_price || 0), 0),
-    tracked:  items.filter((p) => p.batch_tracking).length,
-    // "Near expiry" comes from the per-batch rollup, not the items list —
-    // an item can have multiple lots at different expiries so the count is
-    // by batch (a single tracked item may contribute several rows).
-    expiring: nearExpiry.length,
-  }), [items, nearExpiry])
+  const totals = useMemo(() => {
+    if (isMaster) {
+      const listed = items.reduce((sum, p) => sum + (p.available_branch_count || 0), 0)
+      return {
+        items: items.length,
+        tracked: items.filter((p) => p.batch_tracking).length,
+        avgBranches: items.length ? Math.round(listed / items.length) : 0,
+      }
+    }
+    return {
+      items:    items.length,
+      low:      items.filter((p) => p.available_stock > 0 && p.available_stock <= p.reorder_level).length,
+      outStock: items.filter((p) => p.available_stock === 0).length,
+      stockVal: items.reduce((sum, p) => sum + (p.available_stock || 0) * (p.cost_price || 0), 0),
+      tracked:  items.filter((p) => p.batch_tracking).length,
+      expiring: nearExpiry.length,
+    }
+  }, [items, nearExpiry, isMaster])
 
-  const openAdd  = () => {
-    setForm(EMPTY_ITEM)
-    setEditItem(null)
-    setEditWasTracked(false)
-    setShowAdd(true)
-  }
   const openEdit = (item) => {
     setForm({
       name: item.name,
@@ -213,11 +221,11 @@ export default function ItemsPage() {
       categoryId: item.categoryId,
       brand: item.brand,
       unit: item.unit,
-      cost_price: item.cost_price,
-      selling_price: item.selling_price,
+      cost_price: isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+      selling_price: isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
       tax_rate: item.tax_rate,
       hsn_code: item.hsn_code,
-      reorder_level: item.reorder_level,
+      reorder_level: isMaster ? (item.default_reorder_level ?? item.reorder_level) : item.reorder_level,
       opening_stock: item.available_stock,
       emoji: item.emoji,
       batch_tracking: item.batch_tracking || false,
@@ -228,7 +236,6 @@ export default function ItemsPage() {
     })
     setEditWasTracked(Boolean(item.batch_tracking))
     setEditItem(item.id)
-    setShowAdd(true)
   }
 
   // Open the stock adjustment modal. For batch-tracked items we lazily fetch
@@ -255,18 +262,10 @@ export default function ItemsPage() {
   }
 
   const saveItem = async () => {
+    if (!editItem) return
     if (!form.name) { toast.error('Item name is required'); return }
     if (!form.selling_price) { toast.error('Selling price is required'); return }
-    if (!editItem && form.batch_tracking && Number(form.opening_stock) > 0) {
-      const { ok, errors } = validateBatchDates(
-        { mfgDate: form.opening_mfg_date, expiryDate: form.opening_expiry_date },
-        { requireExpiry: Boolean(form.expiry_tracking) },
-      )
-      if (!ok) {
-        toast.error(errors[0])
-        return
-      }
-    }
+
     try {
       const payload = {
         name: form.name,
@@ -283,32 +282,22 @@ export default function ItemsPage() {
         emoji: form.emoji || '📦',
         batch_tracking: form.batch_tracking,
         expiry_tracking: form.expiry_tracking,
-        opening_stock: editItem ? 0 : Number(form.opening_stock),
+        opening_stock: 0,
         branch_id: branchFilter,
-        // Opening-batch metadata is read by the backend only when
-        // batch_tracking is on AND opening_stock > 0; safe to always send.
-        opening_batch_number: form.opening_batch_number || undefined,
-        opening_mfg_date:     form.opening_mfg_date || undefined,
-        opening_expiry_date:  form.opening_expiry_date || undefined,
       }
 
-      if (editItem) {
-        const res = await itemsAPI.update(editItem, payload)
-        const ch = res?.data?.batch_tracking_change
-        if (ch?.action === 'disabled') {
-          toast.success(`Item updated — ${ch.batches_deleted ?? 0} batch(es) removed`)
-        } else if (ch?.action === 'enabled') {
-          toast.success(`Item updated — ${ch.batches_seeded ?? 0} opening batch(es) created`)
-        } else {
-          toast.success('Item updated')
-        }
+      const res = await itemsAPI.update(editItem, payload)
+      const ch = res?.data?.batch_tracking_change
+      if (ch?.action === 'disabled') {
+        toast.success(`Item updated — ${ch.batches_deleted ?? 0} batch(es) removed`)
+      } else if (ch?.action === 'enabled') {
+        toast.success(`Item updated — ${ch.batches_seeded ?? 0} opening batch(es) created`)
       } else {
-        await itemsAPI.create(payload)
-        toast.success('Item added')
+        toast.success('Item updated')
       }
       await fetchItems()
       await loadNearExpiry()
-      setShowAdd(false)
+      setEditItem(null)
     } catch (err) {
       console.error('Failed to save item:', err)
       toast.error('Failed to save item')
@@ -344,7 +333,12 @@ export default function ItemsPage() {
 
   return (
     <div className="page-container">
-      <SectionHeader title="Items & Inventory" subtitle="Manage item master, stock levels, and adjustments">
+      <SectionHeader
+        title={isMaster ? 'Item Master' : 'Items & Stock'}
+        subtitle={isMaster
+          ? 'Central product catalog — create items, defaults, and branch listing'
+          : 'Branch inventory — stock levels and adjustments for the selected branch'}
+      >
         <button className="btn btn-secondary btn-sm" onClick={() => {
           const exportData = filtered.map(item => ({
             'Item Name': item.name,
@@ -353,33 +347,47 @@ export default function ItemsPage() {
             'Category': item.categoryName || '—',
             'Brand': item.brand || '—',
             'Unit': item.unit,
-            'Cost Price (₹)': item.cost_price,
-            'Selling Price (₹)': item.selling_price,
+            'Cost Price (₹)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+            'Selling Price (₹)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
             'GST (%)': item.tax_rate,
-            'Stock': item.available_stock,
-            'Reorder Level': item.reorder_level,
-            'Stock Value (₹)': (item.available_stock || 0) * (item.cost_price || 0),
+            ...(isMaster
+              ? { 'Active Branches': item.available_branch_count ?? 0 }
+              : {
+                'Stock': item.available_stock,
+                'Reorder Level': item.reorder_level,
+                'Stock Value (₹)': (item.available_stock || 0) * (item.cost_price || 0),
+              }),
           }))
-          exportToCSV(exportData, `Items_${new Date().toISOString().split('T')[0]}.csv`)
+          exportToCSV(exportData, `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Items exported')
         }}>↓ Export</button>
-        {can('items.adjust') && (
+        {!isMaster && can('items.adjust') && (
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Adjust Stock</button>
         )}
-        {can('items.create') && (
-          <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add Item</button>
+        {isMaster && can('items.create') && (
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
         )}
       </SectionHeader>
 
       {/* KPIs */}
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        <KPICard label="Total Items"         value={totals.items}     color="var(--accent)" sub={`${totals.tracked} tracked (FIFO/FEFO)`} />
-        <KPICard label="Low Stock Items"     value={totals.low}       color="var(--amber)"   />
-        <KPICard label="Near Expiry"         value={totals.expiring}  color="var(--red)" sub={`within ${nearExpiryDays} days`} onClick={() => setTab('expiry')} />
-        <KPICard label="Stock Value"         value={fmt(totals.stockVal)} color="var(--green)" />
+        {isMaster ? (
+          <>
+            <KPICard label="Total Items" value={totals.items} color="var(--accent)" sub="In central catalog" />
+            <KPICard label="Batch Tracked" value={totals.tracked} color="var(--purple)" sub="FIFO / FEFO items" />
+            <KPICard label="Avg Branch Listing" value={totals.avgBranches} color="var(--green)" sub="Retail branches per item" />
+          </>
+        ) : (
+          <>
+            <KPICard label="Total Items"         value={totals.items}     color="var(--accent)" sub={`${totals.tracked} tracked (FIFO/FEFO)`} />
+            <KPICard label="Low Stock Items"     value={totals.low}       color="var(--amber)"   />
+            <KPICard label="Near Expiry"         value={totals.expiring}  color="var(--red)" sub={`within ${nearExpiryDays} days`} onClick={() => setTab('expiry')} />
+            <KPICard label="Stock Value"         value={fmt(totals.stockVal)} color="var(--green)" />
+          </>
+        )}
       </div>
 
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <Tabs tabs={isMaster ? MASTER_TABS : BRANCH_TABS} active={tab} onChange={setTab} />
 
       {/* Filters */}
       <div className="filter-bar">
@@ -388,12 +396,14 @@ export default function ItemsPage() {
           <option value="">All Categories</option>
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <select className="form-input" style={{ width: 150 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-          {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </select>
+        {!isMaster && (
+          <select className="form-input" style={{ width: 150 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        )}
       </div>
 
-      {tab === 'expiry' && (
+      {!isMaster && tab === 'expiry' && (
         <>
         <div style={{ marginBottom: 12 }}>
           <AlertBar type="blue" icon="ℹ️">
@@ -479,12 +489,15 @@ export default function ItemsPage() {
                   <SortableHeader label="Item" sortKey="name" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
                   <th>SKU / Barcode</th>
                   <SortableHeader label="Category" sortKey="category_id" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
-                  <SortableHeader label="Cost" sortKey="cost_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  <SortableHeader label="Price" sortKey="selling_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
+                  <SortableHeader label={isMaster ? 'Default Cost' : 'Cost'} sortKey="cost_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
+                  <SortableHeader label={isMaster ? 'Default Price' : 'Price'} sortKey="selling_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
+                  {isMaster && <th>Branches</th>}
                   <th>GST</th>
-                  <SortableHeader label="Stock" sortKey="available_stock" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  <th>Status</th>
-                  <th style={{ width: 120 }}></th>
+                  {!isMaster && (
+                    <SortableHeader label="Stock" sortKey="available_stock" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
+                  )}
+                  {!isMaster && <th>Status</th>}
+                  <th style={{ width: 48 }} aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -511,7 +524,7 @@ export default function ItemsPage() {
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                               {p.brand}
-                              {p.batch_tracking && p.batches_count > 0 && (
+                              {!isMaster && p.batch_tracking && p.batches_count > 0 && (
                                 <span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>
                                   · {p.batches_count} batch{p.batches_count === 1 ? '' : 'es'}
                                   {p.nearest_expiry ? ` · exp ${fmtDate(p.nearest_expiry)}` : ''}
@@ -526,25 +539,57 @@ export default function ItemsPage() {
                         <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{p.barcode}</div>
                       </td>
                       <td><Tag>{p.categoryName}</Tag></td>
-                      <td className="text-right mono">{fmt(p.cost_price)}</td>
-                      <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(p.selling_price)}</td>
-                      <td><Tag>{p.tax_rate}%</Tag></td>
-                      <td className="text-right">
-                        <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{branchStock}</div>
+                      <td className="text-right mono">
+                        {fmt(isMaster ? (p.default_cost_price ?? p.cost_price) : p.cost_price)}
+                        {!isMaster && p.branch_cost_override != null && (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
+                        )}
                       </td>
-                      <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          {p.batch_tracking && (
-                            <button className="btn btn-ghost btn-xs" onClick={() => setBatchesModal(p)} title="View batches">Batches</button>
-                          )}
-                          {can('items.edit') && (
-                            <button className="btn btn-ghost btn-xs" onClick={() => openEdit(p)}>Edit</button>
-                          )}
-                          {can('items.adjust') && (
-                            <button className="btn btn-ghost btn-xs" onClick={() => openAdj(p)}>Adj</button>
-                          )}
-                        </div>
+                      <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {fmt(isMaster ? (p.default_selling_price ?? p.selling_price) : p.selling_price)}
+                        {!isMaster && p.branch_price_override != null && (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
+                        )}
+                      </td>
+                      {isMaster && (
+                        <td>
+                          <Tag>{p.available_branch_count ?? 0} active</Tag>
+                        </td>
+                      )}
+                      <td><Tag>{p.tax_rate}%</Tag></td>
+                      {!isMaster && (
+                        <td className="text-right">
+                          <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{branchStock}</div>
+                        </td>
+                      )}
+                      {!isMaster && <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>}
+                      <td className="text-right">
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${p.name}`}
+                          actions={isMaster ? [
+                            {
+                              label: 'Edit item',
+                              hidden: !can('items.edit'),
+                              onClick: () => openEdit(p),
+                            },
+                            {
+                              label: 'Branch availability & pricing',
+                              hidden: !can('items.edit'),
+                              onClick: () => setBranchConfigItem(p),
+                            },
+                          ] : [
+                            {
+                              label: 'Adjust stock',
+                              hidden: !can('items.adjust'),
+                              onClick: () => openAdj(p),
+                            },
+                            {
+                              label: 'View batches',
+                              hidden: !p.batch_tracking || !can('items.view'),
+                              onClick: () => setBatchesModal(p),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   )
@@ -563,10 +608,12 @@ export default function ItemsPage() {
         />
       </Card>
 
+      {isMaster && (
+        <>
       <ItemFormModal
-        open={showAdd}
-        onClose={() => setShowAdd(false)}
-        editing={!!editItem}
+        open={!!editItem}
+        onClose={() => setEditItem(null)}
+        editing
         editWasTracked={editWasTracked}
         form={form}
         patchForm={patchForm}
@@ -575,11 +622,19 @@ export default function ItemsPage() {
         taxRates={taxRates}
       />
 
-      {/* Stock Adjustment Modal — batch-aware. For tracked items we show the
-          batch table and let the operator EITHER pick a specific lot (per-
-          batch absolute set) OR leave 'Aggregate' selected to let the backend
-          add/consume via FIFO/FEFO. The currently-selected target's stock
-          drives the New Quantity field. */}
+      <BranchConfigModal
+        item={branchConfigItem}
+        branches={branches.filter((b) => b.code !== 'WH')}
+        open={!!branchConfigItem}
+        onClose={() => setBranchConfigItem(null)}
+        onSaved={fetchItems}
+      />
+        </>
+      )}
+
+      {!isMaster && (
+        <>
+      {/* Stock Adjustment Modal — batch-aware */}
       <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdj(null)}>Cancel</button>
@@ -731,6 +786,8 @@ export default function ItemsPage() {
         }}
         canAdd={can('items.adjust')}
       />
+        </>
+      )}
     </div>
   )
 }

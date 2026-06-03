@@ -48,6 +48,13 @@ export const Package = make(
   </>
 )
 
+export const List = make(
+  <>
+    <path d="M8 6h13M8 12h13M8 18h13" />
+    <path d="M3 6h.01M3 12h.01M3 18h.01" />
+  </>
+)
+
 export const Transfer = make(
   <>
     <path d="M4 7h13l-3-3" />
@@ -152,6 +159,13 @@ export const HelpCircle = make(
 )
 
 export const Plus    = make(<path d="M12 5v14M5 12h14" />)
+export const MoreVertical = make(
+  <>
+    <circle cx="12" cy="5" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="19" r="1.25" fill="currentColor" stroke="none" />
+  </>
+)
 export const LogOut  = make(
   <>
     <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />

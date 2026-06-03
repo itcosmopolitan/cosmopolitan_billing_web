@@ -10,7 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
-from src.models import Item, ItemBatch, ItemStock
+from src.item_branch import effective_cost_price, effective_reorder_level, effective_selling_price
+from src.models import Branch, Item, ItemBatch, ItemBranchConfig, ItemStock
 from src.pagination import (
     normalize_limit,
     normalize_skip,
@@ -27,6 +28,97 @@ from src.routes._atomic import (
 from src.security import require_perm
 
 router = APIRouter()
+
+
+async def _get_config_map(
+    db: AsyncSession,
+    item_ids: list[str],
+    branch_id: Optional[str],
+) -> dict[str, ItemBranchConfig]:
+    if not item_ids or not branch_id:
+        return {}
+    res = await db.execute(
+        select(ItemBranchConfig).where(
+            ItemBranchConfig.item_id.in_(item_ids),
+            ItemBranchConfig.branch_id == branch_id,
+        )
+    )
+    return {row.item_id: row for row in res.scalars().all()}
+
+
+async def _available_branch_counts(
+    db: AsyncSession,
+    item_ids: list[str],
+) -> dict[str, int]:
+    if not item_ids:
+        return {}
+    res = await db.execute(
+        select(ItemBranchConfig.item_id, func.count(ItemBranchConfig.id))
+        .where(
+            ItemBranchConfig.item_id.in_(item_ids),
+            ItemBranchConfig.is_available == True,  # noqa: E712
+        )
+        .group_by(ItemBranchConfig.item_id)
+    )
+    return {item_id: int(cnt or 0) for item_id, cnt in res.all()}
+
+
+async def _upsert_branch_config(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+    is_available: bool = True,
+    cost_price: Optional[float] = None,
+    selling_price: Optional[float] = None,
+    reorder_level: Optional[int] = None,
+) -> ItemBranchConfig:
+    res = await db.execute(
+        select(ItemBranchConfig).where(
+            ItemBranchConfig.item_id == item_id,
+            ItemBranchConfig.branch_id == branch_id,
+        )
+    )
+    cfg = res.scalar_one_or_none()
+    if cfg:
+        cfg.is_available = is_available
+        cfg.cost_price = cost_price
+        cfg.selling_price = selling_price
+        cfg.reorder_level = reorder_level
+        return cfg
+    cfg = ItemBranchConfig(
+        id=str(uuid.uuid4()),
+        item_id=item_id,
+        branch_id=branch_id,
+        is_available=is_available,
+        cost_price=cost_price,
+        selling_price=selling_price,
+        reorder_level=reorder_level,
+    )
+    db.add(cfg)
+    return cfg
+
+
+async def _ensure_stock_row(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+) -> None:
+    res = await db.execute(
+        select(ItemStock).where(
+            ItemStock.item_id == item_id,
+            ItemStock.branch_id == branch_id,
+        )
+    )
+    if res.scalar_one_or_none():
+        return
+    db.add(ItemStock(
+        id=str(uuid.uuid4()),
+        item_id=item_id,
+        branch_id=branch_id,
+        quantity=0,
+    ))
 
 
 def _raise_batch_date_errors(errors: list[str]) -> None:
@@ -114,6 +206,24 @@ class ItemCreate(BaseModel):
     opening_batch_number: Optional[str] = None
     opening_mfg_date:     Optional[str] = None
     opening_expiry_date:  Optional[str] = None
+    # Per-branch listing / pricing. When omitted, only ``branch_id`` is listed.
+    branch_configs: Optional[list["BranchConfigIn"]] = None
+
+
+class BranchConfigIn(BaseModel):
+    branch_id: str
+    is_available: bool = True
+    cost_price: Optional[float] = None
+    selling_price: Optional[float] = None
+    reorder_level: Optional[int] = None
+    opening_stock: int = 0
+    opening_batch_number: Optional[str] = None
+    opening_mfg_date: Optional[str] = None
+    opening_expiry_date: Optional[str] = None
+
+
+class BranchConfigBulk(BaseModel):
+    branches: list[BranchConfigIn]
 
 class StockAdjustRequest(BaseModel):
     item_id: str
@@ -182,6 +292,8 @@ async def list_items(
     limit: Optional[int] = Query(None, ge=1, le=500),
     include_total: bool = True,
     pos_mode: bool = False,
+    master_mode: bool = False,
+    listed_only: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
 ):
     if page_no is not None or per_page is not None:
@@ -191,24 +303,34 @@ async def list_items(
         lim = normalize_limit(limit)
         pn = max(1, (sk // lim) + 1)
         pp = lim
-    q = select(Item).where(Item.active == True).options(selectinload(Item.category))
+
+    filter_listed = listed_only if listed_only is not None else (pos_mode or not master_mode)
+
+    q = select(Item).where(Item.active == True).options(selectinload(Item.category))  # noqa: E712
+    cq = select(func.count(Item.id)).where(Item.active == True)  # noqa: E712
+
+    if filter_listed and branch_id:
+        listed_join = and_(
+            ItemBranchConfig.item_id == Item.id,
+            ItemBranchConfig.branch_id == branch_id,
+            ItemBranchConfig.is_available == True,  # noqa: E712
+        )
+        q = q.join(ItemBranchConfig, listed_join)
+        cq = cq.join(ItemBranchConfig, listed_join)
+
     if search:
         term = f"%{search}%"
         q = q.where(
             (Item.name.ilike(term)) | (Item.sku.ilike(term)) | (Item.barcode.ilike(term))
         )
+        cq = cq.where(
+            (Item.name.ilike(term)) | (Item.sku.ilike(term)) | (Item.barcode.ilike(term))
+        )
     if category_id:
         q = q.where(Item.category_id == category_id)
+        cq = cq.where(Item.category_id == category_id)
     total = 0
     if include_total and not pos_mode:
-        cq = select(func.count(Item.id)).where(Item.active == True)
-        if search:
-            term = f"%{search}%"
-            cq = cq.where(
-                (Item.name.ilike(term)) | (Item.sku.ilike(term)) | (Item.barcode.ilike(term))
-            )
-        if category_id:
-            cq = cq.where(Item.category_id == category_id)
         total = int((await db.execute(cq)).scalar() or 0)
     # NB: `available_stock` is a per-branch lookup done in Python below, not a
     # column on Item — we can't sort by it at the SQL level without a join. If
@@ -241,12 +363,14 @@ async def list_items(
         items = items[:lim]
     ids = [it.id for it in items]
     stock_by_item = {}
-    if ids:
+    if ids and branch_id:
         sr = await db.execute(
             select(ItemStock).where(and_(ItemStock.item_id.in_(ids), ItemStock.branch_id == branch_id))
         )
         for row in sr.scalars().all():
             stock_by_item[row.item_id] = row.quantity
+    config_by_item = await _get_config_map(db, ids, branch_id)
+    avail_branch_counts = await _available_branch_counts(db, ids) if master_mode else {}
     # Per-item batch summary (count + nearest expiry) so the Items table can
     # show a "🧴 N batches • exp dd MMM" hint for tracked items without an
     # extra round-trip per row.
@@ -273,7 +397,11 @@ async def list_items(
                 nearest_expiry[item_id] = exp
     out = []
     for item in items:
-        out.append({
+        cfg = config_by_item.get(item.id)
+        eff_price = effective_selling_price(item.selling_price, cfg.selling_price if cfg else None)
+        eff_cost = effective_cost_price(item.cost_price, cfg.cost_price if cfg else None)
+        eff_reorder = effective_reorder_level(item.reorder_level, cfg.reorder_level if cfg else None)
+        row = {
             "id": item.id,
             "name": item.name,
             "sku": item.sku,
@@ -282,18 +410,27 @@ async def list_items(
             "categoryName": item.category.name if item.category else "Uncategorized",
             "brand": item.brand,
             "unit": item.unit,
-            "cost_price": item.cost_price,
-            "selling_price": item.selling_price,
+            "default_cost_price": item.cost_price,
+            "cost_price": item.cost_price if master_mode else eff_cost,
+            "default_selling_price": item.selling_price,
+            "selling_price": eff_price,
             "tax_rate": item.tax_rate,
             "hsn_code": item.hsn_code,
-            "reorder_level": item.reorder_level,
+            "reorder_level": eff_reorder,
+            "default_reorder_level": item.reorder_level,
             "emoji": item.emoji,
             "batch_tracking": item.batch_tracking,
             "expiry_tracking": item.expiry_tracking,
             "available_stock": stock_by_item.get(item.id, 0),
             "batches_count":   batch_counts.get(item.id, 0),
             "nearest_expiry":  nearest_expiry.get(item.id),
-        })
+            "is_available": bool(cfg.is_available) if cfg else False,
+            "branch_cost_override": cfg.cost_price if cfg else None,
+            "branch_price_override": cfg.selling_price if cfg else None,
+        }
+        if master_mode:
+            row["available_branch_count"] = avail_branch_counts.get(item.id, 0)
+        out.append(row)
     if pos_mode and not include_total:
         return paged(
             out,
@@ -328,45 +465,107 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
         expiry_tracking=data.expiry_tracking,
     )
     db.add(item)
-    # Seed item_stock at zero — add_batch_atomic will bump it for tracked
-    # items; for untracked items we set it directly.
-    db.add(ItemStock(
-        id=str(uuid.uuid4()),
-        item_id=item.id,
-        branch_id=data.branch_id,
-        quantity=0,
-    ))
-    await db.flush()  # so the ItemStock row exists before add_batch_atomic UPDATEs it
+    await db.flush()
 
-    if data.opening_stock and data.opening_stock > 0:
+    configs = data.branch_configs
+
+    async def _seed_opening_at_branch(
+        branch_id: str,
+        qty: int,
+        *,
+        cost_price: float,
+        batch_number: Optional[str] = None,
+        mfg_date: Optional[str] = None,
+        expiry_date: Optional[str] = None,
+    ) -> None:
+        if qty <= 0:
+            return
+        await _ensure_stock_row(db, item_id=item.id, branch_id=branch_id)
         if data.batch_tracking:
             _raise_batch_date_errors(validate_batch_dates(
-                mfg_date=data.opening_mfg_date,
-                expiry_date=data.opening_expiry_date,
+                mfg_date=mfg_date,
+                expiry_date=expiry_date,
                 require_expiry=bool(data.expiry_tracking),
             ))
-            # Capture the opening parcel as the first batch so FIFO/FEFO has
-            # something to draw from on day one.
             await add_batch_atomic(
                 db,
                 item_id=item.id,
-                branch_id=data.branch_id,
-                qty=int(data.opening_stock),
-                batch_number=data.opening_batch_number,
-                mfg_date=data.opening_mfg_date,
-                expiry_date=data.opening_expiry_date,
-                cost_price=data.cost_price,
+                branch_id=branch_id,
+                qty=int(qty),
+                batch_number=batch_number,
+                mfg_date=mfg_date,
+                expiry_date=expiry_date,
+                cost_price=cost_price,
                 source_type="opening",
                 source_ref=item.id,
-                received_date=data.opening_mfg_date or None,
+                received_date=mfg_date or None,
             )
         else:
             await set_stock_atomic(
                 db,
                 item_id=item.id,
-                branch_id=data.branch_id,
-                new_qty=int(data.opening_stock),
+                branch_id=branch_id,
+                new_qty=int(qty),
             )
+
+    if configs:
+        seeded_any = False
+        for bc in configs:
+            branch_cost = effective_cost_price(data.cost_price, bc.cost_price)
+            await _upsert_branch_config(
+                db,
+                item_id=item.id,
+                branch_id=bc.branch_id,
+                is_available=bc.is_available,
+                cost_price=bc.cost_price,
+                selling_price=bc.selling_price,
+                reorder_level=bc.reorder_level,
+            )
+            if bc.is_available:
+                await _ensure_stock_row(db, item_id=item.id, branch_id=bc.branch_id)
+            if bc.is_available and int(bc.opening_stock or 0) > 0:
+                await _seed_opening_at_branch(
+                    bc.branch_id,
+                    int(bc.opening_stock),
+                    cost_price=branch_cost,
+                    batch_number=bc.opening_batch_number,
+                    mfg_date=bc.opening_mfg_date,
+                    expiry_date=bc.opening_expiry_date,
+                )
+                seeded_any = True
+        if not seeded_any:
+            # Listed branches exist at zero stock; legacy top-level opening still
+            # supported when every branch row has opening_stock = 0.
+            if data.opening_stock and data.opening_stock > 0:
+                await _seed_opening_at_branch(
+                    data.branch_id,
+                    int(data.opening_stock),
+                    cost_price=float(data.cost_price),
+                    batch_number=data.opening_batch_number,
+                    mfg_date=data.opening_mfg_date,
+                    expiry_date=data.opening_expiry_date,
+                )
+    else:
+        await _upsert_branch_config(
+            db,
+            item_id=item.id,
+            branch_id=data.branch_id,
+            is_available=True,
+            cost_price=None,
+            selling_price=None,
+            reorder_level=None,
+        )
+        await _ensure_stock_row(db, item_id=item.id, branch_id=data.branch_id)
+        if data.opening_stock and data.opening_stock > 0:
+            await _seed_opening_at_branch(
+                data.branch_id,
+                int(data.opening_stock),
+                cost_price=float(data.cost_price),
+                batch_number=data.opening_batch_number,
+                mfg_date=data.opening_mfg_date,
+                expiry_date=data.opening_expiry_date,
+            )
+
     await db.commit()
     return {"id": item.id, "message": "Item created"}
 
@@ -405,6 +604,97 @@ async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends
     if toggle_meta:
         out["batch_tracking_change"] = toggle_meta
     return out
+
+
+@router.get(
+    "/{item_id}/branches",
+    dependencies=[Depends(require_perm("items.view"))],
+)
+async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
+    item_res = await db.execute(select(Item).where(Item.id == item_id))
+    item = item_res.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    branches = (await db.execute(
+        select(Branch).where(Branch.active == True).order_by(Branch.name)  # noqa: E712
+    )).scalars().all()
+    cfg_res = await db.execute(
+        select(ItemBranchConfig).where(ItemBranchConfig.item_id == item_id)
+    )
+    cfg_map = {c.branch_id: c for c in cfg_res.scalars().all()}
+    stock_res = await db.execute(
+        select(ItemStock).where(ItemStock.item_id == item_id)
+    )
+    stock_map = {s.branch_id: int(s.quantity or 0) for s in stock_res.scalars().all()}
+
+    out = []
+    for br in branches:
+        cfg = cfg_map.get(br.id)
+        out.append({
+            "branch_id": br.id,
+            "branch_name": br.name,
+            "branch_code": br.code,
+            "is_available": bool(cfg.is_available) if cfg else False,
+            "cost_price": cfg.cost_price if cfg else None,
+            "selling_price": cfg.selling_price if cfg else None,
+            "reorder_level": cfg.reorder_level if cfg else None,
+            "effective_cost_price": effective_cost_price(
+                item.cost_price,
+                cfg.cost_price if cfg else None,
+            ),
+            "effective_selling_price": effective_selling_price(
+                item.selling_price,
+                cfg.selling_price if cfg else None,
+            ),
+            "effective_reorder_level": effective_reorder_level(
+                item.reorder_level,
+                cfg.reorder_level if cfg else None,
+            ),
+            "available_stock": stock_map.get(br.id, 0),
+        })
+    return {
+        "item_id": item.id,
+        "default_cost_price": item.cost_price,
+        "default_selling_price": item.selling_price,
+        "default_reorder_level": item.reorder_level,
+        "branches": out,
+    }
+
+
+@router.put(
+    "/{item_id}/branches",
+    dependencies=[Depends(require_perm("items.edit"))],
+)
+async def update_item_branches(
+    item_id: str,
+    data: BranchConfigBulk,
+    db: AsyncSession = Depends(get_db),
+):
+    item_res = await db.execute(select(Item).where(Item.id == item_id))
+    item = item_res.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    branch_ids = {b.id for b in (await db.execute(select(Branch.id))).scalars().all()}
+    for bc in data.branches:
+        if bc.branch_id not in branch_ids:
+            raise HTTPException(400, f"Unknown branch: {bc.branch_id}")
+        await _upsert_branch_config(
+            db,
+            item_id=item_id,
+            branch_id=bc.branch_id,
+            is_available=bc.is_available,
+            cost_price=bc.cost_price,
+            selling_price=bc.selling_price,
+            reorder_level=bc.reorder_level,
+        )
+        if bc.is_available:
+            await _ensure_stock_row(db, item_id=item_id, branch_id=bc.branch_id)
+
+    await db.commit()
+    return {"message": "Branch configuration updated"}
+
 
 @router.patch("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
 async def patch_item(item_id: str, data: ItemPatch, db: AsyncSession = Depends(get_db)):

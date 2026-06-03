@@ -33,6 +33,7 @@ from src.models import (
     DocumentNumbering,
     Item,
     ItemBatch,
+    ItemBranchConfig,
     ItemStock,
     Organisation,
     PurchaseBill,
@@ -215,6 +216,22 @@ async def seed():
             ("B", 0.40,  -45, -50,  60),   # mid lot
             ("C", 0.25,  -10, -12, 180),   # freshest lot
         ]
+        # Per-branch price overrides (NULL in DB = use item default).
+        BRANCH_PRICE_OVERRIDES = {
+            "pr-001": {"br-002": 309, "br-003": 305},
+            "pr-003": {"br-002": 155, "br-003": 152},
+            "pr-004": {"br-002": 52, "br-003": 51},
+            "pr-005": {"br-002": 158},
+            "pr-013": {"br-002": 72, "br-003": 70},
+        }
+        # Retail branches where an item is NOT listed (warehouse excluded).
+        NOT_AT_BRANCH = {
+            ("pr-011", "br-004"),
+            ("pr-016", "br-004"),
+            ("pr-015", "br-004"),
+        }
+        RETAIL_BRANCHES = {"br-001", "br-002", "br-003", "br-004"}
+        ALL_BRANCH_IDS = {b.id for b in branches}
         today_date = date.today()
 
         def _date(offset_days: int) -> str:
@@ -266,6 +283,25 @@ async def seed():
                         notes=f"Seeded opening lot {lbl}",
                         active=True,
                     ))
+
+            # Branch listing + per-branch selling price
+            price_overrides = BRANCH_PRICE_OVERRIDES.get(pid, {})
+            for br_id in ALL_BRANCH_IDS:
+                if br_id == "br-005":
+                    listed = False
+                elif br_id in RETAIL_BRANCHES:
+                    listed = (pid, br_id) not in NOT_AT_BRANCH
+                else:
+                    listed = False
+                override = price_overrides.get(br_id)
+                db.add(ItemBranchConfig(
+                    id=str(uuid.uuid4()),
+                    item_id=pid,
+                    branch_id=br_id,
+                    is_available=listed,
+                    selling_price=override,
+                    reorder_level=None,
+                ))
 
         # ── Customers ─────────────────────────────────────────────────────────
         customers = [

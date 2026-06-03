@@ -62,6 +62,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("transfer_line_items", "requested_allocation", "TEXT"),
     ("transfer_line_items", "batch_allocation",     "TEXT"),
     ("organisations", "tax_pricing_mode", "VARCHAR DEFAULT 'inclusive'"),
+    ("item_branch_config", "cost_price", "FLOAT"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.
@@ -88,6 +89,7 @@ async def init_schema() -> None:
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
         await _backfill_role_ids(conn)
+        await _backfill_item_branch_config(conn)
 
 
 async def _bootstrap_system_roles(conn) -> None:
@@ -220,4 +222,54 @@ async def _backfill_role_ids(conn) -> None:
         await conn.execute(
             text("UPDATE users SET role_id = :rid WHERE role_id IS NULL AND role = :lr"),
             {"rid": role_id, "lr": legacy_role},
+        )
+
+
+async def _backfill_item_branch_config(conn) -> None:
+    """Seed ``item_branch_config`` for databases created before multi-branch
+    item master. Preserves legacy behaviour: every active item is listed at
+    every active branch with default pricing until an admin changes it."""
+    import uuid
+
+    tables = (
+        await conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('items', 'branches', 'item_branch_config')"
+            )
+        )
+    ).fetchall()
+    table_names = {r[0] for r in tables}
+    if "item_branch_config" not in table_names:
+        return
+    if "items" not in table_names or "branches" not in table_names:
+        return
+
+    item_count = (await conn.execute(text("SELECT COUNT(*) FROM items"))).scalar() or 0
+    if item_count == 0:
+        return
+
+    existing = int(
+        (await conn.execute(text("SELECT COUNT(*) FROM item_branch_config"))).scalar() or 0
+    )
+    if existing > 0:
+        return
+
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT i.id, b.id FROM items i "
+                "CROSS JOIN branches b "
+                "WHERE i.active = 1 AND b.active = 1"
+            )
+        )
+    ).fetchall()
+    for item_id, branch_id in rows:
+        await conn.execute(
+            text(
+                "INSERT INTO item_branch_config "
+                "(id, item_id, branch_id, is_available, selling_price, reorder_level) "
+                "VALUES (:id, :item_id, :branch_id, 1, NULL, NULL)"
+            ),
+            {"id": str(uuid.uuid4()), "item_id": item_id, "branch_id": branch_id},
         )
