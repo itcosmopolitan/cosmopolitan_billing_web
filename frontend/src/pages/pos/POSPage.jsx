@@ -329,7 +329,19 @@ export default function POSPage() {
         taxTotal: tax,
         discount: disc,
         method: paymentMethod,
-        items: cart.map(i => ({ name: i.name, qty: i.qty, price: i.price, lineTotal: i.lineTotal })),
+        items: cart.map(i => ({
+          name: i.name,
+          qty: i.qty,
+          price: i.price,
+          lineTotal: i.lineTotal,
+          hsnCode: i.hsnCode || i.hsn_code || '',
+          size: i.size || i.package || '',
+          attribute: i.attribute || i.attr || '',
+          batch: Array.isArray(i.batchAllocation)
+            ? i.batchAllocation.map((b) => b.batchNumber).filter(Boolean).join(', ')
+            : '',
+          discount: i.lineDiscountValue ?? i.lineDiscountPct ?? 0,
+        })),
         id: result.id,
       })
 
