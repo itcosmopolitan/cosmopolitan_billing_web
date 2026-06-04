@@ -36,6 +36,11 @@ class TransferStatus(str, enum.Enum):
     received = "received"
     rejected = "rejected"
 
+class AdjustmentStatus(str, enum.Enum):
+    pending  = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
 class QuotationStatus(str, enum.Enum):
     draft    = "draft"
     sent     = "sent"
@@ -548,7 +553,36 @@ class CashEntry(Base):
     branch = relationship("Branch", back_populates="cash_entries")
 
 
-# ─── Stock Adjustment ─────────────────────────────────────────────────────────
+class AdjustmentRequest(Base):
+    """Pending/approved/rejected stock adjustment — stock changes only on approve."""
+    __tablename__ = "adjustment_requests"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "ref_number", name="uq_adj_branch_ref"),
+    )
+    id               = Column(String, primary_key=True)
+    ref_number       = Column(String, nullable=False)
+    branch_id        = Column(String, ForeignKey("branches.id"), nullable=False)
+    branch_name      = Column(String)
+    item_id          = Column(String, ForeignKey("items.id"), nullable=False)
+    item_name        = Column(String)
+    before_qty       = Column(Integer, default=0)
+    new_qty          = Column(Integer, nullable=False)
+    reason           = Column(String)
+    notes            = Column(Text)
+    batch_id         = Column(String, nullable=True)
+    status           = Column(SAEnum(AdjustmentStatus), default=AdjustmentStatus.pending)
+    requested_by     = Column(String)
+    approved_by      = Column(String)
+    rejected_by      = Column(String)
+    rejection_notes  = Column(Text)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+    resolved_at      = Column(DateTime, nullable=True)
+
+    item = relationship("Item")
+    branch = relationship("Branch")
+
+
+# ─── Stock Adjustment (audit log, written on approve) ─────────────────────────
 class StockAdjustment(Base):
     __tablename__ = "stock_adjustments"
     id            = Column(String, primary_key=True)
@@ -559,6 +593,7 @@ class StockAdjustment(Base):
     reason        = Column(String)
     notes         = Column(Text)
     adjusted_by   = Column(String)
+    request_id    = Column(String, nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 

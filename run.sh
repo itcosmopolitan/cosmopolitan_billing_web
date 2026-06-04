@@ -47,10 +47,15 @@ cd "$ROOT_DIR/frontend"
 npm install --silent
 echo -e "${GREEN}✓ Frontend dependencies installed${RESET}"
 
-# ─── Install backend dependencies ────────────────────────────────────────────
+# ─── Install backend dependencies (isolated venv — avoids pip/uvicorn Python mismatch) ─
 echo -e "${YELLOW}Installing backend dependencies...${RESET}"
 cd "$ROOT_DIR/backend"
-pip3 install -r requirements.txt -q
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+python -m pip install -r requirements.txt -q
 echo -e "${GREEN}✓ Backend dependencies installed${RESET}"
 
 # ─── Seed database ────────────────────────────────────────────────────────────
@@ -69,11 +74,28 @@ echo -e "${BOLD}Starting services...${RESET}"
 
 # ─── Start backend ────────────────────────────────────────────────────────────
 cd "$ROOT_DIR/backend"
+# shellcheck disable=SC1091
+source .venv/bin/activate
 echo -e "${YELLOW}▶ Starting FastAPI backend on port 8080...${RESET}"
-uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload &
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload &
 BACKEND_PID=$!
 
-sleep 2
+# Wait until the API responds (or fail fast if startup crashed, e.g. missing deps)
+HEALTH_RETRIES=30
+HEALTH_COUNT=0
+until curl -fsS -m 2 http://127.0.0.1:8080/api/v1/permissions/catalog >/dev/null 2>&1; do
+  HEALTH_COUNT=$((HEALTH_COUNT + 1))
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    echo -e "${YELLOW}❌ Backend exited during startup. Check errors above.${RESET}"
+    exit 1
+  fi
+  if [ "$HEALTH_COUNT" -ge "$HEALTH_RETRIES" ]; then
+    echo -e "${YELLOW}❌ Backend did not become healthy within ${HEALTH_RETRIES}s.${RESET}"
+    exit 1
+  fi
+  sleep 1
+done
+echo -e "${GREEN}✓ Backend up (${HEALTH_COUNT}s)${RESET}"
 
 # ─── Start frontend ───────────────────────────────────────────────────────────
 cd "$ROOT_DIR/frontend"

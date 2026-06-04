@@ -62,6 +62,15 @@ export const Transfer = make(
   </>
 )
 
+export const Scale = make(
+  <>
+    <path d="M12 3v18" />
+    <path d="M5 7h14" />
+    <path d="M5 7l-3 5h6L5 7z" />
+    <path d="M19 7l3 5h-6l3-5z" />
+  </>
+)
+
 export const ShoppingBag = make(
   <>
     <path d="M5 7h14l-1 13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 7z" />

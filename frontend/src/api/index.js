@@ -149,6 +149,14 @@ export const transfersAPI = {
   receive: (id)     => api.post(`/transfers/${id}/receive`),
 }
 
+// ─── Stock Adjustments (approval workflow) ───────────────────────────────────
+export const adjustmentsAPI = {
+  list:    (params) => api.get('/adjustments/', { params }),
+  create:  (data)   => api.post('/adjustments/', data),
+  approve: (id, params) => api.post(`/adjustments/${id}/approve`, null, { params }),
+  reject:  (id, data)   => api.post(`/adjustments/${id}/reject`, data),
+}
+
 // ─── Cash ─────────────────────────────────────────────────────────────────────
 export const cashAPI = {
   entries: (branchId, date) => api.get(`/cash/${branchId}/entries`, { params: { date } }),

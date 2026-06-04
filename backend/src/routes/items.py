@@ -756,102 +756,30 @@ async def patch_item(item_id: str, data: ItemPatch, db: AsyncSession = Depends(g
         out["batch_tracking_change"] = toggle_meta
     return out
 
-@router.post("/adjust", dependencies=[Depends(require_perm("items.adjust"))])
+@router.post("/adjust", dependencies=[Depends(require_perm("adjustments.approve"))])
 async def adjust_stock(data: StockAdjustRequest, db: AsyncSession = Depends(get_db)):
-    """Stock adjustment.
+    """Direct stock apply — restricted to approvers (e.g. API integrations).
 
-    Three flavors:
-      1. `batch_id` supplied → per-batch absolute set (the ItemBatch.quantity
-         becomes `new_qty`, item_stock is bumped by the delta).
-      2. Untracked item, no `batch_id` → legacy absolute set on item_stock.
-      3. Tracked item, no `batch_id` → aggregate target. Increases create a
-         new "Adjustment" batch (so we have a record of the new parcel);
-         decreases drain oldest batches first via FIFO/FEFO.
+    UI flows should use POST /adjustments/ and approve instead.
     """
-    if data.new_qty < 0:
-        raise HTTPException(400, "new_qty must be >= 0")
+    from src.routes._stock_adjust_apply import apply_stock_adjustment
 
-    if data.batch_id:
-        b = await set_batch_quantity_atomic(
-            db, batch_id=data.batch_id, new_qty=int(data.new_qty)
-        )
-        if not b:
-            raise HTTPException(404, "Batch not found")
-        await db.commit()
-        return {"message": "Batch adjusted", "batch_id": b.id}
-
-    # No batch_id — look at the item to decide whether to engage the batch
-    # machinery or fall back to the simple set.
-    item_row = await db.execute(
-        select(Item.batch_tracking, Item.expiry_tracking).where(Item.id == data.item_id)
-    )
-    item_flags = item_row.first()
-    tracked = bool(item_flags and item_flags.batch_tracking)
-
-    if not tracked:
-        await set_stock_atomic(
+    try:
+        result = await apply_stock_adjustment(
             db,
             item_id=data.item_id,
             branch_id=data.branch_id,
             new_qty=int(data.new_qty),
-        )
-        await db.commit()
-        return {"message": "Stock adjusted"}
-
-    # Tracked item, aggregate adjust. Compute delta vs current aggregate.
-    cur_row = await db.execute(
-        select(ItemStock.quantity).where(
-            ItemStock.item_id == data.item_id,
-            ItemStock.branch_id == data.branch_id,
-        )
-    )
-    cur = int(cur_row.scalar() or 0)
-    delta = int(data.new_qty) - cur
-    if delta == 0:
-        await db.commit()
-        return {"message": "No change"}
-
-    if delta > 0:
-        # New stock parcel — record as an adjustment batch so it's traceable.
-        await add_batch_atomic(
-            db,
-            item_id=data.item_id,
-            branch_id=data.branch_id,
-            qty=delta,
-            source_type="adjustment",
-            source_ref=data.reason,
+            reason=data.reason,
             notes=data.notes,
+            batch_id=data.batch_id,
         )
-    else:
-        strategy = "fefo" if (item_flags and item_flags.expiry_tracking) else "fifo"
-        try:
-            await consume_batches_atomic(
-                db,
-                item_id=data.item_id,
-                branch_id=data.branch_id,
-                qty=-delta,
-                strategy=strategy,
-            )
-        except ValueError:
-            # Less batched stock than aggregate (e.g. data drift from legacy
-            # writes). Zero everything out and continue rather than blocking
-            # the user — `Stock Adjustment` is the very tool used to fix this.
-            await db.execute(
-                text(
-                    "UPDATE item_batches SET quantity = 0 "
-                    "WHERE item_id = :i AND branch_id = :b"
-                ),
-                {"i": data.item_id, "b": data.branch_id},
-            )
-            await set_stock_atomic(
-                db,
-                item_id=data.item_id,
-                branch_id=data.branch_id,
-                new_qty=int(data.new_qty),
-            )
-
+    except LookupError:
+        raise HTTPException(404, "Batch not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     await db.commit()
-    return {"message": "Stock adjusted"}
+    return result
 
 
 # ─── Batches (per item) ──────────────────────────────────────────────────────
