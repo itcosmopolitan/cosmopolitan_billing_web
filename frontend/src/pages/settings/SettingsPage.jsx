@@ -1,13 +1,26 @@
 import { useState, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { roleColors } from '@/utils/helpers'
-import { usersAPI, branchesAPI, rolesAPI, permissionsAPI } from '@/api'
+import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
+
+const EMPTY_ORG_FORM = {
+  id: '',
+  name: '',
+  gstin: '',
+  pan: '',
+  address: '',
+  phone: '',
+  email: '',
+  website: '',
+  state_code: '33',
+  financial_year: 'Apr-Mar',
+}
 
 const TABS = [
   { id: 'org',      label: '🏢 Organisation' },
@@ -36,17 +49,16 @@ export default function SettingsPage() {
   const [userSortBy, setUserSortBy] = useState('name')
   const [userSortOrder, setUserSortOrder] = useState('asc')
   const [userListVersion, setUserListVersion] = useState(0)
-  // Roles are loaded in full by the boot effect (small list — the catalog of
-  // role types, typically <20). Paginate client-side for consistency with
-  // the Users table — server-side pagination on /roles/ would be overkill.
+  // Roles are loaded when the Roles sub-tab is opened (small list — the
+  // catalog of role types, typically <20). Paginate client-side for
+  // consistency with the Users table.
   const [roleSkip, setRoleSkip] = useState(0)
   const [roleLimit, setRoleLimit] = useState(DEFAULT_PAGE_SIZE)
   const [branches, setBranches] = useState([])
   const [brSkip, setBrSkip] = useState(0)
   const [brLimit, setBrLimit] = useState(DEFAULT_PAGE_SIZE)
-  // Branches are loaded in full via fetchAllList (small list — used by every
-  // dropdown), so sort them client-side rather than re-fetching on every
-  // header click.
+  // Branches tab state — fetched when that tab is active. User modals use
+  // storeBranches (hydrated at app boot) for branch pickers.
   const [branchSortBy, setBranchSortBy] = useState('name')
   const [branchSortOrder, setBranchSortOrder] = useState('asc')
   const [showBranch, setShowBranch] = useState(false)
@@ -63,7 +75,7 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [branchForm, setBranchForm] = useState({ name:'', code:'', manager:'', phone:'', address:'' })
-  // Only the setter is consumed; loading state is internal to the boot effect.
+  // Only the setter is consumed; loading state is used by tab fetchers.
   // eslint-disable-next-line no-unused-vars
   const [loading, setLoading] = useState(true)
   const puf = (k,v) => setUserForm(f=>({...f,[k]:v}))
@@ -76,6 +88,8 @@ export default function SettingsPage() {
   const peuf = (k,v) => setEditUserForm(f=>({...f,[k]:v}))
 
   // RBAC: roles + permission catalog (Phase 1 of Users & Roles)
+  const storeBranches = useAppStore((s) => s.branches)
+  const setStoreBranches = useAppStore((s) => s.setBranches)
   const roles = useAppStore((s) => s.roles)
   const permCatalog = useAppStore((s) => s.permCatalog)
   const setRoles = useAppStore((s) => s.setRoles)
@@ -89,14 +103,24 @@ export default function SettingsPage() {
     try {
       const data = await fetchAllList(branchesAPI.list).catch(() => [])
       setBranches(data || [])
+      setStoreBranches(data || [])
+      return data || []
     } catch (err) {
       console.error(err)
       toast.error('Failed to load branches')
+      return []
     }
   }
 
   const reloadRoles = async () => {
     try { setRoles(await rolesAPI.list()) } catch (e) { console.error(e) }
+  }
+
+  const loadPermCatalog = async () => {
+    if (Object.keys(permCatalog).length > 0) return
+    try {
+      setPermCatalog(await permissionsAPI.catalog().catch(() => ({})))
+    } catch (e) { console.error(e) }
   }
 
   const openNewRole = () => { setEditingRole(null); setShowRoleEditor(true) }
@@ -109,31 +133,28 @@ export default function SettingsPage() {
     catch (e) { console.error(e) }
   }
 
+  // Branches tab — fetch only when that tab is active (default tab is org, no API).
   useEffect(() => {
-    (async () => {
+    if (tab !== 'branches') return
+    let cancelled = false
+    ;(async () => {
       try {
         setLoading(true)
-        // Load branches (paginated upstream, fetched in full here for the
-        // dropdowns) and the RBAC roles + permission catalog in parallel.
-        // Users are paginated separately by the next useEffect.
-        const [, rolesData, catalogData] = await Promise.all([
-          loadAllBranches(),
-          rolesAPI.list().catch(() => []),
-          permissionsAPI.catalog().catch(() => ({})),
-        ])
-        setRoles(rolesData || [])
-        setPermCatalog(catalogData || {})
+        const data = await fetchAllList(branchesAPI.list).catch(() => [])
+        if (!cancelled) setBranches(data || [])
+      } catch (err) {
+        console.error(err)
+        if (!cancelled) toast.error('Failed to load branches')
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     })()
-    // setRoles + setPermCatalog are stable Zustand setters; loadAllBranches
-    // is a top-level fn that doesn't change between renders. Boot-once
-    // intentionally.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    return () => { cancelled = true }
+  }, [tab])
 
+  // Users sub-tab — fetch list when active (mirrors roles sub-tab below).
   useEffect(() => {
+    if (tab !== 'users' || usersTab !== 'users') return
     let cancelled = false
     ;(async () => {
       try {
@@ -157,7 +178,35 @@ export default function SettingsPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [userSkip, userLimit, userListVersion, userSortBy, userSortOrder])
+  }, [tab, usersTab, userSkip, userLimit, userListVersion, userSortBy, userSortOrder])
+
+  // Roles sub-tab — roles + permission catalog (for RoleEditor) on demand.
+  useEffect(() => {
+    if (tab !== 'users' || usersTab !== 'roles') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        setLoading(true)
+        const [rolesData] = await Promise.all([
+          rolesAPI.list().catch(() => []),
+          loadPermCatalog(),
+        ])
+        if (!cancelled) setRoles(rolesData || [])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, usersTab])
+
+  // Add/Edit User modals need the roles dropdown without visiting the Roles sub-tab.
+  useEffect(() => {
+    if (!showUser && !showEditUser) return
+    if (roles.length > 0) return
+    reloadRoles()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showUser, showEditUser, roles.length])
 
   const onUserSort = (key) => {
     setUserSkip(0)
@@ -201,20 +250,82 @@ export default function SettingsPage() {
     setEditBranchForm(prev => ({ ...prev, [k]: v }))
   }
 
-  const [orgForm, setOrgForm] = useState({
-    name: 'Sri Murugan Traders Pvt Ltd',
-    gstIn: '33AAZCS1429R1Z1',
-    pan: 'AAZCS1429R',
-    address: '12, Anna Nagar West, Chennai — 600 040',
-    phone: '044-2626 1234',
-    email: 'accounts@srimurugan.com',
-    website: 'www.srimurugan.com',
-    stateCode: '33',
-    financialYear: 'Apr–Mar',
-  })
+  const [orgForm, setOrgForm] = useState(EMPTY_ORG_FORM)
+  const [orgSaving, setOrgSaving] = useState(false)
   const pof = (k,v) => setOrgForm(f=>({...f,[k]:v}))
 
-  const saveOrg = () => toast.success('Organisation profile saved')
+  // Organisation tab — load profile from DB when active (default tab).
+  useEffect(() => {
+    if (tab !== 'org') return
+    const controller = new AbortController()
+    ;(async () => {
+      try {
+        setLoading(true)
+        const data = await settingsAPI.getOrganisation({ signal: controller.signal })
+        if (data) {
+          setOrgForm({
+            id: data.id || '',
+            name: data.name || '',
+            gstin: data.gstin || '',
+            pan: data.pan || '',
+            address: data.address || '',
+            phone: data.phone || '',
+            email: data.email || '',
+            website: data.website || '',
+            state_code: data.state_code || '33',
+            financial_year: data.financial_year || 'Apr-Mar',
+          })
+        }
+      } catch (err) {
+        if (err?.code === 'ERR_CANCELED') return
+        console.error(err)
+        toast.error('Failed to load organisation profile')
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
+    })()
+    return () => controller.abort()
+  }, [tab])
+
+  const saveOrg = async () => {
+    if (!orgForm.name?.trim()) {
+      toast.error('Company name is required')
+      return
+    }
+    setOrgSaving(true)
+    try {
+      const saved = await settingsAPI.updateOrganisation({
+        name: orgForm.name.trim(),
+        gstin: orgForm.gstin?.trim() || '',
+        pan: orgForm.pan?.trim() || '',
+        address: orgForm.address?.trim() || '',
+        phone: orgForm.phone?.trim() || '',
+        email: orgForm.email?.trim() || '',
+        website: orgForm.website?.trim() || '',
+        state_code: orgForm.state_code?.trim() || '33',
+        financial_year: orgForm.financial_year || 'Apr-Mar',
+      })
+      setOrgForm((prev) => ({
+        ...prev,
+        id: saved?.id || prev.id,
+        name: saved?.name ?? prev.name,
+        gstin: saved?.gstin ?? prev.gstin,
+        pan: saved?.pan ?? prev.pan,
+        address: saved?.address ?? prev.address,
+        phone: saved?.phone ?? prev.phone,
+        email: saved?.email ?? prev.email,
+        website: saved?.website ?? prev.website,
+        state_code: saved?.state_code ?? prev.state_code,
+        financial_year: saved?.financial_year ?? prev.financial_year,
+      }))
+      toast.success('Organisation profile saved')
+    } catch (err) {
+      console.error(err)
+      // Toast already fired by global axios interceptor on non-2xx
+    } finally {
+      setOrgSaving(false)
+    }
+  }
 
   // Cryptographically random URL-safe temp password generator. ~12 chars
   // from 9 random bytes. Matches the server-side default in
@@ -276,7 +387,6 @@ export default function SettingsPage() {
       const result = await usersAPI.create(payload)
       setUserSkip(0)
       setUserListVersion((v) => v + 1)
-      await loadAllBranches()
       setShowUser(false)
       // Show the post-create confirmation modal with the temp password to
       // share. Prefer the server-echoed `temp_password` (covers the case
@@ -328,7 +438,7 @@ export default function SettingsPage() {
     if (Array.isArray(user.branch_ids) && user.branch_ids.length > 0) {
       initialBranchIds = [...user.branch_ids]
     } else if (user.all_branches) {
-      initialBranchIds = branches.map((b) => b.id)
+      initialBranchIds = storeBranches.map((b) => b.id)
     } else if (user.branch_id) {
       initialBranchIds = [user.branch_id]
     }
@@ -418,18 +528,22 @@ export default function SettingsPage() {
       {tab === 'org' && (
         <div className="grid-2" style={{alignItems:'start'}}>
           <Card title="Organisation Profile">
-            <FormRow><FormGroup label="Company Name" required><input className="form-input" value={orgForm.name} onChange={e=>pof('name',e.target.value)} /></FormGroup>
-            <FormGroup label="GSTIN"><input className="form-input" value={orgForm.gstIn} onChange={e=>pof('gstIn',e.target.value)} /></FormGroup></FormRow>
-            <FormRow><FormGroup label="PAN"><input className="form-input" value={orgForm.pan} onChange={e=>pof('pan',e.target.value)} /></FormGroup>
-            <FormGroup label="State Code"><input className="form-input" value={orgForm.stateCode} onChange={e=>pof('stateCode',e.target.value)} /></FormGroup></FormRow>
-            <FormGroup label="Registered Address"><textarea className="form-input" value={orgForm.address} onChange={e=>pof('address',e.target.value)} style={{height:72}}/></FormGroup>
-            <FormRow><FormGroup label="Phone"><input className="form-input" value={orgForm.phone} onChange={e=>pof('phone',e.target.value)} /></FormGroup>
-            <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} /></FormGroup></FormRow>
-            <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} /></FormGroup>
-            <FormGroup label="Financial Year"><select className="form-input" value={orgForm.financialYear} onChange={e=>pof('financialYear',e.target.value)}><option>Apr–Mar</option><option>Jan–Dec</option></select></FormGroup></FormRow>
-            <div style={{marginTop:6}}>
-              <button className="btn btn-primary btn-sm" onClick={saveOrg}>Save Changes</button>
-            </div>
+            <FormRow><FormGroup label="Company Name" required><input className="form-input" value={orgForm.name} onChange={e=>pof('name',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
+            <FormGroup label="GSTIN"><input className="form-input" value={orgForm.gstin} onChange={e=>pof('gstin',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
+            <FormRow><FormGroup label="PAN"><input className="form-input" value={orgForm.pan} onChange={e=>pof('pan',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
+            <FormGroup label="State Code"><input className="form-input" value={orgForm.state_code} onChange={e=>pof('state_code',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
+            <FormGroup label="Registered Address"><textarea className="form-input" value={orgForm.address} onChange={e=>pof('address',e.target.value)} style={{height:72}} disabled={!can('settings.edit')} /></FormGroup>
+            <FormRow><FormGroup label="Phone"><input className="form-input" value={orgForm.phone} onChange={e=>pof('phone',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
+            <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
+            <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
+            <FormGroup label="Financial Year"><select className="form-input" value={orgForm.financial_year} onChange={e=>pof('financial_year',e.target.value)} disabled={!can('settings.edit')}><option value="Apr-Mar">Apr–Mar</option><option value="Jan-Dec">Jan–Dec</option></select></FormGroup></FormRow>
+            {can('settings.edit') && (
+              <div style={{marginTop:6}}>
+                <button className="btn btn-primary btn-sm" onClick={saveOrg} disabled={orgSaving || loading}>
+                  {orgSaving ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            )}
           </Card>
           <div style={{display:'flex',flexDirection:'column',gap:16}}>
             <Card title="Branding">
@@ -591,7 +705,7 @@ export default function SettingsPage() {
                     const assigned = Array.isArray(u.branch_ids) && u.branch_ids.length > 0
                       ? u.branch_ids
                       : (u.branch_id ? [u.branch_id] : [])
-                    const branchNames = assigned.map(bid => branches.find(b=>b.id===bid)?.name || bid)
+                    const branchNames = assigned.map(bid => storeBranches.find(b=>b.id===bid)?.name || bid)
                     return (
                     <tr key={u.id}>
                       <td>
@@ -713,7 +827,7 @@ export default function SettingsPage() {
             </FormGroup>
             <FormGroup label="Branches" required>
               <MultiSelect
-                options={branches.map(b => ({ id: b.id, label: b.name }))}
+                options={storeBranches.map(b => ({ id: b.id, label: b.name }))}
                 value={userForm.branch_ids}
                 onChange={(ids) => puf('branch_ids', ids)}
                 placeholder="Choose branches…"
@@ -801,7 +915,7 @@ export default function SettingsPage() {
             </FormGroup>
             <FormGroup label="Branches" required>
               <MultiSelect
-                options={branches.map(b => ({ id: b.id, label: b.name }))}
+                options={storeBranches.map(b => ({ id: b.id, label: b.name }))}
                 value={editUserForm.branch_ids}
                 onChange={(ids) => peuf('branch_ids', ids)}
                 placeholder="Choose branches…"

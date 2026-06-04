@@ -24,6 +24,7 @@ config.load()
 
 from src.database import Base, get_async_session, get_engine
 from src.document_numbering import DEFAULT_NUMBERING
+from src.invoice_template_defaults import DEFAULT_INVOICE_TEMPLATE
 from src.models import (
     AuditLog,
     Branch,
@@ -31,6 +32,7 @@ from src.models import (
     Category,
     Customer,
     DocumentNumbering,
+    InvoiceTemplateSettings,
     Item,
     ItemBatch,
     ItemBranchConfig,
@@ -93,6 +95,23 @@ async def seed():
                 scope=cfg["scope"],
                 next_seq=cfg["next_seq"],
             ))
+
+        db.add(InvoiceTemplateSettings(
+            id=DEFAULT_INVOICE_TEMPLATE["id"],
+            header_style=DEFAULT_INVOICE_TEMPLATE["header_style"],
+            show_attr=DEFAULT_INVOICE_TEMPLATE["show_attr"],
+            show_size=DEFAULT_INVOICE_TEMPLATE["show_size"],
+            show_disc=DEFAULT_INVOICE_TEMPLATE["show_disc"],
+            show_hsn=DEFAULT_INVOICE_TEMPLATE["show_hsn"],
+            tax_mode=DEFAULT_INVOICE_TEMPLATE["tax_mode"],
+            show_customer=DEFAULT_INVOICE_TEMPLATE["show_customer"],
+            show_payment=DEFAULT_INVOICE_TEMPLATE["show_payment"],
+            show_printed_date=DEFAULT_INVOICE_TEMPLATE["show_printed_date"],
+            show_store=DEFAULT_INVOICE_TEMPLATE["show_store"],
+            show_cashier=DEFAULT_INVOICE_TEMPLATE["show_cashier"],
+            footer_msg=DEFAULT_INVOICE_TEMPLATE["footer_msg"],
+            footer_note=DEFAULT_INVOICE_TEMPLATE["footer_note"],
+        ))
 
         # ── Branches ──────────────────────────────────────────────────────────
         branches = [

@@ -96,7 +96,7 @@ export const useAppStore = create(
       // UI preferences
       sidebarCollapsed: false,
       theme: 'light',
-      // inclusive = shelf prices include GST (org default); exclusive = tax added at checkout
+      // inclusive = shelf prices include GST (fixed default)
       taxPricingMode: 'inclusive',
 
       // ── RBAC session state (Users & Roles, Phase 1 + 1.5) ────────────────
@@ -124,9 +124,6 @@ export const useAppStore = create(
       }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setTheme: (theme) => set({ theme }),
-      setTaxPricingMode: (taxPricingMode) => set({
-        taxPricingMode: taxPricingMode === 'exclusive' ? 'exclusive' : 'inclusive',
-      }),
       setUser: (user) => set({ user }),
       setPermCatalog: (permCatalog) => set({ permCatalog }),
       setRoles: (roles) => set({ roles }),
