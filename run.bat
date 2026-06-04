@@ -35,10 +35,11 @@ cd /d "%~dp0frontend"
 call npm install --silent
 echo [OK] Frontend ready
 
-:: Install backend deps
+:: Install backend deps (venv keeps pip and uvicorn on the same Python)
 echo Installing backend dependencies...
 cd /d "%~dp0backend"
-pip install -r requirements.txt -q
+if not exist ".venv" python -m venv .venv
+call .venv\Scripts\pip install -r requirements.txt -q
 echo [OK] Backend ready
 
 :: Seed DB if not exists
@@ -56,7 +57,7 @@ echo.
 
 :: Start backend in new window
 cd /d "%~dp0backend"
-start "Cosmopolitan Backend" cmd /k "uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload"
+start "Cosmopolitan Backend" cmd /k ".venv\Scripts\python -m uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload"
 
 :: Poll the backend for up to 30s before declaring success.
 :: Uses /api/v1/permissions/catalog because it's unauthenticated, cheap,

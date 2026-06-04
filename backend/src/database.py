@@ -81,6 +81,8 @@ async def init_schema() -> None:
     """Create tables, then apply additive column migrations and the role-id
     backfill (D6). Called from main.py startup after Base.metadata.create_all.
     """
+    import src.models  # noqa: F401 — register all ORM tables on Base.metadata
+
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -111,7 +113,7 @@ async def _bootstrap_system_roles(conn) -> None:
             await conn.execute(
                 text(
                     "UPDATE roles SET permissions = :perms "
-                    "WHERE id = :id AND is_system = 1"
+                    "WHERE id = :id AND is_system IS TRUE"
                 ),
                 {"id": rid, "perms": json.dumps(perms)},
             )
@@ -119,7 +121,7 @@ async def _bootstrap_system_roles(conn) -> None:
         await conn.execute(
             text(
                 "INSERT INTO roles (id, key, label, description, color, permissions, is_system, active) "
-                "VALUES (:id, :key, :label, :desc, :color, :perms, 1, 1)"
+                "VALUES (:id, :key, :label, :desc, :color, :perms, :is_system, :active)"
             ),
             {
                 "id": rid,
@@ -128,6 +130,8 @@ async def _bootstrap_system_roles(conn) -> None:
                 "desc": description,
                 "color": color,
                 "perms": json.dumps(perms),
+                "is_system": True,
+                "active": True,
             },
         )
 
@@ -213,14 +217,15 @@ async def _bootstrap_default_tax_rates(conn) -> None:
         await conn.execute(
             text(
                 "INSERT INTO tax_rates (id, rate, label, examples, active, is_system) "
-                "VALUES (:id, :rate, :label, :examples, 1, :is_system)"
+                "VALUES (:id, :rate, :label, :examples, :active, :is_system)"
             ),
             {
                 "id": tid,
                 "rate": rate,
                 "label": label,
                 "examples": examples,
-                "is_system": 1 if is_system else 0,
+                "active": True,
+                "is_system": bool(is_system),
             },
         )
 
@@ -296,7 +301,7 @@ async def _backfill_item_branch_config(conn) -> None:
             text(
                 "SELECT i.id, b.id FROM items i "
                 "CROSS JOIN branches b "
-                "WHERE i.active = true AND b.active = true"
+                "WHERE i.active IS TRUE AND b.active IS TRUE"
             )
         )
     ).fetchall()
