@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { itemsAPI } from '@/api'
+import { itemsAPI, adjustmentsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
@@ -41,6 +41,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const can = useCan()
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const user = useAppStore((s) => s.user)
   const [tab, setTab]           = useState('all')
   const [search, setSearch]     = useState('')
   const [catFilter, setCatFilter] = useState('')
@@ -50,6 +51,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [adjSelectSearch, setAdjSelectSearch] = useState('')
   const [adjQty, setAdjQty]     = useState('')
   const [adjReason, setAdjReason] = useState('Physical count')
+  const [adjNotes, setAdjNotes] = useState('')
   const [adjBatches, setAdjBatches] = useState([])      // batch list when adjusting a tracked item
   const [adjBatchId, setAdjBatchId] = useState('')      // selected single-batch id (or '' = aggregate)
   const [adjLoading, setAdjLoading] = useState(false)
@@ -207,6 +209,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     setShowAdj(item)
     setAdjQty(item.available_stock || 0)
     setAdjReason('Physical count')
+    setAdjNotes('')
     setAdjBatchId('')
     setAdjBatches([])
     if (item.batch_tracking) {
@@ -225,24 +228,27 @@ export default function ItemsPage({ mode = 'branch' }) {
 
   const saveAdj = async () => {
     if (adjQty === '' || adjQty === null) { toast.error('Enter adjusted quantity'); return }
+    if (!can('adjustments.create')) {
+      toast.error('You do not have permission to request stock adjustments')
+      return
+    }
     try {
-      await itemsAPI.adjust({
-        item_id: showAdj.id,
+      await adjustmentsAPI.create({
         branch_id: branchFilter,
+        item_id: showAdj.id,
+        item_name: showAdj.name,
         new_qty: Number(adjQty),
         reason: adjReason,
-        // batch_id only sent when the operator picks a specific lot in the
-        // adjustment table; '' means "aggregate" and the backend will draw
-        // from oldest batches first using the item's tracking strategy.
+        notes: adjNotes || undefined,
         batch_id: adjBatchId || undefined,
+        requested_by: user?.name || 'Staff',
       })
-      toast.success(`Stock adjusted for ${showAdj.name}`)
+      toast.success(`Adjustment request submitted for ${showAdj.name}`)
       await fetchItems()
-      await loadNearExpiry()
       setShowAdj(null)
     } catch (err) {
-      console.error('Failed to adjust stock:', err)
-      toast.error('Failed to adjust stock')
+      console.error('Failed to submit adjustment request:', err)
+      toast.error('Failed to submit adjustment request')
     }
   }
 
@@ -256,7 +262,7 @@ export default function ItemsPage({ mode = 'branch' }) {
         title={isMaster ? 'Item Master' : 'Items & Stock'}
         subtitle={isMaster
           ? 'Central product catalog — create items, defaults, and branch listing'
-          : 'Branch inventory — stock levels and adjustments for the selected branch'}
+          : 'Branch inventory — request stock corrections (manager approval required)'}
       >
         <button className="btn btn-secondary btn-sm" onClick={() => {
           const exportData = filtered.map(item => ({
@@ -280,8 +286,8 @@ export default function ItemsPage({ mode = 'branch' }) {
           exportToCSV(exportData, `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Items exported')
         }}>↓ Export</button>
-        {!isMaster && can('items.adjust') && (
-          <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Adjust Stock</button>
+        {!isMaster && can('adjustments.create') && (
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Request Adjustment</button>
         )}
         {isMaster && can('items.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
@@ -493,8 +499,8 @@ export default function ItemsPage({ mode = 'branch' }) {
                             },
                           ] : [
                             {
-                              label: 'Adjust stock',
-                              hidden: !can('items.adjust'),
+                              label: 'Request adjustment',
+                              hidden: !can('adjustments.create'),
                               onClick: () => openAdj(p),
                             },
                             {
@@ -525,10 +531,10 @@ export default function ItemsPage({ mode = 'branch' }) {
       {!isMaster && (
         <>
       {/* Stock Adjustment Modal — batch-aware */}
-      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
+      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdj(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={saveAdj}>Save Adjustment</button>
+          <button className="btn btn-primary" onClick={saveAdj}>Submit for Approval</button>
         </>}>
         {showAdj && (
           <>
@@ -593,8 +599,11 @@ export default function ItemsPage({ mode = 'branch' }) {
               </select>
             </FormGroup>
             <FormGroup label="Notes">
-              <textarea className="form-input" placeholder="Optional notes about this adjustment" style={{ height: 60 }} />
+              <textarea className="form-input" placeholder="Optional notes for the approver" style={{ height: 60 }} value={adjNotes} onChange={(e) => setAdjNotes(e.target.value)} />
             </FormGroup>
+            <AlertBar type="blue" icon="ℹ">
+              Stock is not changed until a manager approves this request in Stock Adjustments.
+            </AlertBar>
             {showAdj.batch_tracking && !adjBatchId && Number(adjQty) > (showAdj.available_stock || 0) && (
               <AlertBar type="blue" icon="ℹ">
                 Aggregate increase will be recorded as a new &quot;Adjustment&quot; batch (no expiry).
@@ -611,7 +620,7 @@ export default function ItemsPage({ mode = 'branch' }) {
       </Modal>
 
       {/* Stock Adjustment - Item Selection Modal */}
-      <Modal open={showAdjSelect} onClose={() => setShowAdjSelect(false)} title="Select Item to Adjust Stock" icon="⚖" size="md"
+      <Modal open={showAdjSelect} onClose={() => setShowAdjSelect(false)} title="Select Item to Adjust" icon="⚖" size="md"
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdjSelect(false)}>Close</button>
         </>}>

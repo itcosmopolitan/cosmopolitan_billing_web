@@ -55,6 +55,14 @@ DEFAULT_NUMBERING: list[dict[str, Any]] = [
         "next_seq": 42,
     },
     {
+        "doc_type": "stock_adjustment",
+        "label": "Stock Adjustment",
+        "prefix": "ADJ",
+        "format": "ADJ-YYYY-####",
+        "scope": "per_branch",
+        "next_seq": 41,
+    },
+    {
         "doc_type": "credit_note",
         "label": "Credit Note",
         "prefix": "CN",

@@ -63,6 +63,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("transfer_line_items", "batch_allocation",     "TEXT"),
     ("organisations", "tax_pricing_mode", "VARCHAR DEFAULT 'inclusive'"),
     ("item_branch_config", "cost_price", "FLOAT"),
+    ("stock_adjustments", "request_id", "VARCHAR"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.
@@ -90,6 +91,7 @@ async def init_schema() -> None:
         await _bootstrap_default_tax_rates(conn)
         await _backfill_role_ids(conn)
         await _backfill_item_branch_config(conn)
+        await _migrate_adjustment_requests_per_branch_ref(conn)
 
 
 async def _bootstrap_system_roles(conn) -> None:
@@ -105,6 +107,14 @@ async def _bootstrap_system_roles(conn) -> None:
     existing = {r[0] for r in rows}
     for rid, key, label, color, description, perms in SYSTEM_ROLES:
         if rid in existing:
+            # Keep system-role permission lists in sync when the catalog grows.
+            await conn.execute(
+                text(
+                    "UPDATE roles SET permissions = :perms "
+                    "WHERE id = :id AND is_system = 1"
+                ),
+                {"id": rid, "perms": json.dumps(perms)},
+            )
             continue
         await conn.execute(
             text(
@@ -117,8 +127,6 @@ async def _bootstrap_system_roles(conn) -> None:
                 "label": label,
                 "desc": description,
                 "color": color,
-                # JSON column on SQLite is stored as TEXT; serialize ourselves
-                # because we're using raw SQL here, not the ORM.
                 "perms": json.dumps(perms),
             },
         )
@@ -175,6 +183,13 @@ async def _bootstrap_document_numbering(conn) -> None:
     existing = {r[0] for r in rows}
     for cfg in DEFAULT_NUMBERING:
         if cfg["doc_type"] in existing:
+            if cfg["doc_type"] == "stock_adjustment":
+                await conn.execute(
+                    text(
+                        "UPDATE document_numbering SET scope = 'per_branch' "
+                        "WHERE doc_type = 'stock_adjustment' AND scope != 'per_branch'"
+                    )
+                )
             continue
         await conn.execute(
             text(
@@ -225,22 +240,42 @@ async def _backfill_role_ids(conn) -> None:
         )
 
 
+async def _existing_tables(conn, names: list[str]) -> set[str]:
+    """Return which of *names* exist — works on SQLite (dev) and PostgreSQL."""
+    if not names:
+        return set()
+    if conn.dialect.name == "sqlite":
+        in_list = ", ".join(f"'{n}'" for n in names)
+        rows = (
+            await conn.execute(
+                text(
+                    f"SELECT name FROM sqlite_master "
+                    f"WHERE type='table' AND name IN ({in_list})"
+                )
+            )
+        ).fetchall()
+        return {r[0] for r in rows}
+    in_list = ", ".join(f"'{n}'" for n in names)
+    rows = (
+        await conn.execute(
+            text(
+                f"SELECT table_name FROM information_schema.tables "
+                f"WHERE table_schema = 'public' AND table_name IN ({in_list})"
+            )
+        )
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 async def _backfill_item_branch_config(conn) -> None:
     """Seed ``item_branch_config`` for databases created before multi-branch
     item master. Preserves legacy behaviour: every active item is listed at
     every active branch with default pricing until an admin changes it."""
     import uuid
 
-    tables = (
-        await conn.execute(
-            text(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' "
-                "AND table_name IN ('items', 'branches', 'item_branch_config')"
-            )
-        )
-    ).fetchall()
-    table_names = {r[0] for r in tables}
+    table_names = await _existing_tables(
+        conn, ["items", "branches", "item_branch_config"]
+    )
     if "item_branch_config" not in table_names:
         return
     if "items" not in table_names or "branches" not in table_names:
@@ -274,3 +309,100 @@ async def _backfill_item_branch_config(conn) -> None:
             ),
             {"id": str(uuid.uuid4()), "item_id": item_id, "branch_id": branch_id},
         )
+
+
+async def _migrate_adjustment_requests_per_branch_ref(conn) -> None:
+    """Replace global UNIQUE(ref_number) with UNIQUE(branch_id, ref_number).
+
+    Per-branch document numbering can reuse the same ADJ-YYYY-#### at different
+    branches; only the pair (branch_id, ref_number) must be unique.
+    """
+    table_names = await _existing_tables(conn, ["adjustment_requests"])
+    if "adjustment_requests" not in table_names:
+        return
+
+    if conn.dialect.name == "sqlite":
+        ddl = (
+            await conn.execute(
+                text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type='table' AND name='adjustment_requests'"
+                )
+            )
+        ).scalar()
+        if not ddl or "uq_adj_branch_ref" in ddl:
+            return
+
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE adjustment_requests_mig (
+                    id VARCHAR NOT NULL PRIMARY KEY,
+                    ref_number VARCHAR NOT NULL,
+                    branch_id VARCHAR NOT NULL,
+                    branch_name VARCHAR,
+                    item_id VARCHAR NOT NULL,
+                    item_name VARCHAR,
+                    before_qty INTEGER DEFAULT 0,
+                    new_qty INTEGER NOT NULL,
+                    reason VARCHAR,
+                    notes TEXT,
+                    batch_id VARCHAR,
+                    status VARCHAR,
+                    requested_by VARCHAR,
+                    approved_by VARCHAR,
+                    rejected_by VARCHAR,
+                    rejection_notes TEXT,
+                    created_at DATETIME,
+                    resolved_at DATETIME,
+                    FOREIGN KEY(branch_id) REFERENCES branches(id),
+                    FOREIGN KEY(item_id) REFERENCES items(id),
+                    UNIQUE (branch_id, ref_number)
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO adjustment_requests_mig
+                SELECT id, ref_number, branch_id, branch_name, item_id, item_name,
+                       before_qty, new_qty, reason, notes, batch_id, status,
+                       requested_by, approved_by, rejected_by, rejection_notes,
+                       created_at, resolved_at
+                FROM adjustment_requests
+                """
+            )
+        )
+        await conn.execute(text("DROP TABLE adjustment_requests"))
+        await conn.execute(
+            text("ALTER TABLE adjustment_requests_mig RENAME TO adjustment_requests")
+        )
+        return
+
+    has_composite = (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM pg_constraint c "
+                "JOIN pg_class t ON c.conrelid = t.oid "
+                "WHERE t.relname = 'adjustment_requests' "
+                "AND c.conname = 'uq_adj_branch_ref'"
+            )
+        )
+    ).scalar()
+    if has_composite:
+        return
+
+    await conn.execute(
+        text(
+            "ALTER TABLE adjustment_requests "
+            "DROP CONSTRAINT IF EXISTS adjustment_requests_ref_number_key"
+        )
+    )
+    await conn.execute(
+        text(
+            "ALTER TABLE adjustment_requests "
+            "ADD CONSTRAINT uq_adj_branch_ref "
+            "UNIQUE (branch_id, ref_number)"
+        )
+    )

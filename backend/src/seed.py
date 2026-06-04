@@ -41,6 +41,8 @@ from src.models import (
     Role,
     SaleInvoice,
     SaleLineItem,
+    AdjustmentRequest,
+    AdjustmentStatus,
     StockTransfer,
     TaxRate,
     TransferLineItem,
@@ -552,6 +554,33 @@ async def seed():
                     id=str(uuid.uuid4()), transfer_id=t["id"],
                     item_id=item["item_id"], item_name=item["item_name"], qty=item["qty"],
                 ))
+
+        # ── Stock adjustment requests (approval workflow demo) ───────────────
+        from datetime import datetime as _dt
+
+        adj_requests = [
+            {
+                "id": "adj-req-001", "ref_number": "ADJ-2024-0041",
+                "branch_id": "br-001", "branch_name": "Male",
+                "item_id": "pr-001", "item_name": "Basmati Rice 5kg",
+                "before_qty": 78, "new_qty": 62, "reason": "Physical count",
+                "notes": "Shelf count after month-end", "status": AdjustmentStatus.pending,
+                "requested_by": "Deepa S.",
+                "created_at": _dt(2024, 4, 16, 9, 15),
+            },
+            {
+                "id": "adj-req-002", "ref_number": "ADJ-2024-0042",
+                "branch_id": "br-002", "branch_name": "Addu",
+                "item_id": "pr-003", "item_name": "Sunflower Oil 1L",
+                "before_qty": 45, "new_qty": 44, "reason": "Damaged / Spoilage",
+                "notes": "One leaking bottle removed", "status": AdjustmentStatus.approved,
+                "requested_by": "Ravi S.", "approved_by": "Kavitha R.",
+                "created_at": _dt(2024, 4, 15, 14, 20),
+                "resolved_at": _dt(2024, 4, 15, 16, 45),
+            },
+        ]
+        for ar in adj_requests:
+            db.add(AdjustmentRequest(**ar))
 
         # ── Cash Entries ──────────────────────────────────────────────────────
         cash_entries = [
