@@ -56,11 +56,19 @@ export const authAPI = {
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const dashAPI = {
-  kpis:            (branchId) => api.get('/dashboard/kpis',            { params: { branch_id: branchId } }),
-  salesTrend:      (days)     => api.get('/dashboard/sales-trend',      { params: { days } }),
-  topProducts:     (branchId) => api.get('/dashboard/top-products',     { params: { branch_id: branchId } }),
-  branchComparison:()         => api.get('/dashboard/branch-comparison'),
-  alerts:          ()         => api.get('/dashboard/alerts'),
+  filters:          (params) => api.get('/dashboard/filters', { params }),
+  summary:          (params) => api.get('/dashboard/summary', { params }),
+  sales:            (params) => api.get('/dashboard/sales', { params }),
+  inventory:        (params) => api.get('/dashboard/inventory', { params }),
+  billing:          (params) => api.get('/dashboard/billing', { params }),
+  operations:       (params) => api.get('/dashboard/operations', { params }),
+  export:           (data)   => api.post('/dashboard/export', data),
+  topProducts:      (params) => api.get('/dashboard/sales/top-products', { params }),
+  recentSales:      (params) => api.get('/dashboard/sales/recent-sales', { params }),
+  lowStock:         (params) => api.get('/dashboard/inventory/low-stock', { params }),
+  expiryNear:       (params) => api.get('/dashboard/inventory/expiry-near', { params }),
+  pendingPayments:  (params) => api.get('/dashboard/billing/pending-payments', { params }),
+  activityLogs:     (params) => api.get('/dashboard/operations/activity-logs', { params }),
 }
 
 // ─── Items ────────────────────────────────────────────────────────────────────

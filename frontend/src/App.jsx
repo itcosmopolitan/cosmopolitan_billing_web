@@ -9,7 +9,7 @@ import Topbar from '@/components/layout/Topbar'
 import LoginPage from '@/pages/auth/LoginPage'
 import ChangePasswordPage from '@/pages/auth/ChangePasswordPage'
 
-import Dashboard     from '@/pages/dashboard/Dashboard'
+import Dashboard     from '@/features/dashboard/DashboardPage'
 import POSPage       from '@/pages/pos/POSPage'
 import ItemsPage     from '@/pages/inventory/ItemsPage'
 import ItemMasterPage from '@/pages/inventory/ItemMasterPage'

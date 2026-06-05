@@ -117,18 +117,22 @@ async def _bootstrap_system_roles(conn) -> None:
 
     from src.system_roles import SYSTEM_ROLES
 
-    rows = (await conn.execute(text("SELECT id FROM roles"))).fetchall()
-    existing = {r[0] for r in rows}
+    rows = (await conn.execute(text("SELECT id, permissions FROM roles"))).fetchall()
+    existing = {r[0]: r[1] for r in rows}
     for rid, key, label, color, description, perms in SYSTEM_ROLES:
         if rid in existing:
-            # Keep system-role permission lists in sync when the catalog grows.
-            await conn.execute(
-                text(
-                    "UPDATE roles SET permissions = :perms "
-                    "WHERE id = :id AND is_system IS TRUE"
-                ),
-                {"id": rid, "perms": json.dumps(perms)},
-            )
+            current = existing[rid] or []
+            if isinstance(current, str):
+                try:
+                    current = json.loads(current)
+                except json.JSONDecodeError:
+                    current = []
+            merged = list(dict.fromkeys([*(current or []), *perms]))
+            if merged != (current or []):
+                await conn.execute(
+                    text("UPDATE roles SET permissions = :perms WHERE id = :id AND is_system = :is_system"),
+                    {"id": rid, "perms": json.dumps(merged), "is_system": True},
+                )
             continue
         await conn.execute(
             text(

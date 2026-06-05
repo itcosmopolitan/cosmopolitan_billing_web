@@ -175,6 +175,27 @@ export const MoreVertical = make(
     <circle cx="12" cy="19" r="1.25" fill="currentColor" stroke="none" />
   </>
 )
+export const Download = make(
+  <>
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M5 21h14" />
+  </>
+)
+export const RefreshCw = make(
+  <>
+    <path d="M20 6v5h-5" />
+    <path d="M4 18v-5h5" />
+    <path d="M18.5 9A7 7 0 0 0 6.4 5.6L4 8" />
+    <path d="M5.5 15A7 7 0 0 0 17.6 18.4L20 16" />
+  </>
+)
+export const Clock = make(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </>
+)
 export const LogOut  = make(
   <>
     <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />

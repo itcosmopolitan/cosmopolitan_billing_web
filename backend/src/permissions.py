@@ -12,7 +12,16 @@ Adding a new permission:
 from __future__ import annotations
 
 PERMISSIONS: dict[str, list[str]] = {
-    "dashboard": ["view", "export"],
+    "dashboard": [
+        "view",
+        "sales.view",
+        "inventory.view",
+        "billing.view",
+        "operations.view",
+        "profit.view",
+        "staff_performance.view",
+        "export",
+    ],
     "items":     ["view", "create", "edit", "delete", "export", "adjust"],
     "invoices":  ["view", "create", "edit", "delete", "cancel", "export"],
     "pos":       ["use", "discount", "override_price", "refund",
