@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -8,28 +9,36 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, case, desc, distinct, func, select
+from sqlalchemy import and_, case, desc, distinct, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
+from src.date_utils import MAX_DASHBOARD_DATE_RANGE_DAYS, parse_date_range
 from src.models import (
     AuditLog,
     Branch,
     Category,
+    DailySalesSummary,
     InvoiceStatus,
+    InventorySnapshot,
     Item,
     ItemBatch,
     ItemStock,
+    PaymentSummary,
+    ProductSalesSummary,
     PurchaseBill,
     PurchaseLineItem,
+    RefundSummary,
     SaleInvoice,
     SaleLineItem,
+    StaffPerformanceSummary,
     User,
     UserBranch,
 )
 from src.security import require_perm
 
 router = APIRouter()
+logger = logging.getLogger("cosmopolitan.dashboard")
 _DASHBOARD_CACHE: dict[str, tuple[datetime, dict]] = {}
 
 
@@ -85,15 +94,19 @@ class Period:
 
 def _parse_period(filters: DashboardFilters) -> Period:
     today = date.today()
-    start_s = filters.from_date or today.replace(day=1).isoformat()
-    end_s = filters.to or today.isoformat()
-    try:
-        start = date.fromisoformat(start_s)
-        end = date.fromisoformat(end_s)
-    except ValueError:
-        raise HTTPException(400, "Invalid dashboard date range")
-    if end < start:
-        raise HTTPException(400, "Dashboard 'to' date must be on or after 'from' date")
+    start, end = parse_date_range(
+        filters.from_date,
+        filters.to,
+        today.replace(day=1),
+        today,
+        MAX_DASHBOARD_DATE_RANGE_DAYS,
+    )
+    logger.debug(
+        "Dashboard date range %s to %s (max %s days)",
+        start.isoformat(),
+        end.isoformat(),
+        MAX_DASHBOARD_DATE_RANGE_DAYS,
+    )
     return Period(start, end)
 
 
@@ -168,12 +181,19 @@ def _invoice_conditions(
     if filters.staff_id:
         conds.append(SaleInvoice.cashier == filters.staff_id)
     if filters.category_id:
-        category_invoice_ids = (
-            select(SaleLineItem.invoice_id)
-            .join(Item, SaleLineItem.item_id == Item.id)
-            .where(Item.category_id == filters.category_id)
+        conds.append(
+            exists(
+                select(1)
+                .select_from(SaleLineItem)
+                .join(Item, SaleLineItem.item_id == Item.id)
+                .where(
+                    and_(
+                        SaleLineItem.invoice_id == SaleInvoice.id,
+                        Item.category_id == filters.category_id,
+                    )
+                )
+            )
         )
-        conds.append(SaleInvoice.id.in_(category_invoice_ids))
     return conds
 
 
@@ -181,6 +201,20 @@ def _line_conditions(filters: DashboardFilters, allowed_branch_ids: Optional[lis
     conds = _invoice_conditions(filters, allowed_branch_ids, period)
     if filters.category_id:
         conds.append(Item.category_id == filters.category_id)
+    return conds
+
+
+def _can_use_sales_mvs(filters: DashboardFilters) -> bool:
+    return filters.category_id is None
+
+
+def _mv_conds(model, filters: DashboardFilters, allowed_branch_ids: Optional[list[str]]):
+    conds = []
+    branch_cond = _branch_condition(model.branch_id, filters, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if filters.staff_id:
+        conds.append(model.cashier == filters.staff_id)
     return conds
 
 
@@ -194,12 +228,44 @@ def _stock_conditions(filters: DashboardFilters, allowed_branch_ids: Optional[li
     return conds
 
 
+def _inventory_mv_conds(filters: DashboardFilters, allowed_branch_ids: Optional[list[str]]):
+    conds = []
+    branch_cond = _branch_condition(InventorySnapshot.branch_id, filters, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if filters.category_id:
+        conds.append(InventorySnapshot.category_id == filters.category_id)
+    return conds
+
+
 async def _invoice_summary(
     db: AsyncSession,
     filters: DashboardFilters,
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> dict:
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(DailySalesSummary.revenue), 0).label("revenue"),
+                    func.coalesce(func.sum(DailySalesSummary.collected), 0).label("collected"),
+                    func.coalesce(func.sum(DailySalesSummary.discount), 0).label("discount"),
+                    func.coalesce(func.avg(DailySalesSummary.average_bill_value), 0).label("average_bill_value"),
+                    func.coalesce(func.sum(DailySalesSummary.bill_count), 0).label("bill_count"),
+                )
+                .where(and_(*conds, DailySalesSummary.sale_date >= period.start, DailySalesSummary.sale_date <= period.end))
+            )
+        ).one()
+        return {
+            "revenue": float(row.revenue or 0),
+            "collected": float(row.collected or 0),
+            "discount": float(row.discount or 0),
+            "average_bill_value": float(row.average_bill_value or 0),
+            "bill_count": int(row.bill_count or 0),
+        }
+
     conds = _invoice_conditions(filters, allowed_branch_ids, period)
     row = (
         await db.execute(
@@ -227,16 +293,19 @@ async def _line_profit_summary(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> dict:
-    conds = _line_conditions(filters, allowed_branch_ids, period)
+    conds = [
+        ProductSalesSummary.sale_date >= period.start,
+        ProductSalesSummary.sale_date <= period.end,
+    ]
+    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+    if filters.category_id:
+        conds.append(ProductSalesSummary.category_id == filters.category_id)
     row = (
         await db.execute(
             select(
-                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("line_revenue"),
-                func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0).label("profit"),
+                func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("line_revenue"),
+                func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
             )
-            .select_from(SaleLineItem)
-            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-            .outerjoin(Item, SaleLineItem.item_id == Item.id)
             .where(and_(*conds))
         )
     ).one()
@@ -255,6 +324,17 @@ async def _invoice_total_for_period(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> float:
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
+        conds.append(DailySalesSummary.sale_date >= period.start)
+        conds.append(DailySalesSummary.sale_date <= period.end)
+        value = (
+            await db.execute(
+                select(func.coalesce(func.sum(DailySalesSummary.revenue), 0)).where(and_(*conds))
+            )
+        ).scalar()
+        return float(value or 0)
+
     conds = _invoice_conditions(filters, allowed_branch_ids, period)
     value = (
         await db.execute(
@@ -270,6 +350,24 @@ async def _sales_trend(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
+        conds.extend([DailySalesSummary.sale_date >= period.start, DailySalesSummary.sale_date <= period.end])
+        result = await db.execute(
+            select(
+                DailySalesSummary.sale_date,
+                func.coalesce(func.sum(DailySalesSummary.revenue), 0).label("sales"),
+                func.coalesce(func.sum(DailySalesSummary.bill_count), 0).label("bills"),
+            )
+            .where(and_(*conds))
+            .group_by(DailySalesSummary.sale_date)
+            .order_by(DailySalesSummary.sale_date)
+        )
+        return [
+            {"date": row.sale_date, "sales": float(row.sales or 0), "bills": int(row.bills or 0)}
+            for row in result.fetchall()
+        ]
+
     conds = _invoice_conditions(filters, allowed_branch_ids, period)
     result = await db.execute(
         select(
@@ -293,19 +391,22 @@ async def _revenue_vs_profit(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = _line_conditions(filters, allowed_branch_ids, period)
+    conds = [
+        ProductSalesSummary.sale_date >= period.start,
+        ProductSalesSummary.sale_date <= period.end,
+    ]
+    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+    if filters.category_id:
+        conds.append(ProductSalesSummary.category_id == filters.category_id)
     result = await db.execute(
         select(
-            SaleInvoice.date,
-            func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
-            func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0).label("profit"),
+            ProductSalesSummary.sale_date.label("date"),
+            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+            func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
         )
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-        .outerjoin(Item, SaleLineItem.item_id == Item.id)
         .where(and_(*conds))
-        .group_by(SaleInvoice.date)
-        .order_by(SaleInvoice.date)
+        .group_by(ProductSalesSummary.sale_date)
+        .order_by(ProductSalesSummary.sale_date)
     )
     return [
         {"date": row.date, "revenue": float(row.revenue or 0), "profit": float(row.profit or 0)}
@@ -319,16 +420,20 @@ async def _category_sales(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = _line_conditions(filters, allowed_branch_ids, period)
+    conds = [
+        ProductSalesSummary.sale_date >= period.start,
+        ProductSalesSummary.sale_date <= period.end,
+    ]
+    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+    if filters.category_id:
+        conds.append(ProductSalesSummary.category_id == filters.category_id)
     result = await db.execute(
         select(
             func.coalesce(Category.name, "Uncategorized").label("category"),
-            func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
         )
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-        .outerjoin(Item, SaleLineItem.item_id == Item.id)
-        .outerjoin(Category, Item.category_id == Category.id)
+        .select_from(ProductSalesSummary)
+        .outerjoin(Category, ProductSalesSummary.category_id == Category.id)
         .where(and_(*conds))
         .group_by(Category.name)
         .order_by(desc("revenue"))
@@ -343,17 +448,20 @@ async def _brand_sales(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = _line_conditions(filters, allowed_branch_ids, period)
+    conds = [
+        ProductSalesSummary.sale_date >= period.start,
+        ProductSalesSummary.sale_date <= period.end,
+    ]
+    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+    if filters.category_id:
+        conds.append(ProductSalesSummary.category_id == filters.category_id)
     result = await db.execute(
         select(
-            func.coalesce(Item.brand, "Unbranded").label("brand"),
-            func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+            func.coalesce(ProductSalesSummary.brand, "Unbranded").label("brand"),
+            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
         )
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-        .outerjoin(Item, SaleLineItem.item_id == Item.id)
         .where(and_(*conds))
-        .group_by(Item.brand)
+        .group_by(ProductSalesSummary.brand)
         .order_by(desc("revenue"))
         .limit(8)
     )
@@ -367,19 +475,22 @@ async def _top_products(
     period: Period,
     limit: int = 20,
 ) -> dict:
-    conds = _line_conditions(filters, allowed_branch_ids, period)
+    conds = [
+        ProductSalesSummary.sale_date >= period.start,
+        ProductSalesSummary.sale_date <= period.end,
+    ]
+    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+    if filters.category_id:
+        conds.append(ProductSalesSummary.category_id == filters.category_id)
     result = await db.execute(
         select(
-            func.coalesce(SaleLineItem.item_id, SaleLineItem.name).label("product_id"),
-            SaleLineItem.name,
-            func.coalesce(func.sum(SaleLineItem.qty), 0).label("qty"),
-            func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+            func.coalesce(ProductSalesSummary.item_id, ProductSalesSummary.product_name).label("product_id"),
+            ProductSalesSummary.product_name.label("name"),
+            func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("qty"),
+            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
         )
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-        .outerjoin(Item, SaleLineItem.item_id == Item.id)
         .where(and_(*conds))
-        .group_by(SaleLineItem.item_id, SaleLineItem.name)
+        .group_by(ProductSalesSummary.item_id, ProductSalesSummary.product_name)
         .order_by(desc("revenue"))
         .limit(limit)
     )
@@ -442,22 +553,29 @@ async def _recent_sales(
             raise HTTPException(400, "Invalid cursor_date")
         conds.append(SaleInvoice.created_at < cursor)
     result = await db.execute(
-        select(SaleInvoice)
+        select(
+            SaleInvoice.id,
+            SaleInvoice.number,
+            SaleInvoice.customer_name,
+            SaleInvoice.date,
+            SaleInvoice.total,
+            SaleInvoice.status,
+        )
         .where(and_(*conds))
         .order_by(desc(SaleInvoice.created_at), desc(SaleInvoice.id))
         .limit(limit)
     )
     items = [
         {
-            "id": inv.id,
-            "invoice_id": inv.id,
-            "number": inv.number,
-            "customer": inv.customer_name or "Walk-in",
-            "date": inv.date,
-            "total": float(inv.total or 0),
-            "status": inv.status.value if hasattr(inv.status, "value") else str(inv.status),
+            "id": row.id,
+            "invoice_id": row.id,
+            "number": row.number,
+            "customer": row.customer_name or "Walk-in",
+            "date": row.date,
+            "total": float(row.total or 0),
+            "status": row.status.value if hasattr(row.status, "value") else str(row.status),
         }
-        for inv in result.scalars().all()
+        for row in result.fetchall()
     ]
     return _page(items, page_size=limit)
 
@@ -468,19 +586,34 @@ async def _branch_sales(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = _invoice_conditions(filters, allowed_branch_ids, period)
-    result = await db.execute(
-        select(
-            func.coalesce(Branch.name, SaleInvoice.branch_name, SaleInvoice.branch_id).label("branch"),
-            func.count(SaleInvoice.id).label("transactions"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("sales"),
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
+        result = await db.execute(
+            select(
+                func.coalesce(Branch.name, DailySalesSummary.branch_id).label("branch"),
+                func.coalesce(func.sum(DailySalesSummary.bill_count), 0).label("transactions"),
+                func.coalesce(func.sum(DailySalesSummary.revenue), 0).label("sales"),
+            )
+            .select_from(DailySalesSummary)
+            .outerjoin(Branch, DailySalesSummary.branch_id == Branch.id)
+            .where(and_(*conds, DailySalesSummary.sale_date >= period.start, DailySalesSummary.sale_date <= period.end))
+            .group_by(Branch.name, DailySalesSummary.branch_id)
+            .order_by(desc("sales"))
         )
-        .select_from(SaleInvoice)
-        .outerjoin(Branch, SaleInvoice.branch_id == Branch.id)
-        .where(and_(*conds))
-        .group_by(Branch.name, SaleInvoice.branch_name, SaleInvoice.branch_id)
-        .order_by(desc("sales"))
-    )
+    else:
+        conds = _invoice_conditions(filters, allowed_branch_ids, period)
+        result = await db.execute(
+            select(
+                func.coalesce(Branch.name, SaleInvoice.branch_name, SaleInvoice.branch_id).label("branch"),
+                func.count(SaleInvoice.id).label("transactions"),
+                func.coalesce(func.sum(SaleInvoice.total), 0).label("sales"),
+            )
+            .select_from(SaleInvoice)
+            .outerjoin(Branch, SaleInvoice.branch_id == Branch.id)
+            .where(and_(*conds))
+            .group_by(Branch.name, SaleInvoice.branch_name, SaleInvoice.branch_id)
+            .order_by(desc("sales"))
+        )
     return [
         {
             "branch": row.branch,
@@ -491,6 +624,61 @@ async def _branch_sales(
     ]
 
 
+async def _period_sales_totals(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    allowed_branch_ids: Optional[list[str]],
+) -> tuple[float, float, float]:
+    today = date.today()
+    weekly_start = today - timedelta(days=6)
+    monthly_start = today.replace(day=1)
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date == today), 0).label("daily_sales"),
+                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date >= weekly_start).filter(DailySalesSummary.sale_date <= today), 0).label("weekly_sales"),
+                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date >= monthly_start).filter(DailySalesSummary.sale_date <= today), 0).label("monthly_sales"),
+                )
+                .where(and_(*conds))
+            )
+        ).one()
+        return float(row.daily_sales or 0), float(row.weekly_sales or 0), float(row.monthly_sales or 0)
+
+    fallback_conds = [SaleInvoice.date >= monthly_start.isoformat(), SaleInvoice.date <= today.isoformat()]
+    branch_cond = _branch_condition(SaleInvoice.branch_id, filters, allowed_branch_ids)
+    if branch_cond is not None:
+        fallback_conds.append(branch_cond)
+    if filters.staff_id:
+        fallback_conds.append(SaleInvoice.cashier == filters.staff_id)
+    if filters.category_id:
+        fallback_conds.append(
+            exists(
+                select(1)
+                .select_from(SaleLineItem)
+                .join(Item, SaleLineItem.item_id == Item.id)
+                .where(
+                    and_(
+                        SaleLineItem.invoice_id == SaleInvoice.id,
+                        Item.category_id == filters.category_id,
+                    )
+                )
+            )
+        )
+    row = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date == today.isoformat()), 0).label("daily_sales"),
+                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date >= weekly_start.isoformat()).filter(SaleInvoice.date <= today.isoformat()), 0).label("weekly_sales"),
+                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date >= monthly_start.isoformat()).filter(SaleInvoice.date <= today.isoformat()), 0).label("monthly_sales"),
+            )
+            .where(and_(*fallback_conds))
+        )
+    ).one()
+    return float(row.daily_sales or 0), float(row.weekly_sales or 0), float(row.monthly_sales or 0)
+
+
 async def _sales_dashboard_payload(
     db: AsyncSession,
     filters: DashboardFilters,
@@ -498,20 +686,13 @@ async def _sales_dashboard_payload(
 ) -> dict:
     period = _parse_period(filters)
     allowed = await _allowed_branch_ids(db, user)
-    today = date.today()
-    daily_period = Period(today, today)
-    weekly_period = Period(today - timedelta(days=6), today)
-    monthly_period = Period(today.replace(day=1), today)
+    daily_sales, weekly_sales, monthly_sales = await _period_sales_totals(db, filters, allowed)
 
-    # Run ALL 17 queries in parallel - independent operations
     (
         invoice_summary,
         previous_invoice_summary,
         profit_summary,
         previous_profit_summary,
-        daily_sales,
-        weekly_sales,
-        monthly_sales,
         sales_trend,
         revenue_profit,
         branches,
@@ -525,9 +706,6 @@ async def _sales_dashboard_payload(
         _invoice_summary(db, filters, allowed, period.previous),
         _line_profit_summary(db, filters, allowed, period),
         _line_profit_summary(db, filters, allowed, period.previous),
-        _invoice_total_for_period(db, filters, allowed, daily_period),
-        _invoice_total_for_period(db, filters, allowed, weekly_period),
-        _invoice_total_for_period(db, filters, allowed, monthly_period),
         _sales_trend(db, filters, allowed, period),
         _revenue_vs_profit(db, filters, allowed, period),
         _branch_sales(db, filters, allowed, period),
@@ -585,17 +763,16 @@ async def _inventory_payload(db: AsyncSession, filters: DashboardFilters, user: 
     allowed = await _allowed_branch_ids(db, user)
     stock_conds = _stock_conditions(filters, allowed)
 
+    snapshot_conds = _inventory_mv_conds(filters, allowed)
     summary = (
         await db.execute(
             select(
-                func.count(distinct(Item.id)).label("products"),
-                func.coalesce(func.sum(ItemStock.quantity * Item.cost_price), 0).label("inventory_value"),
-                func.coalesce(func.sum(case((ItemStock.quantity <= 0, 1), else_=0)), 0).label("out_of_stock"),
-                func.coalesce(func.sum(case((and_(ItemStock.quantity > 0, ItemStock.quantity <= Item.reorder_level), 1), else_=0)), 0).label("low_stock"),
+                func.count(distinct(InventorySnapshot.item_id)).label("products"),
+                func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("inventory_value"),
+                func.coalesce(func.sum(case((InventorySnapshot.quantity <= 0, 1), else_=0)), 0).label("out_of_stock"),
+                func.coalesce(func.sum(case((and_(InventorySnapshot.quantity > 0, InventorySnapshot.quantity <= InventorySnapshot.reorder_level), 1), else_=0)), 0).label("low_stock"),
             )
-            .select_from(ItemStock)
-            .join(Item, ItemStock.item_id == Item.id)
-            .where(and_(*stock_conds))
+            .where(and_(*snapshot_conds))
         )
     ).one()
 
@@ -654,18 +831,18 @@ async def _inventory_payload(db: AsyncSession, filters: DashboardFilters, user: 
 
 
 async def _current_stock(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], limit: int = 20) -> dict:
-    conds = _stock_conditions(filters, allowed)
+    conds = _inventory_mv_conds(filters, allowed)
     result = await db.execute(
         select(
-            Item.id.label("item_id"),
+            InventorySnapshot.item_id,
             Item.name,
-            func.coalesce(Branch.name, ItemStock.branch_id).label("branch"),
-            ItemStock.quantity.label("qty"),
-            (ItemStock.quantity * Item.cost_price).label("value"),
+            func.coalesce(Branch.name, InventorySnapshot.branch_id).label("branch"),
+            InventorySnapshot.quantity.label("qty"),
+            InventorySnapshot.inventory_value.label("value"),
         )
-        .select_from(ItemStock)
-        .join(Item, ItemStock.item_id == Item.id)
-        .outerjoin(Branch, ItemStock.branch_id == Branch.id)
+        .select_from(InventorySnapshot)
+        .join(Item, InventorySnapshot.item_id == Item.id)
+        .outerjoin(Branch, InventorySnapshot.branch_id == Branch.id)
         .where(and_(*conds))
         .order_by(desc("value"))
         .limit(limit)
@@ -684,14 +861,19 @@ async def _current_stock(db: AsyncSession, filters: DashboardFilters, allowed: O
 
 
 async def _low_stock(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], limit: int = 20) -> dict:
-    conds = _stock_conditions(filters, allowed)
-    conds.append(ItemStock.quantity <= Item.reorder_level)
+    conds = _inventory_mv_conds(filters, allowed)
+    conds.append(InventorySnapshot.quantity <= InventorySnapshot.reorder_level)
     result = await db.execute(
-        select(Item.id.label("item_id"), Item.name, ItemStock.quantity.label("qty"), Item.reorder_level)
-        .select_from(ItemStock)
-        .join(Item, ItemStock.item_id == Item.id)
+        select(
+            InventorySnapshot.item_id.label("item_id"),
+            Item.name,
+            InventorySnapshot.quantity.label("qty"),
+            InventorySnapshot.reorder_level,
+        )
+        .select_from(InventorySnapshot)
+        .join(Item, InventorySnapshot.item_id == Item.id)
         .where(and_(*conds))
-        .order_by(ItemStock.quantity.asc(), Item.name.asc())
+        .order_by(InventorySnapshot.quantity.asc(), Item.name.asc())
         .limit(limit)
     )
     items = [
@@ -725,32 +907,35 @@ async def _dead_stock(
     period: Period,
     limit: int = 20,
 ) -> dict:
-    """Dead stock (unsold items in stock). Uses LEFT JOIN instead of NOTIN for better performance."""
-    stock_conds = _stock_conditions(filters, allowed)
-    line_conds = _line_conditions(filters, allowed, period)
-    
-    # LEFT JOIN finds items NOT in sales (where SaleLineItem.id IS NULL)
-    result = await db.execute(
-        select(
-            Item.id.label("item_id"),
-            Item.name,
-            func.coalesce(func.sum(ItemStock.quantity), 0).label("qty"),
-            func.coalesce(func.sum(ItemStock.quantity * Item.cost_price), 0).label("value"),
-        )
-        .select_from(ItemStock)
-        .join(Item, ItemStock.item_id == Item.id)
-        .outerjoin(
-            SaleLineItem,
+    stock_conds = _inventory_mv_conds(filters, allowed)
+    sales_exists = exists(
+        select(1)
+        .select_from(SaleLineItem)
+        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+        .where(
             and_(
-                SaleLineItem.item_id == Item.id,
-                SaleLineItem.invoice_id.in_(
-                    select(SaleInvoice.id)
-                    .where(and_(*line_conds))
-                )
+                SaleLineItem.item_id == InventorySnapshot.item_id,
+                SaleInvoice.status != InvoiceStatus.cancelled,
+                SaleInvoice.date >= period.start_s,
+                SaleInvoice.date <= period.end_s,
+                *(_branch_condition(SaleInvoice.branch_id, filters, allowed) is not None and [
+                    _branch_condition(SaleInvoice.branch_id, filters, allowed)
+                ] or []),
+                *(filters.staff_id and [SaleInvoice.cashier == filters.staff_id] or []),
             )
         )
-        .where(and_(*stock_conds, SaleLineItem.id == None, ItemStock.quantity > 0))
-        .group_by(Item.id, Item.name)
+    )
+    result = await db.execute(
+        select(
+            InventorySnapshot.item_id,
+            Item.name,
+            func.coalesce(func.sum(InventorySnapshot.quantity), 0).label("qty"),
+            func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("value"),
+        )
+        .select_from(InventorySnapshot)
+        .join(Item, InventorySnapshot.item_id == Item.id)
+        .where(and_(*stock_conds, InventorySnapshot.quantity > 0, ~sales_exists))
+        .group_by(InventorySnapshot.item_id, Item.name)
         .order_by(desc("value"))
         .limit(limit)
     )
@@ -809,14 +994,14 @@ async def _expiry_near(db: AsyncSession, filters: DashboardFilters, allowed: Opt
 
 
 async def _stock_by_category(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]]) -> list[dict]:
-    conds = _stock_conditions(filters, allowed)
+    conds = _inventory_mv_conds(filters, allowed)
     result = await db.execute(
         select(
             func.coalesce(Category.name, "Uncategorized").label("category"),
-            func.coalesce(func.sum(ItemStock.quantity * Item.cost_price), 0).label("value"),
+            func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("value"),
         )
-        .select_from(ItemStock)
-        .join(Item, ItemStock.item_id == Item.id)
+        .select_from(InventorySnapshot)
+        .join(Item, InventorySnapshot.item_id == Item.id)
         .outerjoin(Category, Item.category_id == Category.id)
         .where(and_(*conds))
         .group_by(Category.name)
@@ -832,14 +1017,11 @@ async def _inventory_value_trend(
     allowed: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    stock_conds = _stock_conditions(filters, allowed)
+    snapshot_conds = _inventory_mv_conds(filters, allowed)
     current_value = float(
         (
             await db.execute(
-                select(func.coalesce(func.sum(ItemStock.quantity * Item.cost_price), 0))
-                .select_from(ItemStock)
-                .join(Item, ItemStock.item_id == Item.id)
-                .where(and_(*stock_conds))
+                select(func.coalesce(func.sum(InventorySnapshot.inventory_value), 0)).where(and_(*snapshot_conds))
             )
         ).scalar()
         or 0
@@ -971,15 +1153,28 @@ async def _billing_payload(db: AsyncSession, filters: DashboardFilters, user: Us
     conds = _invoice_conditions(filters, allowed, period)
     previous_conds = _invoice_conditions(filters, allowed, period.previous)
 
-    payment_rows = await db.execute(
-        select(
-            func.coalesce(SaleInvoice.payment_mode, "cash").label("method"),
-            func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("amount"),
+    if _can_use_sales_mvs(filters):
+        payment_conds = _mv_conds(PaymentSummary, filters, allowed)
+        payment_conds.extend([PaymentSummary.paid_date >= period.start, PaymentSummary.paid_date <= period.end])
+        payment_rows = await db.execute(
+            select(
+                func.coalesce(PaymentSummary.payment_method, "cash").label("method"),
+                func.coalesce(func.sum(PaymentSummary.collected), 0).label("amount"),
+            )
+            .where(and_(*payment_conds))
+            .group_by(PaymentSummary.payment_method)
+            .order_by(desc("amount"))
         )
-        .where(and_(*conds))
-        .group_by(SaleInvoice.payment_mode)
-        .order_by(desc("amount"))
-    )
+    else:
+        payment_rows = await db.execute(
+            select(
+                func.coalesce(SaleInvoice.payment_mode, "cash").label("method"),
+                func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("amount"),
+            )
+            .where(and_(*conds))
+            .group_by(SaleInvoice.payment_mode)
+            .order_by(desc("amount"))
+        )
     payment_distribution = [
         {"method": (row.method or "cash").upper(), "amount": float(row.amount or 0)}
         for row in payment_rows.fetchall()
@@ -1090,15 +1285,27 @@ async def _refund_summary(
     allowed: Optional[list[str]],
     period: Period,
 ) -> dict:
-    conds = _refund_conditions(filters, allowed, period)
-    row = (
-        await db.execute(
-            select(
-                func.coalesce(func.sum(SaleInvoice.total), 0).label("amount"),
-                func.count(SaleInvoice.id).label("count"),
-            ).where(and_(*conds))
-        )
-    ).one()
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(RefundSummary, filters, allowed)
+        conds.extend([RefundSummary.refund_date >= period.start, RefundSummary.refund_date <= period.end])
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(RefundSummary.refund_amount), 0).label("amount"),
+                    func.coalesce(func.sum(RefundSummary.refund_count), 0).label("count"),
+                ).where(and_(*conds))
+            )
+        ).one()
+    else:
+        conds = _refund_conditions(filters, allowed, period)
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(SaleInvoice.total), 0).label("amount"),
+                    func.count(SaleInvoice.id).label("count"),
+                ).where(and_(*conds))
+            )
+        ).one()
     return {"amount": float(row.amount or 0), "count": int(row.count or 0)}
 
 
@@ -1108,13 +1315,23 @@ async def _refund_trends(
     allowed: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = _refund_conditions(filters, allowed, period)
-    result = await db.execute(
-        select(SaleInvoice.date, func.coalesce(func.sum(SaleInvoice.total), 0).label("refunds"))
-        .where(and_(*conds))
-        .group_by(SaleInvoice.date)
-        .order_by(SaleInvoice.date)
-    )
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(RefundSummary, filters, allowed)
+        conds.extend([RefundSummary.refund_date >= period.start, RefundSummary.refund_date <= period.end])
+        result = await db.execute(
+            select(RefundSummary.refund_date.label("date"), func.coalesce(func.sum(RefundSummary.refund_amount), 0).label("refunds"))
+            .where(and_(*conds))
+            .group_by(RefundSummary.refund_date)
+            .order_by(RefundSummary.refund_date)
+        )
+    else:
+        conds = _refund_conditions(filters, allowed, period)
+        result = await db.execute(
+            select(SaleInvoice.date, func.coalesce(func.sum(SaleInvoice.total), 0).label("refunds"))
+            .where(and_(*conds))
+            .group_by(SaleInvoice.date)
+            .order_by(SaleInvoice.date)
+        )
     refund_by_date = {row.date: float(row.refunds or 0) for row in result.fetchall()}
 
     trend_end = min(period.end, date.today())
@@ -1166,13 +1383,23 @@ async def _recent_refunds(
 
 
 async def _daily_billing_count(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], period: Period) -> list[dict]:
-    conds = _invoice_conditions(filters, allowed, period)
-    result = await db.execute(
-        select(SaleInvoice.date, func.count(SaleInvoice.id).label("count"))
-        .where(and_(*conds))
-        .group_by(SaleInvoice.date)
-        .order_by(SaleInvoice.date)
-    )
+    if _can_use_sales_mvs(filters):
+        conds = _mv_conds(DailySalesSummary, filters, allowed)
+        conds.extend([DailySalesSummary.sale_date >= period.start, DailySalesSummary.sale_date <= period.end])
+        result = await db.execute(
+            select(DailySalesSummary.sale_date.label("date"), func.coalesce(func.sum(DailySalesSummary.bill_count), 0).label("count"))
+            .where(and_(*conds))
+            .group_by(DailySalesSummary.sale_date)
+            .order_by(DailySalesSummary.sale_date)
+        )
+    else:
+        conds = _invoice_conditions(filters, allowed, period)
+        result = await db.execute(
+            select(SaleInvoice.date, func.count(SaleInvoice.id).label("count"))
+            .where(and_(*conds))
+            .group_by(SaleInvoice.date)
+            .order_by(SaleInvoice.date)
+        )
     return [{"date": row.date, "count": int(row.count or 0)} for row in result.fetchall()]
 
 

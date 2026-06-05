@@ -1,10 +1,19 @@
-from sqlalchemy import text
+import asyncio
+import logging
+import os
+import socket
+import ssl
+import time
+
+from sqlalchemy import event, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
 
 # Lazy engine initialization to support config loading
 _engine = None
+logger = logging.getLogger("cosmopolitan.database")
 
 def get_engine():
     """Initialize and return the database engine
@@ -16,31 +25,155 @@ def get_engine():
     global _engine
     if _engine is None:
         from src import config
-        database_url = config.get().database_url
-        
+        database_url = config.get().database_url.strip()
+        url = _validate_database_url(database_url)
+
         # AsyncIO engines don't support QueuePool - use NullPool for both databases
         # PostgreSQL: asyncpg driver handles connection pooling internally
         # SQLite: Not properly async-compatible, use NullPool
         engine_kwargs = {
             "echo": False,
-            "poolclass": NullPool,  # Required for async engines
         }
-        
-        # Configure connection/query timeouts
-        is_postgres = database_url.startswith("postgresql://") or database_url.startswith("postgresql+asyncpg://")
-        
+
+        # Configure connection/query timeouts and pooling for PostgreSQL.
+        is_postgres = url.drivername in ("postgresql", "postgresql+asyncpg")
+
         if is_postgres:
-            # PostgreSQL: asyncpg handles pooling at driver level
-            engine_kwargs["connect_args"] = {
-                "timeout": 30,         # Connection timeout in seconds
-                "command_timeout": 30, # Query timeout in seconds
-            }
+            engine_kwargs.update(
+                {
+                    "pool_size": 5,
+                    "max_overflow": 10,
+                    "pool_timeout": 20,
+                    "pool_recycle": 1800,
+                    "pool_pre_ping": True,
+                    "connect_args": _build_postgres_connect_args(url),
+                }
+            )
         else:
-            # SQLite: Basic timeout
+            engine_kwargs["poolclass"] = NullPool
             engine_kwargs["connect_args"] = {"timeout": 30}
         
+        logger.info(
+            "Creating database engine for host=%s port=%s database=%s user=%s",
+            url.host,
+            url.port or 5432,
+            url.database,
+            url.username,
+        )
+
         _engine = create_async_engine(database_url, **engine_kwargs)
+        _enable_sqlalchemy_query_logging(_engine)
     return _engine
+
+
+def _validate_database_url(database_url: str):
+    try:
+        url = make_url(database_url)
+    except Exception as exc:
+        raise RuntimeError(
+            "Invalid DATABASE_URL format. Use postgresql+asyncpg://user:pass@host:port/dbname"
+        ) from exc
+
+    if url.drivername not in ("postgresql+asyncpg", "postgresql"):
+        raise RuntimeError(
+            f"Unsupported database driver '{url.drivername}'. Use postgresql+asyncpg://"
+        )
+    if not url.username or not url.password:
+        raise RuntimeError("DATABASE_URL must include both username and password.")
+    if not url.host:
+        raise RuntimeError("DATABASE_URL must include a host.")
+    if not url.database:
+        raise RuntimeError("DATABASE_URL must include a database name.")
+
+    _resolve_database_host(url.host, url.port or 5432)
+    return url
+
+
+def _build_postgres_connect_args(url):
+    connect_args = {
+        "timeout": 10,
+        "command_timeout": 120,
+        "server_settings": {"application_name": "cosmopolitan_backend"},
+    }
+
+    sslmode = os.getenv("PGSSLMODE") or os.getenv("PGSSL_MODE") or url.query.get("sslmode")
+    if sslmode:
+        if sslmode.lower() != "disable":
+            connect_args["ssl"] = True
+    elif url.host not in ("localhost", "127.0.0.1", "::1"):
+        connect_args["ssl"] = True
+
+    return connect_args
+
+
+def _resolve_database_host(host: str, port: int) -> None:
+    try:
+        socket.getaddrinfo(host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Failed to resolve DATABASE_URL host '{host}:{port}'. Verify DNS and network connectivity."
+        ) from exc
+
+
+async def _wait_for_connection(engine, attempts: int = 5) -> None:
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        start = time.perf_counter()
+        try:
+            async with engine.connect() as conn:
+                result = await conn.scalar(text("SELECT 1"))
+                elapsed = time.perf_counter() - start
+                if result != 1:
+                    logger.warning("DATABASE_URL connection succeeded but SELECT 1 returned %s", result)
+                logger.info(
+                    "Database connection verified in %.2fs (attempt %s/%s)",
+                    elapsed,
+                    attempt,
+                    attempts,
+                )
+                return
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            last_error = exc
+            logger.warning(
+                "Database connection attempt %s/%s failed in %.2fs: %s",
+                attempt,
+                attempts,
+                elapsed,
+                exc,
+            )
+            if attempt == attempts:
+                break
+            await asyncio.sleep(min(2 ** (attempt - 1), 10))
+    raise RuntimeError(
+        f"Unable to connect to the database after {attempts} attempts."
+    ) from last_error
+
+
+def _enable_sqlalchemy_query_logging(engine):
+    from sqlalchemy import event
+    import logging
+    import time
+
+    logger = logging.getLogger("cosmopolitan.database")
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        conn.info.setdefault("query_start_time", []).append(time.perf_counter())
+
+    @event.listens_for(engine.sync_engine, "after_cursor_execute")
+    def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        start_time = conn.info.get("query_start_time")
+        if start_time:
+            elapsed_ms = (time.perf_counter() - start_time.pop()) * 1000
+            logger.debug(
+                "SQL executed in %.2f ms: %s | params=%s | rows=%s",
+                elapsed_ms,
+                statement,
+                parameters,
+                cursor.rowcount,
+            )
+
 
 def get_async_session():
     """Get SQLAlchemy async session factory"""
@@ -123,6 +256,9 @@ async def init_schema() -> None:
     import src.models  # noqa: F401 — register all ORM tables on Base.metadata
 
     engine = get_engine()
+    await _wait_for_connection(engine)
+    start = time.perf_counter()
+    logger.info("Starting schema initialization")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
@@ -134,6 +270,7 @@ async def init_schema() -> None:
         await _backfill_role_ids(conn)
         await _backfill_item_branch_config(conn)
         await _migrate_adjustment_requests_per_branch_ref(conn)
+    logger.info("Schema initialization completed in %.2f seconds", time.perf_counter() - start)
 
 
 async def _bootstrap_system_roles(conn) -> None:

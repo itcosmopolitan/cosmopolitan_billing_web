@@ -1,3 +1,5 @@
+import logging
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -5,11 +7,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
+from src.date_utils import MAX_REPORT_DATE_RANGE_DAYS, parse_date_range
 from src.models import Item, PurchaseBill, SaleInvoice
 from src.pagination import normalize_limit, normalize_skip, paged
 from src.security import require_perm
 
 router = APIRouter()
+logger = logging.getLogger("cosmopolitan.reports")
 
 
 @router.get("/sales-summary", dependencies=[Depends(require_perm("reports.view"))])
@@ -19,6 +23,15 @@ async def sales_summary(
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
+    start, end = parse_date_range(
+        date_from,
+        date_to,
+        date.today() - timedelta(days=30),
+        date.today(),
+        MAX_REPORT_DATE_RANGE_DAYS,
+    )
+    logger.debug("Sales summary date range %s to %s", start.isoformat(), end.isoformat())
+
     q = select(
         func.sum(SaleInvoice.total).label("total"),
         func.count(SaleInvoice.id).label("count"),
@@ -26,6 +39,7 @@ async def sales_summary(
         func.sum(SaleInvoice.discount).label("discount"),
         func.sum(SaleInvoice.paid_amount).label("collected"),
     )
+    q = q.where(SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat())
     if branch_id:
         q = q.where(SaleInvoice.branch_id == branch_id)
     result = await db.execute(q)
@@ -54,11 +68,21 @@ async def purchase_summary(
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
+    start, end = parse_date_range(
+        date_from,
+        date_to,
+        date.today() - timedelta(days=30),
+        date.today(),
+        MAX_REPORT_DATE_RANGE_DAYS,
+    )
+    logger.debug("Purchase summary date range %s to %s", start.isoformat(), end.isoformat())
+
     q = select(
         func.sum(PurchaseBill.total).label("total"),
         func.count(PurchaseBill.id).label("count"),
         func.sum(PurchaseBill.paid_amount).label("paid"),
     )
+    q = q.where(PurchaseBill.date >= start.isoformat(), PurchaseBill.date <= end.isoformat())
     if branch_id:
         q = q.where(PurchaseBill.branch_id == branch_id)
     result = await db.execute(q)
@@ -77,6 +101,15 @@ async def tax_summary(
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
+    start, end = parse_date_range(
+        date_from,
+        date_to,
+        date.today() - timedelta(days=30),
+        date.today(),
+        MAX_REPORT_DATE_RANGE_DAYS,
+    )
+    logger.debug("Tax summary date range %s to %s", start.isoformat(), end.isoformat())
+
     output_tax = [
         {"rate": "0%",  "taxable": 224000, "cgst": 0,     "sgst": 0,     "cess": 0},
         {"rate": "5%",  "taxable": 384000, "cgst": 9600,  "sgst": 9600,  "cess": 0},
@@ -92,7 +125,7 @@ async def tax_summary(
     total_output = sum(r["cgst"] + r["sgst"] for r in output_tax)
     total_input  = sum(r["cgst"] + r["sgst"] for r in input_tax)
     return {
-        "period":       {"from": date_from or "2024-04-01", "to": date_to or "2024-04-16"},
+        "period":       {"from": start.isoformat(), "to": end.isoformat()},
         "output_tax":   output_tax,
         "input_tax":    input_tax,
         "total_output": total_output,
