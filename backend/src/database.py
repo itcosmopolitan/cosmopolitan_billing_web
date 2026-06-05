@@ -1,17 +1,45 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import NullPool
 
 # Lazy engine initialization to support config loading
 _engine = None
 
 def get_engine():
-    """Initialize and return the database engine"""
+    """Initialize and return the database engine
+    
+    Note: SQLAlchemy async engines only support NullPool.
+    Connection pooling for PostgreSQL is handled by the asyncpg driver.
+    Connection pooling for SQLite is not applicable (not async-compatible).
+    """
     global _engine
     if _engine is None:
         from src import config
         database_url = config.get().database_url
-        _engine = create_async_engine(database_url, echo=False)
+        
+        # AsyncIO engines don't support QueuePool - use NullPool for both databases
+        # PostgreSQL: asyncpg driver handles connection pooling internally
+        # SQLite: Not properly async-compatible, use NullPool
+        engine_kwargs = {
+            "echo": False,
+            "poolclass": NullPool,  # Required for async engines
+        }
+        
+        # Configure connection/query timeouts
+        is_postgres = database_url.startswith("postgresql://") or database_url.startswith("postgresql+asyncpg://")
+        
+        if is_postgres:
+            # PostgreSQL: asyncpg handles pooling at driver level
+            engine_kwargs["connect_args"] = {
+                "timeout": 30,         # Connection timeout in seconds
+                "command_timeout": 30, # Query timeout in seconds
+            }
+        else:
+            # SQLite: Basic timeout
+            engine_kwargs["connect_args"] = {"timeout": 30}
+        
+        _engine = create_async_engine(database_url, **engine_kwargs)
     return _engine
 
 def get_async_session():

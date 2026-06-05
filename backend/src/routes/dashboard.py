@@ -725,14 +725,11 @@ async def _dead_stock(
     period: Period,
     limit: int = 20,
 ) -> dict:
-    sold_ids = (
-        select(distinct(SaleLineItem.item_id))
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-        .outerjoin(Item, SaleLineItem.item_id == Item.id)
-        .where(and_(*_line_conditions(filters, allowed, period), SaleLineItem.item_id != None))
-    )
-    conds = _stock_conditions(filters, allowed)
+    """Dead stock (unsold items in stock). Uses LEFT JOIN instead of NOTIN for better performance."""
+    stock_conds = _stock_conditions(filters, allowed)
+    line_conds = _line_conditions(filters, allowed, period)
+    
+    # LEFT JOIN finds items NOT in sales (where SaleLineItem.id IS NULL)
     result = await db.execute(
         select(
             Item.id.label("item_id"),
@@ -742,7 +739,17 @@ async def _dead_stock(
         )
         .select_from(ItemStock)
         .join(Item, ItemStock.item_id == Item.id)
-        .where(and_(*conds, Item.id.notin_(sold_ids), ItemStock.quantity > 0))
+        .outerjoin(
+            SaleLineItem,
+            and_(
+                SaleLineItem.item_id == Item.id,
+                SaleLineItem.invoice_id.in_(
+                    select(SaleInvoice.id)
+                    .where(and_(*line_conds))
+                )
+            )
+        )
+        .where(and_(*stock_conds, SaleLineItem.id == None, ItemStock.quantity > 0))
         .group_by(Item.id, Item.name)
         .order_by(desc("value"))
         .limit(limit)
@@ -897,9 +904,12 @@ async def _inventory_value_trend(
         scale = 0.15
 
     rolling_value = max(0, current_value - (raw_delta * scale))
-    sample_dates = set(_sampled_dates(period.start, trend_end, max_points=60))
+    sample_dates = _sampled_dates(period.start, trend_end, max_points=60)
+    sample_dates_set = set(sample_dates)
     rows = []
     day = period.start
+    
+    # Only iterate through days, but optimize to skip unnecessary date operations
     while day <= trend_end:
         day_key = day.isoformat()
         rolling_value = max(
@@ -908,7 +918,7 @@ async def _inventory_value_trend(
             + (purchase_by_date.get(day_key, 0) * scale)
             - (sales_cost_by_date.get(day_key, 0) * scale),
         )
-        if day in sample_dates or day == trend_end:
+        if day in sample_dates_set:
             rows.append({"date": day_key, "value": round(rolling_value, 2)})
         day += timedelta(days=1)
 
