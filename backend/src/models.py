@@ -619,6 +619,32 @@ class DocumentNumberCounter(Base):
     next_seq   = Column(Integer, default=1)
 
 
+# ─── Invoice Template ─────────────────────────────────────────────────────────
+class InvoiceTemplateSettings(Base):
+    """Singleton invoice print layout (Settings → Invoice Template)."""
+    __tablename__ = "invoice_template_settings"
+    id                 = Column(String, primary_key=True)
+    header_style       = Column(String, default="full")
+    show_attr          = Column(Boolean, default=True)
+    show_size          = Column(Boolean, default=True)
+    show_disc          = Column(Boolean, default=True)
+    show_hsn           = Column(Boolean, default=False)
+    tax_mode           = Column(String, default="total")
+    show_customer      = Column(Boolean, default=True)
+    show_payment       = Column(Boolean, default=True)
+    show_printed_date  = Column(Boolean, default=True)
+    show_store         = Column(Boolean, default=True)
+    show_cashier       = Column(Boolean, default=True)
+    footer_msg         = Column(Text, default="")
+    footer_note        = Column(Text, default="")
+    # Legacy columns from first API schema — kept for additive migration.
+    show_item_description = Column(Boolean, default=True)
+    tax_display        = Column(String, default="")
+    footer_text        = Column(Text, default="")
+    terms_text         = Column(Text, default="")
+    updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 class AuditLog(Base):
     __tablename__ = "audit_logs"

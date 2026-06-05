@@ -1,7 +1,6 @@
 /**
- * Tab bodies for the Settings page that are mostly read-only / placeholder
- * UI: Tax Config, Document Numbering, Invoice Template. Extracted out of
- * SettingsPage to keep that file under 500 lines and easier to navigate.
+ * Tab bodies for the Settings page: Tax Config, Document Numbering, Invoice
+ * Template. Extracted out of SettingsPage to keep that file easier to navigate.
  *
  * Org / Branches / Users / Roles tabs remain in the parent because they
  * share the parent's state (form, modals, fetchers). Move them out only
@@ -11,9 +10,15 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { settingsAPI, taxRatesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { useAppStore } from '@/store'
 import { Card, AlertBar, Tag, Modal, FormGroup, FormRow } from '@/components/ui'
-import { getInvoiceConfig, saveInvoiceConfig, getColumnStructure, getColumnHeaders } from '@/utils/invoiceConfig'
+import {
+  apiToConfig,
+  configToApi,
+  getColumnStructure,
+  getColumnHeaders,
+  notifyInvoiceConfigChanged,
+  DEFAULT_INVOICE_CONFIG,
+} from '@/utils/invoiceConfig'
 
 const SCOPE_LABELS = {
   per_branch: 'Per Branch',
@@ -43,52 +48,32 @@ function previewFormat(prefix, formatStr, seq) {
 
 export function TaxConfigTab() {
   const can = useCan()
-  const taxPricingMode = useAppStore((s) => s.taxPricingMode)
-  const setTaxPricingMode = useAppStore((s) => s.setTaxPricingMode)
   const [rates, setRates] = useState([])
   const [loading, setLoading] = useState(true)
-  const [settingsLoading, setSettingsLoading] = useState(true)
-  const [savingMode, setSavingMode] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(EMPTY_TAX_FORM)
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
-  const loadRates = useCallback(async () => {
+  const loadRates = useCallback(async (signal) => {
     try {
       setLoading(true)
-      const data = await taxRatesAPI.list()
+      const data = await taxRatesAPI.list(signal ? { signal } : undefined)
       setRates(Array.isArray(data) ? data : [])
     } catch (err) {
+      if (err?.code === 'ERR_CANCELED') return
       console.error(err)
       setRates([])
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [])
 
-  useEffect(() => { loadRates() }, [loadRates])
-
   useEffect(() => {
-    taxRatesAPI.getSettings()
-      .then((s) => setTaxPricingMode(s?.tax_pricing_mode || 'inclusive'))
-      .catch((err) => console.error(err))
-      .finally(() => setSettingsLoading(false))
-  }, [setTaxPricingMode])
-
-  const toggleTaxPricingMode = async () => {
-    const next = taxPricingMode === 'inclusive' ? 'exclusive' : 'inclusive'
-    setSavingMode(true)
-    try {
-      const res = await taxRatesAPI.updateSettings({ tax_pricing_mode: next })
-      setTaxPricingMode(res?.tax_pricing_mode || next)
-      toast.success(`Pricing set to ${next === 'inclusive' ? 'tax inclusive' : 'tax exclusive'}`)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setSavingMode(false)
-    }
-  }
+    const controller = new AbortController()
+    loadRates(controller.signal)
+    return () => controller.abort()
+  }, [loadRates])
 
   const openCreate = () => {
     setEditing(null)
@@ -161,27 +146,9 @@ export function TaxConfigTab() {
       <Card
         title="GST Rate Configuration"
         titleRight={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {can('settings.edit') ? (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={toggleTaxPricingMode}
-                disabled={settingsLoading || savingMode}
-                title={taxPricingMode === 'inclusive'
-                  ? 'Shelf prices include tax'
-                  : 'Tax added at checkout'}
-              >
-                {settingsLoading ? '…' : (taxPricingMode === 'inclusive' ? 'Tax inclusive' : 'Tax exclusive')}
-              </button>
-            ) : (
-              <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-secondary)' }}>
-                {taxPricingMode === 'inclusive' ? 'Tax inclusive' : 'Tax exclusive'}
-              </span>
-            )}
-            {can('settings.edit') && (
-              <button className="btn btn-primary btn-sm" onClick={openCreate}>+ Add Tax Rate</button>
-            )}
-          </div>
+          can('settings.edit') ? (
+            <button className="btn btn-primary btn-sm" onClick={openCreate}>+ Add Tax Rate</button>
+          ) : null
         }
         bodyPadding={false}
       >
@@ -293,20 +260,25 @@ export function NumberingTab() {
   const [form, setForm] = useState({ prefix: '', format: '', scope: 'per_branch', next_seq: 1 })
   const [saving, setSaving] = useState(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal) => {
     try {
       setLoading(true)
-      const data = await settingsAPI.listNumbering()
+      const data = await settingsAPI.listNumbering(signal ? { signal } : undefined)
       setRows(Array.isArray(data) ? data : [])
     } catch (e) {
+      if (e?.code === 'ERR_CANCELED') return
       console.error(e)
       toast.error('Failed to load document numbering')
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const controller = new AbortController()
+    load(controller.signal)
+    return () => controller.abort()
+  }, [load])
 
   const liveSample = useMemo(() => {
     if (!editing) return ''
@@ -444,43 +416,116 @@ export function NumberingTab() {
 }
 
 export function InvoiceTemplateTab() {
-  const savedConfig = useMemo(() => getInvoiceConfig(), [])
-  const [headerStyle, setHeaderStyle] = useState(savedConfig.headerStyle)
-  const [showAttr, setShowAttr] = useState(savedConfig.showAttr)
-  const [showSize, setShowSize] = useState(savedConfig.showSize)
-  const [showDisc, setShowDisc] = useState(savedConfig.showDisc)
-  const [showHsn, setShowHsn] = useState(savedConfig.showHsn)
-  const [taxMode, setTaxMode] = useState(savedConfig.taxMode)
-  const [showCustomer, setShowCustomer] = useState(savedConfig.showCustomer)
-  const [showPayment, setShowPayment] = useState(savedConfig.showPayment)
-  const [showPrintedDate, setShowPrintedDate] = useState(savedConfig.showPrintedDate)
-  const [showStore, setShowStore] = useState(savedConfig.showStore)
-  const [showCashier, setShowCashier] = useState(savedConfig.showCashier)
-  const [footerMsg, setFooterMsg] = useState(savedConfig.footerMsg)
-  const [footerNote, setFooterNote] = useState(savedConfig.footerNote)
+  const can = useCan()
+  const canEdit = can('settings.edit')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [orgPreview, setOrgPreview] = useState({ name: '', address: '', phone: '', gstin: '' })
+
+  const [headerStyle, setHeaderStyle] = useState(DEFAULT_INVOICE_CONFIG.headerStyle)
+  const [showAttr, setShowAttr] = useState(DEFAULT_INVOICE_CONFIG.showAttr)
+  const [showSize, setShowSize] = useState(DEFAULT_INVOICE_CONFIG.showSize)
+  const [showDisc, setShowDisc] = useState(DEFAULT_INVOICE_CONFIG.showDisc)
+  const [showHsn, setShowHsn] = useState(DEFAULT_INVOICE_CONFIG.showHsn)
+  const [taxMode, setTaxMode] = useState(DEFAULT_INVOICE_CONFIG.taxMode)
+  const [showCustomer, setShowCustomer] = useState(DEFAULT_INVOICE_CONFIG.showCustomer)
+  const [showPayment, setShowPayment] = useState(DEFAULT_INVOICE_CONFIG.showPayment)
+  const [showPrintedDate, setShowPrintedDate] = useState(DEFAULT_INVOICE_CONFIG.showPrintedDate)
+  const [showStore, setShowStore] = useState(DEFAULT_INVOICE_CONFIG.showStore)
+  const [showCashier, setShowCashier] = useState(DEFAULT_INVOICE_CONFIG.showCashier)
+  const [footerMsg, setFooterMsg] = useState(DEFAULT_INVOICE_CONFIG.footerMsg)
+  const [footerNote, setFooterNote] = useState(DEFAULT_INVOICE_CONFIG.footerNote)
+
+  const applyConfig = useCallback((cfg) => {
+    setHeaderStyle(cfg.headerStyle)
+    setShowAttr(cfg.showAttr)
+    setShowSize(cfg.showSize)
+    setShowDisc(cfg.showDisc)
+    setShowHsn(cfg.showHsn)
+    setTaxMode(cfg.taxMode)
+    setShowCustomer(cfg.showCustomer)
+    setShowPayment(cfg.showPayment)
+    setShowPrintedDate(cfg.showPrintedDate)
+    setShowStore(cfg.showStore)
+    setShowCashier(cfg.showCashier)
+    setFooterMsg(cfg.footerMsg)
+    setFooterNote(cfg.footerNote)
+  }, [])
+
+  const load = useCallback(async (signal) => {
+    try {
+      setLoading(true)
+      const [template, org] = await Promise.all([
+        settingsAPI.getInvoiceTemplate(signal ? { signal } : undefined),
+        settingsAPI.getOrganisation(signal ? { signal } : undefined).catch(() => null),
+      ])
+      if (signal?.aborted) return
+      if (template) applyConfig(apiToConfig(template))
+      if (org?.name) {
+        setOrgPreview({
+          name: org.name,
+          address: org.address || '',
+          phone: org.phone || '',
+          gstin: org.gstin || '',
+        })
+      }
+    } catch (err) {
+      if (err?.code === 'ERR_CANCELED') return
+      console.error(err)
+      toast.error('Failed to load invoice template')
+    } finally {
+      if (!signal?.aborted) setLoading(false)
+    }
+  }, [applyConfig])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    load(controller.signal)
+    return () => controller.abort()
+  }, [load])
 
   const sampleItems = [
-    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'MVR270.00', cgst: '0', sgst: '0', total: 'MVR270.00' },
-    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', disc: '5', qty: '2', price: 'MVR17.80', cgst: '0.90', sgst: '0.90', total: 'MVR35.60' },
+    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'MVR270.00', total: 'MVR270.00' },
+    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', disc: '5', qty: '2', price: 'MVR17.80', total: 'MVR35.60' },
   ]
 
   const currentConfig = useMemo(() => ({
-    headerStyle, showAttr, showSize, showDisc, showHsn, taxMode, showCustomer, showPayment, showPrintedDate, showStore, showCashier, footerMsg, footerNote
+    headerStyle, showAttr, showSize, showDisc, showHsn, taxMode,
+    showCustomer, showPayment, showPrintedDate, showStore, showCashier, footerMsg, footerNote,
   }), [headerStyle, showAttr, showSize, showDisc, showHsn, taxMode, showCustomer, showPayment, showPrintedDate, showStore, showCashier, footerMsg, footerNote])
 
   const columnGrid = useMemo(() => getColumnStructure(currentConfig), [currentConfig])
   const columnHeaders = useMemo(() => getColumnHeaders(currentConfig), [currentConfig])
 
-  const handleSave = () => {
-    saveInvoiceConfig(currentConfig)
-    toast.success('Invoice template saved!')
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const saved = await settingsAPI.updateInvoiceTemplate(configToApi(currentConfig))
+      const next = apiToConfig(saved)
+      applyConfig(next)
+      notifyInvoiceConfigChanged(next)
+      toast.success('Invoice template saved')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSaving(false)
+    }
   }
+
+  const previewCompany = orgPreview.name || 'Your Company Name'
+  const previewAddress = orgPreview.address || 'Registered address'
+  const previewPhone = orgPreview.phone || '—'
+  const previewGst = orgPreview.gstin || '—'
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'start' }}>
       <Card title="Invoice Template Settings">
+        {loading ? (
+          <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+        ) : (
+          <>
         <FormGroup label="Header Style">
-          <select className="form-input" value={headerStyle} onChange={(e) => setHeaderStyle(e.target.value)}>
+          <select className="form-input" value={headerStyle} onChange={(e) => setHeaderStyle(e.target.value)} disabled={!canEdit}>
             <option value="full">Full (name, address, GST, phone)</option>
             <option value="nameonly">Name only</option>
             <option value="logo">Logo only</option>
@@ -491,26 +536,26 @@ export function InvoiceTemplateTab() {
         <FormGroup label="Item Details to Show" required>
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showAttr} onChange={(e) => setShowAttr(e.target.checked)} />
+              <input type="checkbox" checked={showAttr} onChange={(e) => setShowAttr(e.target.checked)} disabled={!canEdit} />
               <span>Item attributes (color, size, etc.)</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showSize} onChange={(e) => setShowSize(e.target.checked)} />
+              <input type="checkbox" checked={showSize} onChange={(e) => setShowSize(e.target.checked)} disabled={!canEdit} />
               <span>Size column</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showDisc} onChange={(e) => setShowDisc(e.target.checked)} />
+              <input type="checkbox" checked={showDisc} onChange={(e) => setShowDisc(e.target.checked)} disabled={!canEdit} />
               <span>Discount % column</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showHsn} onChange={(e) => setShowHsn(e.target.checked)} />
+              <input type="checkbox" checked={showHsn} onChange={(e) => setShowHsn(e.target.checked)} disabled={!canEdit} />
               <span>HSN codes</span>
             </label>
           </div>
         </FormGroup>
 
         <FormGroup label="Tax Display Mode">
-          <select className="form-input" value={taxMode} onChange={(e) => setTaxMode(e.target.value)}>
+          <select className="form-input" value={taxMode} onChange={(e) => setTaxMode(e.target.value)} disabled={!canEdit}>
             <option value="total">Total only</option>
             <option value="itemized">Show itemized tax breakdown</option>
           </select>
@@ -520,15 +565,15 @@ export function InvoiceTemplateTab() {
         <FormGroup label="Header Fields">
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showPrintedDate} onChange={(e) => setShowPrintedDate(e.target.checked)} />
+              <input type="checkbox" checked={showPrintedDate} onChange={(e) => setShowPrintedDate(e.target.checked)} disabled={!canEdit} />
               <span>Show printed date & time</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showStore} onChange={(e) => setShowStore(e.target.checked)} />
+              <input type="checkbox" checked={showStore} onChange={(e) => setShowStore(e.target.checked)} disabled={!canEdit} />
               <span>Show store name</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showCashier} onChange={(e) => setShowCashier(e.target.checked)} />
+              <input type="checkbox" checked={showCashier} onChange={(e) => setShowCashier(e.target.checked)} disabled={!canEdit} />
               <span>Show cashier name</span>
             </label>
           </div>
@@ -537,59 +582,53 @@ export function InvoiceTemplateTab() {
         <FormGroup label="Other Options">
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showCustomer} onChange={(e) => setShowCustomer(e.target.checked)} />
+              <input type="checkbox" checked={showCustomer} onChange={(e) => setShowCustomer(e.target.checked)} disabled={!canEdit} />
               <span>Show customer name / GSTIN</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} />
+              <input type="checkbox" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} disabled={!canEdit} />
               <span>Show payment method</span>
             </label>
           </div>
         </FormGroup>
 
         <FormGroup label="Footer Message">
-          <textarea 
-            className="form-input" 
-            value={footerMsg} 
-            onChange={(e) => setFooterMsg(e.target.value)} 
-            style={{ height: 80 }} 
-          />
+          <textarea className="form-input" value={footerMsg} onChange={(e) => setFooterMsg(e.target.value)} style={{ height: 80 }} disabled={!canEdit} />
         </FormGroup>
 
         <FormGroup label="Footer Note (Secondary)">
-          <textarea 
-            className="form-input" 
-            value={footerNote} 
-            onChange={(e) => setFooterNote(e.target.value)} 
-            style={{ height: 80 }} 
-          />
+          <textarea className="form-input" value={footerNote} onChange={(e) => setFooterNote(e.target.value)} style={{ height: 80 }} disabled={!canEdit} />
         </FormGroup>
 
-        <button className="btn btn-primary" onClick={handleSave}>💾 Save Template Configuration</button>
+        {canEdit && (
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving…' : '💾 Save Template Configuration'}
+          </button>
+        )}
+          </>
+        )}
       </Card>
 
       <Card title="Live Preview">
         <div style={{ border: '1px solid var(--border-default)', borderRadius: 10, padding: 16, fontFamily: 'DM Mono, monospace', fontSize: 10.5, color: 'var(--text-primary)', background: 'var(--bg-raised)', lineHeight: 1.4, maxHeight: 600, overflowY: 'auto' }}>
-          {/* Top info line */}
           {(showPrintedDate || showStore || showCashier) && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, fontSize: 9, marginBottom: 8, textAlign: 'center' }}>
               {showPrintedDate && <div>Printed: 27 May 2026, 2:30 PM</div>}
-              {showStore && <div>Store: Champa Shop</div>}
+              {showStore && <div>Store: Sample Branch</div>}
               {showCashier && <div>Cashier: Admin</div>}
             </div>
           )}
 
-          {/* Header */}
           {headerStyle !== 'logo' && (
             <div style={{ textAlign: 'center', marginBottom: 8 }}>
               {(headerStyle === 'full' || headerStyle === 'nameonly') && (
                 <>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>Champa Brothers Maldives Pvt Ltd</div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{previewCompany}</div>
                   {headerStyle === 'full' && (
                     <>
-                      <div style={{ fontSize: 10 }}>LOT11155 / HULHUMALE PHASE 01</div>
-                      <div style={{ fontSize: 10 }}>PHONE : 3350000 / VIBER : 7957182</div>
-                      <div style={{ fontSize: 10 }}>TIN: 1017548GST501</div>
+                      <div style={{ fontSize: 10 }}>{previewAddress}</div>
+                      <div style={{ fontSize: 10 }}>PHONE : {previewPhone}</div>
+                      <div style={{ fontSize: 10 }}>TIN: {previewGst}</div>
                     </>
                   )}
                 </>
@@ -600,24 +639,22 @@ export function InvoiceTemplateTab() {
           <div style={{ fontWeight: 700, textAlign: 'center', margin: '8px 0', fontSize: 12 }}>TAX INVOICE</div>
           {showCustomer && <div style={{ margin: '6px 0', fontSize: 10 }}><span style={{ fontWeight: 700 }}>Bill To:</span> Sample Customer</div>}
 
-          {/* Column headers */}
-          <div style={{ display: `grid`, gridTemplateColumns: columnGrid, gap: 4, fontWeight: 700, borderBottom: '1px solid #000', paddingBottom: 4, marginBottom: 4, fontSize: 10.5 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: columnGrid, gap: 4, fontWeight: 700, borderBottom: '1px solid #000', paddingBottom: 4, marginBottom: 4, fontSize: 10.5 }}>
             {columnHeaders.map((h) => (
               <div key={h} style={{ textAlign: h === 'Item Name' ? 'left' : 'right' }}>{h}</div>
             ))}
           </div>
 
-          {/* Sample rows */}
           {sampleItems.map((item, idx) => (
-            <div key={idx} style={{ display: `grid`, gridTemplateColumns: columnGrid, gap: 4, padding: '3px 0', fontSize: 10 }}>
+            <div key={idx} style={{ display: 'grid', gridTemplateColumns: columnGrid, gap: 4, padding: '3px 0', fontSize: 10 }}>
               {['name', 'hsn', 'attr', 'size', 'disc', 'qty', 'price', 'total'].map((field) => {
                 if (field === 'hsn' && !showHsn) return null
                 if (field === 'attr' && !showAttr) return null
                 if (field === 'size' && !showSize) return null
                 if (field === 'disc' && !showDisc) return null
-                const value = field === 'price' ? item.price : field === 'disc' ? item.disc + '%' : item[field]
+                const value = field === 'price' ? item.price : field === 'disc' ? `${item.disc}%` : item[field]
                 return (
-                  <div key={field} style={{ textAlign: ['name'].includes(field) ? 'left' : 'right' }}>
+                  <div key={field} style={{ textAlign: field === 'name' ? 'left' : 'right' }}>
                     {value}
                   </div>
                 )
@@ -627,7 +664,6 @@ export function InvoiceTemplateTab() {
 
           <div style={{ borderTop: '1px solid #000', margin: '8px 0' }} />
 
-          {/* Totals */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
             <div>Subtotal</div>
             <div>MVR305.60</div>
@@ -651,7 +687,7 @@ export function InvoiceTemplateTab() {
           )}
 
           <div style={{ borderTop: '1px solid #000', margin: '8px 0' }} />
-          <div style={{ textAlign: 'center', fontSize: 9.5, lineHeight: 1.5 }}>
+          <div style={{ textAlign: 'center', fontSize: 9.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
             <div>{footerMsg}</div>
             <div>{footerNote}</div>
           </div>

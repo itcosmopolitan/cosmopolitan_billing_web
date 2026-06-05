@@ -200,17 +200,19 @@ export const permissionsAPI = {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 export const settingsAPI = {
-  listNumbering: () => api.get('/settings/numbering'),
+  getOrganisation: (config) => api.get('/settings/organisation', config),
+  updateOrganisation: (data) => api.put('/settings/organisation', data),
+  getInvoiceTemplate: (config) => api.get('/settings/invoice-template', config),
+  updateInvoiceTemplate: (data) => api.put('/settings/invoice-template', data),
+  listNumbering: (config) => api.get('/settings/numbering', config),
   updateNumbering: (docType, data) => api.put(`/settings/numbering/${docType}`, data),
 }
 
 // ─── Tax rates ───────────────────────────────────────────────────────────────
 export const taxRatesAPI = {
-  list:   ()         => api.get('/taxes/'),
+  list:   (config)    => api.get('/taxes/', config),
   get:    (id)       => api.get(`/taxes/${id}`),
   create: (data)     => api.post('/taxes/', data),
   update: (id, data) => api.put(`/taxes/${id}`, data),
   delete: (id)       => api.delete(`/taxes/${id}`),
-  getSettings:    () => api.get('/taxes/settings'),
-  updateSettings: (data) => api.patch('/taxes/settings', data),
 }

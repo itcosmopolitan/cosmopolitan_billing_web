@@ -1,65 +1,93 @@
 /**
- * Invoice Template Configuration Utilities
- * Manages saved template settings for invoices and receipts
+ * Invoice template config — persisted via GET/PUT /settings/invoice-template.
  */
 import { useEffect, useState } from 'react'
+import { settingsAPI } from '@/api'
 
-export const INVOICE_CONFIG_STORAGE_KEY = 'invoiceTemplateConfig'
 export const INVOICE_CONFIG_CHANGED_EVENT = 'invoice-template-config-changed'
 
 export const DEFAULT_INVOICE_CONFIG = {
-  headerStyle: 'full',       // 'full' | 'nameonly' | 'logo'
+  headerStyle: 'full',
   showAttr: true,
   showSize: true,
   showDisc: true,
   showHsn: false,
-  taxMode: 'total',         // 'total' | 'itemized'
+  taxMode: 'total',
   showCustomer: true,
   showPayment: true,
   showPrintedDate: true,
   showStore: true,
   showCashier: true,
   footerMsg: 'Thank you for shopping with us! Champa brothers',
-  footerNote: 'Goods once sold will not be taken back'
+  footerNote: 'Goods once sold will not be taken back',
 }
 
 function normalizeInvoiceConfig(config) {
   return { ...DEFAULT_INVOICE_CONFIG, ...(config || {}) }
 }
 
-export function getInvoiceConfig() {
-  try {
-    const saved = localStorage.getItem(INVOICE_CONFIG_STORAGE_KEY)
-    return saved ? normalizeInvoiceConfig(JSON.parse(saved)) : DEFAULT_INVOICE_CONFIG
-  } catch (e) {
-    console.error('Failed to load invoice config:', e)
-    return DEFAULT_INVOICE_CONFIG
+export function apiToConfig(data) {
+  if (!data) return DEFAULT_INVOICE_CONFIG
+  return normalizeInvoiceConfig({
+    headerStyle: data.header_style,
+    showAttr: data.show_attr,
+    showSize: data.show_size,
+    showDisc: data.show_disc,
+    showHsn: data.show_hsn,
+    taxMode: data.tax_mode,
+    showCustomer: data.show_customer,
+    showPayment: data.show_payment,
+    showPrintedDate: data.show_printed_date,
+    showStore: data.show_store,
+    showCashier: data.show_cashier,
+    footerMsg: data.footer_msg,
+    footerNote: data.footer_note,
+  })
+}
+
+export function configToApi(config) {
+  const c = normalizeInvoiceConfig(config)
+  return {
+    header_style: c.headerStyle,
+    show_attr: c.showAttr,
+    show_size: c.showSize,
+    show_disc: c.showDisc,
+    show_hsn: c.showHsn,
+    tax_mode: c.taxMode,
+    show_customer: c.showCustomer,
+    show_payment: c.showPayment,
+    show_printed_date: c.showPrintedDate,
+    show_store: c.showStore,
+    show_cashier: c.showCashier,
+    footer_msg: c.footerMsg,
+    footer_note: c.footerNote,
   }
 }
 
-export function saveInvoiceConfig(config) {
-  try {
-    const next = normalizeInvoiceConfig(config)
-    localStorage.setItem(INVOICE_CONFIG_STORAGE_KEY, JSON.stringify(next))
-    window.dispatchEvent(new CustomEvent(INVOICE_CONFIG_CHANGED_EVENT, { detail: next }))
-    return true
-  } catch (e) {
-    console.error('Failed to save invoice config:', e)
-    return false
-  }
+export function notifyInvoiceConfigChanged(config) {
+  window.dispatchEvent(new CustomEvent(INVOICE_CONFIG_CHANGED_EVENT, {
+    detail: normalizeInvoiceConfig(config),
+  }))
 }
 
 export function useInvoiceConfig() {
-  const [config, setConfig] = useState(() => getInvoiceConfig())
+  const [config, setConfig] = useState(DEFAULT_INVOICE_CONFIG)
 
   useEffect(() => {
-    const syncConfig = () => setConfig(getInvoiceConfig())
-    const onConfigChanged = (event) => setConfig(normalizeInvoiceConfig(event.detail))
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await settingsAPI.getInvoiceTemplate()
+        if (!cancelled) setConfig(apiToConfig(data))
+      } catch (e) {
+        if (e?.code !== 'ERR_CANCELED' && !cancelled) console.error(e)
+      }
+    })()
 
-    window.addEventListener('storage', syncConfig)
+    const onConfigChanged = (event) => setConfig(normalizeInvoiceConfig(event.detail))
     window.addEventListener(INVOICE_CONFIG_CHANGED_EVENT, onConfigChanged)
     return () => {
-      window.removeEventListener('storage', syncConfig)
+      cancelled = true
       window.removeEventListener(INVOICE_CONFIG_CHANGED_EVENT, onConfigChanged)
     }
   }, [])
@@ -67,24 +95,18 @@ export function useInvoiceConfig() {
   return config
 }
 
-/**
- * Generate column grid structure based on config
- */
 export function getColumnStructure(config) {
-  const cols = ['2.5fr'] // Item name
+  const cols = ['2.5fr']
   if (config.showHsn) cols.push('0.9fr')
   if (config.showAttr) cols.push('1fr')
   if (config.showSize) cols.push('0.8fr')
   if (config.showDisc) cols.push('0.7fr')
-  cols.push('0.7fr') // Qty
-  cols.push('1.2fr') // Price
-  cols.push('1.2fr') // Total
+  cols.push('0.7fr')
+  cols.push('1.2fr')
+  cols.push('1.2fr')
   return cols.join(' ')
 }
 
-/**
- * Get header names based on config
- */
 export function getColumnHeaders(config) {
   const headers = ['Item Name']
   if (config.showHsn) headers.push('HSN')
@@ -97,9 +119,6 @@ export function getColumnHeaders(config) {
   return headers
 }
 
-/**
- * Get item cell value based on config and field
- */
 export function getItemCell(item, field, config) {
   if (field === 'name') return item.name
   if (field === 'hsn' && config.showHsn) return item.hsnCode || item.hsn_code || ''

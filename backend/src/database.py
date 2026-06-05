@@ -62,6 +62,17 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("transfer_line_items", "requested_allocation", "TEXT"),
     ("transfer_line_items", "batch_allocation",     "TEXT"),
     ("organisations", "tax_pricing_mode", "VARCHAR DEFAULT 'inclusive'"),
+    ("invoice_template_settings", "show_attr", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "show_size", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "show_disc", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "tax_mode", "VARCHAR DEFAULT 'total'"),
+    ("invoice_template_settings", "show_customer", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "show_payment", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "show_printed_date", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "show_store", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "show_cashier", "BOOLEAN DEFAULT 1"),
+    ("invoice_template_settings", "footer_msg", "TEXT DEFAULT ''"),
+    ("invoice_template_settings", "footer_note", "TEXT DEFAULT ''"),
     ("item_branch_config", "cost_price", "FLOAT"),
     ("stock_adjustments", "request_id", "VARCHAR"),
 ]
@@ -91,6 +102,7 @@ async def init_schema() -> None:
         await _bootstrap_system_roles(conn)
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
+        await _bootstrap_invoice_template(conn)
         await _backfill_role_ids(conn)
         await _backfill_item_branch_config(conn)
         await _migrate_adjustment_requests_per_branch_ref(conn)
@@ -228,6 +240,85 @@ async def _bootstrap_default_tax_rates(conn) -> None:
                 "is_system": bool(is_system),
             },
         )
+
+
+async def _bootstrap_invoice_template(conn) -> None:
+    """Idempotently seed default invoice template settings."""
+    from src.invoice_template_defaults import DEFAULT_INVOICE_TEMPLATE
+
+    row = (await conn.execute(text("SELECT id FROM invoice_template_settings LIMIT 1"))).fetchone()
+    if row:
+        await _migrate_invoice_template_columns(conn)
+        return
+    cfg = DEFAULT_INVOICE_TEMPLATE
+    await conn.execute(
+        text(
+            "INSERT INTO invoice_template_settings "
+            "(id, header_style, show_attr, show_size, show_disc, show_hsn, tax_mode, "
+            "show_customer, show_payment, show_printed_date, show_store, show_cashier, "
+            "footer_msg, footer_note) "
+            "VALUES (:id, :header_style, :show_attr, :show_size, :show_disc, :show_hsn, :tax_mode, "
+            ":show_customer, :show_payment, :show_printed_date, :show_store, :show_cashier, "
+            ":footer_msg, :footer_note)"
+        ),
+        {
+            "id": cfg["id"],
+            "header_style": cfg["header_style"],
+            "show_attr": 1 if cfg["show_attr"] else 0,
+            "show_size": 1 if cfg["show_size"] else 0,
+            "show_disc": 1 if cfg["show_disc"] else 0,
+            "show_hsn": 1 if cfg["show_hsn"] else 0,
+            "tax_mode": cfg["tax_mode"],
+            "show_customer": 1 if cfg["show_customer"] else 0,
+            "show_payment": 1 if cfg["show_payment"] else 0,
+            "show_printed_date": 1 if cfg["show_printed_date"] else 0,
+            "show_store": 1 if cfg["show_store"] else 0,
+            "show_cashier": 1 if cfg["show_cashier"] else 0,
+            "footer_msg": cfg["footer_msg"],
+            "footer_note": cfg["footer_note"],
+        },
+    )
+
+
+async def _migrate_invoice_template_columns(conn) -> None:
+    """Backfill new columns from legacy invoice_template_settings fields."""
+    await conn.execute(
+        text(
+            "UPDATE invoice_template_settings SET header_style = CASE header_style "
+            "WHEN 'name_and_logo' THEN 'full' WHEN 'logo_only' THEN 'logo' "
+            "WHEN 'name_only' THEN 'nameonly' ELSE header_style END "
+            "WHERE header_style IN ('name_and_logo', 'logo_only', 'name_only')"
+        )
+    )
+    await conn.execute(
+        text(
+            "UPDATE invoice_template_settings SET tax_mode = CASE tax_display "
+            "WHEN 'total_only' THEN 'total' WHEN 'cgst_sgst' THEN 'itemized' "
+            "WHEN 'igst' THEN 'itemized' ELSE COALESCE(NULLIF(tax_mode, ''), 'total') END "
+            "WHERE (tax_mode IS NULL OR tax_mode = '') "
+            "AND tax_display IS NOT NULL AND tax_display != ''"
+        )
+    )
+    await conn.execute(
+        text(
+            "UPDATE invoice_template_settings SET footer_msg = footer_text "
+            "WHERE (footer_msg IS NULL OR footer_msg = '') "
+            "AND footer_text IS NOT NULL AND footer_text != ''"
+        )
+    )
+    await conn.execute(
+        text(
+            "UPDATE invoice_template_settings SET footer_note = terms_text "
+            "WHERE (footer_note IS NULL OR footer_note = '') "
+            "AND terms_text IS NOT NULL AND terms_text != ''"
+        )
+    )
+    await conn.execute(
+        text(
+            "UPDATE invoice_template_settings SET show_attr = show_item_description "
+            "WHERE show_attr IS NULL AND show_item_description IS NOT NULL"
+        )
+    )
 
 
 async def _backfill_role_ids(conn) -> None:

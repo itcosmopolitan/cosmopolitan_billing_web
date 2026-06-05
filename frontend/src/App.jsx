@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
-import { authAPI, branchesAPI, permissionsAPI, taxRatesAPI } from '@/api'
+import { authAPI, branchesAPI, permissionsAPI } from '@/api'
 import { fetchAllList } from '@/utils/pagination'
 import { RequireAuth, RequirePasswordSet, RequirePerm } from '@/auth/guards'
 import Sidebar from '@/components/layout/Sidebar'
@@ -85,7 +85,6 @@ export default function App() {
   const setSession = useAppStore((s) => s.setSession)
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
-  const setTaxPricingMode = useAppStore((s) => s.setTaxPricingMode)
   const [booting, setBooting] = useState(true)
 
   useEffect(() => {
@@ -107,14 +106,12 @@ export default function App() {
         const tasks = [
           permissionsAPI.catalog().catch(() => ({})),
           fetchAllList(branchesAPI.list).catch(() => []),
-          taxRatesAPI.getSettings().catch(() => ({ tax_pricing_mode: 'inclusive' })),
         ]
         if (token) tasks.push(authAPI.me().catch(() => null))
-        const [catalog, branches, taxSettings, me] = await Promise.all(tasks)
+        const [catalog, branches, me] = await Promise.all(tasks)
         if (cancelled) return
         setPermCatalog(catalog || {})
         setBranches(branches || [])
-        setTaxPricingMode(taxSettings?.tax_pricing_mode || 'inclusive')
         if (token && me) {
           setSession({ user: me, permissions: me.permissions || [] })
         }
@@ -123,7 +120,7 @@ export default function App() {
       }
     })()
     return () => { cancelled = true }
-  }, [setSession, setPermCatalog, setBranches, setTaxPricingMode])
+  }, [setSession, setPermCatalog, setBranches])
 
   if (booting) return <BootSplash />
 
