@@ -51,10 +51,16 @@ export default function ItemFormPage({ mode = 'create' }) {
   }, [can, navigate, isEdit])
 
   useEffect(() => {
-    taxRatesAPI.list()
-      .then((data) => setTaxRates(Array.isArray(data) ? data : []))
+    if (isEdit && loading) return
+    const params = { active_only: true }
+    const currentRate = form.tax_rate
+    if (currentRate !== '' && currentRate != null && currentRate !== undefined) {
+      params.include_inactive_rates = String(currentRate)
+    }
+    fetchAllList((p) => taxRatesAPI.list({ ...p, ...params }))
+      .then((data) => setTaxRates(data || []))
       .catch((err) => console.error('Failed to load tax rates:', err))
-  }, [])
+  }, [form.tax_rate, isEdit, loading])
 
   useEffect(() => {
     if (!isEdit || !itemId) return

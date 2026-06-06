@@ -187,7 +187,7 @@ export const usersAPI = {
 // See docs/USERS_AND_ROLES.md §7.4. CRUD on roles + the read-only permission
 // catalog used by the Roles editor and useCan().
 export const rolesAPI = {
-  list:   ()         => api.get('/roles/'),
+  list:   (params) => api.get('/roles/', { params }),
   get:    (id)       => api.get(`/roles/${id}`),
   create: (data)     => api.post('/roles/', data),
   update: (id, data) => api.put(`/roles/${id}`, data),
@@ -210,7 +210,7 @@ export const settingsAPI = {
 
 // ─── Tax rates ───────────────────────────────────────────────────────────────
 export const taxRatesAPI = {
-  list:   (config)    => api.get('/taxes/', config),
+  list:   (params, config) => api.get('/taxes/', { params, ...config }),
   get:    (id)       => api.get(`/taxes/${id}`),
   create: (data)     => api.post('/taxes/', data),
   update: (id, data) => api.put(`/taxes/${id}`, data),
