@@ -59,6 +59,12 @@ export default function DashboardHeader({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginLeft: 'auto' }}>
+            {isFetching ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+                <Icon.RefreshCw size={14} className="spinner" />
+                Updating dashboard…
+              </div>
+            ) : null}
             <ExportMenu onExport={onExport} disabled={isFetching} />
             <button type="button" className="btn btn-secondary" onClick={onRefresh} disabled={isFetching} title="Refresh dashboard data" style={{ height: 42 }}>
               <Icon.RefreshCw size={15} className={isFetching ? 'spinner' : undefined} />

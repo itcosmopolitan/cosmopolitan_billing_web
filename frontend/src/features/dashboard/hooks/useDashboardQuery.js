@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   getBillingDashboard,
   getInventoryDashboard,
@@ -20,7 +20,7 @@ export function useDashboardQuery(tab, filters, { autoRefresh = false, enabled =
     queryFn: () => endpoints[tab](filters),
     staleTime: 2 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
-    placeholderData: keepPreviousData,
+    keepPreviousData: true,
     refetchInterval: autoRefresh ? 60_000 : false,
     enabled: enabled && Boolean(endpoints[tab]),
   })
