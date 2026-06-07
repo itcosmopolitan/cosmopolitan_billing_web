@@ -18,7 +18,7 @@ SYSTEM_ROLES: list[tuple[str, str, str, str, str, list[str]]] = [
         ["dashboard.*", "pos.*", "invoices.*",
          "items.view", "items.edit", "items.adjust", "items.export",
          "transfers.create", "transfers.approve",
-         "adjustments.view", "adjustments.create", "adjustments.approve",
+         "adjustments.view", "adjustments.create", "adjustments.approve", "adjustments.delete",
          "customers.*", "vendors.view",
          "cash.view", "cash.edit",
          "reports.*"]),

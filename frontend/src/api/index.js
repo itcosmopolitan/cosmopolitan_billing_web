@@ -153,8 +153,9 @@ export const transfersAPI = {
 export const adjustmentsAPI = {
   list:    (params) => api.get('/adjustments/', { params }),
   create:  (data)   => api.post('/adjustments/', data),
-  approve: (id, params) => api.post(`/adjustments/${id}/approve`, null, { params }),
-  reject:  (id, data)   => api.post(`/adjustments/${id}/reject`, data),
+  approve: (id, data) => api.post(`/adjustments/${id}/approve`, data),
+  reject:  (id, data) => api.post(`/adjustments/${id}/reject`, data),
+  delete:  (id, params) => api.delete(`/adjustments/${id}`, { params }),
 }
 
 // ─── Cash ─────────────────────────────────────────────────────────────────────
