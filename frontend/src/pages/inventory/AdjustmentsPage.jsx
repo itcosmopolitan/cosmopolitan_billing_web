@@ -1,17 +1,18 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { adjustmentsAPI, branchesAPI, itemsAPI } from '@/api'
+import { adjustmentsAPI, branchesAPI, itemsAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
-  KPICard, EmptyState, AlertBar, PaginationBar, SortableHeader, SearchSelect,
+  EmptyState, AlertBar, PaginationBar, SortableHeader, SearchSelect,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import RowActionsMenu from './RowActionsMenu'
 
-const TABS = [
+const TAB_DEFS = [
   { id: 'all',      label: 'All' },
   { id: 'pending',  label: 'Pending Approval' },
   { id: 'approved', label: 'Approved' },
@@ -62,7 +63,7 @@ export default function AdjustmentsPage() {
   const [branches, setBranches] = useState([])
   const [items, setItems] = useState([])
   const [itemsLoading, setItemsLoading] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [listLoading, setListLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
   const [skip, setSkip] = useState(0)
@@ -101,7 +102,7 @@ export default function AdjustmentsPage() {
     let cancelled = false
     ;(async () => {
       try {
-        setLoading(true)
+        setListLoading(true)
         const raw = await adjustmentsAPI.list({
           skip,
           limit,
@@ -109,26 +110,32 @@ export default function AdjustmentsPage() {
           sort_order: sortOrder,
           status: tab === 'all' ? undefined : tab,
         })
-        const { items, total, summary: s } = unwrapPaged(raw)
+        const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setRequests(items || [])
           setListTotal(total)
-          setSummary(s)
         }
       } catch (err) {
         console.error(err)
         if (!cancelled) {
           setRequests([])
           setListTotal(0)
-          setSummary(null)
           toast.error('Failed to load adjustment requests')
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setListLoading(false)
       }
     })()
     return () => { cancelled = true }
   }, [tab, skip, limit, sortBy, sortOrder, listVersion])
+
+  useEffect(() => {
+    let cancelled = false
+    summariesAPI.get('adjustments')
+      .then((data) => { if (!cancelled) setSummary(data) })
+      .catch(() => { if (!cancelled) setSummary(null) })
+    return () => { cancelled = true }
+  }, [listVersion])
 
   useEffect(() => {
     setSelectedIds(new Set())
@@ -287,10 +294,7 @@ export default function AdjustmentsPage() {
     else { setSortBy(key); setSortOrder('desc') }
   }
 
-  const pending = summary?.pending ?? 0
-  const approved = summary?.approved ?? 0
-  const rejected = summary?.rejected ?? 0
-  const totalAll = summary?.total ?? 0
+  const tabs = useMemo(() => tabsWithCounts(TAB_DEFS, summary), [summary])
 
   const submitNew = async () => {
     if (submitting) return
@@ -390,10 +394,6 @@ export default function AdjustmentsPage() {
 
   const isRowBusy = (id) => actionBusy === id || (deleteBusy && deleteTargets?.some((r) => r.id === id))
 
-  if (loading) {
-    return <div className="page-container"><div style={{ padding: 40, textAlign: 'center' }}>Loading adjustments…</div></div>
-  }
-
   return (
     <div className="page-container">
       <SectionHeader
@@ -405,22 +405,10 @@ export default function AdjustmentsPage() {
         )}
       </SectionHeader>
 
-      <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        <KPICard label="Pending Approval" value={pending} color="var(--amber)" icon="⏳" />
-        <KPICard label="Approved" value={approved} color="var(--green)" icon="✅" />
-        <KPICard label="Rejected" value={rejected} color="var(--text-muted)" icon="✕" />
-        <KPICard label="Total" value={totalAll} color="var(--accent)" icon="⚖" sub="all requests" />
-      </div>
-
-      {pending > 0 && can('adjustments.approve') && (
-        <AlertBar type="amber" icon="⚠️" style={{ marginBottom: 16 }}>
-          {pending} adjustment request{pending > 1 ? 's' : ''} awaiting your approval.
-        </AlertBar>
-      )}
 
       <div className="" style={{ alignItems: 'start' }}>
         <div>
-          <Tabs tabs={TABS} active={tab} onChange={(t) => { setTab(t); setSkip(0) }} />
+          <Tabs tabs={tabs} active={tab} onChange={(t) => { setTab(t); setSkip(0) }} />
           {canDelete && selectedCount > 0 && (
             <div style={{
               display: 'flex',
@@ -452,7 +440,11 @@ export default function AdjustmentsPage() {
             </div>
           )}
           <Card bodyPadding={false}>
-            {requests.length === 0 ? (
+            {listLoading ? (
+              <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                Loading adjustments…
+              </div>
+            ) : requests.length === 0 ? (
               <EmptyState icon="⚖" title="No requests" desc="No adjustment requests match this filter" />
             ) : (
               <table className="data-table">
@@ -570,7 +562,7 @@ export default function AdjustmentsPage() {
               limit={limit}
               onSkipChange={setSkip}
               onLimitChange={(n) => { setLimit(n); setSkip(0) }}
-              disabled={loading}
+              disabled={listLoading}
             />
           </Card>
         </div>

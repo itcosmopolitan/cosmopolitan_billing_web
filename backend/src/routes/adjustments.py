@@ -92,31 +92,6 @@ def _serialize(ar: AdjustmentRequest) -> dict:
 _VALID_STATUSES = {s.value for s in AdjustmentStatus}
 
 
-async def _adjustment_summary(
-    db: AsyncSession, *, branch_id: Optional[str] = None
-) -> dict[str, int]:
-    """Counts per status for KPI cards (not filtered by the list tab's status)."""
-    base = select(func.count(AdjustmentRequest.id))
-    if branch_id:
-        base = base.where(AdjustmentRequest.branch_id == branch_id)
-
-    async def _count(status: Optional[AdjustmentStatus]) -> int:
-        q = base
-        if status is not None:
-            q = q.where(AdjustmentRequest.status == status)
-        return int((await db.execute(q)).scalar() or 0)
-
-    pending = await _count(AdjustmentStatus.pending)
-    approved = await _count(AdjustmentStatus.approved)
-    rejected = await _count(AdjustmentStatus.rejected)
-    return {
-        "pending": pending,
-        "approved": approved,
-        "rejected": rejected,
-        "total": pending + approved + rejected,
-    }
-
-
 _REF_SEQ_TAIL = re.compile(r"(\d+)$")
 
 
@@ -268,8 +243,7 @@ async def list_adjustments(
         cq = cq.where(AdjustmentRequest.branch_id == branch_id)
     total = int((await db.execute(cq)).scalar() or 0)
     rows = (await db.execute(q.offset(sk).limit(lim))).scalars().all()
-    summary = await _adjustment_summary(db, branch_id=branch_id)
-    return paged([_serialize(ar) for ar in rows], total, sk, lim, summary=summary)
+    return paged([_serialize(ar) for ar in rows], total, sk, lim)
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("adjustments.create"))])

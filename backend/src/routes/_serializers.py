@@ -124,16 +124,21 @@ def serialize_cash_entry(e) -> dict:
 
 
 def serialize_transfer(t) -> dict:
+    created = t.created_at
     return {
         "id": t.id,
         "ref_number": t.ref_number,
+        "number": t.ref_number,
         "from_branch_id": t.from_branch_id,
         "to_branch_id": t.to_branch_id,
         "requested_by": t.requested_by,
         "approved_by": t.approved_by,
         "status": _enum_value(t.status),
+        "priority": t.priority,
         "notes": t.notes,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "request_date": t.request_date,
+        "created_at": created.isoformat() if created else None,
+        "date": created.strftime("%Y-%m-%d") if created else None,
     }
 
 

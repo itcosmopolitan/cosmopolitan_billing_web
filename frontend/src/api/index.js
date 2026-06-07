@@ -140,13 +140,21 @@ export const branchesAPI = {
   update: (id, data) => api.put(`/branches/${id}`, data),
 }
 
+// ─── Summaries (section tab counts) ───────────────────────────────────────────
+export const summariesAPI = {
+  get: (module, params) => api.get('/summaries/', { params: { module, ...params } }),
+}
+
 // ─── Transfers ────────────────────────────────────────────────────────────────
 export const transfersAPI = {
   list:    (params) => api.get('/transfers/',          { params }),
   get:     (id)     => api.get(`/transfers/${id}`),
   create:  (data)   => api.post('/transfers/', data),
-  approve: (id)     => api.post(`/transfers/${id}/approve`),
-  receive: (id)     => api.post(`/transfers/${id}/receive`),
+  update:  (id, data) => api.put(`/transfers/${id}`, data),
+  approve: (id, data) => api.post(`/transfers/${id}/approve`, data),
+  reject:  (id, data) => api.post(`/transfers/${id}/reject`, data),
+  receive: (id, data) => api.post(`/transfers/${id}/receive`, data),
+  delete:  (id, params) => api.delete(`/transfers/${id}`, { params }),
 }
 
 // ─── Stock Adjustments (approval workflow) ───────────────────────────────────

@@ -18,7 +18,7 @@ PERMISSIONS: dict[str, list[str]] = {
     "pos":       ["use", "discount", "override_price", "refund",
                   "hold_bill", "split_payment", "open_till", "close_till"],
     "purchases": ["view", "create", "edit", "delete", "export"],
-    "transfers":   ["view", "create", "approve", "receive"],
+    "transfers":   ["view", "create", "approve", "receive", "delete"],
     "adjustments": ["view", "create", "approve", "delete"],
     "customers": ["view", "create", "edit", "delete"],
     "vendors":   ["view", "create", "edit", "delete"],

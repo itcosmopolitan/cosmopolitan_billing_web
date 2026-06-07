@@ -1,179 +1,128 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { transfersAPI, branchesAPI, itemsAPI } from '@/api'
+import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, KPICard, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
-import BatchAllocationModal from '@/components/BatchAllocationModal'
-import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { useAppStore } from '@/store'
+import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
+import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate } from '@/utils/helpers'
-import {
-  allocatableBatches,
-  computeAutoAllocation,
-  isAllocationValid,
-  allocationSum,
-  toApiPayload,
-  formatAllocationSummary,
-} from '@/utils/batchAllocation'
+import RowActionsMenu from './RowActionsMenu'
 
-const TABS = [
+const TAB_DEFS = [
   { id: 'all',      label: 'All Transfers' },
   { id: 'pending',  label: 'Pending Approval' },
   { id: 'transit',  label: 'In Transit' },
   { id: 'received', label: 'Received' },
+  { id: 'rejected', label: 'Rejected' },
 ]
 
-const STEPS = [
-  { n: 1, title: 'Create Request', desc: 'Source branch initiates transfer request with items and quantities' },
-  { n: 2, title: 'Manager Approval', desc: 'Branch manager or super admin reviews and approves/rejects' },
-  { n: 3, title: 'Issue & Dispatch', desc: 'Source branch picks items, updates stock, marks dispatched' },
-  { n: 4, title: 'Receive & Confirm', desc: 'Destination branch receives, counts, confirms — stock auto-updated' },
-]
+const TAB_IDS = new Set(TAB_DEFS.map((t) => t.id))
+
+/** Read the active section from ?status= (defaults to all). */
+function tabFromSearchParams(searchParams) {
+  const raw = searchParams.get('status')
+  if (!raw || raw === 'all') return 'all'
+  return TAB_IDS.has(raw) ? raw : 'all'
+}
+
+function transferStatusChip(status) {
+  if (status === 'received') return { status: 'received', label: 'Received' }
+  if (status === 'transit') return { status: 'transit', label: 'In Transit' }
+  if (status === 'pending') return { status: 'pending', label: 'Pending' }
+  if (status === 'rejected') return { status: 'draft', label: 'Rejected' }
+  return { status: 'draft', label: status?.charAt(0).toUpperCase() + status?.slice(1) }
+}
 
 export default function TransfersPage() {
   const can = useCan()
-  const [tab, setTab]           = useState('all')
-  const [showNew, setShowNew]   = useState(false)
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const user = useAppStore((s) => s.user)
+  const tab = tabFromSearchParams(searchParams)
   const [showDetail, setShowDetail] = useState(null)
   const [transfers, setTransfers] = useState([])
+  const [listTotal, setListTotal] = useState(0)
+  const [summary, setSummary] = useState(null)
+  const [listVersion, setListVersion] = useState(0)
   const [trSkip, setTrSkip] = useState(0)
   const [trLimit, setTrLimit] = useState(DEFAULT_PAGE_SIZE)
   const [trSortBy, setTrSortBy] = useState('created_at')
   const [trSortOrder, setTrSortOrder] = useState('desc')
-  const [branches, setBranches] = useState([])
-  const [items, setItems]       = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [newForm, setNewForm]   = useState({
-    from_branch_id: 'br-001', to_branch_id: 'br-002', priority: 'Normal', notes: '',
-    items: [{ item_id: '', qty: '', batchAllocation: [], batchAllocationCustom: false }],
-  })
-  // Cache of `${itemId}|${branchId}` → batch list, populated lazily when the
-  // operator picks a tracked item in the New Transfer form. Avoids hitting
-  // /items/{id}/batches on every render.
-  const [batchOptions, setBatchOptions] = useState({})
-  // Active allocation editor target — `{ index }` when open. Mirrors the
-  // POS pattern: a single shared modal driven by a row pointer.
-  const [allocEditor, setAllocEditor] = useState(null)
+  const [listLoading, setListLoading] = useState(true)
+  const [actionBusy, setActionBusy] = useState(null)
+  const [actionKind, setActionKind] = useState(null)
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [deleteTargets, setDeleteTargets] = useState(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const selectAllRef = useRef(null)
+  const canDelete = can('transfers.delete')
+  const canCreate = can('transfers.create')
 
-  const fetchData = useCallback(async (branchForItems = 'br-001') => {
-    try {
-      setLoading(true)
-      const [transfersData, branchesData, itemsData] = await Promise.all([
-        fetchAllList(transfersAPI.list),
-        fetchAllList(branchesAPI.list).catch(() => []),
-        fetchAllList(itemsAPI.list, { branch_id: branchForItems }).catch(() => []),
-      ])
-      setTransfers(transfersData || [])
-      setBranches(branchesData || [])
-      setItems(itemsData || [])
-    } catch (err) {
-      console.error('Failed to fetch transfers:', err)
-      setTransfers([])
-      toast.error('Failed to load transfers')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
-
-  // Refresh the item list whenever the operator changes the source branch in
-  // the New Transfer form — stock counts and batch availability are per-branch.
-  useEffect(() => {
-    if (!showNew) return
-    fetchAllList(itemsAPI.list, { branch_id: newForm.from_branch_id })
-      .then((rows) => setItems(rows || []))
-      .catch(() => { /* keep existing items on failure */ })
-    // Branch changed → every cached batch list AND every per-row
-    // `batchAllocation` is now stale (the batch IDs refer to lots at the
-    // PREVIOUS source branch). We must blow both away. Without clearing
-    // the allocation, the auto-allocation effect would short-circuit
-    // (its `batches.length === 0` guard fires while the new-branch cache
-    // is still empty) and the stale batch IDs would survive submit. On
-    // approve, the backend would detect the branch mismatch and — in its
-    // legacy error path — zero out ALL stock for that item at the actual
-    // source branch. Destructive data loss; see backend safety net in
-    // transfers.approve_transfer.
-    setBatchOptions({})
-    setNewForm((f) => ({
-      ...f,
-      items: f.items.map((row) => (
-        row.item_id
-          ? { ...row, batchAllocation: [], batchAllocationCustom: false }
-          : row
-      )),
-    }))
-  }, [showNew, newForm.from_branch_id])
-
-  const loadBatchesForRow = useCallback(async (itemId) => {
-    if (!itemId) return null
-    const key = `${itemId}|${newForm.from_branch_id}`
-    if (batchOptions[key]) return batchOptions[key]
-    try {
-      const data = await itemsAPI.batches.list(itemId, { branch_id: newForm.from_branch_id })
-      const rows = allocatableBatches(data?.items || [])
-      setBatchOptions((prev) => ({ ...prev, [key]: rows }))
-      return rows
-    } catch {
-      setBatchOptions((prev) => ({ ...prev, [key]: [] }))
-      return []
-    }
-  }, [batchOptions, newForm.from_branch_id])
-
-  // Auto-allocate FIFO/FEFO whenever a row's batch list or qty changes and the
-  // operator hasn't locked the split via the modal. Mirrors CartRow's effect.
-  //
-  // Also kicks off a lazy fetch for any row whose (item, branch) batches
-  // aren't cached yet — covers the case where the operator changed the
-  // source branch AFTER selecting items, in which case loadBatchesForRow
-  // never fires from the row's item-select onChange. Without this fetch,
-  // the new-branch cache stays empty, the short-circuit below skips the
-  // row, and the row's allocation stays empty → submit is blocked (which
-  // is correct) but the user has no way out other than reselecting items.
-  useEffect(() => {
-    if (!showNew) return
-    let mutated = false
-    const next = newForm.items.map((row) => {
-      if (!row.item_id || row.batchAllocationCustom) return row
-      const picked = items.find((x) => x.id === row.item_id)
-      if (!picked?.batch_tracking) return row
-      const key = `${row.item_id}|${newForm.from_branch_id}`
-      const batches = batchOptions[key]
-      if (batches === undefined) {
-        // Not in cache yet — trigger a fetch and let this effect re-run
-        // when batchOptions updates.
-        loadBatchesForRow(row.item_id)
-        return row
-      }
-      if (batches.length === 0) return row
-      const auto = computeAutoAllocation(batches, Number(row.qty) || 0)
-      const same = JSON.stringify(auto) === JSON.stringify(row.batchAllocation || [])
-      if (same) return row
-      mutated = true
-      return { ...row, batchAllocation: auto }
-    })
-    if (mutated) setNewForm((f) => ({ ...f, items: next }))
-  }, [showNew, newForm.items, newForm.from_branch_id, batchOptions, items, loadBatchesForRow])
-
-  useEffect(() => {
+  const onTabChange = useCallback((next) => {
     setTrSkip(0)
-  }, [tab])
+    const params = new URLSearchParams(searchParams)
+    if (next === 'all') params.delete('status')
+    else params.set('status', next)
+    setSearchParams(params, { replace: true })
+  }, [searchParams, setSearchParams])
 
-  const patchForm = (k, v) => setNewForm((f) => ({ ...f, [k]: v }))
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        setListLoading(true)
+        const raw = await transfersAPI.list({
+          skip: trSkip,
+          limit: trLimit,
+          sort_by: trSortBy,
+          sort_order: trSortOrder,
+          status: tab === 'all' ? undefined : tab,
+        })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setTransfers(items || [])
+          setListTotal(total)
+        }
+      } catch (err) {
+        console.error('Failed to fetch transfers:', err)
+        if (!cancelled) {
+          setTransfers([])
+          setListTotal(0)
+          toast.error('Failed to load transfers')
+        }
+      } finally {
+        if (!cancelled) setListLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
 
-  const filtered = useMemo(() => {
-    const base = tab === 'all' ? transfers : transfers.filter((t) => t.status === tab)
-    // Client-side sort (same reasoning as ItemsPage — page uses fetchAllList).
-    const dir = trSortOrder === 'desc' ? -1 : 1
-    const valueOf = (row) => row[trSortBy] ?? ''
-    return [...base].sort((a, b) => {
-      const av = valueOf(a)
-      const bv = valueOf(b)
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
-      return String(av).localeCompare(String(bv)) * dir
+  useEffect(() => {
+    let cancelled = false
+    summariesAPI.get('transfers')
+      .then((data) => { if (!cancelled) setSummary(data) })
+      .catch(() => { if (!cancelled) setSummary(null) })
+    return () => { cancelled = true }
+  }, [listVersion])
+
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [tab, trSkip, trLimit])
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev
+      const pendingIds = new Set(
+        transfers.filter((t) => t.status === 'pending').map((t) => t.id),
+      )
+      const next = new Set([...prev].filter((id) => pendingIds.has(id)))
+      return next.size === prev.size ? prev : next
     })
-  }, [transfers, tab, trSortBy, trSortOrder])
+  }, [transfers])
 
   const onSort = (key) => {
     setTrSkip(0)
@@ -185,144 +134,244 @@ export default function TransfersPage() {
     setTrSortOrder(key === 'created_at' ? 'desc' : 'asc')
   }
 
-  const pageRows = useMemo(
-    () => filtered.slice(trSkip, trSkip + trLimit),
-    [filtered, trSkip, trLimit]
-  )
+  const pendingOnPage = transfers.filter((t) => t.status === 'pending')
+  const selectablePending = canDelete ? pendingOnPage : []
+  const selectedPending = selectablePending.filter((t) => selectedIds.has(t.id))
+  const selectedCount = selectedPending.length
+  const allPendingSelected = selectablePending.length > 0
+    && selectablePending.every((t) => selectedIds.has(t.id))
+  const somePendingSelected = selectablePending.some((t) => selectedIds.has(t.id))
 
-  const approve = async (id) => {
-    try {
-      await transfersAPI.approve(id)
-      await fetchData()
-      toast.success('Transfer approved & dispatched')
-    } catch (err) {
-      console.error('Failed to approve transfer:', err)
-      toast.error('Failed to approve transfer')
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = somePendingSelected && !allPendingSelected
     }
+  }, [somePendingSelected, allPendingSelected])
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
-  const receive = async (id) => {
-    try {
-      await transfersAPI.receive(id)
-      await fetchData()
-      toast.success('Stock received & inventory updated')
-    } catch (err) {
-      console.error('Failed to receive transfer:', err)
-      toast.error('Failed to receive transfer')
-    }
+  const toggleSelectAllPending = () => {
+    setSelectedIds((prev) => {
+      if (allPendingSelected) {
+        const next = new Set(prev)
+        selectablePending.forEach((t) => next.delete(t.id))
+        return next
+      }
+      const next = new Set(prev)
+      selectablePending.forEach((t) => next.add(t.id))
+      return next
+    })
   }
 
-  const submitNew = async () => {
-    if (newForm.from_branch_id === newForm.to_branch_id) { toast.error('From and To branches must differ'); return }
-    // Validate every tracked row's allocation matches its qty before posting.
-    for (const row of newForm.items) {
-      if (!row.item_id) continue
-      const picked = items.find((x) => x.id === row.item_id)
-      if (!picked?.batch_tracking) continue
-      const need = Number(row.qty) || 0
-      if (!isAllocationValid(row.batchAllocation || [], need)) {
-        toast.error(`Fix batch split for ${picked.name} — ${allocationSum(row.batchAllocation || [])}/${need} allocated`)
-        return
-      }
-      // Defense in depth: every allocation batch_id must exist in the CURRENT
-      // (new branch) cache. Catches the case where someone managed to keep a
-      // stale allocation referencing the previous source branch's lots.
-      // Without this, the backend would 400 (or worse — see backend safety
-      // net) on approve.
-      const key = `${row.item_id}|${newForm.from_branch_id}`
-      const known = new Set((batchOptions[key] || []).map((b) => b.id))
-      if (known.size === 0) {
-        toast.error(`Loading batches for ${picked.name}, please retry in a moment`)
-        return
-      }
-      for (const entry of row.batchAllocation || []) {
-        if (!known.has(entry.id)) {
-          toast.error(`Stale batch in ${picked.name} — re-select the item to refresh`)
-          return
-        }
+  const clearSelection = () => setSelectedIds(new Set())
+
+  const deselectRow = (id) => {
+    setSelectedIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  const openDeleteConfirm = (rows) => {
+    const list = (Array.isArray(rows) ? rows : [rows]).filter((t) => t.status === 'pending')
+    if (list.length === 0) return
+    setDeleteTargets(list)
+  }
+
+  const closeDeleteConfirm = () => {
+    if (!deleteBusy) setDeleteTargets(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTargets?.length || deleteBusy) return
+    setDeleteBusy(true)
+    setActionKind('delete')
+    let ok = 0
+    let fail = 0
+    let lastError = null
+    for (const row of deleteTargets) {
+      try {
+        await transfersAPI.delete(row.id, { ref_number: row.ref_number })
+        ok += 1
+      } catch (err) {
+        fail += 1
+        lastError = err
+        console.error(err)
       }
     }
+    if (ok > 0) toast.success(`${ok} transfer${ok > 1 ? 's' : ''} deleted`)
+    if (fail > 0) {
+      toast.error(lastError?.response?.data?.detail || `${fail} transfer${fail > 1 ? 's' : ''} could not be deleted`)
+    }
+    setDeleteTargets(null)
+    setSelectedIds(new Set())
+    setShowDetail(null)
+    bumpList()
+    setDeleteBusy(false)
+    setActionKind(null)
+  }
+
+  const isRowBusy = (id) => actionBusy === id || (deleteBusy && deleteTargets?.some((r) => r.id === id))
+
+  const approve = async (row) => {
+    if (actionBusy) return
+    setActionBusy(row.id)
+    setActionKind('approve')
     try {
-      await transfersAPI.create({
-        from_branch_id: newForm.from_branch_id,
-        to_branch_id: newForm.to_branch_id,
-        items: newForm.items.filter((i) => i.item_id).map(i => {
-          const itm = items.find(x => x.id === i.item_id)
-          return {
-            item_id: i.item_id,
-            item_name: itm?.name || 'Unknown',
-            qty: Number(i.qty),
-            // Explicit operator split — backend consumes these batches in
-            // this order on approve. Untracked items send undefined and
-            // fall through to the aggregate path.
-            batch_allocation: toApiPayload(i.batchAllocation),
-          }
-        }),
-        requested_by: 'Current User',
-        notes: newForm.notes,
+      const res = await transfersAPI.approve(row.id, {
+        approved_by: user?.name || 'Manager',
+        ref_number: row.ref_number,
       })
-      await fetchData(newForm.from_branch_id)
-      setShowNew(false)
-      toast.success('Transfer submitted')
+      if (res.already_processed) {
+        toast.success(`${row.ref_number} was already dispatched`)
+      } else {
+        toast.success(`${row.ref_number} approved & dispatched`)
+      }
+      bumpList()
+      deselectRow(row.id)
+      setShowDetail(null)
     } catch (err) {
-      console.error('Failed to create transfer:', err)
-      toast.error('Failed to create transfer')
+      console.error(err)
+      toast.error(err.response?.data?.detail || 'Failed to approve transfer')
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
     }
   }
 
-  const addItemRow = () => setNewForm((f) => ({
-    ...f,
-    items: [...f.items, { item_id: '', qty: '', batchAllocation: [], batchAllocationCustom: false }],
-  }))
-  const patchItem  = (i, k, v) => setNewForm((f) => ({
-    ...f,
-    items: f.items.map((it, idx) => {
-      if (idx !== i) return it
-      // Clear the allocation whenever the item changes — batches belong to a
-      // specific item, so the previous split becomes meaningless. Same for
-      // qty: reset custom so the auto-effect re-flows the split.
-      if (k === 'item_id') return { ...it, item_id: v, batchAllocation: [], batchAllocationCustom: false }
-      if (k === 'qty') return { ...it, qty: v, batchAllocationCustom: false }
-      return { ...it, [k]: v }
-    }),
-  }))
-
-  const pending  = transfers.filter((t) => t.status === 'pending').length
-  const transit  = transfers.filter((t) => t.status === 'transit').length
-  const received = transfers.filter((t) => t.status === 'received').length
-
-  if (loading) {
-    return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading transfers...</div></div>
+  const reject = async (row) => {
+    if (actionBusy) return
+    setActionBusy(row.id)
+    setActionKind('reject')
+    try {
+      const res = await transfersAPI.reject(row.id, {
+        rejected_by: user?.name || 'Manager',
+        rejection_notes: 'Rejected by manager',
+        ref_number: row.ref_number,
+      })
+      if (res.already_processed) {
+        toast.success(`${row.ref_number} was already rejected`)
+      } else {
+        toast.success(`${row.ref_number} rejected`)
+      }
+      bumpList()
+      deselectRow(row.id)
+      setShowDetail(null)
+    } catch (err) {
+      console.error(err)
+      toast.error(err.response?.data?.detail || 'Failed to reject transfer')
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
+    }
   }
+
+  const receive = async (row) => {
+    if (actionBusy) return
+    setActionBusy(row.id)
+    setActionKind('receive')
+    try {
+      const res = await transfersAPI.receive(row.id, {
+        received_by: user?.name || 'Staff',
+        ref_number: row.ref_number,
+      })
+      if (res.already_processed) {
+        toast.success(`${row.ref_number} was already received`)
+      } else {
+        toast.success(`${row.ref_number} received — inventory updated`)
+      }
+      bumpList()
+      setShowDetail(null)
+    } catch (err) {
+      console.error(err)
+      toast.error(err.response?.data?.detail || 'Failed to receive transfer')
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
+    }
+  }
+
+  const deleteRequest = (row) => openDeleteConfirm(row)
+
+  const deleteSelected = () => openDeleteConfirm(selectedPending)
+
+  const tabs = useMemo(() => tabsWithCounts(TAB_DEFS, summary), [summary])
 
   return (
     <div className="page-container">
       <SectionHeader title="Stock Transfers" subtitle="Move stock between branches with approval workflow">
-        {can('transfers.create') && (
-          <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ New Transfer</button>
+        {canCreate && (
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/transfers/new')}>+ New Transfer</button>
         )}
       </SectionHeader>
 
-      <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        <KPICard label="Pending Approval" value={pending}  color="var(--amber)" icon="⏳" />
-        <KPICard label="In Transit"       value={transit}  color="var(--blue)"  icon="🚚" />
-        <KPICard label="Received (Apr)"   value={received} color="var(--green)" icon="✅" />
-        <KPICard label="Total"            value={transfers.length} color="var(--accent)" icon="↔" sub="all transfers" />
-      </div>
 
-      {pending > 0 && <AlertBar type="amber" icon="⚠️" style={{ marginBottom: 16 }}>
-        {pending} transfer request{pending > 1 ? 's' : ''} awaiting your approval.
-      </AlertBar>}
-
-      <div className="grid-65" style={{ alignItems: 'start' }}>
+      <div style={{ alignItems: 'start' }}>
         <div>
-          <Tabs tabs={TABS} active={tab} onChange={setTab} />
+          <Tabs tabs={tabs} active={tab} onChange={onTabChange} />
+          {canDelete && selectedCount > 0 && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '10px 14px',
+              marginBottom: 10,
+              background: 'var(--bg-raised)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+            }}>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                {selectedCount} pending transfer{selectedCount > 1 ? 's' : ''} selected
+              </span>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={deleteSelected}
+                disabled={deleteBusy || !!actionBusy}
+              >
+                Delete selected
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={clearSelection}
+                disabled={deleteBusy || !!actionBusy}
+              >
+                Clear selection
+              </button>
+            </div>
+          )}
           <Card bodyPadding={false}>
-            {filtered.length === 0 ? <EmptyState icon="↔" title="No transfers" desc="No transfers match this filter" /> : (
+            {listLoading ? (
+              <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                Loading transfers…
+              </div>
+            ) : transfers.length === 0 ? (
+              <EmptyState icon="↔" title="No transfers" desc="No transfers match this filter" />
+            ) : (
               <table className="data-table">
                 <thead>
                   <tr>
-                    <SortableHeader label="Ref #" sortKey="ref_number" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                    {canDelete && (
+                      <th style={{ width: 36 }}>
+                        <input
+                          ref={selectAllRef}
+                          type="checkbox"
+                          aria-label="Select all pending transfers on this page"
+                          checked={allPendingSelected}
+                          disabled={selectablePending.length === 0 || deleteBusy || !!actionBusy}
+                          onChange={toggleSelectAllPending}
+                        />
+                      </th>
+                    )}
+                    <SortableHeader label="Transfer #" sortKey="ref_number" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                     <SortableHeader label="From → To" sortKey="from_branch_id" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                     <th>Items</th>
                     <SortableHeader label="Status" sortKey="status" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
@@ -331,9 +380,24 @@ export default function TransfersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pageRows.map((t) => (
+                  {transfers.map((t) => {
+                    const chip = transferStatusChip(t.status)
+                    return (
                     <tr key={t.id}>
-                      <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{t.number || t.ref_number}</span></td>
+                      {canDelete && (
+                        <td>
+                          {t.status === 'pending' ? (
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${t.ref_number}`}
+                              checked={selectedIds.has(t.id)}
+                              disabled={deleteBusy || !!actionBusy}
+                              onChange={() => toggleSelect(t.id)}
+                            />
+                          ) : null}
+                        </td>
+                      )}
+                      <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}>{t.ref_number}</span></td>
                       <td>
                         <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{t.from_branch_name || t.from_branch_id}</div>
                         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>→ {t.to_branch_name || t.to_branch_id}</div>
@@ -343,206 +407,140 @@ export default function TransfersPage() {
                         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.items?.map((i) => i.name?.split(' ')[0]).join(', ')}</div>
                       </td>
                       <td>
-                        <Chip status={t.status === 'received' ? 'received' : t.status === 'transit' ? 'transit' : t.status === 'pending' ? 'pending' : 'draft'} label={t.status === 'transit' ? 'In Transit' : t.status?.charAt(0).toUpperCase() + t.status?.slice(1)} />
+                        <Chip status={chip.status} label={chip.label} />
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || 'N/A'}</td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(t)}>View</button>
-                          {t.status === 'pending'  && can('transfers.approve') && <button className="btn btn-primary btn-xs" onClick={() => approve(t.id)}>Approve</button>}
-                          {t.status === 'transit'  && can('transfers.receive') && <button className="btn btn-success btn-xs" onClick={() => receive(t.id)}>Receive</button>}
-                        </div>
+                      <td className="text-right">
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${t.ref_number}`}
+                          actions={[
+                            {
+                              label: 'View details',
+                              disabled: isRowBusy(t.id),
+                              onClick: () => setShowDetail(t),
+                            },
+                            {
+                              label: 'Edit',
+                              hidden: t.status !== 'pending' || !canCreate,
+                              disabled: isRowBusy(t.id),
+                              onClick: () => navigate(`/transfers/${t.id}/edit`),
+                            },
+                            {
+                              label: actionKind === 'approve' && isRowBusy(t.id) ? 'Approving…' : 'Approve & dispatch',
+                              hidden: t.status !== 'pending' || !can('transfers.approve'),
+                              disabled: isRowBusy(t.id),
+                              onClick: () => approve(t),
+                            },
+                            {
+                              label: actionKind === 'reject' && isRowBusy(t.id) ? 'Rejecting…' : 'Reject',
+                              danger: true,
+                              hidden: t.status !== 'pending' || !can('transfers.approve'),
+                              disabled: isRowBusy(t.id),
+                              onClick: () => reject(t),
+                            },
+                            {
+                              label: actionKind === 'receive' && isRowBusy(t.id) ? 'Receiving…' : 'Receive',
+                              hidden: t.status !== 'transit' || !can('transfers.receive'),
+                              disabled: isRowBusy(t.id),
+                              onClick: () => receive(t),
+                            },
+                            {
+                              label: actionKind === 'delete' && isRowBusy(t.id) ? 'Deleting…' : 'Delete',
+                              danger: true,
+                              hidden: t.status !== 'pending' || !canDelete,
+                              disabled: isRowBusy(t.id) || deleteBusy || !!actionBusy,
+                              onClick: () => deleteRequest(t),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             )}
             <PaginationBar
-              total={filtered.length}
+              total={listTotal}
               skip={trSkip}
               limit={trLimit}
               onSkipChange={setTrSkip}
               onLimitChange={setTrLimit}
-              disabled={loading}
+              disabled={listLoading}
             />
           </Card>
         </div>
-
-        {/* Transfer workflow steps */}
-        <Card title="Transfer Workflow">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {STEPS.map((s) => (
-              <div key={s.n} style={{ display: 'flex', gap: 12, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'var(--accent-bg)', border: '1.5px solid var(--accent)', color: 'var(--accent)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</div>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{s.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.4 }}>{s.desc}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="divider" />
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-            Stock is reserved at source on approval and deducted on dispatch. Destination branch receives and confirms quantity. Discrepancies are flagged for review.
-          </div>
-        </Card>
       </div>
 
-      {/* New Transfer Modal */}
-      <Modal open={showNew} onClose={() => setShowNew(false)} title="New Stock Transfer Request" icon="↔" size="lg"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowNew(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={submitNew}>Submit Request</button>
-        </>}>
-        <FormRow>
-          <FormGroup label="From Branch">
-            <select className="form-input" value={newForm.from_branch_id} onChange={(e) => patchForm('from_branch_id', e.target.value)}>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </FormGroup>
-          <FormGroup label="To Branch">
-            <select className="form-input" value={newForm.to_branch_id} onChange={(e) => patchForm('to_branch_id', e.target.value)}>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </FormGroup>
-        </FormRow>
-
-        <div style={{ marginBottom: 14 }}>
-          <div className="form-label">Items to Transfer</div>
-          <AlertBar type="blue" icon="🧴">
-            Tracked items auto-split by <strong>FIFO/FEFO</strong>. Click the ✎ to
-            override the split across multiple batches — the receiving branch
-            inherits the exact lot metadata of every batch you draw from.
-          </AlertBar>
-          {newForm.items.map((row, i) => {
-            const picked = items.find((x) => x.id === row.item_id)
-            const tracked = Boolean(picked?.batch_tracking)
-            const expiryTracked = Boolean(picked?.expiry_tracking)
-            const strategy = expiryTracked ? 'FEFO' : 'FIFO'
-            const key = row.item_id ? `${row.item_id}|${newForm.from_branch_id}` : null
-            const batches = key ? (batchOptions[key] || []) : []
-            const allocation = row.batchAllocation || []
-            const need = Number(row.qty) || 0
-            const valid = isAllocationValid(allocation, need)
-            return (
-              <div key={i} style={{ marginBottom: 8 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px auto', gap: 8 }}>
-                  <select
-                    className="form-input"
-                    value={row.item_id}
-                    onChange={(e) => {
-                      patchItem(i, 'item_id', e.target.value)
-                      if (e.target.value) loadBatchesForRow(e.target.value)
-                    }}
-                  >
-                    <option value="">Select item…</option>
-                    {items.map((itm) => (
-                      <option key={itm.id} value={itm.id}>
-                        {itm.name}{itm.batch_tracking ? ` · ${itm.expiry_tracking ? 'FEFO' : 'FIFO'}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <input className="form-input" type="number" placeholder="Qty" value={row.qty} onChange={(e) => patchItem(i, 'qty', e.target.value)} />
-                  <button className="btn btn-ghost btn-sm" onClick={() => setNewForm((f) => ({ ...f, items: f.items.filter((_, idx) => idx !== i) }))}>✕</button>
-                </div>
-                {tracked && row.item_id && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, paddingLeft: 4, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: expiryTracked ? 'rgba(245,158,11,0.15)' : 'var(--accent-bg)', color: expiryTracked ? 'var(--amber)' : 'var(--accent)', letterSpacing: 0.3 }}>
-                      {strategy}
-                    </span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Source batches:</span>
-                    {batches.length === 0 ? (
-                      <span style={{ fontSize: 11, color: 'var(--amber)' }}>none available at source</span>
-                    ) : allocation.length === 0 ? (
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>enter a qty…</span>
-                    ) : (
-                      <span style={{ fontSize: 11, fontFamily: 'DM Mono, monospace', color: valid ? 'var(--text-secondary)' : 'var(--red)' }}>
-                        {formatAllocationSummary(allocation)}
-                      </span>
-                    )}
-                    {row.batchAllocationCustom && (
-                      <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: 'var(--bg-raised)', color: 'var(--text-secondary)', letterSpacing: 0.4 }}>CUSTOM</span>
-                    )}
-                    {!valid && allocation.length > 0 && (
-                      <span style={{ fontSize: 10.5, color: 'var(--red)' }}>⚠ {allocationSum(allocation)} / {need}</span>
-                    )}
-                    {batches.length > 0 && need > 0 && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-xs"
-                        title="Edit batch split"
-                        onClick={async () => {
-                          const rows = await loadBatchesForRow(row.item_id)
-                          setAllocEditor({
-                            index: i,
-                            batches: rows || batches,
-                            itemName: picked?.name || 'Item',
-                            expiryTracking: expiryTracked,
-                          })
-                        }}
-                        style={{ fontSize: 10.5, padding: '2px 6px' }}
-                      >
-                        ✎ Edit split
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-          <button className="btn btn-ghost btn-sm" onClick={addItemRow}>+ Add item</button>
-        </div>
-
-        <FormRow>
-          <FormGroup label="Priority">
-            <select className="form-input" value={newForm.priority} onChange={(e) => patchForm('priority', e.target.value)}>
-              {['Normal', 'Urgent', 'Planned'].map((p) => <option key={p}>{p}</option>)}
-            </select>
-          </FormGroup>
-          <FormGroup label="Expected Dispatch Date">
-            <input className="form-input" type="date" />
-          </FormGroup>
-        </FormRow>
-        <FormGroup label="Notes">
-          <textarea className="form-input" placeholder="Reason for transfer, special instructions…" value={newForm.notes} onChange={(e) => patchForm('notes', e.target.value)} style={{ height: 72 }} />
-        </FormGroup>
-      </Modal>
-
-      {/* Per-line batch allocation editor for the New Transfer form. Saving
-          flips `batchAllocationCustom` so the auto-FIFO/FEFO effect leaves
-          this row alone until qty/item changes. */}
-      <BatchAllocationModal
-        open={!!allocEditor}
-        onClose={() => setAllocEditor(null)}
-        item={allocEditor ? { name: allocEditor.itemName, emoji: '🧴', expiry_tracking: allocEditor.expiryTracking } : null}
-        qty={allocEditor ? Number(newForm.items[allocEditor.index]?.qty || 0) : 0}
-        batches={allocEditor?.batches || []}
-        allocation={allocEditor ? (newForm.items[allocEditor.index]?.batchAllocation || []) : []}
-        strategyLabel={allocEditor?.expiryTracking ? 'FEFO' : 'FIFO'}
-        onSave={(next) => {
-          if (!allocEditor) return
-          setNewForm((f) => ({
-            ...f,
-            items: f.items.map((it, idx) => idx === allocEditor.index
-              ? { ...it, batchAllocation: next, batchAllocationCustom: true }
-              : it),
-          }))
-          setAllocEditor(null)
-          toast.success('Batch split saved')
-        }}
-      />
-
-      {/* Detail Drawer */}
-      <Modal open={!!showDetail} onClose={() => setShowDetail(null)} title={`Transfer — ${showDetail?.number || showDetail?.ref_number}`} icon="↔" size="md"
-        footer={<button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>}>
+      <Modal
+        open={!!showDetail}
+        onClose={() => !actionBusy && !deleteBusy && setShowDetail(null)}
+        title={showDetail ? `Transfer — ${showDetail.ref_number}` : 'Transfer'}
+        icon="↔"
+        size="md"
+        footer={showDetail?.status === 'pending' && (can('transfers.approve') || canDelete || canCreate) ? (
+          <>
+            {canCreate && (
+              <button
+                className="btn btn-secondary"
+                style={{ marginRight: canDelete ? 0 : 'auto' }}
+                onClick={() => {
+                  const id = showDetail.id
+                  setShowDetail(null)
+                  navigate(`/transfers/${id}/edit`)
+                }}
+                disabled={!!actionBusy || deleteBusy}
+              >
+                Edit
+              </button>
+            )}
+            {canDelete && (
+              <button
+                className="btn btn-secondary"
+                style={{ marginRight: 'auto', color: 'var(--red)', marginLeft: canCreate ? 8 : 0 }}
+                onClick={() => deleteRequest(showDetail)}
+                disabled={!!actionBusy || deleteBusy}
+              >
+                Delete
+              </button>
+            )}
+            {can('transfers.approve') && (
+              <>
+                <button className="btn btn-secondary" onClick={() => reject(showDetail)} disabled={!!actionBusy}>
+                  {actionKind === 'reject' && actionBusy === showDetail.id ? 'Rejecting…' : 'Reject'}
+                </button>
+                <button className="btn btn-primary" onClick={() => approve(showDetail)} disabled={!!actionBusy}>
+                  {actionKind === 'approve' && actionBusy === showDetail.id ? 'Approving…' : 'Approve & dispatch'}
+                </button>
+              </>
+            )}
+          </>
+        ) : showDetail?.status === 'transit' && can('transfers.receive') ? (
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
+            <button className="btn btn-primary" onClick={() => receive(showDetail)} disabled={!!actionBusy}>
+              {actionKind === 'receive' && actionBusy === showDetail.id ? 'Receiving…' : 'Receive'}
+            </button>
+          </>
+        ) : (
+          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
+        )}>
         {showDetail && (
           <>
+            <div style={{ marginBottom: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                Transfer #
+              </span>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)', marginTop: 2 }}>
+                {showDetail.ref_number}
+              </div>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
               {[
                 { label: 'From', value: showDetail.from_branch_name || showDetail.from_branch_id },
                 { label: 'To', value: showDetail.to_branch_name || showDetail.to_branch_id },
-                { label: 'Status', value: <Chip status={showDetail.status === 'received' ? 'received' : showDetail.status === 'transit' ? 'transit' : 'pending'} label={showDetail.status?.charAt(0).toUpperCase() + showDetail.status?.slice(1)} /> },
+                { label: 'Status', value: (() => { const c = transferStatusChip(showDetail.status); return <Chip status={c.status} label={c.label} /> })() },
+                { label: 'Requested by', value: showDetail.requested_by || '—' },
               ].map((r) => (
                 <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
@@ -628,6 +626,69 @@ export default function TransfersPage() {
               </>
             )}
             {showDetail.notes && <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8, fontSize: 12.5, color: 'var(--text-secondary)' }}>{showDetail.notes}</div>}
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!deleteTargets?.length}
+        onClose={closeDeleteConfirm}
+        title="Delete transfers"
+        icon="⚠️"
+        size="sm"
+        footer={(
+          <>
+            <button className="btn btn-secondary" onClick={closeDeleteConfirm} disabled={deleteBusy}>
+              Cancel
+            </button>
+            <button className="btn btn-danger" onClick={confirmDelete} disabled={deleteBusy}>
+              {deleteBusy
+                ? `Deleting${deleteTargets?.length > 1 ? ` (${deleteTargets.length})…` : '…'}`
+                : `Delete${deleteTargets?.length > 1 ? ` (${deleteTargets.length})` : ''}`}
+            </button>
+          </>
+        )}
+      >
+        {deleteTargets && (
+          <>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 12 }}>
+              {deleteTargets.length === 1
+                ? 'This will permanently remove the following pending transfer:'
+                : `This will permanently remove ${deleteTargets.length} pending transfers:`}
+            </p>
+            <div style={{
+              maxHeight: 220,
+              overflowY: 'auto',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              marginBottom: 12,
+            }}>
+              <table className="data-table" style={{ marginBottom: 0 }}>
+                <thead>
+                  <tr>
+                    <th>Transfer #</th>
+                    <th>Route</th>
+                    <th>Items</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deleteTargets.map((t) => (
+                    <tr key={t.id}>
+                      <td className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>
+                        {t.ref_number}
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {t.from_branch_name || t.from_branch_id} → {t.to_branch_name || t.to_branch_id}
+                      </td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.items?.length || 0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <AlertBar type="amber" icon="⚠️">
+              This action cannot be undone. In-transit and received transfers cannot be deleted.
+            </AlertBar>
           </>
         )}
       </Modal>
