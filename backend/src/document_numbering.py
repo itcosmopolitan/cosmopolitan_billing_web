@@ -14,10 +14,10 @@ import re
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import DocumentNumberCounter, DocumentNumbering
+from src.models import DocumentNumberCounter, DocumentNumbering, SaleInvoice
 
 _SEQ_TOKEN = re.compile(r"(#+)")
 
@@ -173,7 +173,9 @@ async def allocate_number(
     key = _counter_key(doc_type, scope, branch_id)
     counter = (
         await db.execute(
-            select(DocumentNumberCounter).where(DocumentNumberCounter.id == key)
+            select(DocumentNumberCounter)
+            .where(DocumentNumberCounter.id == key)
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if not counter:
@@ -184,14 +186,27 @@ async def allocate_number(
             next_seq=int(cfg.next_seq or 1),
         )
         db.add(counter)
+        await db.flush()
 
-    seq = int(counter.next_seq or 1)
-    number = render_number(
-        prefix=cfg.prefix or "",
-        format_str=cfg.format or "{PREFIX}-{YYYY}-####",
-        seq=seq,
-        when=when,
-    )
-    counter.next_seq = seq + 1
-    await db.flush()
-    return number
+    while True:
+        seq = int(counter.next_seq or 1)
+        number = render_number(
+            prefix=cfg.prefix or "",
+            format_str=cfg.format or "{PREFIX}-{YYYY}-####",
+            seq=seq,
+            when=when,
+        )
+        if doc_type == "sales_invoice":
+            existing = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(SaleInvoice)
+                    .where(SaleInvoice.number == number)
+                )
+            ).scalar_one()
+            if existing:
+                counter.next_seq = seq + 1
+                continue
+        counter.next_seq = seq + 1
+        await db.flush()
+        return number

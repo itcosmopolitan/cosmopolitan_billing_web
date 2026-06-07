@@ -27,6 +27,7 @@ def get_engine():
         from src import config
         database_url = config.get().database_url.strip()
         url = _validate_database_url(database_url)
+        engine_url = url
 
         # AsyncIO engines don't support QueuePool - use NullPool for both databases
         # PostgreSQL: asyncpg driver handles connection pooling internally
@@ -49,6 +50,7 @@ def get_engine():
                     "connect_args": _build_postgres_connect_args(url),
                 }
             )
+            engine_url = _strip_asyncpg_url_query_params(url)
         else:
             engine_kwargs["poolclass"] = NullPool
             engine_kwargs["connect_args"] = {"timeout": 30}
@@ -61,7 +63,7 @@ def get_engine():
             url.username,
         )
 
-        _engine = create_async_engine(database_url, **engine_kwargs)
+        _engine = create_async_engine(engine_url, **engine_kwargs)
         _enable_sqlalchemy_query_logging(_engine)
     return _engine
 
@@ -71,13 +73,22 @@ def _validate_database_url(database_url: str):
         url = make_url(database_url)
     except Exception as exc:
         raise RuntimeError(
-            "Invalid DATABASE_URL format. Use postgresql+asyncpg://user:pass@host:port/dbname"
+            "Invalid DATABASE_URL format. Use sqlite+aiosqlite:///./retailos.db or postgresql+asyncpg://user:pass@host:port/dbname"
         ) from exc
 
-    if url.drivername not in ("postgresql+asyncpg", "postgresql"):
+    if url.drivername in ("sqlite", "sqlite+aiosqlite"):
+        if url.drivername == "sqlite":
+            url = make_url(database_url.replace("sqlite://", "sqlite+aiosqlite://", 1))
+        return url
+
+    if url.drivername == "postgresql":
+        url = url.set(drivername="postgresql+asyncpg")
+
+    if url.drivername != "postgresql+asyncpg":
         raise RuntimeError(
-            f"Unsupported database driver '{url.drivername}'. Use postgresql+asyncpg://"
+            f"Unsupported database driver '{url.drivername}'. Use sqlite+aiosqlite:// or postgresql+asyncpg://"
         )
+
     if not url.username or not url.password:
         raise RuntimeError("DATABASE_URL must include both username and password.")
     if not url.host:
@@ -91,19 +102,50 @@ def _validate_database_url(database_url: str):
 
 def _build_postgres_connect_args(url):
     connect_args = {
-        "timeout": 10,
+        "timeout": 20,
         "command_timeout": 120,
         "server_settings": {"application_name": "cosmopolitan_backend"},
     }
 
-    sslmode = os.getenv("PGSSLMODE") or os.getenv("PGSSL_MODE") or url.query.get("sslmode")
+    sslmode = (
+        os.getenv("PGSSLMODE")
+        or os.getenv("PGSSL_MODE")
+        or url.query.get("sslmode")
+        or url.query.get("ssl")
+    )
     if sslmode:
-        if sslmode.lower() != "disable":
-            connect_args["ssl"] = True
+        ssl_context = _build_postgres_ssl_context(sslmode)
+        if ssl_context is not None:
+            connect_args["ssl"] = ssl_context
     elif url.host not in ("localhost", "127.0.0.1", "::1"):
-        connect_args["ssl"] = True
+        connect_args["ssl"] = _build_postgres_ssl_context("require")
 
     return connect_args
+
+
+def _strip_asyncpg_url_query_params(url):
+    """Remove libpq-style URL params that asyncpg does not accept directly."""
+    return url.difference_update_query(["sslmode", "ssl"])
+
+
+def _build_postgres_ssl_context(sslmode: str):
+    mode = sslmode.lower()
+    if mode in ("disable", "false", "0", "no"):
+        return None
+    if mode in ("allow", "prefer", "require", "true", "1", "yes"):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+    if mode == "verify-ca":
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        return context
+    if mode == "verify-full":
+        return ssl.create_default_context()
+    raise RuntimeError(
+        "Unsupported PostgreSQL SSL mode. Use disable, require, verify-ca, or verify-full."
+    )
 
 
 def _resolve_database_host(host: str, port: int) -> None:

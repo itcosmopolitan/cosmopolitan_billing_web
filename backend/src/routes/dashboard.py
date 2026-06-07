@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import logging
@@ -12,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, desc, distinct, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src import config
 from src.database import get_db
 from src.date_utils import MAX_DASHBOARD_DATE_RANGE_DAYS, parse_date_range
 from src.models import (
@@ -35,11 +35,10 @@ from src.models import (
     User,
     UserBranch,
 )
-from src.security import require_perm
-
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.dashboard")
 _DASHBOARD_CACHE: dict[str, tuple[datetime, dict]] = {}
+PUBLIC_DASHBOARD_USER_ID = "public"
 
 
 class DashboardFilters:
@@ -204,8 +203,17 @@ def _line_conditions(filters: DashboardFilters, allowed_branch_ids: Optional[lis
     return conds
 
 
-def _can_use_sales_mvs(filters: DashboardFilters) -> bool:
-    return filters.category_id is None
+def _database_supports_materialized_views(db: AsyncSession) -> bool:
+    dialect = db.bind.dialect.name if getattr(db, "bind", None) is not None else "sqlite"
+    try:
+        use_read_models = bool(config.get().dashboard_use_materialized_views)
+    except RuntimeError:
+        use_read_models = False
+    return use_read_models and dialect == "postgresql"
+
+
+def _can_use_sales_mvs(db: AsyncSession, filters: DashboardFilters) -> bool:
+    return _database_supports_materialized_views(db) and filters.category_id is None
 
 
 def _mv_conds(model, filters: DashboardFilters, allowed_branch_ids: Optional[list[str]]):
@@ -244,7 +252,7 @@ async def _invoice_summary(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> dict:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
         row = (
             await db.execute(
@@ -293,22 +301,43 @@ async def _line_profit_summary(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> dict:
-    conds = [
-        ProductSalesSummary.sale_date >= period.start,
-        ProductSalesSummary.sale_date <= period.end,
-    ]
-    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
-    if filters.category_id:
-        conds.append(ProductSalesSummary.category_id == filters.category_id)
-    row = (
-        await db.execute(
-            select(
-                func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("line_revenue"),
-                func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
+    if not _database_supports_materialized_views(db):
+        conds = _line_conditions(filters, allowed_branch_ids, period)
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(SaleLineItem.line_total), 0).label("line_revenue"),
+                    func.coalesce(
+                        func.sum(
+                            SaleLineItem.line_total
+                            - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
+                        ),
+                        0,
+                    ).label("profit"),
+                )
+                .select_from(SaleLineItem)
+                .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+                .outerjoin(Item, SaleLineItem.item_id == Item.id)
+                .where(and_(*conds))
             )
-            .where(and_(*conds))
-        )
-    ).one()
+        ).one()
+    else:
+        conds = [
+            ProductSalesSummary.sale_date >= period.start,
+            ProductSalesSummary.sale_date <= period.end,
+        ]
+        conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+        if filters.category_id:
+            conds.append(ProductSalesSummary.category_id == filters.category_id)
+        row = (
+            await db.execute(
+                select(
+                    func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("line_revenue"),
+                    func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
+                )
+                .where(and_(*conds))
+            )
+        ).one()
     line_revenue = float(row.line_revenue or 0)
     profit = float(row.profit or 0)
     return {
@@ -324,7 +353,7 @@ async def _invoice_total_for_period(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> float:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
         conds.append(DailySalesSummary.sale_date >= period.start)
         conds.append(DailySalesSummary.sale_date <= period.end)
@@ -350,7 +379,7 @@ async def _sales_trend(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
         conds.extend([DailySalesSummary.sale_date >= period.start, DailySalesSummary.sale_date <= period.end])
         result = await db.execute(
@@ -391,23 +420,45 @@ async def _revenue_vs_profit(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = [
-        ProductSalesSummary.sale_date >= period.start,
-        ProductSalesSummary.sale_date <= period.end,
-    ]
-    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
-    if filters.category_id:
-        conds.append(ProductSalesSummary.category_id == filters.category_id)
-    result = await db.execute(
-        select(
-            ProductSalesSummary.sale_date.label("date"),
-            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
-            func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
+    if not _database_supports_materialized_views(db):
+        conds = _line_conditions(filters, allowed_branch_ids, period)
+        result = await db.execute(
+            select(
+                SaleInvoice.date.label("date"),
+                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+                func.coalesce(
+                    func.sum(
+                        SaleLineItem.line_total
+                        - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
+                    ),
+                    0,
+                ).label("profit"),
+            )
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .outerjoin(Item, SaleLineItem.item_id == Item.id)
+            .where(and_(*conds))
+            .group_by(SaleInvoice.date)
+            .order_by(SaleInvoice.date)
         )
-        .where(and_(*conds))
-        .group_by(ProductSalesSummary.sale_date)
-        .order_by(ProductSalesSummary.sale_date)
-    )
+    else:
+        conds = [
+            ProductSalesSummary.sale_date >= period.start,
+            ProductSalesSummary.sale_date <= period.end,
+        ]
+        conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+        if filters.category_id:
+            conds.append(ProductSalesSummary.category_id == filters.category_id)
+        result = await db.execute(
+            select(
+                ProductSalesSummary.sale_date.label("date"),
+                func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+                func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
+            )
+            .where(and_(*conds))
+            .group_by(ProductSalesSummary.sale_date)
+            .order_by(ProductSalesSummary.sale_date)
+        )
     return [
         {"date": row.date, "revenue": float(row.revenue or 0), "profit": float(row.profit or 0)}
         for row in result.fetchall()
@@ -420,25 +471,42 @@ async def _category_sales(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = [
-        ProductSalesSummary.sale_date >= period.start,
-        ProductSalesSummary.sale_date <= period.end,
-    ]
-    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
-    if filters.category_id:
-        conds.append(ProductSalesSummary.category_id == filters.category_id)
-    result = await db.execute(
-        select(
-            func.coalesce(Category.name, "Uncategorized").label("category"),
-            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+    if not _database_supports_materialized_views(db):
+        conds = _line_conditions(filters, allowed_branch_ids, period)
+        result = await db.execute(
+            select(
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+            )
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .outerjoin(Item, SaleLineItem.item_id == Item.id)
+            .outerjoin(Category, Item.category_id == Category.id)
+            .where(and_(*conds))
+            .group_by(Category.name)
+            .order_by(desc("revenue"))
+            .limit(8)
         )
-        .select_from(ProductSalesSummary)
-        .outerjoin(Category, ProductSalesSummary.category_id == Category.id)
-        .where(and_(*conds))
-        .group_by(Category.name)
-        .order_by(desc("revenue"))
-        .limit(8)
-    )
+    else:
+        conds = [
+            ProductSalesSummary.sale_date >= period.start,
+            ProductSalesSummary.sale_date <= period.end,
+        ]
+        conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+        if filters.category_id:
+            conds.append(ProductSalesSummary.category_id == filters.category_id)
+        result = await db.execute(
+            select(
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+            )
+            .select_from(ProductSalesSummary)
+            .outerjoin(Category, ProductSalesSummary.category_id == Category.id)
+            .where(and_(*conds))
+            .group_by(Category.name)
+            .order_by(desc("revenue"))
+            .limit(8)
+        )
     return [{"category": row.category, "revenue": float(row.revenue or 0)} for row in result.fetchall()]
 
 
@@ -448,23 +516,39 @@ async def _brand_sales(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    conds = [
-        ProductSalesSummary.sale_date >= period.start,
-        ProductSalesSummary.sale_date <= period.end,
-    ]
-    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
-    if filters.category_id:
-        conds.append(ProductSalesSummary.category_id == filters.category_id)
-    result = await db.execute(
-        select(
-            func.coalesce(ProductSalesSummary.brand, "Unbranded").label("brand"),
-            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+    if not _database_supports_materialized_views(db):
+        conds = _line_conditions(filters, allowed_branch_ids, period)
+        result = await db.execute(
+            select(
+                func.coalesce(Item.brand, "Unbranded").label("brand"),
+                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+            )
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .outerjoin(Item, SaleLineItem.item_id == Item.id)
+            .where(and_(*conds))
+            .group_by(Item.brand)
+            .order_by(desc("revenue"))
+            .limit(8)
         )
-        .where(and_(*conds))
-        .group_by(ProductSalesSummary.brand)
-        .order_by(desc("revenue"))
-        .limit(8)
-    )
+    else:
+        conds = [
+            ProductSalesSummary.sale_date >= period.start,
+            ProductSalesSummary.sale_date <= period.end,
+        ]
+        conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+        if filters.category_id:
+            conds.append(ProductSalesSummary.category_id == filters.category_id)
+        result = await db.execute(
+            select(
+                func.coalesce(ProductSalesSummary.brand, "Unbranded").label("brand"),
+                func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+            )
+            .where(and_(*conds))
+            .group_by(ProductSalesSummary.brand)
+            .order_by(desc("revenue"))
+            .limit(8)
+        )
     return [{"brand": row.brand or "Unbranded", "revenue": float(row.revenue or 0)} for row in result.fetchall()]
 
 
@@ -475,25 +559,43 @@ async def _top_products(
     period: Period,
     limit: int = 20,
 ) -> dict:
-    conds = [
-        ProductSalesSummary.sale_date >= period.start,
-        ProductSalesSummary.sale_date <= period.end,
-    ]
-    conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
-    if filters.category_id:
-        conds.append(ProductSalesSummary.category_id == filters.category_id)
-    result = await db.execute(
-        select(
-            func.coalesce(ProductSalesSummary.item_id, ProductSalesSummary.product_name).label("product_id"),
-            ProductSalesSummary.product_name.label("name"),
-            func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("qty"),
-            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+    if not _database_supports_materialized_views(db):
+        conds = _line_conditions(filters, allowed_branch_ids, period)
+        result = await db.execute(
+            select(
+                func.coalesce(SaleLineItem.item_id, SaleLineItem.name).label("product_id"),
+                SaleLineItem.name.label("name"),
+                func.coalesce(func.sum(SaleLineItem.qty), 0).label("qty"),
+                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
+            )
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .outerjoin(Item, SaleLineItem.item_id == Item.id)
+            .where(and_(*conds))
+            .group_by(SaleLineItem.item_id, SaleLineItem.name)
+            .order_by(desc("revenue"))
+            .limit(limit)
         )
-        .where(and_(*conds))
-        .group_by(ProductSalesSummary.item_id, ProductSalesSummary.product_name)
-        .order_by(desc("revenue"))
-        .limit(limit)
-    )
+    else:
+        conds = [
+            ProductSalesSummary.sale_date >= period.start,
+            ProductSalesSummary.sale_date <= period.end,
+        ]
+        conds.extend(_mv_conds(ProductSalesSummary, filters, allowed_branch_ids))
+        if filters.category_id:
+            conds.append(ProductSalesSummary.category_id == filters.category_id)
+        result = await db.execute(
+            select(
+                func.coalesce(ProductSalesSummary.item_id, ProductSalesSummary.product_name).label("product_id"),
+                ProductSalesSummary.product_name.label("name"),
+                func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("qty"),
+                func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("revenue"),
+            )
+            .where(and_(*conds))
+            .group_by(ProductSalesSummary.item_id, ProductSalesSummary.product_name)
+            .order_by(desc("revenue"))
+            .limit(limit)
+        )
     items = [
         {
             "product_id": row.product_id,
@@ -586,7 +688,7 @@ async def _branch_sales(
     allowed_branch_ids: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
         result = await db.execute(
             select(
@@ -628,25 +730,40 @@ async def _period_sales_totals(
     db: AsyncSession,
     filters: DashboardFilters,
     allowed_branch_ids: Optional[list[str]],
+    period: Period,
 ) -> tuple[float, float, float]:
-    today = date.today()
-    weekly_start = today - timedelta(days=6)
-    monthly_start = today.replace(day=1)
-    if _can_use_sales_mvs(filters):
+    end = period.end
+    weekly_start = max(period.start, end - timedelta(days=6))
+    monthly_start = max(period.start, end.replace(day=1))
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(DailySalesSummary, filters, allowed_branch_ids)
         row = (
             await db.execute(
                 select(
-                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date == today), 0).label("daily_sales"),
-                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date >= weekly_start).filter(DailySalesSummary.sale_date <= today), 0).label("weekly_sales"),
-                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date >= monthly_start).filter(DailySalesSummary.sale_date <= today), 0).label("monthly_sales"),
+                    func.coalesce(func.sum(DailySalesSummary.revenue).filter(DailySalesSummary.sale_date == end), 0).label("daily_sales"),
+                    func.coalesce(
+                        func.sum(DailySalesSummary.revenue)
+                        .filter(DailySalesSummary.sale_date >= weekly_start)
+                        .filter(DailySalesSummary.sale_date <= end),
+                        0,
+                    ).label("weekly_sales"),
+                    func.coalesce(
+                        func.sum(DailySalesSummary.revenue)
+                        .filter(DailySalesSummary.sale_date >= monthly_start)
+                        .filter(DailySalesSummary.sale_date <= end),
+                        0,
+                    ).label("monthly_sales"),
                 )
                 .where(and_(*conds))
             )
         ).one()
         return float(row.daily_sales or 0), float(row.weekly_sales or 0), float(row.monthly_sales or 0)
 
-    fallback_conds = [SaleInvoice.date >= monthly_start.isoformat(), SaleInvoice.date <= today.isoformat()]
+    fallback_conds = [
+        SaleInvoice.date >= monthly_start.isoformat(),
+        SaleInvoice.date <= end.isoformat(),
+        _status_not_cancelled(),
+    ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, filters, allowed_branch_ids)
     if branch_cond is not None:
         fallback_conds.append(branch_cond)
@@ -669,9 +786,19 @@ async def _period_sales_totals(
     row = (
         await db.execute(
             select(
-                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date == today.isoformat()), 0).label("daily_sales"),
-                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date >= weekly_start.isoformat()).filter(SaleInvoice.date <= today.isoformat()), 0).label("weekly_sales"),
-                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date >= monthly_start.isoformat()).filter(SaleInvoice.date <= today.isoformat()), 0).label("monthly_sales"),
+                func.coalesce(func.sum(SaleInvoice.total).filter(SaleInvoice.date == end.isoformat()), 0).label("daily_sales"),
+                func.coalesce(
+                    func.sum(SaleInvoice.total)
+                    .filter(SaleInvoice.date >= weekly_start.isoformat())
+                    .filter(SaleInvoice.date <= end.isoformat()),
+                    0,
+                ).label("weekly_sales"),
+                func.coalesce(
+                    func.sum(SaleInvoice.total)
+                    .filter(SaleInvoice.date >= monthly_start.isoformat())
+                    .filter(SaleInvoice.date <= end.isoformat()),
+                    0,
+                ).label("monthly_sales"),
             )
             .where(and_(*fallback_conds))
         )
@@ -682,39 +809,23 @@ async def _period_sales_totals(
 async def _sales_dashboard_payload(
     db: AsyncSession,
     filters: DashboardFilters,
-    user: User,
 ) -> dict:
     period = _parse_period(filters)
-    allowed = await _allowed_branch_ids(db, user)
-    daily_sales, weekly_sales, monthly_sales = await _period_sales_totals(db, filters, allowed)
+    allowed = None
+    daily_sales, weekly_sales, monthly_sales = await _period_sales_totals(db, filters, allowed, period)
 
-    (
-        invoice_summary,
-        previous_invoice_summary,
-        profit_summary,
-        previous_profit_summary,
-        sales_trend,
-        revenue_profit,
-        branches,
-        category_sales_data,
-        brand_sales_data,
-        top_products_data,
-        top_customers_data,
-        recent_sales_data,
-    ) = await asyncio.gather(
-        _invoice_summary(db, filters, allowed, period),
-        _invoice_summary(db, filters, allowed, period.previous),
-        _line_profit_summary(db, filters, allowed, period),
-        _line_profit_summary(db, filters, allowed, period.previous),
-        _sales_trend(db, filters, allowed, period),
-        _revenue_vs_profit(db, filters, allowed, period),
-        _branch_sales(db, filters, allowed, period),
-        _category_sales(db, filters, allowed, period),
-        _brand_sales(db, filters, allowed, period),
-        _top_products(db, filters, allowed, period),
-        _top_customers(db, filters, allowed, period),
-        _recent_sales(db, filters, allowed, period),
-    )
+    invoice_summary = await _invoice_summary(db, filters, allowed, period)
+    previous_invoice_summary = await _invoice_summary(db, filters, allowed, period.previous)
+    profit_summary = await _line_profit_summary(db, filters, allowed, period)
+    previous_profit_summary = await _line_profit_summary(db, filters, allowed, period.previous)
+    sales_trend = await _sales_trend(db, filters, allowed, period)
+    revenue_profit = await _revenue_vs_profit(db, filters, allowed, period)
+    branches = await _branch_sales(db, filters, allowed, period)
+    category_sales_data = await _category_sales(db, filters, allowed, period)
+    brand_sales_data = await _brand_sales(db, filters, allowed, period)
+    top_products_data = await _top_products(db, filters, allowed, period)
+    top_customers_data = await _top_customers(db, filters, allowed, period)
+    recent_sales_data = await _recent_sales(db, filters, allowed, period)
 
     target = max(invoice_summary["revenue"] * 1.12, previous_invoice_summary["revenue"] * 1.1, 1)
 
@@ -758,42 +869,46 @@ async def _sales_dashboard_payload(
     }
 
 
-async def _inventory_payload(db: AsyncSession, filters: DashboardFilters, user: User) -> dict:
+async def _inventory_payload(db: AsyncSession, filters: DashboardFilters) -> dict:
     period = _parse_period(filters)
-    allowed = await _allowed_branch_ids(db, user)
+    allowed = None
     stock_conds = _stock_conditions(filters, allowed)
 
-    snapshot_conds = _inventory_mv_conds(filters, allowed)
-    summary = (
-        await db.execute(
-            select(
-                func.count(distinct(InventorySnapshot.item_id)).label("products"),
-                func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("inventory_value"),
-                func.coalesce(func.sum(case((InventorySnapshot.quantity <= 0, 1), else_=0)), 0).label("out_of_stock"),
-                func.coalesce(func.sum(case((and_(InventorySnapshot.quantity > 0, InventorySnapshot.quantity <= InventorySnapshot.reorder_level), 1), else_=0)), 0).label("low_stock"),
+    if not _database_supports_materialized_views(db):
+        summary = (
+            await db.execute(
+                select(
+                    func.count(distinct(ItemStock.item_id)).label("products"),
+                    func.coalesce(func.sum(ItemStock.quantity * func.coalesce(Item.cost_price, 0)), 0).label("inventory_value"),
+                    func.coalesce(func.sum(case((ItemStock.quantity <= 0, 1), else_=0)), 0).label("out_of_stock"),
+                    func.coalesce(func.sum(case((and_(ItemStock.quantity > 0, ItemStock.quantity <= Item.reorder_level), 1), else_=0)), 0).label("low_stock"),
+                )
+                .select_from(ItemStock)
+                .join(Item, ItemStock.item_id == Item.id)
+                .where(and_(*stock_conds))
             )
-            .where(and_(*snapshot_conds))
-        )
-    ).one()
+        ).one()
+    else:
+        snapshot_conds = _inventory_mv_conds(filters, allowed)
+        summary = (
+            await db.execute(
+                select(
+                    func.count(distinct(InventorySnapshot.item_id)).label("products"),
+                    func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("inventory_value"),
+                    func.coalesce(func.sum(case((InventorySnapshot.quantity <= 0, 1), else_=0)), 0).label("out_of_stock"),
+                    func.coalesce(func.sum(case((and_(InventorySnapshot.quantity > 0, InventorySnapshot.quantity <= InventorySnapshot.reorder_level), 1), else_=0)), 0).label("low_stock"),
+                )
+                .where(and_(*snapshot_conds))
+            )
+        ).one()
 
-    # Run all independent queries in parallel
-    (
-        current_stock,
-        low_stock,
-        dead_stock,
-        expiry_near,
-        stock_by_category,
-        sold_item_count,
-        inventory_value_trend,
-    ) = await asyncio.gather(
-        _current_stock(db, filters, allowed, limit=20),
-        _low_stock(db, filters, allowed, limit=20),
-        _dead_stock(db, filters, allowed, period, limit=20),
-        _expiry_near(db, filters, allowed, limit=20),
-        _stock_by_category(db, filters, allowed),
-        _sold_item_count(db, filters, allowed, period),
-        _inventory_value_trend(db, filters, allowed, period),
-    )
+    current_stock = await _current_stock(db, filters, allowed, limit=20)
+    low_stock = await _low_stock(db, filters, allowed, limit=20)
+    dead_stock = await _dead_stock(db, filters, allowed, period, limit=20)
+    expiry_near = await _expiry_near(db, filters, allowed, limit=20)
+    stock_by_category = await _stock_by_category(db, filters, allowed)
+    sold_item_count = await _sold_item_count(db, filters, allowed, period)
+    inventory_value_trend = await _inventory_value_trend(db, filters, allowed, period)
     products = int(summary.products or 0)
 
     return {
@@ -831,22 +946,45 @@ async def _inventory_payload(db: AsyncSession, filters: DashboardFilters, user: 
 
 
 async def _current_stock(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], limit: int = 20) -> dict:
-    conds = _inventory_mv_conds(filters, allowed)
-    result = await db.execute(
-        select(
-            InventorySnapshot.item_id,
-            Item.name,
-            func.coalesce(Branch.name, InventorySnapshot.branch_id).label("branch"),
-            InventorySnapshot.quantity.label("qty"),
-            InventorySnapshot.inventory_value.label("value"),
+    if not _database_supports_materialized_views(db):
+        conds = [Item.active == True]
+        branch_cond = _branch_condition(ItemStock.branch_id, filters, allowed)
+        if branch_cond is not None:
+            conds.append(branch_cond)
+        if filters.category_id:
+            conds.append(Item.category_id == filters.category_id)
+        result = await db.execute(
+            select(
+                ItemStock.item_id,
+                Item.name,
+                func.coalesce(Branch.name, ItemStock.branch_id).label("branch"),
+                ItemStock.quantity.label("qty"),
+                (ItemStock.quantity * func.coalesce(Item.cost_price, 0)).label("value"),
+            )
+            .select_from(ItemStock)
+            .join(Item, ItemStock.item_id == Item.id)
+            .outerjoin(Branch, ItemStock.branch_id == Branch.id)
+            .where(and_(*conds))
+            .order_by(desc("value"))
+            .limit(limit)
         )
-        .select_from(InventorySnapshot)
-        .join(Item, InventorySnapshot.item_id == Item.id)
-        .outerjoin(Branch, InventorySnapshot.branch_id == Branch.id)
-        .where(and_(*conds))
-        .order_by(desc("value"))
-        .limit(limit)
-    )
+    else:
+        conds = _inventory_mv_conds(filters, allowed)
+        result = await db.execute(
+            select(
+                InventorySnapshot.item_id,
+                Item.name,
+                func.coalesce(Branch.name, InventorySnapshot.branch_id).label("branch"),
+                InventorySnapshot.quantity.label("qty"),
+                InventorySnapshot.inventory_value.label("value"),
+            )
+            .select_from(InventorySnapshot)
+            .join(Item, InventorySnapshot.item_id == Item.id)
+            .outerjoin(Branch, InventorySnapshot.branch_id == Branch.id)
+            .where(and_(*conds))
+            .order_by(desc("value"))
+            .limit(limit)
+        )
     items = [
         {
             "item_id": row.item_id,
@@ -861,21 +999,43 @@ async def _current_stock(db: AsyncSession, filters: DashboardFilters, allowed: O
 
 
 async def _low_stock(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], limit: int = 20) -> dict:
-    conds = _inventory_mv_conds(filters, allowed)
-    conds.append(InventorySnapshot.quantity <= InventorySnapshot.reorder_level)
-    result = await db.execute(
-        select(
-            InventorySnapshot.item_id.label("item_id"),
-            Item.name,
-            InventorySnapshot.quantity.label("qty"),
-            InventorySnapshot.reorder_level,
+    if not _database_supports_materialized_views(db):
+        conds = [Item.active == True]
+        branch_cond = _branch_condition(ItemStock.branch_id, filters, allowed)
+        if branch_cond is not None:
+            conds.append(branch_cond)
+        if filters.category_id:
+            conds.append(Item.category_id == filters.category_id)
+        conds.append(ItemStock.quantity <= Item.reorder_level)
+        result = await db.execute(
+            select(
+                ItemStock.item_id.label("item_id"),
+                Item.name,
+                ItemStock.quantity.label("qty"),
+                Item.reorder_level,
+            )
+            .select_from(ItemStock)
+            .join(Item, ItemStock.item_id == Item.id)
+            .where(and_(*conds))
+            .order_by(ItemStock.quantity.asc(), Item.name.asc())
+            .limit(limit)
         )
-        .select_from(InventorySnapshot)
-        .join(Item, InventorySnapshot.item_id == Item.id)
-        .where(and_(*conds))
-        .order_by(InventorySnapshot.quantity.asc(), Item.name.asc())
-        .limit(limit)
-    )
+    else:
+        conds = _inventory_mv_conds(filters, allowed)
+        conds.append(InventorySnapshot.quantity <= InventorySnapshot.reorder_level)
+        result = await db.execute(
+            select(
+                InventorySnapshot.item_id.label("item_id"),
+                Item.name,
+                InventorySnapshot.quantity.label("qty"),
+                InventorySnapshot.reorder_level,
+            )
+            .select_from(InventorySnapshot)
+            .join(Item, InventorySnapshot.item_id == Item.id)
+            .where(and_(*conds))
+            .order_by(InventorySnapshot.quantity.asc(), Item.name.asc())
+            .limit(limit)
+        )
     items = [
         {"item_id": row.item_id, "name": row.name, "qty": int(row.qty or 0), "reorder_level": int(row.reorder_level or 0)}
         for row in result.fetchall()
@@ -907,38 +1067,77 @@ async def _dead_stock(
     period: Period,
     limit: int = 20,
 ) -> dict:
-    stock_conds = _inventory_mv_conds(filters, allowed)
-    sales_exists = exists(
-        select(1)
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-        .where(
-            and_(
-                SaleLineItem.item_id == InventorySnapshot.item_id,
-                SaleInvoice.status != InvoiceStatus.cancelled,
-                SaleInvoice.date >= period.start_s,
-                SaleInvoice.date <= period.end_s,
-                *(_branch_condition(SaleInvoice.branch_id, filters, allowed) is not None and [
-                    _branch_condition(SaleInvoice.branch_id, filters, allowed)
-                ] or []),
-                *(filters.staff_id and [SaleInvoice.cashier == filters.staff_id] or []),
+    if not _database_supports_materialized_views(db):
+        stock_conds = [Item.active == True, ItemStock.quantity > 0]
+        branch_cond = _branch_condition(ItemStock.branch_id, filters, allowed)
+        if branch_cond is not None:
+            stock_conds.append(branch_cond)
+        if filters.category_id:
+            stock_conds.append(Item.category_id == filters.category_id)
+        sales_exists = exists(
+            select(1)
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .where(
+                and_(
+                    SaleLineItem.item_id == ItemStock.item_id,
+                    SaleInvoice.status != InvoiceStatus.cancelled,
+                    SaleInvoice.date >= period.start_s,
+                    SaleInvoice.date <= period.end_s,
+                    *(_branch_condition(SaleInvoice.branch_id, filters, allowed) is not None and [
+                        _branch_condition(SaleInvoice.branch_id, filters, allowed)
+                    ] or []),
+                    *(filters.staff_id and [SaleInvoice.cashier == filters.staff_id] or []),
+                )
             )
         )
-    )
-    result = await db.execute(
-        select(
-            InventorySnapshot.item_id,
-            Item.name,
-            func.coalesce(func.sum(InventorySnapshot.quantity), 0).label("qty"),
-            func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("value"),
+        result = await db.execute(
+            select(
+                ItemStock.item_id,
+                Item.name,
+                func.coalesce(func.sum(ItemStock.quantity), 0).label("qty"),
+                func.coalesce(func.sum(ItemStock.quantity * func.coalesce(Item.cost_price, 0)), 0).label("value"),
+            )
+            .select_from(ItemStock)
+            .join(Item, ItemStock.item_id == Item.id)
+            .where(and_(*stock_conds, ~sales_exists))
+            .group_by(ItemStock.item_id, Item.name)
+            .order_by(desc("value"))
+            .limit(limit)
         )
-        .select_from(InventorySnapshot)
-        .join(Item, InventorySnapshot.item_id == Item.id)
-        .where(and_(*stock_conds, InventorySnapshot.quantity > 0, ~sales_exists))
-        .group_by(InventorySnapshot.item_id, Item.name)
-        .order_by(desc("value"))
-        .limit(limit)
-    )
+    else:
+        stock_conds = _inventory_mv_conds(filters, allowed)
+        sales_exists = exists(
+            select(1)
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .where(
+                and_(
+                    SaleLineItem.item_id == InventorySnapshot.item_id,
+                    SaleInvoice.status != InvoiceStatus.cancelled,
+                    SaleInvoice.date >= period.start_s,
+                    SaleInvoice.date <= period.end_s,
+                    *(_branch_condition(SaleInvoice.branch_id, filters, allowed) is not None and [
+                        _branch_condition(SaleInvoice.branch_id, filters, allowed)
+                    ] or []),
+                    *(filters.staff_id and [SaleInvoice.cashier == filters.staff_id] or []),
+                )
+            )
+        )
+        result = await db.execute(
+            select(
+                InventorySnapshot.item_id,
+                Item.name,
+                func.coalesce(func.sum(InventorySnapshot.quantity), 0).label("qty"),
+                func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("value"),
+            )
+            .select_from(InventorySnapshot)
+            .join(Item, InventorySnapshot.item_id == Item.id)
+            .where(and_(*stock_conds, InventorySnapshot.quantity > 0, ~sales_exists))
+            .group_by(InventorySnapshot.item_id, Item.name)
+            .order_by(desc("value"))
+            .limit(limit)
+        )
     items = [
         {"item_id": row.item_id, "name": row.name, "qty": int(row.qty or 0), "value": float(row.value or 0)}
         for row in result.fetchall()
@@ -994,20 +1193,41 @@ async def _expiry_near(db: AsyncSession, filters: DashboardFilters, allowed: Opt
 
 
 async def _stock_by_category(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]]) -> list[dict]:
-    conds = _inventory_mv_conds(filters, allowed)
-    result = await db.execute(
-        select(
-            func.coalesce(Category.name, "Uncategorized").label("category"),
-            func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("value"),
+    if not _database_supports_materialized_views(db):
+        conds = [Item.active == True]
+        branch_cond = _branch_condition(ItemStock.branch_id, filters, allowed)
+        if branch_cond is not None:
+            conds.append(branch_cond)
+        if filters.category_id:
+            conds.append(Item.category_id == filters.category_id)
+        result = await db.execute(
+            select(
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                func.coalesce(func.sum(ItemStock.quantity * func.coalesce(Item.cost_price, 0)), 0).label("value"),
+            )
+            .select_from(ItemStock)
+            .join(Item, ItemStock.item_id == Item.id)
+            .outerjoin(Category, Item.category_id == Category.id)
+            .where(and_(*conds))
+            .group_by(Category.name)
+            .order_by(desc("value"))
+            .limit(8)
         )
-        .select_from(InventorySnapshot)
-        .join(Item, InventorySnapshot.item_id == Item.id)
-        .outerjoin(Category, Item.category_id == Category.id)
-        .where(and_(*conds))
-        .group_by(Category.name)
-        .order_by(desc("value"))
-        .limit(8)
-    )
+    else:
+        conds = _inventory_mv_conds(filters, allowed)
+        result = await db.execute(
+            select(
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                func.coalesce(func.sum(InventorySnapshot.inventory_value), 0).label("value"),
+            )
+            .select_from(InventorySnapshot)
+            .join(Item, InventorySnapshot.item_id == Item.id)
+            .outerjoin(Category, Item.category_id == Category.id)
+            .where(and_(*conds))
+            .group_by(Category.name)
+            .order_by(desc("value"))
+            .limit(8)
+        )
     return [{"category": row.category, "value": float(row.value or 0)} for row in result.fetchall()]
 
 
@@ -1017,15 +1237,34 @@ async def _inventory_value_trend(
     allowed: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    snapshot_conds = _inventory_mv_conds(filters, allowed)
-    current_value = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(InventorySnapshot.inventory_value), 0)).where(and_(*snapshot_conds))
-            )
-        ).scalar()
-        or 0
-    )
+    if not _database_supports_materialized_views(db):
+        snapshot_conds = [Item.active == True]
+        branch_cond = _branch_condition(ItemStock.branch_id, filters, allowed)
+        if branch_cond is not None:
+            snapshot_conds.append(branch_cond)
+        if filters.category_id:
+            snapshot_conds.append(Item.category_id == filters.category_id)
+        current_value = float(
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(ItemStock.quantity * func.coalesce(Item.cost_price, 0)), 0))
+                    .select_from(ItemStock)
+                    .join(Item, ItemStock.item_id == Item.id)
+                    .where(and_(*snapshot_conds))
+                )
+            ).scalar()
+            or 0
+        )
+    else:
+        snapshot_conds = _inventory_mv_conds(filters, allowed)
+        current_value = float(
+            (
+                await db.execute(
+                    select(func.coalesce(func.sum(InventorySnapshot.inventory_value), 0)).where(and_(*snapshot_conds))
+                )
+            ).scalar()
+            or 0
+        )
 
     purchase_conds = [
         PurchaseBill.date >= period.start_s,
@@ -1147,13 +1386,13 @@ async def _fifo_fefo(db: AsyncSession, filters: DashboardFilters, allowed: Optio
     }
 
 
-async def _billing_payload(db: AsyncSession, filters: DashboardFilters, user: User) -> dict:
+async def _billing_payload(db: AsyncSession, filters: DashboardFilters) -> dict:
     period = _parse_period(filters)
-    allowed = await _allowed_branch_ids(db, user)
+    allowed = None
     conds = _invoice_conditions(filters, allowed, period)
     previous_conds = _invoice_conditions(filters, allowed, period.previous)
 
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         payment_conds = _mv_conds(PaymentSummary, filters, allowed)
         payment_conds.extend([PaymentSummary.paid_date >= period.start, PaymentSummary.paid_date <= period.end])
         payment_rows = await db.execute(
@@ -1206,36 +1445,18 @@ async def _billing_payload(db: AsyncSession, filters: DashboardFilters, user: Us
             or 0
         )
 
-    # Run all independent queries in parallel
-    (
-        current,
-        previous,
-        refunds,
-        previous_refunds,
-        pending_total,
-        previous_pending,
-        daily_count,
-        refund_trends,
-        pending_payments,
-        pending_invoice_count_result,
-    ) = await asyncio.gather(
-        _invoice_summary(db, filters, allowed, period),
-        _invoice_summary(db, filters, allowed, period.previous),
-        _refund_summary(db, filters, allowed, period),
-        _refund_summary(db, filters, allowed, period.previous),
-        get_pending_total(),
-        get_previous_pending(),
-        _daily_billing_count(db, filters, allowed, period),
-        _refund_trends(db, filters, allowed, period),
-        _pending_payments(db, filters, allowed, period),
-        _pending_invoice_count(db, conds),
-    )
-
-    # Get additional data in parallel since they weren't included in the initial gather
-    recent_refunds, discounted_bills = await asyncio.gather(
-        _recent_refunds(db, filters, allowed, period),
-        _discounted_bills(db, filters, allowed, period),
-    )
+    current = await _invoice_summary(db, filters, allowed, period)
+    previous = await _invoice_summary(db, filters, allowed, period.previous)
+    refunds = await _refund_summary(db, filters, allowed, period)
+    previous_refunds = await _refund_summary(db, filters, allowed, period.previous)
+    pending_total = await get_pending_total()
+    previous_pending = await get_previous_pending()
+    daily_count = await _daily_billing_count(db, filters, allowed, period)
+    refund_trends = await _refund_trends(db, filters, allowed, period)
+    pending_payments = await _pending_payments(db, filters, allowed, period)
+    pending_invoice_count_result = await _pending_invoice_count(db, conds)
+    recent_refunds = await _recent_refunds(db, filters, allowed, period)
+    discounted_bills = await _discounted_bills(db, filters, allowed, period)
 
     return {
         "filters": _filters_dict(filters, period),
@@ -1285,7 +1506,7 @@ async def _refund_summary(
     allowed: Optional[list[str]],
     period: Period,
 ) -> dict:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(RefundSummary, filters, allowed)
         conds.extend([RefundSummary.refund_date >= period.start, RefundSummary.refund_date <= period.end])
         row = (
@@ -1315,7 +1536,7 @@ async def _refund_trends(
     allowed: Optional[list[str]],
     period: Period,
 ) -> list[dict]:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(RefundSummary, filters, allowed)
         conds.extend([RefundSummary.refund_date >= period.start, RefundSummary.refund_date <= period.end])
         result = await db.execute(
@@ -1383,7 +1604,7 @@ async def _recent_refunds(
 
 
 async def _daily_billing_count(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], period: Period) -> list[dict]:
-    if _can_use_sales_mvs(filters):
+    if _can_use_sales_mvs(db, filters):
         conds = _mv_conds(DailySalesSummary, filters, allowed)
         conds.extend([DailySalesSummary.sale_date >= period.start, DailySalesSummary.sale_date <= period.end])
         result = await db.execute(
@@ -1466,11 +1687,11 @@ async def _discounted_bills(
     return _page(items, page_size=limit)
 
 
-async def _operations_payload(db: AsyncSession, filters: DashboardFilters, user: User) -> dict:
+async def _operations_payload(db: AsyncSession, filters: DashboardFilters) -> dict:
     period = _parse_period(filters)
-    allowed = await _allowed_branch_ids(db, user)
+    allowed = None
     conds = _invoice_conditions(filters, allowed, period)
-    today_period = Period(date.today(), date.today())
+    today_period = Period(period.end, period.end)
 
     # Helper coroutine for today's count
     async def get_today_count():
@@ -1483,15 +1704,12 @@ async def _operations_payload(db: AsyncSession, filters: DashboardFilters, user:
             or 0
         )
 
-    # Run all independent queries in parallel
-    today_count, staff_sales, branch_performance, heatmap, summary, activity_logs = await asyncio.gather(
-        get_today_count(),
-        _staff_sales(db, filters, allowed, period),
-        _branch_sales(db, filters, allowed, period),
-        _hourly_heatmap(db, filters, allowed, period),
-        _invoice_summary(db, filters, allowed, period),
-        _activity_logs(db, filters, period),
-    )
+    today_count = await get_today_count()
+    staff_sales = await _staff_sales(db, filters, allowed, period)
+    branch_performance = await _branch_sales(db, filters, allowed, period)
+    heatmap = await _hourly_heatmap(db, filters, allowed, period)
+    summary = await _invoice_summary(db, filters, allowed, period)
+    activity_logs = await _activity_logs(db, filters, period)
 
     best_staff = staff_sales[0]["staff"] if staff_sales else "—"
     best_branch = branch_performance[0]["branch"] if branch_performance else "—"
@@ -1607,15 +1825,11 @@ async def _activity_logs(db: AsyncSession, filters: DashboardFilters, period: Pe
     return _page(items, page_size=limit)
 
 
-@router.get("/filters", dependencies=[Depends(require_perm("dashboard.view"))])
+@router.get("/filters")
 async def dashboard_filters(
-    user: User = Depends(require_perm("dashboard.view")),
     db: AsyncSession = Depends(get_db),
 ):
-    allowed = await _allowed_branch_ids(db, user)
     branch_query = select(Branch).where(Branch.active == True).order_by(Branch.name)
-    if allowed is not None:
-        branch_query = branch_query.where(Branch.id.in_(allowed or ["__no_branch_access__"]))
     branches = (await db.execute(branch_query)).scalars().all()
     staff_rows = (await db.execute(select(User).where(User.active == True).order_by(User.name))).scalars().all()
     categories = (await db.execute(select(Category).order_by(Category.name))).scalars().all()
@@ -1629,16 +1843,15 @@ async def dashboard_filters(
 @router.get("/summary")
 async def dashboard_summary(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
-    allowed = await _allowed_branch_ids(db, user)
+    allowed = None
     total_revenue = await _invoice_total_for_period(db, filters, allowed, period)
     return {
         "filters": _filters_dict(filters, period),
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "cache_key": _cache_key("summary", user.id, _filters_dict(filters, period)),
+        "cache_key": _cache_key("summary", PUBLIC_DASHBOARD_USER_ID, _filters_dict(filters, period)),
         "total_revenue": total_revenue,
     }
 
@@ -1646,122 +1859,105 @@ async def dashboard_summary(
 @router.get("/sales")
 async def sales_dashboard(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.sales.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
-    return await _cached_dashboard_payload(
-        "sales",
-        user.id,
-        _filters_dict(filters, period),
-        ttl_seconds=180,
-        loader=lambda: _sales_dashboard_payload(db, filters, user),
-    )
+    return await _sales_dashboard_payload(db, filters)
 
 
 @router.get("/inventory")
 async def inventory_dashboard(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.inventory.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
     return await _cached_dashboard_payload(
         "inventory",
-        user.id,
+        PUBLIC_DASHBOARD_USER_ID,
         _filters_dict(filters, period),
         ttl_seconds=300,
-        loader=lambda: _inventory_payload(db, filters, user),
+        loader=lambda: _inventory_payload(db, filters),
     )
 
 
 @router.get("/billing")
 async def billing_dashboard(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.billing.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
     return await _cached_dashboard_payload(
         "billing",
-        user.id,
+        PUBLIC_DASHBOARD_USER_ID,
         _filters_dict(filters, period),
         ttl_seconds=120,
-        loader=lambda: _billing_payload(db, filters, user),
+        loader=lambda: _billing_payload(db, filters),
     )
 
 
 @router.get("/operations")
 async def operations_dashboard(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.operations.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
     return await _cached_dashboard_payload(
         "operations",
-        user.id,
+        PUBLIC_DASHBOARD_USER_ID,
         _filters_dict(filters, period),
         ttl_seconds=120,
-        loader=lambda: _operations_payload(db, filters, user),
+        loader=lambda: _operations_payload(db, filters),
     )
 
 
 @router.get("/sales/top-products")
 async def sales_top_products(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.sales.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
-    return await _top_products(db, filters, await _allowed_branch_ids(db, user), period, limit=filters.limit)
+    return await _top_products(db, filters, None, period, limit=filters.limit)
 
 
 @router.get("/sales/recent-sales")
 async def sales_recent_sales(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.sales.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
-    return await _recent_sales(db, filters, await _allowed_branch_ids(db, user), period, limit=filters.limit)
+    return await _recent_sales(db, filters, None, period, limit=filters.limit)
 
 
 @router.get("/inventory/low-stock")
 async def inventory_low_stock(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.inventory.view")),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _low_stock(db, filters, await _allowed_branch_ids(db, user), limit=filters.limit)
+    return await _low_stock(db, filters, None, limit=filters.limit)
 
 
 @router.get("/inventory/expiry-near")
 async def inventory_expiry_near(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.inventory.view")),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _expiry_near(db, filters, await _allowed_branch_ids(db, user), limit=filters.limit)
+    return await _expiry_near(db, filters, None, limit=filters.limit)
 
 
 @router.get("/billing/pending-payments")
 async def billing_pending_payments(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.billing.view")),
     db: AsyncSession = Depends(get_db),
 ):
     period = _parse_period(filters)
-    return await _pending_payments(db, filters, await _allowed_branch_ids(db, user), period, limit=filters.limit)
+    return await _pending_payments(db, filters, None, period, limit=filters.limit)
 
 
 @router.get("/operations/activity-logs")
 async def operations_activity_logs(
     filters: DashboardFilters = Depends(),
-    user: User = Depends(require_perm("dashboard.operations.view")),
     db: AsyncSession = Depends(get_db),
 ):
-    _ = user
     period = _parse_period(filters)
     return await _activity_logs(db, filters, period, limit=filters.limit)
 
@@ -1769,9 +1965,8 @@ async def operations_activity_logs(
 @router.post("/export")
 async def export_dashboard(
     payload: DashboardExportRequest,
-    user: User = Depends(require_perm("dashboard.export")),
 ):
-    digest = _cache_key(payload.tab, user.id, payload.filters)
+    digest = _cache_key(payload.tab, PUBLIC_DASHBOARD_USER_ID, payload.filters)
     return {
         "job_id": f"exp_{uuid.uuid4().hex[:12]}",
         "status": "queued",
@@ -1784,6 +1979,12 @@ def _cache_key(scope: str, user_id: str, filters: dict) -> str:
     raw = json.dumps(filters or {}, sort_keys=True, default=str)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return f"dashboard:{scope}:{user_id}:{digest}"
+
+
+def invalidate_dashboard_cache_for_user(user_id: str) -> None:
+    keys_to_remove = [key for key in _DASHBOARD_CACHE if key.split(':')[2] == user_id]
+    for key in keys_to_remove:
+        _DASHBOARD_CACHE.pop(key, None)
 
 
 async def _cached_dashboard_payload(scope: str, user_id: str, filters: dict, ttl_seconds: int, loader):

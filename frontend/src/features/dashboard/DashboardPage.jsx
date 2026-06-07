@@ -28,7 +28,7 @@ export default function DashboardPage() {
   const can = useCan()
   const [activeTab, setActiveTab] = useState('sales')
   const { autoRefresh, toggleAutoRefresh } = useAutoRefresh(false)
-  const { filters, setFilter, resetFilters, filterOptions } = useDashboardFilters()
+  const { filters, setFilter, resetFilters, filterOptions, rangeOptions } = useDashboardFilters()
   const debouncedFilters = useDebouncedFilters(filters, 400)
   const fetchingCount = useIsFetching({ queryKey: dashboardKeys.root })
 
@@ -68,7 +68,7 @@ export default function DashboardPage() {
     <div className="page-container">
       <DashboardHeader
         filters={filters}
-        filterOptions={filterOptions}
+        filterOptions={{ ...filterOptions, rangeOptions }}
         onFilterChange={setFilter}
         onReset={resetFilters}
         onRefresh={refresh}

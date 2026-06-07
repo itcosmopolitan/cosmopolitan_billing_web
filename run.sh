@@ -18,6 +18,40 @@ echo -e "${BOLD}${CYAN}╚══════════════════
 echo ""
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_PORT=8080
+
+kill_port_listener() {
+  local port="$1"
+  local label="$2"
+
+  if ! command -v lsof &>/dev/null; then
+    echo -e "${YELLOW}⚠ lsof not found; cannot pre-clear port ${port}.${RESET}"
+    return 0
+  fi
+
+  local pids
+  pids="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+
+  echo -e "${YELLOW}⚠ Port ${port} is already in use by ${label}. Stopping old listener(s): ${pids}${RESET}"
+  kill $pids 2>/dev/null || true
+
+  local waited=0
+  while [ "$waited" -lt 5 ]; do
+    sleep 1
+    pids="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -z "$pids" ]; then
+      echo -e "${GREEN}✓ Port ${port} freed${RESET}"
+      return 0
+    fi
+    waited=$((waited + 1))
+  done
+
+  echo -e "${YELLOW}⚠ Port ${port} still busy; force-killing listener(s): ${pids}${RESET}"
+  kill -9 $pids 2>/dev/null || true
+}
 
 # ─── Check prerequisites ──────────────────────────────────────────────────────
 echo -e "${YELLOW}Checking prerequisites...${RESET}"
@@ -76,14 +110,15 @@ echo -e "${BOLD}Starting services...${RESET}"
 cd "$ROOT_DIR/backend"
 # shellcheck disable=SC1091
 source .venv/bin/activate
-echo -e "${YELLOW}▶ Starting FastAPI backend on port 8080...${RESET}"
-python -m uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload &
+kill_port_listener "$BACKEND_PORT" "backend"
+echo -e "${YELLOW}▶ Starting FastAPI backend on port ${BACKEND_PORT}...${RESET}"
+python -m uvicorn src.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload &
 BACKEND_PID=$!
 
 # Wait until the API responds (or fail fast if startup crashed, e.g. missing deps)
 HEALTH_RETRIES=30
 HEALTH_COUNT=0
-until curl -fsS -m 2 http://127.0.0.1:8080/api/v1/permissions/catalog >/dev/null 2>&1; do
+until curl -fsS -m 2 "http://127.0.0.1:${BACKEND_PORT}/api/v1/permissions/catalog" >/dev/null 2>&1; do
   HEALTH_COUNT=$((HEALTH_COUNT + 1))
   if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
     echo -e "${YELLOW}❌ Backend exited during startup. Check errors above.${RESET}"

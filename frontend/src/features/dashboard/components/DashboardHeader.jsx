@@ -25,23 +25,17 @@ export default function DashboardHeader({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
-            <FilterField label="From">
-              <input
+            <FilterField label="Date range">
+              <select
                 className="form-input"
-                type="date"
-                value={filters.from}
-                onChange={(e) => onFilterChange('from', e.target.value)}
+                value={filters.range}
+                onChange={(e) => onFilterChange('range', e.target.value)}
                 style={{ height: 42 }}
-              />
-            </FilterField>
-            <FilterField label="To">
-              <input
-                className="form-input"
-                type="date"
-                value={filters.to}
-                onChange={(e) => onFilterChange('to', e.target.value)}
-                style={{ height: 42 }}
-              />
+              >
+                {(filterOptions.rangeOptions || []).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
             </FilterField>
             <FilterField label="Staff">
               <select className="form-input" value={filters.staff_id} onChange={(e) => onFilterChange('staff_id', e.target.value)} style={{ height: 42 }}>

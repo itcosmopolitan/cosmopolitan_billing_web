@@ -5,7 +5,7 @@ All ORM models for the retail platform
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -365,6 +365,74 @@ class SaleLineItem(Base):
 
     invoice = relationship("SaleInvoice", back_populates="line_items")
     item    = relationship("Item", back_populates="sale_lines")
+
+
+class DailySalesSummary(Base):
+    __tablename__ = "mv_daily_sales_summary"
+    branch_id = Column(String, primary_key=True)
+    sale_date = Column(Date, primary_key=True)
+    cashier = Column(String, primary_key=True)
+    bill_count = Column(Integer)
+    revenue = Column(Float)
+    collected = Column(Float)
+    discount = Column(Float)
+    average_bill_value = Column(Float)
+
+
+class ProductSalesSummary(Base):
+    __tablename__ = "mv_product_sales_summary"
+    branch_id = Column(String, primary_key=True)
+    sale_date = Column(Date, primary_key=True)
+    cashier = Column(String, primary_key=True)
+    item_id = Column(String, primary_key=True)
+    product_name = Column(String)
+    category_id = Column(String)
+    brand = Column(String)
+    quantity_sold = Column(Integer)
+    revenue = Column(Float)
+    profit = Column(Float)
+
+
+class InventorySnapshot(Base):
+    __tablename__ = "mv_inventory_snapshot"
+    branch_id = Column(String, primary_key=True)
+    item_id = Column(String, primary_key=True)
+    category_id = Column(String)
+    brand = Column(String)
+    quantity = Column(Integer)
+    reorder_level = Column(Integer)
+    inventory_value = Column(Float)
+    updated_at = Column(DateTime)
+
+
+class PaymentSummary(Base):
+    __tablename__ = "mv_payment_summary"
+    branch_id = Column(String, primary_key=True)
+    paid_date = Column(Date, primary_key=True)
+    cashier = Column(String, primary_key=True)
+    payment_method = Column(String, primary_key=True)
+    bill_count = Column(Integer)
+    collected = Column(Float)
+    pending_amount = Column(Float)
+
+
+class StaffPerformanceSummary(Base):
+    __tablename__ = "mv_staff_performance_summary"
+    branch_id = Column(String, primary_key=True)
+    sale_date = Column(Date, primary_key=True)
+    staff_name = Column(String, primary_key=True)
+    bill_count = Column(Integer)
+    sales = Column(Float)
+    average_bill_value = Column(Float)
+
+
+class RefundSummary(Base):
+    __tablename__ = "mv_refund_summary"
+    branch_id = Column(String, primary_key=True)
+    refund_date = Column(Date, primary_key=True)
+    cashier = Column(String, primary_key=True)
+    refund_count = Column(Integer)
+    refund_amount = Column(Float)
 
 
 # ─── Quotation ────────────────────────────────────────────────────────────────

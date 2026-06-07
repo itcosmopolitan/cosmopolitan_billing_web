@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # ─── Demo Mode ────────────────────────────────────────────────────────
     demo_mode: bool = True
 
+    # ─── Dashboard Read Models ────────────────────────────────────────────
+    # Disabled by default because materialized views require an external
+    # refresh step. When false, dashboard APIs query source tables directly.
+    dashboard_use_materialized_views: bool = False
+
     class Config:
         env_file = ".env"
         case_sensitive = False
