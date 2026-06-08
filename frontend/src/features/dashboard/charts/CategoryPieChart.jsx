@@ -21,7 +21,7 @@ export default function CategoryPieChart({
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(130px, 180px)', gap: 12, alignItems: 'center' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(140px, 220px)', gap: 12, alignItems: 'center' }}>
       <ResponsiveContainer width="100%" height={220}>
         <PieChart>
           <Pie
@@ -36,11 +36,11 @@ export default function CategoryPieChart({
               <Cell key={index} fill={seriesPalette[index % seriesPalette.length]} />
             ))}
           </Pie>
-          <Tooltip formatter={(value) => valueFormatter(value)} contentStyle={tooltipStyle} />
+          <Tooltip content={<CustomTooltip valueFormatter={valueFormatter} nameKey={nameKey} itemsKey="items" />} contentStyle={tooltipStyle} />
         </PieChart>
       </ResponsiveContainer>
-      <div style={{ display: 'grid', gap: 8 }}>
-        {data.slice(0, 6).map((entry, index) => {
+      <div style={{ display: 'grid', gap: 8, maxHeight: 220, overflowY: 'auto', paddingRight: 8 }}>
+        {data.map((entry, index) => {
           const value = Number(entry[valueKey] || 0)
           const percent = total ? (value / total) * 100 : 0
           return (
@@ -64,6 +64,29 @@ export default function CategoryPieChart({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+function CustomTooltip({ active, payload, valueFormatter = (v) => v, nameKey = 'name', itemsKey = 'items' }) {
+  if (!active || !payload || !payload.length) return null
+  const entry = payload[0].payload || {}
+  const name = entry[nameKey] || payload[0].name || ''
+  const value = payload[0].value
+  const items = entry[itemsKey]
+
+  return (
+    <div style={{ padding: 10, background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: 8, color: 'var(--text-primary)', minWidth: 140 }}>
+      <div style={{ fontWeight: 700, marginBottom: items && items.length ? 8 : 0 }}>
+        {name} : {valueFormatter ? valueFormatter(value) : value}
+      </div>
+      {items && items.length ? (
+        <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: 13 }}>
+          {items.map((label, i) => (
+            <div key={`${label}-${i}`} style={{ padding: '4px 0', color: 'var(--text-secondary)' }}>{label}</div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

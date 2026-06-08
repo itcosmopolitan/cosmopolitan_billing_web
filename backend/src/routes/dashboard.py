@@ -911,6 +911,75 @@ async def _inventory_payload(db: AsyncSession, filters: DashboardFilters) -> dic
     inventory_value_trend = await _inventory_value_trend(db, filters, allowed, period)
     products = int(summary.products or 0)
 
+    # Collect example product names for the fast/slow segments so tooltips
+    # can show actual SKUs when hovering on the pie slices.
+    # Fast moving: top sold items by qty within the period.
+    sold_rows = []
+    try:
+        sales_conds = _line_conditions(filters, allowed, period)
+        sold_rows = (
+            await db.execute(
+                select(
+                    Item.name.label("name"),
+                    func.coalesce(func.sum(SaleLineItem.qty), 0).label("qty"),
+                )
+                .select_from(SaleLineItem)
+                .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+                .outerjoin(Item, SaleLineItem.item_id == Item.id)
+                .where(and_(*sales_conds))
+                .group_by(Item.id)
+                .order_by(desc("qty"))
+                .limit(8)
+            )
+        ).fetchall()
+    except Exception:
+        sold_rows = []
+
+    fast_names = [row.name for row in sold_rows if row.name]
+
+    # Slow moving: items with stock but no sales in the period (sample up to 8)
+    slow_rows = []
+    try:
+        stock_conds = [Item.active == True]
+        branch_cond = _branch_condition(ItemStock.branch_id, filters, allowed)
+        if branch_cond is not None:
+            stock_conds.append(branch_cond)
+        if filters.category_id:
+            stock_conds.append(Item.category_id == filters.category_id)
+
+        sales_exists = exists(
+            select(1)
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .where(
+                and_(
+                    SaleLineItem.item_id == Item.id,
+                    SaleInvoice.status != InvoiceStatus.cancelled,
+                    SaleInvoice.date >= period.start_s,
+                    SaleInvoice.date <= period.end_s,
+                    *(_branch_condition(SaleInvoice.branch_id, filters, allowed) is not None and [
+                        _branch_condition(SaleInvoice.branch_id, filters, allowed)
+                    ] or []),
+                )
+            )
+        )
+
+        slow_rows = (
+            await db.execute(
+                select(Item.name)
+                .select_from(ItemStock)
+                .join(Item, ItemStock.item_id == Item.id)
+                .where(and_(*stock_conds, ~sales_exists))
+                .group_by(Item.id)
+                .order_by(Item.name)
+                .limit(8)
+            )
+        ).fetchall()
+    except Exception:
+        slow_rows = []
+
+    slow_names = [row[0] for row in slow_rows if row and row[0]]
+
     return {
         "filters": _filters_dict(filters, period),
         "kpis": {
@@ -923,8 +992,8 @@ async def _inventory_payload(db: AsyncSession, filters: DashboardFilters) -> dic
         "charts": {
             "inventory_value_trend": inventory_value_trend,
             "fast_vs_slow_moving": [
-                {"segment": "Fast moving", "count": sold_item_count},
-                {"segment": "Slow moving", "count": max(0, products - sold_item_count)},
+                {"segment": "Fast moving", "count": sold_item_count, "items": fast_names},
+                {"segment": "Slow moving", "count": max(0, products - sold_item_count), "items": slow_names},
             ],
             "stock_by_category": stock_by_category,
         },
