@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Branch, ItemStock
-from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import serialize_branch
 from src.security import require_perm
 
@@ -38,12 +38,17 @@ class BranchUpdate(BaseModel):
 async def list_branches(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    page_no: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
+    if page_no is not None or per_page is not None:
+        _, pp, sk, lim = pagination_from_page(page_no, per_page)
+    else:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
     total = int((await db.execute(select(func.count(Branch.id)))).scalar() or 0)
     sort_expr = resolve_sort(
         sort_by,
@@ -61,7 +66,7 @@ async def list_branches(
     )
     result = await db.execute(select(Branch).order_by(sort_expr).offset(sk).limit(lim))
     items = [serialize_branch(b) for b in result.scalars().all()]
-    return paged(items, total, sk, lim)
+    return paged_list(items, total, sk, lim)
 
 @router.get("/{branch_id}")
 async def get_branch(branch_id: str, db: AsyncSession = Depends(get_db)):

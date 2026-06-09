@@ -64,6 +64,31 @@ def paged(items: List[Any], total: int, skip: int, limit: int, **extra: Any) -> 
     return out
 
 
+def paged_list(
+    items: List[Any],
+    total: int,
+    skip: int,
+    limit: int,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """Standard list envelope with page_context (page_no, per_page, has_more_page)."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    pn = max(1, (sk // lim) + 1) if lim else 1
+    return paged(
+        items,
+        total,
+        sk,
+        lim,
+        page_context={
+            "page_no": pn,
+            "per_page": lim,
+            "has_more_page": sk + lim < total,
+        },
+        **extra,
+    )
+
+
 def normalize_sort_order(sort_order: Optional[str], default: str = "asc") -> str:
     """Normalize a `sort_order` query string to either 'asc' or 'desc'."""
     so = (sort_order or default or "asc").strip().lower()

@@ -301,6 +301,7 @@ export function Tag({ children, color }) {
 
 export { PaginationBar } from './PaginationBar'
 export { SortableHeader } from './SortableHeader'
+export { default as RowActionsMenu } from './RowActionsMenu'
 
 // ─── Segmented Toggle ────────────────────────────────────────────────────────
 // Pill-style segmented control. Use when picking between a small number of

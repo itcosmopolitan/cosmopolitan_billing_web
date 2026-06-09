@@ -11,13 +11,14 @@ from __future__ import annotations
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Role, User
+from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page
 from src.permissions import filter_valid
 from src.security import require_perm
 
@@ -76,10 +77,30 @@ def _normalize_perms(role_key: str, perms: list[str]) -> list[str]:
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @router.get("/")
-async def list_roles(db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(select(Role).order_by(Role.is_system.desc(), Role.label))).scalars().all()
+async def list_roles(
+    page_no: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    if page_no is not None or per_page is not None:
+        _, pp, sk, lim = pagination_from_page(page_no, per_page)
+    else:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
+    total = int((await db.execute(select(func.count(Role.id)))).scalar() or 0)
+    rows = (
+        await db.execute(
+            select(Role)
+            .order_by(Role.is_system.desc(), Role.label)
+            .offset(sk)
+            .limit(lim)
+        )
+    ).scalars().all()
     counts = await _user_counts(db, [r.id for r in rows])
-    return [_serialize(r, counts.get(r.id, 0)) for r in rows]
+    items = [_serialize(r, counts.get(r.id, 0)) for r in rows]
+    return paged_list(items, total, sk, lim)
 
 
 @router.get("/{role_id}")

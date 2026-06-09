@@ -2,13 +2,22 @@ import { PAGE_SIZE_OPTIONS } from '@/utils/pagination'
 
 /**
  * Server list footer: page controls and per-page size (50 / 100 / 200 / 500).
+ * When `hasMorePage` is supplied (from API `page_context.has_more_page`), the
+ * bar is hidden on a single-page result; it stays visible on page 2+ so Previous
+ * remains available even when `has_more_page` is false on the last page.
  */
-export function PaginationBar({ total, skip, limit, onSkipChange, onLimitChange, disabled }) {
+export function PaginationBar({ total, skip, limit, onSkipChange, onLimitChange, disabled, hasMorePage }) {
   const safeLimit = limit > 0 ? limit : 50
   const from = total === 0 ? 0 : skip + 1
   const to = Math.min(skip + safeLimit, total)
   const totalPages = Math.max(1, Math.ceil(total / safeLimit))
   const page = Math.min(totalPages, Math.floor(skip / safeLimit) + 1)
+
+  const showBar = hasMorePage === undefined
+    ? total > safeLimit
+    : (hasMorePage || skip > 0)
+
+  if (!showBar) return null
 
   return (
     <div
@@ -35,8 +44,10 @@ export function PaginationBar({ total, skip, limit, onSkipChange, onLimitChange,
           className="btn btn-secondary btn-sm"
           disabled={disabled || skip <= 0}
           onClick={() => onSkipChange(Math.max(0, skip - safeLimit))}
+          aria-label="Previous page"
+          title="Previous page"
         >
-          Previous
+          &lt;
         </button>
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>
           Page {page} / {totalPages}
@@ -46,8 +57,10 @@ export function PaginationBar({ total, skip, limit, onSkipChange, onLimitChange,
           className="btn btn-secondary btn-sm"
           disabled={disabled || skip + safeLimit >= total}
           onClick={() => onSkipChange(skip + safeLimit)}
+          aria-label="Next page"
+          title="Next page"
         >
-          Next
+          &gt;
         </button>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
           <span style={{ fontSize: 12 }}>Per page</span>
