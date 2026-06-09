@@ -4,14 +4,27 @@ import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
 import { authAPI, permissionsAPI } from '@/api'
 
-// Demo accounts shown on the login screen. Email + password MUST match what
-// `backend/src/seed.py` writes — these are passed straight to the real
-// /auth/login endpoint (Phase 1.5 — fixes ISS-002).
 const DEMO_USERS = [
-  { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'super_admin',       avatar: 'SA' },
-  { email: 'kavitha@srimurugan.com', password: 'kavitha123', name: 'Kavitha R.',   role: 'branch_manager',    avatar: 'KR' },
-  { email: 'arjun@srimurugan.com',   password: 'arjun123',   name: 'Arjun M.',     role: 'cashier',           avatar: 'AM' },
-  { email: 'deepa@srimurugan.com',   password: 'deepa123',   name: 'Deepa S.',     role: 'inventory_manager', avatar: 'DS' },
+  { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'Super Admin',       avatar: 'SA' },
+  { email: 'kavitha@srimurugan.com', password: 'kavitha123', name: 'Kavitha R.',   role: 'Branch Manager',    avatar: 'KR' },
+  { email: 'arjun@srimurugan.com',   password: 'arjun123',   name: 'Arjun M.',     role: 'Cashier',           avatar: 'AM' },
+  { email: 'deepa@srimurugan.com',   password: 'deepa123',   name: 'Deepa S.',     role: 'Inventory Manager', avatar: 'DS' },
+]
+
+const FEATURES = [
+  { icon: '🏢', label: 'Multi-Branch Management' },
+  { icon: '📦', label: 'Real-Time Inventory Tracking' },
+  { icon: '📊', label: 'Sales & Revenue Analytics' },
+  { icon: '💳', label: 'Billing & POS Operations' },
+  { icon: '👥', label: 'Customer Management' },
+  { icon: '🚚', label: 'Supplier Management' },
+]
+
+const SECURE_ITEMS = [
+  { icon: '🧲', label: 'Protected Login Flow' },
+  { icon: '⚙️', label: 'Adaptive Access Controls' },
+  { icon: '✅', label: 'Verified Role Enforcement' },
+  { icon: '📡', label: 'Encrypted Data Transit' },
 ]
 
 export default function LoginPage() {
@@ -19,6 +32,7 @@ export default function LoginPage() {
   const setSession = useAppStore((s) => s.setSession)
   const [email, setEmail] = useState('suresh@srimurugan.com')
   const [password, setPassword] = useState('admin123')
+  const [rememberMe, setRememberMe] = useState(true)
   const [loading, setLoading] = useState(false)
 
   const handleLogin = async (e) => {
@@ -29,14 +43,8 @@ export default function LoginPage() {
       const { token, user } = await authAPI.login(email.trim().toLowerCase(), password)
       if (!token || !user) throw new Error('Malformed login response')
       localStorage.setItem('retailos_token', token)
-      // Refresh the catalog in case the boot fetch failed (catalog is open
-      // access — this is a cheap call).
       const catalog = await permissionsAPI.catalog().catch(() => undefined)
       setSession({ user, permissions: user.permissions || [], permCatalog: catalog })
-      // Admin-created accounts (or admin-reset ones) land here with a temp
-      // password and must change it before doing anything else. The
-      // RequirePasswordSet guard would also catch this on any other route,
-      // but routing directly here is friendlier than a redirect flash.
       if (user.must_change_password) {
         toast('Please set a new password to continue', { icon: '🔐' })
         navigate('/change-password', { replace: true })
@@ -45,7 +53,6 @@ export default function LoginPage() {
       toast.success(`Welcome back, ${user.name}!`)
       navigate('/dashboard')
     } catch (err) {
-      // Toast already fired by global axios interceptor; nothing else to do.
       console.error(err)
     } finally {
       setLoading(false)
@@ -53,89 +60,158 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{
-      minHeight: '100vh', background: 'var(--bg-base)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: 24,
-    }}>
-      <div style={{ width: '100%', maxWidth: 420 }}>
+    <div className="login-shell">
+      <div className="login-grid">
+        <section className="login-hero">
+          <div className="login-brand">
+            <span className="login-brand-label">Complete Retail Management Platform</span>
+            <h1>Manage your retail business from one powerful platform</h1>
+            <p>Manage branches, inventory, sales, billing, customers, suppliers, and analytics from one unified platform.</p>
+          </div>
 
-        {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: 40 }}>
-          <div style={{ width: 54, height: 54, borderRadius: 16, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, margin: '0 auto 16px' }}>R</div>
-          <h1 style={{ fontSize: 26, letterSpacing: '-0.5px', marginBottom: 6 }}>Cosmopolitan Pro</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Multi-branch retail management platform</p>
-        </div>
-
-        {/* Login Card */}
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: 20, padding: 32, marginBottom: 20 }}>
-          <h3 style={{ marginBottom: 24, fontSize: 18 }}>Sign in to your account</h3>
-
-          <form onSubmit={handleLogin}>
-            <div className="form-group">
-              <label className="form-label">Email address</label>
-              <input
-                className="form-input"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                required
-                autoFocus
-              />
-            </div>
-            <div className="form-group" style={{ marginBottom: 20 }}>
-              <label className="form-label">Password</label>
-              <input
-                className="form-input"
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-              />
-            </div>
-            <button className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }} type="submit" disabled={loading}>
-              {loading ? (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
-                    <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="3" strokeLinecap="round" />
-                  </svg>
-                  Signing in…
-                </span>
-              ) : 'Sign In →'}
-            </button>
-          </form>
-        </div>
-
-        {/* Demo Accounts */}
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: 16, padding: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Demo Accounts</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {DEMO_USERS.map(u => (
-              <button key={u.email} onClick={() => { setEmail(u.email); setPassword(u.password) }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '10px 14px', background: 'var(--bg-raised)',
-                  border: `1px solid ${email === u.email ? 'var(--accent)' : 'var(--border-default)'}`,
-                  borderRadius: 10, cursor: 'pointer', textAlign: 'left', width: '100%',
-                  transition: 'all 0.12s',
-                }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--accent-bg)', color: 'var(--accent)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{u.avatar}</div>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{u.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{u.role.replace('_', ' ')} · {u.email}</div>
-                </div>
-                {email === u.email && <span style={{ marginLeft: 'auto', color: 'var(--accent)', fontSize: 14 }}>✓</span>}
-              </button>
+          <div className="login-feature-list">
+            {FEATURES.map((feature) => (
+              <div key={feature.label} className="login-feature">
+                <div className="login-feature-icon">{feature.icon}</div>
+                <div className="login-feature-copy">{feature.label}</div>
+              </div>
             ))}
           </div>
-        </div>
 
-        <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginTop: 20 }}>
-          Sri Murugan Traders Pvt Ltd · Maldives operations
-        </p>
+          <div className="login-hero-visual">
+            <div className="login-visual-glow" />
+            <div className="login-visual-inner">
+              <div className="login-visual-stats">
+                <div className="login-visual-stat">
+                  <span>Today’s Sales</span>
+                  <strong>$12,450.00</strong>
+                  <small>+12.5% vs yesterday</small>
+                </div>
+                <div className="login-visual-stat">
+                  <span>Total Orders</span>
+                  <strong>156</strong>
+                  <small>+8.2% vs yesterday</small>
+                </div>
+                <div className="login-visual-stat">
+                  <span>Inventory Items</span>
+                  <strong>2,847</strong>
+                  <small>+5.7% vs yesterday</small>
+                </div>
+              </div>
+
+              <div className="login-visual-body">
+                <div className="login-visual-chart">
+                  <div className="login-visual-chart-labels">
+                    <span>Sales Overview</span>
+                    <span>This Week</span>
+                  </div>
+                  <div className="login-chart-bars">
+                    <div className="login-chart-bar bar-1" />
+                    <div className="login-chart-bar bar-2" />
+                    <div className="login-chart-bar bar-3" />
+                    <div className="login-chart-bar bar-4" />
+                    <div className="login-chart-bar bar-5" />
+                    <div className="login-chart-bar bar-6" />
+                    <div className="login-chart-bar bar-7" />
+                  </div>
+                </div>
+
+                <div className="login-visual-products">
+                  <div className="login-visual-products-header">
+                    <span>Top Products</span>
+                  </div>
+                  <div className="login-product-row"><span>Product A</span><strong>$2,450</strong></div>
+                  <div className="login-product-row"><span>Product B</span><strong>$1,850</strong></div>
+                  <div className="login-product-row"><span>Product C</span><strong>$1,250</strong></div>
+                  <div className="login-product-row"><span>Product D</span><strong>$980</strong></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="login-auth">
+          <div className="login-card">
+            <div className="login-card-header">
+              <div>
+                <p className="login-subtitle">Welcome Back!</p>
+                <h2>Sign in to access your retail dashboard</h2>
+              </div>
+            </div>
+
+            <form onSubmit={handleLogin} className="login-form">
+              <div className="form-group">
+                <label className="form-label">Email Address</label>
+                <input
+                  className="form-input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter your email address"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input
+                  className="form-input"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  required
+                />
+              </div>
+
+              <div className="login-form-footer">
+                <label className="login-remember">
+                  <input type="checkbox" checked={rememberMe} onChange={() => setRememberMe(!rememberMe)} />
+                  Remember me
+                </label>
+                <button type="button" className="login-forgot" onClick={() => toast('Forgot password flow coming soon')}>Forgot password?</button>
+              </div>
+
+              <button className="btn btn-primary btn-lg login-submit" type="submit" disabled={loading}>
+                {loading ? (
+                  <span className="login-submit-loading">Signing in…</span>
+                ) : (
+                  'Sign In →'
+                )}
+              </button>
+            </form>
+          </div>
+
+          <div className="login-demo-card">
+            <div className="login-demo-header">
+              <div>
+                <p className="login-demo-label">Demo Accounts</p>
+                <p className="login-demo-note">Click any account to auto-fill credentials</p>
+              </div>
+            </div>
+            <div className="login-demo-grid">
+              {DEMO_USERS.map((u) => (
+                <button
+                  key={u.email}
+                  type="button"
+                  onClick={() => {
+                    setEmail(u.email)
+                    setPassword(u.password)
+                  }}
+                  className={`login-demo-user ${email === u.email ? 'active' : ''}`}
+                >
+                  <div className="login-demo-avatar">{u.avatar}</div>
+                  <div className="login-demo-copy">
+                    <div className="login-demo-name">{u.name}</div>
+                    <div className="login-demo-role">{u.role} · {u.email}</div>
+                  </div>
+                  {email === u.email && <span className="login-demo-check">✓</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   )
