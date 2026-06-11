@@ -14,6 +14,7 @@ from sqlalchemy.pool import NullPool
 # Lazy engine/sessionmaker initialization to support config loading
 _engine = None
 
+logger = logging.getLogger("cosmopolitan.database")
 _async_sessionmaker = None
 
 def get_engine():
