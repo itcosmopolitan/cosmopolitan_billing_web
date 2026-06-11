@@ -55,6 +55,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [adjBatches, setAdjBatches] = useState([])      // batch list when adjusting a tracked item
   const [adjBatchId, setAdjBatchId] = useState('')      // selected single-batch id (or '' = aggregate)
   const [adjLoading, setAdjLoading] = useState(false)
+  const [adjSubmitting, setAdjSubmitting] = useState(false)
   const [batchesModal, setBatchesModal] = useState(null) // item whose batches we're viewing
   const [nearExpiry, setNearExpiry]     = useState([])   // batches expiring within horizon
   const [nearExpiryDays, setNearExpiryDays] = useState(30)
@@ -227,13 +228,15 @@ export default function ItemsPage({ mode = 'branch' }) {
   }
 
   const saveAdj = async () => {
+    if (adjSubmitting) return
     if (adjQty === '' || adjQty === null) { toast.error('Enter adjusted quantity'); return }
     if (!can('adjustments.create')) {
       toast.error('You do not have permission to request stock adjustments')
       return
     }
+    setAdjSubmitting(true)
     try {
-      await adjustmentsAPI.create({
+      const res = await adjustmentsAPI.create({
         branch_id: branchFilter,
         item_id: showAdj.id,
         item_name: showAdj.name,
@@ -243,12 +246,14 @@ export default function ItemsPage({ mode = 'branch' }) {
         batch_id: adjBatchId || undefined,
         requested_by: user?.name || 'Staff',
       })
-      toast.success(`Adjustment request submitted for ${showAdj.name}`)
+      toast.success(`Adjustment ${res.ref_number} submitted for ${showAdj.name}`)
       await fetchItems()
       setShowAdj(null)
     } catch (err) {
       console.error('Failed to submit adjustment request:', err)
       toast.error('Failed to submit adjustment request')
+    } finally {
+      setAdjSubmitting(false)
     }
   }
 
@@ -531,10 +536,12 @@ export default function ItemsPage({ mode = 'branch' }) {
       {!isMaster && (
         <>
       {/* Stock Adjustment Modal — batch-aware */}
-      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
+      <Modal open={!!showAdj} onClose={() => !adjSubmitting && setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowAdj(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={saveAdj}>Submit for Approval</button>
+          <button className="btn btn-secondary" onClick={() => setShowAdj(null)} disabled={adjSubmitting}>Cancel</button>
+          <button className="btn btn-primary" onClick={saveAdj} disabled={adjSubmitting}>
+            {adjSubmitting ? 'Submitting…' : 'Submit for Approval'}
+          </button>
         </>}>
         {showAdj && (
           <>
@@ -624,8 +631,19 @@ export default function ItemsPage({ mode = 'branch' }) {
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdjSelect(false)}>Close</button>
         </>}>
-        <SearchBar value={adjSelectSearch} onChange={setAdjSelectSearch} placeholder="Search by name, SKU, or barcode…" />
+        <SearchBar
+          value={adjSelectSearch}
+          onChange={setAdjSelectSearch}
+          placeholder="Search by name, SKU, or barcode…"
+          style={{ opacity: loading ? 0.6 : 1, pointerEvents: loading ? 'none' : 'auto' }}
+        />
         <div style={{ marginTop: 12, maxHeight: 400, overflowY: 'auto' }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)', fontSize: 13 }}>
+              Loading items…
+            </div>
+          ) : (
+            <>
           {items.filter(item =>
             adjSelectSearch === '' ||
             item.name.toLowerCase().includes(adjSelectSearch.toLowerCase()) ||
@@ -670,6 +688,8 @@ export default function ItemsPage({ mode = 'branch' }) {
             <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
               No items found
             </div>
+          )}
+            </>
           )}
         </div>
       </Modal>

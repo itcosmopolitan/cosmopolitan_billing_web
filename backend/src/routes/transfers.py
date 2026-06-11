@@ -4,13 +4,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number
-from src.models import Branch, StockTransfer, TransferLineItem
+from src.models import Branch, StockTransfer, TransferLineItem, TransferStatus, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import (
     add_batch_atomic,
@@ -18,8 +18,8 @@ from src.routes._atomic import (
     consume_batches_atomic,
     is_tracked,
 )
-from src.routes._serializers import serialize_transfer
-from src.security import require_perm
+from src.routes._serializers import get_user_branch_ids, serialize_transfer
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
 
@@ -55,16 +55,61 @@ class TransferCreate(BaseModel):
     notes: Optional[str] = None
     expected_date: Optional[str] = None
 
+
+class TransferUpdate(BaseModel):
+    ref_number: str
+    from_branch_id: str
+    to_branch_id: str
+    items: List[TransferLine]
+    priority: str = "Normal"
+    notes: Optional[str] = None
+    expected_date: Optional[str] = None
+
+
+class TransferApprove(BaseModel):
+    approved_by: str = "Manager"
+    ref_number: str
+
+
+class TransferReject(BaseModel):
+    rejected_by: str = "Manager"
+    rejection_notes: Optional[str] = None
+    ref_number: str
+
+
+class TransferReceive(BaseModel):
+    received_by: str = "Staff"
+    ref_number: str
+
+
+async def _lock_transfer(
+    db: AsyncSession, transfer_id: str, *, ref_number: str
+) -> StockTransfer:
+    """Load a transfer row with FOR UPDATE to block concurrent actions."""
+    t = (
+        await db.execute(
+            select(StockTransfer)
+            .where(StockTransfer.id == transfer_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not t:
+        raise HTTPException(404, "Transfer not found")
+    if t.ref_number != ref_number:
+        raise HTTPException(400, "Transfer reference number does not match")
+    return t
+
 @router.get("/", dependencies=[Depends(require_perm("transfers.view"))])
 async def list_transfers(
     status: Optional[str] = None,
-    from_branch: Optional[str] = None,
-    to_branch: Optional[str] = None,
+    from_branch: Optional[str] = Depends(enforce_branch_access_optional),
+    to_branch: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
@@ -93,6 +138,22 @@ async def list_transfers(
     if to_branch:
         q = q.where(StockTransfer.to_branch_id == to_branch)
         cq = cq.where(StockTransfer.to_branch_id == to_branch)
+    if not from_branch and not to_branch and not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        q = q.where(
+            or_(
+                StockTransfer.from_branch_id.in_(branch_ids),
+                StockTransfer.to_branch_id.in_(branch_ids),
+            )
+        )
+        cq = cq.where(
+            or_(
+                StockTransfer.from_branch_id.in_(branch_ids),
+                StockTransfer.to_branch_id.in_(branch_ids),
+            )
+        )
     total = int((await db.execute(cq)).scalar() or 0)
     br_result = await db.execute(select(Branch))
     branch_map = {b.id: b.name for b in br_result.scalars().all()}
@@ -135,48 +196,161 @@ def _line_dict(ln: TransferLineItem) -> dict:
         "batches":              _safe_parse(ln.batch_allocation),
     }
 
-@router.post("/", status_code=201, dependencies=[Depends(require_perm("transfers.create"))])
-async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_db)):
-    if data.from_branch_id == data.to_branch_id:
-        raise HTTPException(400, "Source and destination branches must differ")
-    tid = str(uuid.uuid4())
-    ref = await allocate_number(
-        db, "stock_transfer", branch_id=data.from_branch_id
+
+async def _branch_names(
+    db: AsyncSession, from_id: str, to_id: str
+) -> tuple[str, str]:
+    from_branch = (
+        await db.execute(select(Branch).where(Branch.id == from_id))
+    ).scalar_one_or_none()
+    to_branch = (
+        await db.execute(select(Branch).where(Branch.id == to_id))
+    ).scalar_one_or_none()
+    return (
+        from_branch.name if from_branch else from_id,
+        to_branch.name if to_branch else to_id,
     )
 
-    # Fetch branch names
-    from_branch_result = await db.execute(select(Branch).where(Branch.id == data.from_branch_id))
-    from_branch = from_branch_result.scalar_one_or_none()
-    to_branch_result = await db.execute(select(Branch).where(Branch.id == data.to_branch_id))
-    to_branch = to_branch_result.scalar_one_or_none()
 
-    t = StockTransfer(
-        id=tid, ref_number=ref,
-        from_branch_id=data.from_branch_id,
-        from_branch_name=from_branch.name if from_branch else data.from_branch_id,
-        to_branch_id=data.to_branch_id,
-        to_branch_name=to_branch.name if to_branch else data.to_branch_id,
-        requested_by=data.requested_by, status="pending", notes=data.notes,
-    )
-    db.add(t)
+def _add_transfer_lines(transfer_id: str, items: List[TransferLine]) -> None:
     import json as _json
-    for item in data.items:
+
+    for item in items:
         requested = (
             _json.dumps([e.model_dump() for e in item.batch_allocation])
             if item.batch_allocation else None
         )
         line = TransferLineItem(
-            id=str(uuid.uuid4()), transfer_id=tid,
-            item_id=item.item_id, item_name=item.item_name,
-            qty=item.qty, preferred_batch_id=item.batch_id,
+            id=str(uuid.uuid4()),
+            transfer_id=transfer_id,
+            item_id=item.item_id,
+            item_name=item.item_name,
+            qty=item.qty,
+            preferred_batch_id=item.batch_id,
             requested_allocation=requested,
         )
+        # Caller adds via db.add — this helper returns objects for tests;
+        # we inline db.add in callers instead.
+        yield line
+
+
+async def _serialize_transfer_detail(
+    db: AsyncSession, t: StockTransfer
+) -> dict:
+    br_result = await db.execute(select(Branch))
+    branch_map = {b.id: b.name for b in br_result.scalars().all()}
+    lines = t.items or []
+    d = serialize_transfer(t)
+    d["from_branch_name"] = branch_map.get(t.from_branch_id, t.from_branch_name or t.from_branch_id)
+    d["to_branch_name"] = branch_map.get(t.to_branch_id, t.to_branch_name or t.to_branch_id)
+    d["expected_date"] = t.request_date
+    d["items"] = [_line_dict(ln) for ln in lines]
+    return d
+
+
+@router.get("/{transfer_id}", dependencies=[Depends(require_perm("transfers.view"))])
+async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    result = await db.execute(
+        select(StockTransfer)
+        .where(StockTransfer.id == transfer_id)
+        .options(selectinload(StockTransfer.items))
+    )
+    t = result.scalar_one_or_none()
+    if not t:
+        raise HTTPException(404, "Transfer not found")
+    if not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if t.from_branch_id not in branch_ids and t.to_branch_id not in branch_ids:
+            raise HTTPException(403, "Access denied for transfer")
+    return await _serialize_transfer_detail(db, t)
+
+
+@router.post("/", status_code=201, dependencies=[Depends(require_perm("transfers.create"))])
+async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    if data.from_branch_id == data.to_branch_id:
+        raise HTTPException(400, "Source and destination branches must differ")
+    await enforce_branch_access(data.from_branch_id, user=user, db=db)
+    await enforce_branch_access(data.to_branch_id, user=user, db=db)
+    if not data.items:
+        raise HTTPException(400, "At least one line item is required")
+    tid = str(uuid.uuid4())
+    ref = await allocate_number(
+        db, "stock_transfer", branch_id=data.from_branch_id
+    )
+
+    from_name, to_name = await _branch_names(db, data.from_branch_id, data.to_branch_id)
+
+    t = StockTransfer(
+        id=tid, ref_number=ref,
+        from_branch_id=data.from_branch_id,
+        from_branch_name=from_name,
+        to_branch_id=data.to_branch_id,
+        to_branch_name=to_name,
+        requested_by=data.requested_by,
+        status=TransferStatus.pending,
+        priority=data.priority,
+        notes=data.notes,
+        request_date=data.expected_date,
+    )
+    db.add(t)
+    for line in _add_transfer_lines(tid, data.items):
         db.add(line)
     await db.commit()
     return {"id": tid, "ref_number": ref, "status": "pending"}
 
+
+@router.put("/{transfer_id}", dependencies=[Depends(require_perm("transfers.create"))])
+async def update_transfer(
+    transfer_id: str,
+    data: TransferUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Replace a pending transfer's route, lines, and notes.
+
+    Only pending requests may be edited — in-transit and received transfers
+    have already affected stock.
+    """
+    if data.from_branch_id == data.to_branch_id:
+        raise HTTPException(400, "Source and destination branches must differ")
+    if not data.items:
+        raise HTTPException(400, "At least one line item is required")
+
+    t = await _lock_transfer(db, transfer_id, ref_number=data.ref_number)
+    if t.status != TransferStatus.pending:
+        raise HTTPException(
+            400,
+            f"Only pending transfers can be edited; this transfer is {t.status.value}",
+        )
+
+    from_name, to_name = await _branch_names(db, data.from_branch_id, data.to_branch_id)
+    t.from_branch_id = data.from_branch_id
+    t.from_branch_name = from_name
+    t.to_branch_id = data.to_branch_id
+    t.to_branch_name = to_name
+    t.priority = data.priority
+    t.notes = data.notes
+    t.request_date = data.expected_date
+
+    existing = (
+        await db.execute(
+            select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id)
+        )
+    ).scalars().all()
+    for ln in existing:
+        await db.delete(ln)
+
+    for line in _add_transfer_lines(transfer_id, data.items):
+        db.add(line)
+
+    await db.commit()
+    return {"id": transfer_id, "ref_number": t.ref_number, "status": "pending"}
+
 @router.post("/{transfer_id}/approve", dependencies=[Depends(require_perm("transfers.approve"))])
-async def approve_transfer(transfer_id: str, approved_by: str = "Admin", db: AsyncSession = Depends(get_db)):
+async def approve_transfer(
+    transfer_id: str,
+    body: TransferApprove,
+    db: AsyncSession = Depends(get_db),
+):
     """Approve & dispatch a transfer.
 
     For tracked items we consume source batches in FIFO/FEFO order (honoring
@@ -191,14 +365,21 @@ async def approve_transfer(transfer_id: str, approved_by: str = "Admin", db: Asy
 
     from sqlalchemy import text as _text
 
-    result = await db.execute(select(StockTransfer).where(StockTransfer.id == transfer_id))
-    t = result.scalar_one_or_none()
-    if not t:
-        raise HTTPException(404, "Transfer not found")
-    if t.status != "pending":
-        raise HTTPException(400, f"Transfer is already {t.status}")
-    t.status = "transit"
-    t.approved_by = approved_by
+    t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
+
+    if t.status == TransferStatus.transit:
+        await db.commit()
+        return {
+            "status": "transit",
+            "ref_number": t.ref_number,
+            "approved_by": t.approved_by,
+            "already_processed": True,
+        }
+    if t.status != TransferStatus.pending:
+        raise HTTPException(400, f"Transfer is already {t.status.value}")
+
+    t.status = TransferStatus.transit
+    t.approved_by = body.approved_by
 
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     for line in lines_result.scalars().all():
@@ -291,10 +472,41 @@ async def approve_transfer(transfer_id: str, approved_by: str = "Admin", db: Asy
                     {"i": line.item_id, "b": t.from_branch_id},
                 )
     await db.commit()
-    return {"status": "transit", "approved_by": approved_by}
+    return {"status": "transit", "ref_number": t.ref_number, "approved_by": body.approved_by}
+
+
+@router.post("/{transfer_id}/reject", dependencies=[Depends(require_perm("transfers.approve"))])
+async def reject_transfer(
+    transfer_id: str,
+    body: TransferReject,
+    db: AsyncSession = Depends(get_db),
+):
+    t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
+
+    if t.status == TransferStatus.rejected:
+        await db.commit()
+        return {
+            "status": "rejected",
+            "ref_number": t.ref_number,
+            "already_processed": True,
+        }
+    if t.status != TransferStatus.pending:
+        raise HTTPException(400, f"Transfer is already {t.status.value}")
+
+    t.status = TransferStatus.rejected
+    if body.rejection_notes:
+        prefix = f"[Rejected by {body.rejected_by}] "
+        t.notes = f"{prefix}{body.rejection_notes}" + (f"\n{t.notes}" if t.notes else "")
+    await db.commit()
+    return {"status": "rejected", "ref_number": t.ref_number}
+
 
 @router.post("/{transfer_id}/receive", dependencies=[Depends(require_perm("transfers.receive"))])
-async def receive_transfer(transfer_id: str, received_by: str = "Staff", db: AsyncSession = Depends(get_db)):
+async def receive_transfer(
+    transfer_id: str,
+    body: TransferReceive,
+    db: AsyncSession = Depends(get_db),
+):
     """Receive a dispatched transfer.
 
     Replays each line's persisted allocation manifest: every source batch
@@ -306,13 +518,18 @@ async def receive_transfer(transfer_id: str, received_by: str = "Staff", db: Asy
 
     from src.models import ItemBatch
 
-    result = await db.execute(select(StockTransfer).where(StockTransfer.id == transfer_id))
-    t = result.scalar_one_or_none()
-    if not t:
-        raise HTTPException(404, "Transfer not found")
-    if t.status != "transit":
+    t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
+
+    if t.status == TransferStatus.received:
+        await db.commit()
+        return {
+            "status": "received",
+            "ref_number": t.ref_number,
+            "already_processed": True,
+        }
+    if t.status != TransferStatus.transit:
         raise HTTPException(400, "Transfer must be in transit to receive")
-    t.status = "received"
+    t.status = TransferStatus.received
 
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     for line in lines_result.scalars().all():
@@ -368,4 +585,40 @@ async def receive_transfer(transfer_id: str, received_by: str = "Staff", db: Asy
                 delta=line.qty,
             )
     await db.commit()
-    return {"status": "received", "received_by": received_by}
+    return {"status": "received", "ref_number": t.ref_number, "received_by": body.received_by}
+
+
+@router.delete("/{transfer_id}", dependencies=[Depends(require_perm("transfers.delete"))])
+async def delete_transfer(
+    transfer_id: str,
+    ref_number: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a pending transfer request.
+
+    Only pending requests may be deleted — in-transit transfers have already
+    deducted source stock; received transfers are complete audit records.
+    """
+    t = await _lock_transfer(db, transfer_id, ref_number=ref_number)
+    if t.status != TransferStatus.pending:
+        status = t.status.value if hasattr(t.status, "value") else str(t.status)
+        if t.status == TransferStatus.transit:
+            raise HTTPException(
+                400,
+                "In-transit transfers cannot be deleted — stock was already "
+                "deducted at the source branch.",
+            )
+        if t.status == TransferStatus.received:
+            raise HTTPException(
+                400,
+                "Received transfers cannot be deleted — stock was already "
+                "updated at the destination branch.",
+            )
+        raise HTTPException(
+            400,
+            f"Only pending transfers can be deleted; this transfer is {status}",
+        )
+
+    await db.delete(t)
+    await db.commit()
+    return {"status": "deleted", "ref_number": ref_number}

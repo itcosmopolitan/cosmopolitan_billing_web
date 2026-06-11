@@ -46,23 +46,22 @@ async def adjust_stock_atomic(
         return int(row.scalar() or 0)
 
     if delta > 0:
-        # Try the atomic UPDATE first; if no row exists yet, insert it.
-        result = await db.execute(
+        # Atomically insert-or-increment the row. This avoids the classic
+        # read-modify-write race when the stock row doesn't yet exist.
+        await db.execute(
             text(
-                "UPDATE item_stock SET quantity = quantity + :delta "
-                "WHERE item_id = :item_id AND branch_id = :branch_id"
+                "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
+                "VALUES (:id, :item_id, :branch_id, :delta) "
+                "ON CONFLICT(item_id, branch_id) DO UPDATE "
+                "SET quantity = quantity + :delta"
             ),
-            {"delta": delta, "item_id": item_id, "branch_id": branch_id},
+            {
+                "id": str(uuid.uuid4()),
+                "item_id": item_id,
+                "branch_id": branch_id,
+                "delta": delta,
+            },
         )
-        if result.rowcount == 0:
-            db.add(ItemStock(
-                id=str(uuid.uuid4()),
-                item_id=item_id,
-                branch_id=branch_id,
-                quantity=delta,
-            ))
-            await db.flush()
-            return delta
     else:
         # Decrement: WHERE quantity + delta >= 0 prevents oversell.
         result = await db.execute(
@@ -112,21 +111,20 @@ async def set_stock_atomic(
     actions, not concurrent automated flows."""
     if new_qty < 0:
         raise ValueError("new_qty must be >= 0")
-    result = await db.execute(
+    await db.execute(
         text(
-            "UPDATE item_stock SET quantity = :q "
-            "WHERE item_id = :item_id AND branch_id = :branch_id"
+            "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
+            "VALUES (:id, :item_id, :branch_id, :q) "
+            "ON CONFLICT(item_id, branch_id) DO UPDATE "
+            "SET quantity = :q"
         ),
-        {"q": new_qty, "item_id": item_id, "branch_id": branch_id},
+        {
+            "id": str(uuid.uuid4()),
+            "item_id": item_id,
+            "branch_id": branch_id,
+            "q": new_qty,
+        },
     )
-    if result.rowcount == 0:
-        db.add(ItemStock(
-            id=str(uuid.uuid4()),
-            item_id=item_id,
-            branch_id=branch_id,
-            quantity=new_qty,
-        ))
-        await db.flush()
     return new_qty
 
 
@@ -305,7 +303,7 @@ async def consume_batches_atomic(
         # Pull every referenced batch in one round-trip.
         ids = [e["batch_id"] for e in cleaned]
         rows = (await db.execute(
-            select(ItemBatch).where(ItemBatch.id.in_(ids))
+            select(ItemBatch).where(ItemBatch.id.in_(ids)).with_for_update()
         )).scalars().all()
         by_id = {b.id: b for b in rows}
 
@@ -359,6 +357,7 @@ async def consume_batches_atomic(
             ItemBatch.quantity > 0,
         )
         .order_by(*order)
+        .with_for_update()
     )
     batches = list(res.scalars().all())
     if preferred_batch_id:

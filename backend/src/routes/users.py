@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Branch, Role, User, UserBranch
-from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import attach_branch_ids, serialize_user
-from src.security import hash_password, require_perm
+from src.security import hash_password_async, require_perm
 
 router = APIRouter()
 
@@ -163,12 +163,17 @@ async def _resolve_role(
 async def list_users(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    page_no: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
+    if page_no is not None or per_page is not None:
+        _, pp, sk, lim = pagination_from_page(page_no, per_page)
+    else:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
     total = int((await db.execute(select(func.count(User.id)))).scalar() or 0)
     sort_expr = resolve_sort(
         sort_by,
@@ -188,14 +193,13 @@ async def list_users(
     result = await db.execute(select(User).order_by(sort_expr).offset(sk).limit(lim))
     users = result.scalars().all()
     items = [serialize_user(u) for u in users]
-    # Bulk-fetch all user_branches rows for this page in one round trip
-    # (avoids N+1). attach_branch_ids mutates each dict in-place.
     await attach_branch_ids(db, items)
-    return paged(items, total, sk, lim)
+    return paged_list(items, total, sk, lim)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("users.create"))])
 async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
-    existing = (await db.execute(select(User).where(User.email == data.email))).scalar_one_or_none()
+    normalized_email = data.email.lower()
+    existing = (await db.execute(select(User).where(User.email == normalized_email))).scalar_one_or_none()
     if existing:
         raise HTTPException(409, "A user with this email already exists")
     rid, rkey = await _resolve_role(db, data.role_id, data.role)
@@ -208,8 +212,8 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
     u = User(
         id=str(uuid.uuid4()),
         name=data.name,
-        email=data.email,
-        hashed_password=hash_password(temp_password),
+        email=normalized_email,
+        hashed_password=await hash_password_async(temp_password),
         role=rkey or "cashier",
         role_id=rid,
         active=True,
@@ -258,7 +262,7 @@ async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends
     if "password" in payload:
         pw = payload.pop("password")
         if pw:
-            u.hashed_password = hash_password(pw)
+            u.hashed_password = await hash_password_async(pw)
 
     # Branch assignment touches multiple columns + the join table. Only run
     # if the client actually sent something branch-related (otherwise we'd
@@ -273,6 +277,17 @@ async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends
             branch_ids=payload.pop("branch_ids", None),
             legacy_single_branch_id=payload.pop("branch_id", None),
         )
+
+    if "email" in payload:
+        payload["email"] = payload["email"].lower()
+        existing = (
+            await db.execute(
+                select(User)
+                .where(User.email == payload["email"], User.id != user_id)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(409, "A user with this email already exists")
 
     for k, v in payload.items():
         setattr(u, k, v)

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
@@ -49,14 +49,19 @@ export default function SettingsPage() {
   const [userSortBy, setUserSortBy] = useState('name')
   const [userSortOrder, setUserSortOrder] = useState('asc')
   const [userListVersion, setUserListVersion] = useState(0)
-  // Roles are loaded when the Roles sub-tab is opened (small list — the
-  // catalog of role types, typically <20). Paginate client-side for
-  // consistency with the Users table.
+  const [userHasMorePage, setUserHasMorePage] = useState(false)
+  const [roleRows, setRoleRows] = useState([])
+  const [roleTotal, setRoleTotal] = useState(0)
   const [roleSkip, setRoleSkip] = useState(0)
   const [roleLimit, setRoleLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [roleListVersion, setRoleListVersion] = useState(0)
+  const [roleHasMorePage, setRoleHasMorePage] = useState(false)
   const [branches, setBranches] = useState([])
+  const [brTotal, setBrTotal] = useState(0)
   const [brSkip, setBrSkip] = useState(0)
   const [brLimit, setBrLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [brListVersion, setBrListVersion] = useState(0)
+  const [brHasMorePage, setBrHasMorePage] = useState(false)
   // Branches tab state — fetched when that tab is active. User modals use
   // storeBranches (hydrated at app boot) for branch pickers.
   const [branchSortBy, setBranchSortBy] = useState('name')
@@ -113,7 +118,12 @@ export default function SettingsPage() {
   }
 
   const reloadRoles = async () => {
-    try { setRoles(await rolesAPI.list()) } catch (e) { console.error(e) }
+    try { setRoles(await fetchAllList(rolesAPI.list)) } catch (e) { console.error(e) }
+  }
+
+  const syncPageLimit = (setLimit, perPage, limit) => {
+    const effective = perPage ?? limit
+    if (effective) setLimit((prev) => (prev === effective ? prev : effective))
   }
 
   const loadPermCatalog = async () => {
@@ -129,28 +139,44 @@ export default function SettingsPage() {
     if (role.is_system) { toast.error('System roles cannot be deleted'); return }
     if (role.user_count > 0) { toast.error(`Reassign the ${role.user_count} user(s) using this role first`); return }
     if (!window.confirm(`Delete role "${role.label}"? This cannot be undone.`)) return
-    try { await rolesAPI.delete(role.id); toast.success('Role deleted'); await reloadRoles() }
+    try { await rolesAPI.delete(role.id); toast.success('Role deleted'); setRoleListVersion((v) => v + 1); await reloadRoles() }
     catch (e) { console.error(e) }
   }
 
-  // Branches tab — fetch only when that tab is active (default tab is org, no API).
+  // Branches tab — server-paged list when active.
   useEffect(() => {
     if (tab !== 'branches') return
     let cancelled = false
     ;(async () => {
       try {
         setLoading(true)
-        const data = await fetchAllList(branchesAPI.list).catch(() => [])
-        if (!cancelled) setBranches(data || [])
+        const raw = await branchesAPI.list({
+          skip: brSkip,
+          limit: brLimit,
+          sort_by: branchSortBy,
+          sort_order: branchSortOrder,
+        })
+        const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
+        if (!cancelled) {
+          setBranches(items || [])
+          setBrTotal(total)
+          setBrHasMorePage(hasMorePage)
+          syncPageLimit(setBrLimit, perPage, limit)
+        }
       } catch (err) {
         console.error(err)
-        if (!cancelled) toast.error('Failed to load branches')
+        if (!cancelled) {
+          toast.error('Failed to load branches')
+          setBranches([])
+          setBrTotal(0)
+          setBrHasMorePage(false)
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
     })()
     return () => { cancelled = true }
-  }, [tab])
+  }, [tab, brSkip, brLimit, brListVersion, branchSortBy, branchSortOrder])
 
   // Users sub-tab — fetch list when active (mirrors roles sub-tab below).
   useEffect(() => {
@@ -164,41 +190,55 @@ export default function SettingsPage() {
           sort_by: userSortBy,
           sort_order: userSortOrder,
         })
-        const { items, total } = unwrapPaged(raw)
+        const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
         if (!cancelled) {
           setUsers(items || [])
           setUserTotal(total)
+          setUserHasMorePage(hasMorePage)
+          syncPageLimit(setUserLimit, perPage, limit)
         }
       } catch (err) {
         console.error(err)
         if (!cancelled) {
           setUsers([])
           setUserTotal(0)
+          setUserHasMorePage(false)
         }
       }
     })()
     return () => { cancelled = true }
   }, [tab, usersTab, userSkip, userLimit, userListVersion, userSortBy, userSortOrder])
 
-  // Roles sub-tab — roles + permission catalog (for RoleEditor) on demand.
+  // Roles sub-tab — server-paged list; full catalog stays in store for user labels.
   useEffect(() => {
     if (tab !== 'users' || usersTab !== 'roles') return
     let cancelled = false
     ;(async () => {
       try {
         setLoading(true)
-        const [rolesData] = await Promise.all([
-          rolesAPI.list().catch(() => []),
-          loadPermCatalog(),
-        ])
-        if (!cancelled) setRoles(rolesData || [])
+        await loadPermCatalog()
+        const raw = await rolesAPI.list({ skip: roleSkip, limit: roleLimit })
+        const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
+        if (!cancelled) {
+          setRoleRows(items || [])
+          setRoleTotal(total)
+          setRoleHasMorePage(hasMorePage)
+          syncPageLimit(setRoleLimit, perPage, limit)
+        }
+      } catch (err) {
+        console.error(err)
+        if (!cancelled) {
+          setRoleRows([])
+          setRoleTotal(0)
+          setRoleHasMorePage(false)
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, usersTab])
+  }, [tab, usersTab, roleSkip, roleLimit, roleListVersion])
 
   // Add/Edit User modals need the roles dropdown without visiting the Roles sub-tab.
   useEffect(() => {
@@ -217,24 +257,6 @@ export default function SettingsPage() {
     setUserSortBy(key)
     setUserSortOrder('asc')
   }
-
-  const sortedBranches = useMemo(() => {
-    const dir = branchSortOrder === 'desc' ? -1 : 1
-    const valueOf = (b) => b[branchSortBy] ?? ''
-    return [...branches].sort((a, b) => {
-      const av = valueOf(a)
-      const bv = valueOf(b)
-      if (typeof av === 'boolean' || typeof bv === 'boolean') {
-        return ((av === true) - (bv === true)) * dir
-      }
-      return String(av).localeCompare(String(bv)) * dir
-    })
-  }, [branches, branchSortBy, branchSortOrder])
-
-  const branchPageRows = useMemo(
-    () => sortedBranches.slice(brSkip, brSkip + brLimit),
-    [sortedBranches, brSkip, brLimit]
-  )
 
   const onBranchSort = (key) => {
     setBrSkip(0)
@@ -490,6 +512,8 @@ export default function SettingsPage() {
         active: true,
       })
       setShowBranch(false)
+      setBrSkip(0)
+      setBrListVersion((v) => v + 1)
       loadAllBranches()
       toast.success('Branch added')
     } catch (err) {
@@ -511,6 +535,8 @@ export default function SettingsPage() {
       })
       toast.success('Branch updated')
       setShowEditBranch(false)
+      setBrSkip(0)
+      setBrListVersion((v) => v + 1)
       loadAllBranches()
     } catch (err) {
       console.error(err)
@@ -593,7 +619,7 @@ export default function SettingsPage() {
                 </tr>
               </thead>
               <tbody>
-                {branchPageRows.map(b=>(
+                {branches.map(b=>(
                   <tr key={b.id}>
                     <td><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{b.name}</div></td>
                     <td><span className="mono" style={{fontSize:12,color:'var(--accent)'}}>{b.code}</span></td>
@@ -617,9 +643,10 @@ export default function SettingsPage() {
               </tbody>
             </table>
             <PaginationBar
-              total={branches.length}
+              total={brTotal}
               skip={brSkip}
               limit={brLimit}
+              hasMorePage={brHasMorePage}
               onSkipChange={setBrSkip}
               onLimitChange={setBrLimit}
             />
@@ -755,6 +782,7 @@ export default function SettingsPage() {
                 total={userTotal}
                 skip={userSkip}
                 limit={userLimit}
+                hasMorePage={userHasMorePage}
                 onSkipChange={setUserSkip}
                 onLimitChange={setUserLimit}
               />
@@ -763,10 +791,10 @@ export default function SettingsPage() {
 
             {usersTab === 'roles' && (
               <>
-              {roles.length === 0 && (
+              {roleRows.length === 0 && !loading && (
                 <div style={{padding:'12px 0',fontSize:12,color:'var(--text-muted)'}}>No roles yet. Restart backend after seeding.</div>
               )}
-              {roles.slice(roleSkip, roleSkip + roleLimit).map((r) => {
+              {roleRows.map((r) => {
                 const rColor = roleColors[r.key] || (r.color && `var(--${r.color})`) || 'var(--accent)'
                 const granted = (r.permissions || []).join(', ') || '(none)'
                 return (
@@ -794,15 +822,14 @@ export default function SettingsPage() {
                   </div>
                 )
               })}
-              {roles.length > 0 && (
-                <PaginationBar
-                  total={roles.length}
-                  skip={roleSkip}
-                  limit={roleLimit}
-                  onSkipChange={setRoleSkip}
-                  onLimitChange={setRoleLimit}
-                />
-              )}
+              <PaginationBar
+                total={roleTotal}
+                skip={roleSkip}
+                limit={roleLimit}
+                hasMorePage={roleHasMorePage}
+                onSkipChange={setRoleSkip}
+                onLimitChange={setRoleLimit}
+              />
               </>
             )}
           </Card>
@@ -812,7 +839,10 @@ export default function SettingsPage() {
             onClose={()=>setShowRoleEditor(false)}
             role={editingRole}
             catalog={permCatalog}
-            onSaved={reloadRoles}
+            onSaved={async () => {
+              await reloadRoles()
+              setRoleListVersion((v) => v + 1)
+            }}
           />
 
           <Modal open={showUser} onClose={()=>setShowUser(false)} title="Add User" icon="👤" size="md"

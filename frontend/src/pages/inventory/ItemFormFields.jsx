@@ -15,9 +15,12 @@ export default function ItemFormFields({
   branchSectionMode = 'create',
 }) {
   const showBranchSection = Boolean(onBranchConfigsChange) && branchSectionMode !== 'hidden'
-  const rateOptions = taxRates.length > 0
-    ? taxRates.filter((t) => t.active !== false).map((t) => t.rate)
-    : [0, 8]
+  const currentRate = form.tax_rate
+  const selectableTaxes = taxRates.length > 0
+    ? taxRates.filter(
+        (t) => t.is_active !== false || String(t.rate) === String(currentRate),
+      )
+    : [{ rate: 0, is_active: true }, { rate: 8, is_active: true }]
   const strategyHint = !form.batch_tracking
     ? 'Untracked — set stock per branch from Items & Stock.'
     : form.expiry_tracking
@@ -54,7 +57,11 @@ export default function ItemFormFields({
       <FormRow>
         <FormGroup label="GST Rate">
           <select className="form-input" value={form.tax_rate} onChange={(e) => patchForm('tax_rate', e.target.value)}>
-            {rateOptions.map((r) => <option key={r} value={r}>{r}%</option>)}
+            {selectableTaxes.map((t) => (
+              <option key={t.tax_id || t.id || t.rate} value={t.rate}>
+                {t.rate}%{t.is_active === false ? ' (inactive)' : ''}
+              </option>
+            ))}
           </select>
         </FormGroup>
         <FormGroup label="HSN Code"><input className="form-input" value={form.hsn_code} onChange={(e) => patchForm('hsn_code', e.target.value)} placeholder="e.g. 1006" /></FormGroup>

@@ -21,6 +21,7 @@ from src.pagination import (
 )
 from src.routes._atomic import (
     add_batch_atomic,
+    adjust_stock_atomic,
     consume_batches_atomic,
     set_batch_quantity_atomic,
     set_stock_atomic,
@@ -105,20 +106,18 @@ async def _ensure_stock_row(
     item_id: str,
     branch_id: str,
 ) -> None:
-    res = await db.execute(
-        select(ItemStock).where(
-            ItemStock.item_id == item_id,
-            ItemStock.branch_id == branch_id,
-        )
+    await db.execute(
+        text(
+            "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
+            "VALUES (:id, :item_id, :branch_id, 0) "
+            "ON CONFLICT(item_id, branch_id) DO NOTHING"
+        ),
+        {
+            "id": str(uuid.uuid4()),
+            "item_id": item_id,
+            "branch_id": branch_id,
+        },
     )
-    if res.scalar_one_or_none():
-        return
-    db.add(ItemStock(
-        id=str(uuid.uuid4()),
-        item_id=item_id,
-        branch_id=branch_id,
-        quantity=0,
-    ))
 
 
 async def _stock_qty(db: AsyncSession, *, item_id: str, branch_id: str) -> int:
@@ -166,12 +165,11 @@ async def _seed_opening_stock(
             received_date=mfg_date or None,
         )
     else:
-        current = await _stock_qty(db, item_id=item.id, branch_id=branch_id)
-        await set_stock_atomic(
+        await adjust_stock_atomic(
             db,
             item_id=item.id,
             branch_id=branch_id,
-            new_qty=current + int(qty),
+            delta=int(qty),
         )
 
 

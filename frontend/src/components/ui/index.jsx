@@ -301,6 +301,7 @@ export function Tag({ children, color }) {
 
 export { PaginationBar } from './PaginationBar'
 export { SortableHeader } from './SortableHeader'
+export { default as RowActionsMenu } from './RowActionsMenu'
 
 // ─── Segmented Toggle ────────────────────────────────────────────────────────
 // Pill-style segmented control. Use when picking between a small number of
@@ -661,6 +662,213 @@ export function MultiSelect({ options, value, onChange, placeholder = 'Choose…
       >
         <span>{triggerLabel}</span>
         <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8 }}>▾</span>
+      </button>
+      {popover}
+    </div>
+  )
+}
+
+// ─── SearchSelect ─────────────────────────────────────────────────────────────
+// Single-select dropdown with a searchable popover and optional loading state.
+export function SearchSelect({
+  options = [],
+  value = '',
+  onChange,
+  placeholder = 'Select…',
+  loading = false,
+  loadingLabel = 'Loading…',
+  emptyLabel = 'No items found',
+  noMatchLabel = 'No matches',
+  disabled = false,
+  searchPlaceholder = 'Search…',
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H })
+  const triggerRef = useRef(null)
+  const popoverRef = useRef(null)
+  const searchRef = useRef(null)
+
+  const q = search.trim().toLowerCase()
+  const filteredOptions = q
+    ? options.filter((o) => {
+      const hay = (o.searchText || o.label || '').toLowerCase()
+      return hay.includes(q)
+    })
+    : options
+
+  const selected = options.find((o) => o.id === value)
+  const triggerLabel = loading
+    ? loadingLabel
+    : (selected?.label || placeholder)
+
+  const reposition = () => {
+    const el = triggerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PAD
+    const spaceAbove = rect.top - VIEWPORT_PAD
+    const flipUp = spaceBelow < Math.min(POPOVER_MAX_H, 160) && spaceAbove > spaceBelow
+    const maxHeight = Math.max(120, Math.min(POPOVER_MAX_H, flipUp ? spaceAbove : spaceBelow))
+    setCoords({
+      top: flipUp
+        ? Math.max(VIEWPORT_PAD, rect.top - maxHeight - POPOVER_GAP)
+        : rect.bottom + POPOVER_GAP,
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+    })
+  }
+
+  useLayoutEffect(() => {
+    if (open) reposition()
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (open && searchRef.current) searchRef.current.focus()
+  }, [open])
+
+  useEffect(() => {
+    if (!open) setSearch('')
+  }, [open])
+
+  useEffect(() => {
+    if (disabled || loading) setOpen(false)
+  }, [disabled, loading])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (e) => {
+      const inTrigger = triggerRef.current && triggerRef.current.contains(e.target)
+      const inPopover = popoverRef.current && popoverRef.current.contains(e.target)
+      if (!inTrigger && !inPopover) setOpen(false)
+    }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open])
+
+  const pick = (id) => {
+    if (disabled || loading) return
+    onChange(id)
+    setOpen(false)
+  }
+
+  const popover = open ? createPortal(
+    <div
+      ref={popoverRef}
+      role="listbox"
+      style={{
+        position: 'fixed',
+        top: coords.top,
+        left: coords.left,
+        width: coords.width,
+        maxHeight: coords.maxHeight,
+        overflowY: 'auto',
+        zIndex: 1100,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 6,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+        padding: 4,
+      }}
+    >
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 1,
+        background: 'var(--bg-surface)',
+        padding: '2px 2px 4px',
+        borderBottom: '1px solid var(--border-subtle)',
+        marginBottom: 2,
+      }}>
+        <input
+          ref={searchRef}
+          type="text"
+          placeholder={searchPlaceholder}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="form-input"
+          style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </div>
+      {loading ? (
+        <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+          {loadingLabel}
+        </div>
+      ) : options.length === 0 ? (
+        <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+          {emptyLabel}
+        </div>
+      ) : filteredOptions.length === 0 ? (
+        <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+          {q ? `${noMatchLabel} for "${search.trim()}"` : emptyLabel}
+        </div>
+      ) : (
+        filteredOptions.map((o) => {
+          const active = o.id === value
+          return (
+            <button
+              key={o.id}
+              type="button"
+              role="option"
+              aria-selected={active}
+              onClick={() => pick(o.id)}
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '8px 10px',
+                border: 'none',
+                borderRadius: 4,
+                textAlign: 'left',
+                fontSize: 12.5,
+                cursor: 'pointer',
+                color: 'var(--text-primary)',
+                background: active ? 'var(--bg-raised)' : 'transparent',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-raised)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = active ? 'var(--bg-raised)' : 'transparent' }}
+            >
+              {o.label}
+            </button>
+          )
+        })
+      )}
+    </div>,
+    document.body,
+  ) : null
+
+  return (
+    <div style={{ opacity: disabled || loading ? 0.65 : 1 }}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="form-input"
+        onClick={() => !disabled && !loading && setOpen((o) => !o)}
+        disabled={disabled || loading}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          textAlign: 'left', cursor: disabled || loading ? 'not-allowed' : 'pointer',
+          color: selected && !loading ? 'var(--text-primary)' : 'var(--text-muted)',
+          width: '100%',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {triggerLabel}
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8, flexShrink: 0 }}>
+          {loading ? '…' : '▾'}
+        </span>
       </button>
       {popover}
     </div>
