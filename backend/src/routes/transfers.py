@@ -4,13 +4,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number
-from src.models import Branch, StockTransfer, TransferLineItem, TransferStatus
+from src.models import Branch, StockTransfer, TransferLineItem, TransferStatus, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import (
     add_batch_atomic,
@@ -18,8 +18,8 @@ from src.routes._atomic import (
     consume_batches_atomic,
     is_tracked,
 )
-from src.routes._serializers import serialize_transfer
-from src.security import require_perm
+from src.routes._serializers import get_user_branch_ids, serialize_transfer
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
 
@@ -102,13 +102,14 @@ async def _lock_transfer(
 @router.get("/", dependencies=[Depends(require_perm("transfers.view"))])
 async def list_transfers(
     status: Optional[str] = None,
-    from_branch: Optional[str] = None,
-    to_branch: Optional[str] = None,
+    from_branch: Optional[str] = Depends(enforce_branch_access_optional),
+    to_branch: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
@@ -137,6 +138,22 @@ async def list_transfers(
     if to_branch:
         q = q.where(StockTransfer.to_branch_id == to_branch)
         cq = cq.where(StockTransfer.to_branch_id == to_branch)
+    if not from_branch and not to_branch and not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        q = q.where(
+            or_(
+                StockTransfer.from_branch_id.in_(branch_ids),
+                StockTransfer.to_branch_id.in_(branch_ids),
+            )
+        )
+        cq = cq.where(
+            or_(
+                StockTransfer.from_branch_id.in_(branch_ids),
+                StockTransfer.to_branch_id.in_(branch_ids),
+            )
+        )
     total = int((await db.execute(cq)).scalar() or 0)
     br_result = await db.execute(select(Branch))
     branch_map = {b.id: b.name for b in br_result.scalars().all()}
@@ -232,7 +249,7 @@ async def _serialize_transfer_detail(
 
 
 @router.get("/{transfer_id}", dependencies=[Depends(require_perm("transfers.view"))])
-async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db)):
+async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(
         select(StockTransfer)
         .where(StockTransfer.id == transfer_id)
@@ -241,13 +258,19 @@ async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db)):
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Transfer not found")
+    if not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if t.from_branch_id not in branch_ids and t.to_branch_id not in branch_ids:
+            raise HTTPException(403, "Access denied for transfer")
     return await _serialize_transfer_detail(db, t)
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("transfers.create"))])
-async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_db)):
+async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     if data.from_branch_id == data.to_branch_id:
         raise HTTPException(400, "Source and destination branches must differ")
+    await enforce_branch_access(data.from_branch_id, user=user, db=db)
+    await enforce_branch_access(data.to_branch_id, user=user, db=db)
     if not data.items:
         raise HTTPException(400, "At least one line item is required")
     tid = str(uuid.uuid4())

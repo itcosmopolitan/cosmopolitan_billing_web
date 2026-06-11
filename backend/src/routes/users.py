@@ -11,7 +11,7 @@ from src.database import get_db
 from src.models import Branch, Role, User, UserBranch
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import attach_branch_ids, serialize_user
-from src.security import hash_password, require_perm
+from src.security import hash_password_async, require_perm
 
 router = APIRouter()
 
@@ -198,7 +198,8 @@ async def list_users(
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("users.create"))])
 async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
-    existing = (await db.execute(select(User).where(User.email == data.email))).scalar_one_or_none()
+    normalized_email = data.email.lower()
+    existing = (await db.execute(select(User).where(User.email == normalized_email))).scalar_one_or_none()
     if existing:
         raise HTTPException(409, "A user with this email already exists")
     rid, rkey = await _resolve_role(db, data.role_id, data.role)
@@ -211,8 +212,8 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
     u = User(
         id=str(uuid.uuid4()),
         name=data.name,
-        email=data.email,
-        hashed_password=hash_password(temp_password),
+        email=normalized_email,
+        hashed_password=await hash_password_async(temp_password),
         role=rkey or "cashier",
         role_id=rid,
         active=True,
@@ -261,7 +262,7 @@ async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends
     if "password" in payload:
         pw = payload.pop("password")
         if pw:
-            u.hashed_password = hash_password(pw)
+            u.hashed_password = await hash_password_async(pw)
 
     # Branch assignment touches multiple columns + the join table. Only run
     # if the client actually sent something branch-related (otherwise we'd
@@ -276,6 +277,17 @@ async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends
             branch_ids=payload.pop("branch_ids", None),
             legacy_single_branch_id=payload.pop("branch_id", None),
         )
+
+    if "email" in payload:
+        payload["email"] = payload["email"].lower()
+        existing = (
+            await db.execute(
+                select(User)
+                .where(User.email == payload["email"], User.id != user_id)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(409, "A user with this email already exists")
 
     for k, v in payload.items():
         setattr(u, k, v)

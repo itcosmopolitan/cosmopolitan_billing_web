@@ -11,7 +11,7 @@ from src.database import get_db
 from src.models import CashEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_entry
-from src.security import require_perm
+from src.security import enforce_branch_access, require_perm
 
 router = APIRouter()
 
@@ -31,7 +31,7 @@ class DayCloseRequest(BaseModel):
 
 @router.get("/{branch_id}/entries", dependencies=[Depends(require_perm("cash.view"))])
 async def get_entries(
-    branch_id: str,
+    branch_id: str = Depends(enforce_branch_access),
     date: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
@@ -67,7 +67,11 @@ async def get_entries(
     return paged(items, total, sk, lim)
 
 @router.get("/{branch_id}/summary", dependencies=[Depends(require_perm("cash.view"))])
-async def get_summary(branch_id: str, date: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+async def get_summary(
+    branch_id: str = Depends(enforce_branch_access),
+    date: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
     q = select(CashEntry).where(CashEntry.branch_id == branch_id)
     if date:
         q = q.where(CashEntry.date == date)
@@ -81,7 +85,11 @@ async def get_summary(branch_id: str, date: Optional[str] = None, db: AsyncSessi
             "cash_in": cash_in, "cash_out": cash_out, "expected": expected, "actual": expected, "variance": 0}
 
 @router.post("/{branch_id}/entries", status_code=201, dependencies=[Depends(require_perm("cash.entry"))])
-async def add_entry(branch_id: str, data: CashEntryCreate, db: AsyncSession = Depends(get_db)):
+async def add_entry(
+    data: CashEntryCreate,
+    branch_id: str = Depends(enforce_branch_access),
+    db: AsyncSession = Depends(get_db),
+):
     today = datetime.now().strftime("%Y-%m-%d")
     entry = CashEntry(
         id=str(uuid.uuid4()), branch_id=branch_id, type=data.type,
@@ -94,6 +102,10 @@ async def add_entry(branch_id: str, data: CashEntryCreate, db: AsyncSession = De
     return {"id": entry.id, "message": "Entry recorded"}
 
 @router.post("/{branch_id}/close", dependencies=[Depends(require_perm("cash.close"))])
-async def close_day(branch_id: str, data: DayCloseRequest, db: AsyncSession = Depends(get_db)):
+async def close_day(
+    data: DayCloseRequest,
+    branch_id: str = Depends(enforce_branch_access),
+    db: AsyncSession = Depends(get_db),
+):
     return {"message": f"Day closed for branch {branch_id}", "physical_count": data.physical_count,
             "closed_by": data.closed_by, "timestamp": datetime.now().isoformat()}

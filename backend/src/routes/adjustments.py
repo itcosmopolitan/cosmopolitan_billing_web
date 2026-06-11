@@ -23,10 +23,11 @@ from src.models import (
     ItemBatch,
     ItemStock,
     StockAdjustment,
+    User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._stock_adjust_apply import apply_stock_adjustment
-from src.security import require_perm
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
 
@@ -207,12 +208,13 @@ async def _snapshot_before_qty(
 @router.get("/", dependencies=[Depends(require_perm("adjustments.view"))])
 async def list_adjustments(
     status: Optional[str] = None,
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     if status is not None and status not in _VALID_STATUSES:
         raise HTTPException(400, f"Invalid status; use one of: {', '.join(sorted(_VALID_STATUSES))}")
@@ -241,15 +243,27 @@ async def list_adjustments(
     if branch_id:
         q = q.where(AdjustmentRequest.branch_id == branch_id)
         cq = cq.where(AdjustmentRequest.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        q = q.where(AdjustmentRequest.branch_id.in_(branch_ids))
+        cq = cq.where(AdjustmentRequest.branch_id.in_(branch_ids))
     total = int((await db.execute(cq)).scalar() or 0)
     rows = (await db.execute(q.offset(sk).limit(lim))).scalars().all()
     return paged([_serialize(ar) for ar in rows], total, sk, lim)
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("adjustments.create"))])
-async def create_adjustment(data: AdjustmentCreate, db: AsyncSession = Depends(get_db)):
+async def create_adjustment(
+    data: AdjustmentCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     if data.new_qty < 0:
         raise HTTPException(400, "new_qty must be >= 0")
+
+    await enforce_branch_access(data.branch_id, user=user, db=db)
 
     branch_name = (
         await db.execute(

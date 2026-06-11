@@ -5,7 +5,7 @@ All ORM models for the retail platform
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -128,7 +128,7 @@ class User(Base):
     # (frontend and seed.py still write/read it). New code should resolve via
     # `role_id` → `roles` table. Drop in Phase 3 (first Alembic migration).
     role         = Column(SAEnum(UserRole), default=UserRole.cashier)
-    role_id      = Column(String, ForeignKey("roles.id"), nullable=True)
+    role_id      = Column(String, ForeignKey("roles.id"), nullable=True, index=True)
     # Legacy single-branch FK. Pre-multi-branch this was THE branch the user
     # belonged to; it's now mirrored from `user_branches[0]` purely so older
     # code that reads `user.branch_id` keeps working until those reads are
@@ -137,7 +137,7 @@ class User(Base):
     # ordering inside it is incidental. When `all_branches=True` this column
     # is null and user_branches is empty (the user has access to every
     # branch — the super-admin pattern). See docs/USERS_AND_ROLES.md §5.2.
-    branch_id    = Column(String, ForeignKey("branches.id"), nullable=True)
+    branch_id    = Column(String, ForeignKey("branches.id"), nullable=True, index=True)
     avatar       = Column(String)
     active       = Column(Boolean, default=True)
     last_login   = Column(DateTime)
@@ -169,6 +169,10 @@ class UserBranch(Base):
     Phase 4 (per-branch permission scoping).
     """
     __tablename__ = "user_branches"
+    __table_args__ = (
+        Index("ix_user_branches_user_id", "user_id"),
+        Index("ix_user_branches_branch_id", "branch_id"),
+    )
     user_id   = Column(String, ForeignKey("users.id",     ondelete="CASCADE"), primary_key=True)
     branch_id = Column(String, ForeignKey("branches.id",  ondelete="CASCADE"), primary_key=True)
 
@@ -237,9 +241,12 @@ class ItemBranchConfig(Base):
 # ─── Item Stock (per branch) ──────────────────────────────────────────────────
 class ItemStock(Base):
     __tablename__ = "item_stock"
+    __table_args__ = (
+        UniqueConstraint("item_id", "branch_id", name="uq_item_stock_item_branch"),
+    )
     id         = Column(String, primary_key=True)
-    item_id    = Column(String, ForeignKey("items.id"), nullable=False)
-    branch_id  = Column(String, ForeignKey("branches.id"), nullable=False)
+    item_id    = Column(String, ForeignKey("items.id"), nullable=False, index=True)
+    branch_id  = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
     quantity   = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -259,9 +266,12 @@ class ItemStock(Base):
 # batch table entirely; their stock lives only on item_stock.
 class ItemBatch(Base):
     __tablename__ = "item_batches"
+    __table_args__ = (
+        Index("ix_item_batches_item_branch_active", "item_id", "branch_id", "active"),
+    )
     id            = Column(String, primary_key=True)
-    item_id       = Column(String, ForeignKey("items.id"), nullable=False)
-    branch_id     = Column(String, ForeignKey("branches.id"), nullable=False)
+    item_id       = Column(String, ForeignKey("items.id"), nullable=False, index=True)
+    branch_id     = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
     batch_number  = Column(String, nullable=False)         # vendor lot # or auto
     mfg_date      = Column(String)                          # YYYY-MM-DD
     expiry_date   = Column(String)                          # YYYY-MM-DD
@@ -353,6 +363,10 @@ class SaleInvoice(Base):
 
 class SaleLineItem(Base):
     __tablename__ = "sale_line_items"
+    __table_args__ = (
+        Index("ix_sale_line_items_invoice_id", "invoice_id"),
+        Index("ix_sale_line_items_item_id", "item_id"),
+    )
     id         = Column(String, primary_key=True)
     invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
     item_id    = Column(String, ForeignKey("items.id"), nullable=True)
@@ -434,6 +448,10 @@ class PurchaseBill(Base):
 
 class PurchaseLineItem(Base):
     __tablename__ = "purchase_line_items"
+    __table_args__ = (
+        Index("ix_purchase_line_items_bill_id", "bill_id"),
+        Index("ix_purchase_line_items_item_id", "item_id"),
+    )
     id         = Column(String, primary_key=True)
     bill_id    = Column(String, ForeignKey("purchase_bills.id"), nullable=False)
     item_id    = Column(String, ForeignKey("items.id"), nullable=True)
@@ -475,6 +493,10 @@ class VendorReturn(Base):
 
 class ReturnLineItem(Base):
     __tablename__ = "return_line_items"
+    __table_args__ = (
+        Index("ix_return_line_items_return_id", "return_id"),
+        Index("ix_return_line_items_item_id", "item_id"),
+    )
     id            = Column(String, primary_key=True)
     return_id     = Column(String, ForeignKey("vendor_returns.id"), nullable=False)
     item_id       = Column(String, ForeignKey("items.id"), nullable=True)
