@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
-import { itemsAPI, customersAPI, salesAPI } from '@/api'
+import { itemsAPI, customersAPI, salesAPI, settingsAPI } from '@/api'
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
@@ -15,6 +15,7 @@ import { Receipt } from '@/components/Receipt'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
+import POSRefundModal from './POSRefundModal'
 import PanelDragHandle from './PanelDragHandle'
 import {
   POS_STORAGE_SPLIT,
@@ -79,6 +80,8 @@ export default function POSPage() {
   // Active allocation editor target. `null` => modal closed. Shape:
   //   { item, batches, allocation }
   const [allocEditor, setAllocEditor] = useState(null)
+  const [allowOverselling, setAllowOverselling] = useState(true)
+  const [showRefund, setShowRefund] = useState(false)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -108,6 +111,15 @@ export default function POSPage() {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 250)
     return () => clearTimeout(t)
   }, [search])
+
+  useEffect(() => {
+    settingsAPI.getOrganisation()
+      .then((res) => {
+        const data = res?.data ?? res
+        setAllowOverselling(data?.allowOverselling !== false)
+      })
+      .catch(() => setAllowOverselling(true))
+  }, [])
 
   const updateCategories = (rows, reset = false) => {
     setCategories((prev) => {
@@ -318,6 +330,16 @@ export default function POSPage() {
       }
     }
 
+    if (!allowOverselling) {
+      for (const line of cart) {
+        const stock = Number(line.availableStock ?? line.available_stock ?? 0)
+        if (line.qty > stock) {
+          toast.error(`Insufficient stock for ${line.name}: need ${line.qty}, available ${stock}`)
+          return
+        }
+      }
+    }
+
     // Walk-in + unchecked = unpaid invoice with nobody to follow up with.
     // Warn the operator exactly ONCE per attempt; the second click
     // (within the same cart) lets the sale through. Reset the flag on
@@ -368,6 +390,7 @@ export default function POSPage() {
         // PR 1: null payment_mode → backend creates a pending (unpaid)
         // invoice. Operator records payment later via Sales → Invoices.
         payment_mode: paymentReceived ? paymentMethod : null,
+        origin: 'pos',
         notes: store.notes,
       })
 
@@ -570,6 +593,9 @@ export default function POSPage() {
             <input ref={searchRef} className="form-input" style={{ paddingLeft: 32 }} placeholder="Search item, SKU, barcode… (F2)" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => toast('Connect to USB barcode scanner')}>📷 Scan</button>
+          {can('invoices.create') && (
+            <button className="btn btn-secondary btn-sm" onClick={() => setShowRefund(true)}>↩ Refund</button>
+          )}
           <button className="btn btn-secondary btn-sm" style={{ position: 'relative' }} onClick={() => setShowHeld(true)}>
             ⏸ Hold
             {heldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{heldBills.length}</span>}
@@ -594,13 +620,19 @@ export default function POSPage() {
         {/* Products grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10 }}>
           {filtered.map((p) => {
-            const isOut = p.available_stock <= 0
-            const isLow = p.available_stock > 0 && p.available_stock <= (p.reorder_level || 10)
+            const stock = p.available_stock ?? 0
+            const inCart = cart.find((i) => i.id === p.id)?.qty ?? 0
+            const isOut = !allowOverselling && stock <= 0
+            const wouldExceed = !allowOverselling && inCart + 1 > stock
+            const isLow = stock > 0 && stock <= (p.reorder_level || 10)
             return (
               <div key={p.id}
                 onClick={() => {
-                  if (!isOut) {
-                    store.addItem({
+                  if (isOut || wouldExceed) {
+                    if (wouldExceed) toast.error(`Only ${stock} available for ${p.name}`)
+                    return
+                  }
+                  store.addItem({
                       id: p.id,
                       name: p.name,
                       price: p.selling_price,
@@ -609,14 +641,13 @@ export default function POSPage() {
                       emoji: p.emoji,
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
-                      availableStock: p.available_stock ?? 0,
+                      availableStock: stock,
                       // Carry batch-tracking flags forward so CartRow knows
                       // whether to render the source batch picker.
                       batchTracking: Boolean(p.batch_tracking),
                       expiryTracking: Boolean(p.expiry_tracking),
                     })
                     toast.success(p.name, { duration: 800 })
-                  }
                 }}
                 style={{
                   background: 'var(--bg-surface)', border: `1.5px solid ${isOut ? 'var(--border-subtle)' : 'var(--border-default)'}`,
@@ -629,7 +660,9 @@ export default function POSPage() {
                 <div style={{ fontSize: 28, lineHeight: 1.3 }}>{p.emoji || '📦'}</div>
                 <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginTop: 7, lineHeight: 1.3 }}>{p.name}</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}>{fmt(p.selling_price)}</div>
-                <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{isOut ? 'Out of stock' : `${p.available_stock} in stock`}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {isOut ? 'Out of stock' : `${stock} in stock${inCart > 0 ? ` (${inCart} in cart)` : ''}`}
+                </div>
               </div>
             )
           })}
@@ -776,7 +809,16 @@ export default function POSPage() {
                       key={item.id}
                       item={item}
                       branchId={activeBranch?.id}
-                      onQtyChange={(qty) => store.updateQty(item.id, qty)}
+                      onQtyChange={(qty) => {
+                        if (!allowOverselling) {
+                          const stock = Number(item.availableStock ?? item.available_stock ?? 0)
+                          if (qty > stock) {
+                            toast.error(`Only ${stock} available for ${item.name}`)
+                            return
+                          }
+                        }
+                        store.updateQty(item.id, qty)
+                      }}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
@@ -1032,6 +1074,13 @@ export default function POSPage() {
           />
         )}
       </Modal>
+
+      <POSRefundModal
+        open={showRefund}
+        onClose={() => setShowRefund(false)}
+        branchId={activeBranch?.id}
+        onSuccess={refreshProductStock}
+      />
 
     </div>
   )

@@ -20,6 +20,7 @@
  *   • title, source — same shape as ConvertToInvoiceModal
  *   • lines    — [{ item_id, name, qty, batch_tracking, expiry_tracking }]
  *   • confirming — disables submit while parent awaits
+ *   • mode — 'convert' (default) creates GRN+bill; 'receive' stock only
  */
 import { useEffect, useState } from 'react'
 import { Modal, FormGroup, AlertBar } from '@/components/ui'
@@ -34,7 +35,9 @@ export default function ConvertPOToBillModal({
   source,
   lines = null,
   confirming = false,
+  mode = 'convert',
 }) {
+  const isReceiveOnly = mode === 'receive'
   const [paymentReceived, setPaymentReceived] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState(null)
   const [paymentRef, setPaymentRef] = useState('')
@@ -159,16 +162,18 @@ export default function ConvertPOToBillModal({
       }
     }
     onConfirm({
-      payment_received: paymentReceived,
-      payment_mode: paymentReceived ? paymentMethod : null,
-      payment_ref: paymentRef.trim() || null,
+      payment_received: isReceiveOnly ? false : paymentReceived,
+      payment_mode: isReceiveOnly ? null : (paymentReceived ? paymentMethod : null),
+      payment_ref: isReceiveOnly ? null : (paymentRef.trim() || null),
       notes: notes.trim() || null,
-      due_date: dueDate || null,
+      due_date: isReceiveOnly ? null : (dueDate || null),
       line_receipts: line_receipts.length ? line_receipts : null,
     })
   }
 
-  const buttonDisabled = confirming || (paymentReceived && !paymentMethod) || hasMissingExpiry
+  const buttonDisabled = confirming
+    || (!isReceiveOnly && paymentReceived && !paymentMethod)
+    || hasMissingExpiry
   const showStockSection = Array.isArray(lines) && lines.length > 0
 
   return (
@@ -188,16 +193,25 @@ export default function ConvertPOToBillModal({
             onClick={handleConfirm}
             disabled={buttonDisabled}
           >
-            {confirming ? 'Converting…' : 'Create Bill'}
+            {confirming ? (isReceiveOnly ? 'Receiving…' : 'Converting…') : (isReceiveOnly ? 'Receive Stock' : 'Create Bill')}
           </button>
         </>
       }
     >
       {source && (
         <AlertBar type="blue" icon="ℹ">
-          Creating bill from <strong>{source.number}</strong>
+          {isReceiveOnly ? (
+            <>Receiving stock for <strong>{source.number}</strong></>
+          ) : (
+            <>Creating bill from <strong>{source.number}</strong></>
+          )}
           {source.vendorName ? <> for <strong>{source.vendorName}</strong></> : null}
           {typeof source.total === 'number' ? <> · Total: <strong>{fmt(source.total)}</strong></> : null}
+          {isReceiveOnly && (
+            <div style={{ marginTop: 6, fontSize: 12 }}>
+              No bill yet — create one later from the GRN tab via <strong>To Bill</strong>.
+            </div>
+          )}
         </AlertBar>
       )}
 
@@ -298,6 +312,8 @@ export default function ConvertPOToBillModal({
 
       <div style={{ height: showStockSection ? 16 : 14 }} />
 
+      {!isReceiveOnly && (
+        <>
       <FormGroup label="Due Date">
         <input className="form-input" type="date"
           value={dueDate}
@@ -371,6 +387,21 @@ export default function ConvertPOToBillModal({
           />
         </FormGroup>
       </div>
+        </>
+      )}
+
+      {isReceiveOnly && (
+        <div style={{ marginTop: 14 }}>
+          <FormGroup label="Notes (optional)">
+            <textarea
+              className="form-input"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              style={{ height: 60 }}
+            />
+          </FormGroup>
+        </div>
+      )}
     </Modal>
   )
 }

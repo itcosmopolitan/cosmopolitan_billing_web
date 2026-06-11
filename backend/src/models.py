@@ -58,6 +58,7 @@ class SalesOrderStatus(str, enum.Enum):
     edited or re-converted."""
     draft     = "draft"
     confirmed = "confirmed"
+    partially_invoiced = "partially_invoiced"
     converted = "converted"
     cancelled = "cancelled"
 
@@ -69,9 +70,17 @@ class PurchaseOrderStatus(str, enum.Enum):
     SalesOrderStatus) so the two domains can evolve independently if
     purchase workflows grow new states (e.g. `approved_pending_receipt`).
     """
+    draft              = "draft"
+    confirmed          = "confirmed"
+    partially_received = "partially_received"
+    converted          = "converted"
+    cancelled          = "cancelled"
+
+
+class GRNStatus(str, enum.Enum):
+    """Goods Receipt Note lifecycle. Stock moves only at `received`."""
     draft     = "draft"
-    confirmed = "confirmed"
-    converted = "converted"
+    received  = "received"
     cancelled = "cancelled"
 
 
@@ -81,6 +90,19 @@ class SalesReturnStatus(str, enum.Enum):
     exists for future "undo a return" support but isn't writable yet."""
     processed = "processed"
     void      = "void"
+
+
+class DocumentReturnStatus(str, enum.Enum):
+    """How much of a source invoice/bill has been credited via returns."""
+    none    = "none"
+    partial = "partial"
+    full    = "full"
+
+
+class StockReservationStatus(str, enum.Enum):
+    active    = "active"
+    released  = "released"
+    fulfilled = "fulfilled"
 
 
 # ─── Organisation ─────────────────────────────────────────────────────────────
@@ -99,6 +121,10 @@ class Organisation(Base):
     logo_url      = Column(String)
     # inclusive = shelf prices include GST (default); exclusive = tax added at checkout
     tax_pricing_mode = Column(String, default="inclusive")
+    # Phase 0: when True (default), POS/SO convert may sell below available stock.
+    allow_overselling = Column(Boolean, default=True, nullable=False)
+    # Phase 4: JSON {"pos": {"prefix": "POS", "start": 1000}, "invoice": {...}}
+    numbering_config  = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
@@ -339,13 +365,9 @@ class Customer(Base):
     branch_id       = Column(String, ForeignKey("branches.id"))
     credit_limit    = Column(Float, default=0)
     outstanding     = Column(Float, default=0)
-    # Money we owe the customer (always ≥0). Two write paths today:
-    #   • Overpayment on a customer invoice (excess routed here)
-    #   • PR 2: Sales return with refund_method='credit'
-    # Read paths: Customers table, Credit Notes tab. v1 only running total;
-    # full ledger (CustomerCreditEntry) is deferred — every change writes an
-    # AuditLog row so the trail exists in the audit module either way. See
-    # ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
+    # Money we owe the customer (always ≥0). Mutations go through
+    # routes/_credit_ledger.adjust_customer_credit so every change also
+    # writes a CustomerCreditEntry row.
     credit_balance  = Column(Float, default=0, nullable=False)
     total_purchases = Column(Float, default=0)
     type            = Column(String, default="retail")  # retail | wholesale
@@ -369,6 +391,9 @@ class Vendor(Base):
     gstin            = Column(String)
     payment_terms    = Column(String, default="30 days")
     outstanding      = Column(Float, default=0)
+    # Advance / overpayment credit (money we prepaid the vendor). Mutations
+    # go through routes/_vendor_credit_ledger.adjust_vendor_credit.
+    credit_balance   = Column(Float, default=0, nullable=False)
     total_purchases  = Column(Float, default=0)
     active           = Column(Boolean, default=True)
     created_at       = Column(DateTime, default=datetime.utcnow)
@@ -401,6 +426,12 @@ class SaleInvoice(Base):
     # explicit `None` values during INSERT, masking the unpaid state.
     payment_mode  = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.paid)
+    due_date      = Column(String)   # credit-term due; drives overdue flag
+    # Phase 0: cumulative return value + derived flag (see recalc_invoice_after_cn).
+    credited_amount = Column(Float, default=0, nullable=False)
+    return_status   = Column(String, default="none")
+    # Phase 4: pos | invoice | sales_order | quotation — drives receipt numbering.
+    origin        = Column(String, default="invoice")
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -525,6 +556,8 @@ class Quotation(Base):
     # (status alone is insufficient — it never resets when the SO is
     # deleted). Nullable until conversion. Added 2026-05-30.
     converted_order_id = Column(String, ForeignKey("sales_orders.id"), nullable=True)
+    # Set on direct quote→invoice convert (skip SO). Nullable until then.
+    converted_invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=True)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -623,6 +656,9 @@ class PurchaseBill(Base):
     # upi / bank_transfer).
     payment_mode  = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.pending)
+    credited_amount = Column(Float, default=0, nullable=False)
+    return_status   = Column(String, default="none")
+    grn_id        = Column(String, ForeignKey("goods_receipt_notes.id"), nullable=True)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -703,14 +739,61 @@ class PurchaseOrderLineItem(Base):
     item  = relationship("Item")
 
 
+# ─── Goods Receipt Note (GRN) ────────────────────────────────────────────────
+# Primary stock-in document for purchases. Bills reference a GRN for lineage;
+# legacy bills without grn_id are treated as having an implicit GRN (batches
+# keyed on bill.id). See routes/_grn_stock.py + routes/purchases.py.
+class GoodsReceiptNote(Base):
+    __tablename__ = "goods_receipt_notes"
+    id                = Column(String, primary_key=True)
+    number            = Column(String, unique=True, nullable=False)  # GRN-YYYY-NNNN
+    vendor_id         = Column(String, ForeignKey("vendors.id"), nullable=False)
+    vendor_name       = Column(String)
+    branch_id         = Column(String, ForeignKey("branches.id"), nullable=False)
+    branch_name       = Column(String)
+    purchase_order_id = Column(String, ForeignKey("purchase_orders.id"), nullable=True)
+    po_number         = Column(String)
+    date              = Column(String, nullable=False)
+    subtotal          = Column(Float, default=0)
+    tax_total         = Column(Float, default=0)
+    discount          = Column(Float, default=0)
+    total             = Column(Float, default=0)
+    status            = Column(SAEnum(GRNStatus), default=GRNStatus.received)
+    converted_bill_id = Column(String, ForeignKey("purchase_bills.id"), nullable=True)
+    notes             = Column(Text)
+    created_by        = Column(String)
+    created_at        = Column(DateTime, default=datetime.utcnow)
+
+    vendor     = relationship("Vendor")
+    line_items = relationship("GRNLineItem", back_populates="grn", cascade="all, delete-orphan")
+
+
+class GRNLineItem(Base):
+    __tablename__ = "grn_line_items"
+    id           = Column(String, primary_key=True)
+    grn_id       = Column(String, ForeignKey("goods_receipt_notes.id"), nullable=False)
+    po_line_id   = Column(String, ForeignKey("purchase_order_line_items.id"), nullable=True)
+    item_id      = Column(String, ForeignKey("items.id"), nullable=True)
+    name         = Column(String, nullable=False)
+    ordered_qty  = Column(Integer)
+    received_qty = Column(Integer, default=1)
+    cost         = Column(Float, default=0)
+    tax_rate     = Column(Float, default=0)
+    discount     = Column(Float, default=0)
+    line_total   = Column(Float, default=0)
+    batch_number = Column(String)
+    mfg_date     = Column(String)
+    expiry_date  = Column(String)
+
+    grn  = relationship("GoodsReceiptNote", back_populates="line_items")
+    item = relationship("Item")
+
+
 # ─── Vendor Payment ──────────────────────────────────────────────────────────
 # Mirror of CustomerPayment for the purchase side. See CustomerPayment for
 # the design rationale (multi-bill payments, retrofit path, etc.).
-# Difference from the sales side: there's no `credit_applied` field today —
-# vendors don't have a credit_balance equivalent. If an operator overpays
-# a vendor (rare but possible), the new endpoint rejects with 400 ("reduce
-# amount"). Future "vendor advance" feature would add a credit-balance
-# column on Vendor and an analogous credit_applied here.
+# Overpayment on multi-bill payments accumulates in credit_applied and bumps
+# vendor.credit_balance (Purchase Phase 3 — mirrors CustomerPayment).
 class VendorPayment(Base):
     __tablename__ = "vendor_payments"
     id              = Column(String, primary_key=True)
@@ -724,11 +807,33 @@ class VendorPayment(Base):
     payment_mode    = Column(String, nullable=False)
     payment_ref     = Column(String)
     notes           = Column(Text)
+    voided          = Column(Boolean, default=False, nullable=False)
+    voided_at       = Column(String)
+    credit_applied  = Column(Float, default=0)
     created_by      = Column(String)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
     vendor      = relationship("Vendor")
     allocations = relationship("VendorPaymentAllocation", back_populates="payment", cascade="all, delete-orphan")
+
+
+class VendorCreditEntry(Base):
+    __tablename__ = "vendor_credit_entries"
+    id             = Column(String, primary_key=True)
+    vendor_id      = Column(String, ForeignKey("vendors.id"), nullable=False)
+    entry_type     = Column(String, nullable=False)
+    delta          = Column(Float, nullable=False)
+    balance_before = Column(Float, default=0)
+    balance_after  = Column(Float, default=0)
+    source_type    = Column(String)
+    source_ref     = Column(String)
+    source_number  = Column(String)
+    notes          = Column(Text)
+    date           = Column(String, nullable=False)
+    created_by     = Column(String)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+    vendor = relationship("Vendor")
 
 
 class VendorPaymentAllocation(Base):
@@ -762,6 +867,8 @@ class VendorReturn(Base):
     total         = Column(Float, default=0)
     credited_amount = Column(Float, default=0)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.pending)
+    voided        = Column(Boolean, default=False, nullable=False)
+    voided_at     = Column(String)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
@@ -923,6 +1030,8 @@ class CustomerPayment(Base):
     # Excess routed to customer.credit_balance for non-walk-in customers.
     # 0 for exact-amount payments. Always ≥ 0.
     credit_applied  = Column(Float, default=0)
+    voided          = Column(Boolean, default=False, nullable=False)
+    voided_at       = Column(String)
     created_by      = Column(String)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
@@ -944,6 +1053,86 @@ class CustomerPaymentAllocation(Base):
 
     payment = relationship("CustomerPayment", back_populates="allocations")
     invoice = relationship("SaleInvoice")
+
+
+# ─── Customer Credit Ledger (Sales Phase 1) ───────────────────────────────────
+class CustomerCreditEntry(Base):
+    __tablename__ = "customer_credit_entries"
+    id             = Column(String, primary_key=True)
+    customer_id    = Column(String, ForeignKey("customers.id"), nullable=False)
+    entry_type     = Column(String, nullable=False)
+    delta          = Column(Float, nullable=False)
+    balance_before = Column(Float, default=0)
+    balance_after  = Column(Float, default=0)
+    source_type    = Column(String)
+    source_ref     = Column(String)
+    source_number  = Column(String)
+    notes          = Column(Text)
+    date           = Column(String, nullable=False)
+    created_by     = Column(String)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+    customer = relationship("Customer")
+
+
+# ─── Stock Movement Ledger (Phase 0) ─────────────────────────────────────────
+# Append-only audit of every physical stock change. Populated by _atomic helpers.
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+    id             = Column(String, primary_key=True)
+    item_id        = Column(String, ForeignKey("items.id"), nullable=False)
+    branch_id      = Column(String, ForeignKey("branches.id"), nullable=False)
+    delta          = Column(Integer, nullable=False)
+    before_qty     = Column(Integer, default=0)
+    after_qty      = Column(Integer, default=0)
+    movement_type  = Column(String, nullable=False)
+    source_type    = Column(String)
+    source_ref     = Column(String)
+    batch_id       = Column(String, ForeignKey("item_batches.id"), nullable=True)
+    notes          = Column(Text)
+    created_by     = Column(String)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+
+
+# ─── Stock Reservations (Phase 0 — when allow_overselling=False) ─────────────
+class StockReservation(Base):
+    __tablename__ = "stock_reservations"
+    id              = Column(String, primary_key=True)
+    item_id         = Column(String, ForeignKey("items.id"), nullable=False)
+    branch_id       = Column(String, ForeignKey("branches.id"), nullable=False)
+    qty             = Column(Integer, default=0)
+    source_type     = Column(String, nullable=False)   # sales_order
+    source_ref      = Column(String, nullable=False)
+    source_line_id  = Column(String)
+    status          = Column(SAEnum(StockReservationStatus), default=StockReservationStatus.active)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
+# ─── Payment Record (Phase 0 — unified money-movement ledger) ────────────────
+# Append-only audit of every customer receipt and vendor disbursement.
+# Source of truth for payment docs remains customer_payments / vendor_payments;
+# this table is the cross-domain index for reporting and future cash reconciliation.
+class PaymentRecord(Base):
+    __tablename__ = "payment_records"
+    id                   = Column(String, primary_key=True)
+    number               = Column(String, nullable=False)
+    direction            = Column(String, nullable=False)   # receive | pay
+    party_type           = Column(String)                   # customer | vendor
+    party_id             = Column(String)
+    party_name           = Column(String)
+    branch_id            = Column(String, ForeignKey("branches.id"), nullable=True)
+    branch_name          = Column(String)
+    date                 = Column(String, nullable=False)
+    amount               = Column(Float, default=0)
+    payment_mode         = Column(String)
+    payment_ref          = Column(String)
+    source_document_type = Column(String, nullable=False)   # customer_payment | vendor_payment
+    source_document_id   = Column(String, nullable=False)
+    voided               = Column(Boolean, default=False, nullable=False)
+    voided_at            = Column(String)
+    notes                = Column(Text)
+    created_by           = Column(String)
+    created_at           = Column(DateTime, default=datetime.utcnow)
 
 
 # ─── Stock Transfer ───────────────────────────────────────────────────────────

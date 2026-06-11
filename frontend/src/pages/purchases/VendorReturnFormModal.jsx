@@ -168,6 +168,7 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
   }, [bill, returnQtys])
 
   const handleSubmit = async () => {
+    if (submitting) return
     if (!bill) {
       toast.error('Pick a bill first')
       return

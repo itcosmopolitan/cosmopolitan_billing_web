@@ -19,35 +19,13 @@
  * load fine; their picker shows the cached name as "selected" so the
  * operator can still review or × out and re-pick.
  */
-import { fmt } from '@/utils/helpers'
 import { Modal, FormGroup } from '@/components/ui'
 import InventoryItemPicker from './InventoryItemPicker'
 import CustomerPicker from './CustomerPicker'
+import DocumentNumberField from '@/components/DocumentNumberField'
+import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
-// 2026-05-24: simplified. Tax column + cart-level Discount were removed
-// from the modal at user request ("If needed we can add later"). Per-row
-// discount can be expressed in % OR ₹ via the inline toggle — the
-// `lineDiscountType` flag on each row picks the interpretation. Math:
-//   • '%' (default) → discountAmt = gross × value / 100, capped at gross
-//   • '₹'           → discountAmt = value, capped at gross
-// Backend stores percent only — saveOrder converts ₹ → % before POST.
-function lineDiscountAmount(it, gross) {
-  const raw = Math.max(0, Number(it.lineDiscount || 0))
-  if (it.lineDiscountType === '₹') return Math.min(gross, raw)
-  // '%' — also handles legacy rows without the type field.
-  return Math.min(gross, gross * (Math.min(raw, 100) / 100))
-}
-
-function computeTotals(items) {
-  let gross = 0
-  let discount = 0
-  items.forEach((it) => {
-    const g = Number(it.qty || 0) * Number(it.price || 0)
-    gross += g
-    discount += lineDiscountAmount(it, g)
-  })
-  return { gross, discount, total: Math.max(0, gross - discount) }
-}
+// Per-row discount in % or ₹ via lineDiscountType. Backend stores percent only.
 
 export default function OrderFormModal({
   open,
@@ -61,13 +39,18 @@ export default function OrderFormModal({
   saving = false,
   editingNumber = null,
   readOnly = false,
+  conversionLabel = null,
+  /** When true, render only the form body (for full-page DocumentFormShell). */
+  embedded = false,
 }) {
   const isEdit = !!editingNumber
   const title = readOnly
     ? `Sales Order — ${editingNumber}`
-    : isEdit
-      ? `Edit Sales Order — ${editingNumber}`
-      : 'Create Sales Order'
+    : conversionLabel
+      ? `Create Sales Order — from ${conversionLabel}`
+      : isEdit
+        ? `Edit Sales Order — ${editingNumber}`
+        : 'Create Sales Order'
   const saveLabel = saving
     ? (isEdit ? 'Saving…' : 'Creating…')
     : (isEdit ? 'Save Changes' : 'Create')
@@ -120,34 +103,21 @@ export default function OrderFormModal({
     pof('items', next)
   }
 
-  const totals = computeTotals(orderForm.items)
+  const disableLineDiscount = readOnly || shouldDisableLineDiscount(orderForm.discount)
 
-  return (
-    <Modal
-      open={open}
-      onClose={saving ? () => {} : onClose}
-      title={title}
-      icon="📦"
-      size="lg"
-      footer={
-        <>
-          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
-            {readOnly ? 'Close' : 'Cancel'}
-          </button>
-          {!readOnly && (
-            <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-              {saveLabel}
-            </button>
-          )}
-        </>
-      }
-    >
-      {/* 2026-05-24: simplified header to just Customer + Expected Date.
-          Branch is implicit (always the active branch — see
-          SalesPage.openCreateOrder). Cart-level discount field was
-          removed in favour of per-line discounts in the items table —
-          "If needed we can add later" per user. */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+  const formBody = (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <DocumentNumberField
+          label="Order #"
+          docType="sales_order"
+          branchId={orderForm.branchId}
+          value={orderForm.number}
+          onChange={(v) => pof('number', v)}
+          isEdit={isEdit}
+          editingNumber={editingNumber}
+          readOnly={readOnly}
+        />
         <FormGroup label="Customer" required>
           <CustomerPicker
             disabled={readOnly}
@@ -233,14 +203,14 @@ export default function OrderFormModal({
                         discount stays the same when switching ₹ ↔ %.
                         Backend only stores percent — saveOrder converts
                         before POST. */}
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <input className="form-input" type="number" disabled={readOnly}
+                    <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
+                      <input className="form-input" type="number" disabled={readOnly || disableLineDiscount}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={e => { const n = [...orderForm.items]; n[i].lineDiscount = e.target.value; pof('items', n) }} />
                       <button
                         type="button"
-                        disabled={readOnly}
+                        disabled={readOnly || disableLineDiscount}
                         onClick={() => toggleDiscountType(i)}
                         title={type === '%' ? 'Switch to amount (₹)' : 'Switch to percent (%)'}
                         style={discountToggleStyle}
@@ -268,49 +238,49 @@ export default function OrderFormModal({
         )}
       </FormGroup>
 
-      {/* Totals strip — Subtotal = sum of qty × price; Discount = sum of
-          line discounts (shown only when > 0 so plain-pricing SOs stay
-          quiet); Total = the bottom line. No GST / no cart-level
-          discount in this build — see computeTotals + the user note from
-          2026-05-24 ("If needed we can add later"). */}
-      {orderForm.items.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-          <div style={{ minWidth: 240 }}>
-            <div style={totalsRowStyle}>
-              <span style={totalsLabelStyle}>Subtotal</span>
-              <span className="mono" style={totalsValueStyle}>{fmt(totals.gross)}</span>
-            </div>
-            {totals.discount > 0 && (
-              <div style={totalsRowStyle}>
-                <span style={totalsLabelStyle}>Discount</span>
-                <span className="mono" style={{ ...totalsValueStyle, color: 'var(--green)' }}>−{fmt(totals.discount)}</span>
-              </div>
-            )}
-            <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
-              <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Total</span>
-              <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{fmt(totals.total)}</span>
-            </div>
-          </div>
-        </div>
-      )}
+      <DocumentTotalsStrip
+        items={orderForm.items}
+        entityDiscount={orderForm.discount}
+        entityDiscountType={orderForm.discountType || '%'}
+        onEntityDiscountChange={readOnly ? undefined : (v) => pof('discount', v)}
+        onEntityDiscountTypeChange={readOnly ? undefined : (t) => pof('discountType', t)}
+        readOnly={readOnly}
+        lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+      />
 
       <FormGroup label="Notes">
         <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
           value={orderForm.notes} onChange={e => pof('notes', e.target.value)} />
       </FormGroup>
+    </>
+  )
+
+  if (embedded) return formBody
+
+  return (
+    <Modal
+      open={open}
+      onClose={saving ? () => {} : onClose}
+      title={title}
+      icon="📦"
+      size="lg"
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
+            {readOnly ? 'Close' : 'Cancel'}
+          </button>
+          {!readOnly && (
+            <button className="btn btn-primary" onClick={onSave} disabled={saving}>
+              {saveLabel}
+            </button>
+          )}
+        </>
+      }
+    >
+      {formBody}
     </Modal>
   )
 }
-
-const totalsRowStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'baseline',
-  padding: '3px 0',
-  fontSize: 13,
-}
-const totalsLabelStyle = { color: 'var(--text-muted)' }
-const totalsValueStyle = { color: 'var(--text-primary)' }
 
 // 2026-05-24: right-aligned + tabular-numerals for SO/Quote item cells.
 // Pairs with the right-aligned column headers and the hidden number

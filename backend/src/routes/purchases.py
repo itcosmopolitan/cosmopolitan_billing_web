@@ -11,9 +11,12 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
-from src.document_numbering import allocate_number
+from src.document_numbering import allocate_number, resolve_number
 from src.models import (
     AuditLog,
+    GRNLineItem,
+    GRNStatus,
+    GoodsReceiptNote,
     ItemBatch,
     PurchaseBill,
     PurchaseLineItem,
@@ -28,6 +31,21 @@ from src.models import (
     VendorReturn,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.routes._grn_stock import (
+    ReceiptLine,
+    grn_batches_consumed,
+    receive_lines_to_stock,
+    reverse_grn_stock,
+)
+from src.routes._lifecycle import (
+    compute_due_date,
+    recalc_bill_after_vendor_credit,
+    refresh_purchase_overdue,
+    reverse_vendor_payment,
+    sync_vendor_outstanding,
+)
+from src.routes._payment_ledger import record_vendor_payment, void_payment_record
+from src.routes._vendor_credit_ledger import adjust_vendor_credit
 from src.routes._atomic import (
     add_batch_atomic,
     adjust_stock_atomic,
@@ -46,7 +64,7 @@ router = APIRouter()
 # Payment on purchase bills all offer the same 4 methods. Mirror the SO
 # `RecordedPaymentMode` decision: cheque NOT included even though vendor
 # settlements often use it, because parity with the POS dropdown won out.
-PaymentMode = Literal["cash", "card", "upi", "bank_transfer"]
+PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
 
 
 def _coerce_payment_mode_value(v):
@@ -94,12 +112,15 @@ class PurchaseCreate(BaseModel):
     due_date: Optional[str] = None
     items: List[PurchaseLine]
     discount: float = 0
+    number: Optional[str] = None
     notes: Optional[str] = None
     # 2026-05-24: parallel to SaleCreate.payment_mode. When set at create
     # time, the bill is created `paid`; when None, `pending`. Frontend
     # BillFormModal's "Payment received?" checkbox drives this.
     payment_mode: Optional[PaymentMode] = None
     payment_ref: Optional[str] = None
+    purchase_order_id: Optional[str] = None
+    grn_id: Optional[str] = None
 
     @field_validator("payment_mode", mode="before")
     @classmethod
@@ -152,45 +173,6 @@ def _purchase_bill_filters(
     return conds
 
 
-async def _purchase_bills_summary(db: AsyncSession, conds):
-    base = and_(*conds) if conds else True
-    amount_total = float(
-        (await db.execute(select(func.coalesce(func.sum(PurchaseBill.total), 0)).where(base))).scalar() or 0
-    )
-    collected_paid = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(PurchaseBill.total), 0)).where(and_(base, PurchaseBill.status == "paid"))
-            )
-        ).scalar()
-        or 0
-    )
-    pending_balance = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0)).where(
-                    and_(base, PurchaseBill.status.in_(["pending", "partial"]))
-                )
-            )
-        ).scalar()
-        or 0
-    )
-    overdue_count = int(
-        (
-            await db.execute(
-                select(func.count(PurchaseBill.id)).where(and_(base, PurchaseBill.status == "overdue"))
-            )
-        ).scalar()
-        or 0
-    )
-    return {
-        "amountTotal": amount_total,
-        "collectedPaid": collected_paid,
-        "pendingBalance": pending_balance,
-        "overdueCount": overdue_count,
-    }
-
-
 # ─── LIST ─────────────────────────────────────────────────────────────────────
 @router.get("/", dependencies=[Depends(require_perm("purchases.view"))])
 async def list_bills(
@@ -209,6 +191,8 @@ async def list_bills(
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
+    await refresh_purchase_overdue(db, branch_id)
+    await db.commit()
     conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to)
     if branch_id is None and not getattr(user, "all_branches", False):
         branch_ids = await get_user_branch_ids(db, user.id)
@@ -246,8 +230,7 @@ async def list_bills(
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     bills = result.unique().scalars().all()
     out = [_bill_dict(b, b.line_items) for b in bills]
-    summary = await _purchase_bills_summary(db, conds)
-    return paged(out, total, sk, lim, summary=summary)
+    return paged(out, total, sk, lim)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
@@ -287,8 +270,11 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
         tax_total += line_tax
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
-    bill_num = await allocate_number(
-        db, "purchase_bill", branch_id=data.branch_id
+    bill_num = await resolve_number(
+        db,
+        requested=data.number,
+        model=PurchaseBill,
+        allocate=lambda: allocate_number(db, "purchase_bill", branch_id=data.branch_id),
     )
 
     await enforce_branch_access(data.branch_id, user=user, db=db)
@@ -298,79 +284,102 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
     # lands as pending and gets settled later via record_payment.
     paid_at_create = data.payment_mode is not None
     paid_amount = total if paid_at_create else 0.0
+
+    due_date = data.due_date
     bill_status = "paid" if paid_amount >= total else "pending"
+    if not due_date and bill_status in ("pending", "partial"):
+        vendor_row = (await db.execute(
+            select(Vendor).where(Vendor.id == data.vendor_id)
+        )).scalar_one_or_none()
+        payment_terms = vendor_row.payment_terms if vendor_row else None
+        due_date = compute_due_date(data.date or today, payment_terms)
 
-    bill = PurchaseBill(
-        id=str(uuid.uuid4()), number=bill_num,
-        vendor_id=data.vendor_id,
-        vendor_name=data.vendor_name,
-        branch_id=data.branch_id,
-        branch_name=data.branch_name or data.branch_id,
-        date=data.date or today,
-        due_date=data.due_date,
-        subtotal=round(subtotal, 2),
-        tax_total=round(tax_total, 2),
-        discount=round(data.discount or 0, 2),
-        total=total,
-        paid_amount=round(paid_amount, 2),
-        payment_mode=data.payment_mode,
-        payment_ref=data.payment_ref or "",
-        status=bill_status,
-        notes=data.notes,
-    )
-    db.add(bill)
+    if data.grn_id and data.purchase_order_id:
+        raise HTTPException(400, "Specify grn_id or purchase_order_id, not both")
 
-    for item, line_net, line_tax in line_rows:
-        li = PurchaseLineItem(
-            id=str(uuid.uuid4()), bill_id=bill.id,
-            item_id=item.item_id, name=item.name,
-            qty=item.qty, cost=item.cost,
-            tax_rate=item.tax_rate,
-            discount=item.discount or 0,
-            line_total=round(line_net + line_tax, 2),
+    po = None
+    if data.purchase_order_id:
+        po_res = await db.execute(
+            select(PurchaseOrder)
+            .options(selectinload(PurchaseOrder.line_items))
+            .where(PurchaseOrder.id == data.purchase_order_id)
         )
-        db.add(li)
-        # Stock side-effect: tracked items create a new batch (carrying vendor
-        # lot, mfg/expiry), untracked items just bump the aggregate counter.
-        # Both code paths atomically update item_stock so reports stay correct.
-        if item.item_id:
-            tracked, expiry_tracked = await is_tracked(db, item.item_id)
-            if tracked:
-                date_errs = validate_batch_dates(
-                    mfg_date=item.mfg_date,
-                    expiry_date=item.expiry_date,
-                    received_date=data.date or today,
-                    require_expiry=expiry_tracked,
-                )
-                if date_errs:
-                    raise HTTPException(
-                        400,
-                        f"{item.name}: {'; '.join(date_errs)}",
-                    )
-                try:
-                    await add_batch_atomic(
-                        db,
-                        item_id=item.item_id,
-                        branch_id=data.branch_id,
-                        qty=item.qty,
-                        batch_number=item.batch_number,
-                        mfg_date=item.mfg_date,
-                        expiry_date=item.expiry_date,
-                        cost_price=float(item.cost or 0),
-                        vendor_id=data.vendor_id,
-                        source_type="purchase",
-                        source_ref=bill.id,
-                        received_date=data.date or today,
-                    )
-                except ValueError as e:
-                    raise HTTPException(400, f"{item.name}: {e}")
-            else:
-                await adjust_stock_atomic(
-                    db,
-                    item_id=item.item_id,
-                    branch_id=data.branch_id,
-                    delta=item.qty,
-                )
+        po = po_res.scalar_one_or_none()
+        if not po:
+            raise HTTPException(404, "Purchase order not found")
+        if po.status == PurchaseOrderStatus.converted:
+            raise HTTPException(400, "Purchase order already converted")
+        if po.status == PurchaseOrderStatus.partially_received:
+            raise HTTPException(
+                400,
+                "PO already has a goods receipt — open the GRN tab and create a bill from the pending receipt",
+            )
+        if po.status == PurchaseOrderStatus.cancelled:
+            raise HTTPException(400, "Cannot convert a cancelled purchase order")
+
+    if data.grn_id:
+        grn_res = await db.execute(
+            select(GoodsReceiptNote)
+            .options(selectinload(GoodsReceiptNote.line_items))
+            .where(GoodsReceiptNote.id == data.grn_id)
+        )
+        grn = grn_res.scalar_one_or_none()
+        if not grn:
+            raise HTTPException(404, "GRN not found")
+        grn_status = str(grn.status.value) if hasattr(grn.status, "value") else str(grn.status)
+        if grn_status != "received":
+            raise HTTPException(400, "Only received GRNs can be billed")
+        if grn.converted_bill_id:
+            raise HTTPException(400, "GRN already has a linked bill")
+        grn_total = float(grn.total or 0)
+        paid_amount = grn_total if paid_at_create else 0.0
+        bill_status = "paid" if paid_amount >= grn_total else "pending"
+        bill = await _create_bill_for_grn(
+            db,
+            grn,
+            due_date=due_date,
+            payment_mode=data.payment_mode,
+            payment_ref=data.payment_ref or "",
+            notes=data.notes,
+            paid_amount=paid_amount,
+        )
+        if grn.purchase_order_id:
+            po = (await db.execute(
+                select(PurchaseOrder).where(PurchaseOrder.id == grn.purchase_order_id)
+            )).scalar_one_or_none()
+            if po is not None:
+                po.status = PurchaseOrderStatus.converted
+                po.converted_bill_id = bill.id
+    else:
+        # Phase 3: stock on GRN, bill is financial only (auto-GRN for direct bill).
+        grn = await _create_grn_received(
+            db,
+            vendor_id=data.vendor_id,
+            vendor_name=data.vendor_name,
+            branch_id=data.branch_id,
+            branch_name=data.branch_name or data.branch_id,
+            date=data.date or today,
+            line_rows=line_rows,
+            discount=data.discount or 0,
+            notes=data.notes,
+            purchase_order_id=po.id if po else None,
+            po_number=po.number if po else None,
+            number=data.number,
+        )
+        bill = await _create_bill_for_grn(
+            db,
+            grn,
+            due_date=due_date,
+            payment_mode=data.payment_mode,
+            payment_ref=data.payment_ref or "",
+            notes=data.notes,
+            paid_amount=paid_amount,
+        )
+        if po is not None:
+            po.status = PurchaseOrderStatus.converted
+            po.converted_bill_id = bill.id
+    bill_num = bill.number
+    total = float(bill.total or 0)
 
     # 2026-05-31: record a VendorPayment for a bill paid at creation, so the
     # Purchases > Payments tab is a complete ledger — parity with the sales
@@ -400,6 +409,10 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
             bill_number=bill.number,
             amount=round(paid_amount, 2),
         ))
+        await record_vendor_payment(db, bpay)
+
+    if bill.vendor_id and bill_status in ("pending", "partial"):
+        await sync_vendor_outstanding(db, bill.vendor_id)
 
     await db.commit()
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
@@ -409,15 +422,8 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
 async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db)):
     """Record a payment against a purchase bill.
 
-    2026-05-24 changes:
-      • `mode` is now persisted (purchase_bills.payment_mode column added).
-      • Already-paid bills return 400 instead of silently no-oping.
-      • Cancelled bills are unpayable.
-      • Amount > balance is clamped to balance (vendor over-payments are
-        rare and don't have a credit_balance equivalent yet — flag for a
-        future "vendor advance" feature). Excess silently discarded
-        rather than rejected, mirroring the lenient behaviour the
-        purchase side has historically had.
+    Overpayment (amount > balance) routes excess to vendor.credit_balance.
+    Credit mode debits vendor.credit_balance instead of cash.
     """
     if data.amount <= 0:
         raise HTTPException(400, "amount must be > 0")
@@ -431,17 +437,35 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
     if balance <= 0:
         raise HTTPException(400, "Bill already settled")
+
+    if data.mode == "credit":
+        if not b.vendor_id:
+            raise HTTPException(400, "Credit-mode payment requires a vendor")
+        vendor_row = (await db.execute(
+            select(Vendor).where(Vendor.id == b.vendor_id)
+        )).scalar_one_or_none()
+        if not vendor_row:
+            raise HTTPException(404, "Vendor not found")
+        avail = float(vendor_row.credit_balance or 0)
+        if avail + 0.001 < data.amount:
+            raise HTTPException(
+                400,
+                f"Insufficient vendor credit — ₹{round(avail, 2)} available, "
+                f"payment is ₹{data.amount}",
+            )
+        if data.amount > balance + 0.001:
+            raise HTTPException(
+                400,
+                f"Credit mode can't overpay — balance is ₹{round(balance, 2)}",
+            )
+
     applied = min(balance, data.amount)
+    credit_applied = round(max(0.0, data.amount - balance), 2)
     b.paid_amount = round(float(b.paid_amount or 0) + applied, 2)
     b.payment_ref = data.ref or b.payment_ref
     b.payment_mode = data.mode
     b.status = "paid" if b.paid_amount >= b.total else "partial"
 
-    # 2026-05-24: also write a VendorPayment + 1 allocation row so the
-    # Payments tab in the Purchases UI shows every payment regardless
-    # of entry point (single-bill via Pay button OR multi-bill via the
-    # new Payments tab). Mirrors the sales side. `applied` (not amount)
-    # is recorded since vendor overpayments are silently clamped.
     pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
     pay = VendorPayment(
         id=str(uuid.uuid4()),
@@ -451,10 +475,11 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         branch_id=b.branch_id,
         branch_name=b.branch_name,
         date=datetime.now().strftime("%Y-%m-%d"),
-        total_amount=round(applied, 2),
+        total_amount=round(data.amount, 2),
         payment_mode=data.mode,
         payment_ref=data.ref or "",
         notes=None,
+        credit_applied=credit_applied,
         created_by="Staff",
     )
     db.add(pay)
@@ -463,14 +488,39 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         payment_id=pay.id,
         bill_id=b.id,
         bill_number=b.number,
-        amount=round(applied, 2),
+        amount=round(data.amount, 2),
     ))
+
+    if credit_applied > 0 and b.vendor_id:
+        await adjust_vendor_credit(
+            db,
+            b.vendor_id,
+            credit_applied,
+            entry_type="overpayment",
+            source_type="vendor_payment",
+            source_ref=pay.id,
+            source_number=pay.number,
+        )
+    elif data.mode == "credit" and b.vendor_id:
+        await adjust_vendor_credit(
+            db,
+            b.vendor_id,
+            -round(data.amount, 2),
+            entry_type="payment_debit",
+            source_type="vendor_payment",
+            source_ref=pay.id,
+            source_number=pay.number,
+        )
+
+    await record_vendor_payment(db, pay)
+    await sync_vendor_outstanding(db, b.vendor_id)
 
     await db.commit()
     return {
         "status": b.status,
         "paid_amount": b.paid_amount,
         "balance": round(float(b.total or 0) - float(b.paid_amount or 0), 2),
+        "credit_applied": credit_applied,
     }
 
 
@@ -493,9 +543,36 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
     if not b:
         raise HTTPException(404, "Bill not found")
     bill_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
-    if bill_status == "paid":
-        raise HTTPException(400, "Cannot cancel a bill that is already paid")
+    if bill_status == "cancelled":
+        return {"status": "cancelled"}
+    if (b.paid_amount or 0) > 0:
+        raise HTTPException(
+            400,
+            "Cannot cancel a bill with payments recorded. Delete payment records first.",
+        )
+    return_count = int((await db.execute(
+        select(func.count(VendorReturn.id)).where(VendorReturn.bill_id == bill_id)
+    )).scalar() or 0)
+    if return_count > 0:
+        raise HTTPException(
+            400,
+            f"Cannot cancel bill with {return_count} vendor return(s). Delete returns first.",
+        )
+    pay_count = int((await db.execute(
+        select(func.count(VendorPaymentAllocation.id))
+        .join(VendorPayment, VendorPaymentAllocation.payment_id == VendorPayment.id)
+        .where(
+            VendorPaymentAllocation.bill_id == bill_id,
+            or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)),  # noqa: E712
+        )
+    )).scalar() or 0)
+    if pay_count > 0:
+        raise HTTPException(
+            400,
+            "Cannot cancel a bill with active payment allocations. Void or delete payments first.",
+        )
     b.status = "cancelled"
+    await sync_vendor_outstanding(db, b.vendor_id)
     await db.commit()
     return {"status": "cancelled"}
 
@@ -503,10 +580,8 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
 # ═════════════════════════════════════════════════════════════════════════════
 # MULTI-BILL PAYMENTS (2026-05-24)
 # ═════════════════════════════════════════════════════════════════════════════
-# Mirror of sales /payments/ flow. See routes/sales.py for the design
-# rationale + write-path retrofit details. Differences from the sales
-# side: no overpay-to-credit (vendors don't have a credit_balance field
-# yet — overpayment is rejected with 400).
+# Mirror of sales /payments/ flow. Overpayment routes to vendor.credit_balance;
+# credit mode debits stored advance to settle bills.
 
 
 class PaymentAllocationIn(BaseModel):
@@ -541,6 +616,9 @@ def _vendor_payment_dict(p, allocations=None):
         "paymentMode": p.payment_mode,
         "paymentRef": p.payment_ref,
         "notes": p.notes,
+        "voided": bool(getattr(p, "voided", False)),
+        "voidedAt": getattr(p, "voided_at", None),
+        "creditApplied": p.credit_applied or 0,
         "createdBy": p.created_by,
     }
     if allocations is not None:
@@ -568,7 +646,7 @@ async def list_payments(
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    conds = []
+    conds = [or_(VendorPayment.voided == False, VendorPayment.voided.is_(None))]  # noqa: E712
     if vendor_id:
         conds.append(VendorPayment.vendor_id == vendor_id)
     if payment_mode:
@@ -626,15 +704,51 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
     return _vendor_payment_dict(p, p.allocations)
 
 
+@router.post("/payments/{payment_id}/void", dependencies=[Depends(require_perm("purchases.edit"))])
+async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+    """Soft-void a vendor payment — reverses bill allocations but keeps the row."""
+    res = await db.execute(
+        select(VendorPayment)
+        .options(selectinload(VendorPayment.allocations))
+        .where(VendorPayment.id == payment_id)
+    )
+    pay = res.unique().scalar_one_or_none()
+    if not pay:
+        raise HTTPException(404, "Payment not found")
+    if getattr(pay, "voided", False):
+        return {"status": "voided", "number": pay.number}
+    await reverse_vendor_payment(db, pay)
+    pay.voided = True
+    pay.voided_at = datetime.now().strftime("%Y-%m-%d")
+    await void_payment_record(
+        db,
+        source_document_type="vendor_payment",
+        source_document_id=pay.id,
+        voided_at=pay.voided_at,
+    )
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        action="void_vendor_payment",
+        user_id=None,
+        user_name=None,
+        module="purchases",
+        ref=pay.number,
+        detail=f"Voided vendor payment {pay.number} (₹{pay.total_amount})",
+        risk="medium",
+        ip_address=None,
+    ))
+    await db.commit()
+    return {"status": "voided", "number": pay.number}
+
+
 # ─── PAYMENTS: CREATE (multi-bill) ──────────────────────────────────────────
 @router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("purchases.edit"))])
 async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(get_db)):
     """Record a payment to a vendor across one or more bills.
 
-    Differs from the sales /payments/ flow in one respect: there's no
-    vendor.credit_balance yet, so overpayment (allocation.amount > bill
-    balance) is REJECTED with a 400. If we add a "vendor advance"
-    feature later, this is where the credit_applied logic would land.
+    Allocation amount may exceed bill balance — excess accumulates in
+    credit_applied and bumps vendor.credit_balance. Credit mode debits
+    vendor advance instead of cash.
     """
     vendor = (await db.execute(
         select(Vendor).where(Vendor.id == data.vendor_id)
@@ -664,28 +778,65 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         if balance <= 0:
             raise HTTPException(400, f"Bill {b.number} already settled")
 
-    # Validate every allocation ≤ balance (overpayment rejected).
-    for a in data.allocations:
-        b = bill_by_id[a.bill_id]
-        balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
-        if a.amount > balance + 1e-9:
+    requested_total = sum(float(a.amount) for a in data.allocations)
+    if data.payment_mode == "credit":
+        for a in data.allocations:
+            b = bill_by_id[a.bill_id]
+            balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+            if float(a.amount) > balance + 0.001:
+                raise HTTPException(
+                    400,
+                    f"Credit mode can't overpay — {b.number} balance is ₹{round(balance, 2)}",
+                )
+        avail = float(vendor.credit_balance or 0)
+        if avail + 0.001 < requested_total:
             raise HTTPException(
                 400,
-                f"Allocation of ₹{a.amount} exceeds {b.number}'s balance ₹{round(balance, 2)}",
+                f"Insufficient vendor credit — {vendor.name} has ₹{round(avail, 2)} available, "
+                f"payment totals ₹{round(requested_total, 2)}",
             )
 
-    # Apply.
+    total_credit = 0.0
     total_amount = 0.0
     today = datetime.now().strftime("%Y-%m-%d")
     for a in data.allocations:
         b = bill_by_id[a.bill_id]
-        b.paid_amount = round(float(b.paid_amount or 0) + float(a.amount), 2)
+        balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+        applied = min(float(a.amount), balance)
+        excess = max(0.0, float(a.amount) - balance)
+        b.paid_amount = round(float(b.paid_amount or 0) + applied, 2)
         b.payment_mode = data.payment_mode
         b.status = "paid" if b.paid_amount >= float(b.total or 0) else "partial"
+        total_credit += excess
         total_amount += float(a.amount)
 
     count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
     pay_num = f"VPAY-{datetime.now().year}-{1000 + count:04d}"
+
+    if total_credit > 0:
+        await adjust_vendor_credit(
+            db,
+            data.vendor_id,
+            total_credit,
+            entry_type="overpayment",
+            source_type="vendor_payment",
+            source_number=pay_num,
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="vendor_credit",
+            user_id=None,
+            user_name=None,
+            module="purchases",
+            ref=None,
+            detail=(
+                f"Multi-bill payment overpayment: +₹{round(total_credit, 2)} "
+                f"credited to {vendor.name}"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+
     payment = VendorPayment(
         id=str(uuid.uuid4()),
         number=pay_num,
@@ -698,6 +849,7 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         payment_mode=data.payment_mode,
         payment_ref=data.payment_ref or "",
         notes=data.notes,
+        credit_applied=round(total_credit, 2),
         created_by=data.created_by or "Staff",
     )
     db.add(payment)
@@ -711,11 +863,26 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
             amount=round(float(a.amount), 2),
         ))
 
+    if data.payment_mode == "credit":
+        await adjust_vendor_credit(
+            db,
+            data.vendor_id,
+            -round(total_amount, 2),
+            entry_type="payment_debit",
+            source_type="vendor_payment",
+            source_ref=payment.id,
+            source_number=pay_num,
+        )
+
+    await record_vendor_payment(db, payment)
+    await sync_vendor_outstanding(db, data.vendor_id)
+
     await db.commit()
     return {
         "id": payment.id,
         "number": pay_num,
         "total_amount": round(total_amount, 2),
+        "credit_applied": round(total_credit, 2),
         "allocations_count": len(data.allocations),
     }
 
@@ -744,24 +911,71 @@ class VendorReturnCreate(BaseModel):
 async def _already_returned_for_bill(
     db: AsyncSession, bill_id: str
 ) -> dict[str, int]:
-    """Sum return_qty per bill_line_id across all VendorReturns for this
-    bill. Used to validate that a new return's per-line qty plus the
-    cumulative prior returns doesn't exceed the original bill line's qty.
-
-    Returns {bill_line_id: total_returned_qty}. Legacy rows without
-    bill_line_id are excluded — caller falls back to (item_id, name)
-    matching for those.
-    """
+    """Sum return_qty per bill_line_id across active VendorReturns for this bill."""
     res = await db.execute(
         select(
             ReturnLineItem.bill_line_id,
             func.coalesce(func.sum(ReturnLineItem.return_qty), 0),
         )
         .join(VendorReturn, ReturnLineItem.return_id == VendorReturn.id)
-        .where(VendorReturn.bill_id == bill_id)
+        .where(
+            VendorReturn.bill_id == bill_id,
+            or_(VendorReturn.voided == False, VendorReturn.voided.is_(None)),  # noqa: E712
+        )
         .group_by(ReturnLineItem.bill_line_id)
     )
     return {row[0]: int(row[1]) for row in res.all() if row[0]}
+
+
+async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) -> None:
+    """Undo stock + bill adjustments from a processed vendor return."""
+    for rl in ret.line_items:
+        if not rl.batch_allocation:
+            continue
+        try:
+            ledger = json.loads(rl.batch_allocation)
+        except (ValueError, TypeError):
+            ledger = []
+        for entry in ledger:
+            qty = int(entry.get("consumed") or 0)
+            if qty <= 0:
+                continue
+            batch_id = entry.get("batch_id")
+            restored = False
+            if batch_id:
+                b = (await db.execute(
+                    select(ItemBatch).where(ItemBatch.id == batch_id)
+                )).scalar_one_or_none()
+                if b is not None:
+                    await set_batch_quantity_atomic(
+                        db, batch_id=batch_id, new_qty=int(b.quantity or 0) + qty,
+                    )
+                    restored = True
+            if not restored and rl.item_id:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=rl.item_id, branch_id=ret.branch_id, delta=qty,
+                        movement_type="vendor_return_void",
+                        source_type="vendor_return",
+                        source_ref=ret.id,
+                    )
+                except ValueError:
+                    pass
+
+    bill = (await db.execute(
+        select(PurchaseBill).where(PurchaseBill.id == ret.bill_id)
+    )).scalar_one_or_none()
+    if bill is not None:
+        bill.total = round(float(bill.total or 0) + float(ret.total or 0), 2)
+        bill.paid_amount = round(
+            float(bill.paid_amount or 0) + float(ret.credited_amount or 0), 2,
+        )
+        if bill.paid_amount >= bill.total:
+            bill.status = "paid"
+        elif bill.paid_amount > 0:
+            bill.status = "partial"
+        else:
+            bill.status = "pending"
 
 @router.get("/returns/", dependencies=[Depends(require_perm("purchases.view"))])
 async def list_returns(
@@ -919,6 +1133,12 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
     vendor_result = await db.execute(select(Vendor).where(Vendor.id == data.vendor_id))
     vendor = vendor_result.scalar_one_or_none()
 
+    return_total = round(subtotal + tax_total, 2)
+    bill_paid = float(bill.paid_amount or 0)
+    # Mirror sales returns: full return value reduces bill.total; any
+    # payment already made is reduced by up to the return total.
+    credited = round(min(return_total, bill_paid), 2)
+
     ret = VendorReturn(
         id=str(uuid.uuid4()),
         number=return_num,
@@ -932,7 +1152,8 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
         reason=data.reason,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
-        total=round(subtotal + tax_total, 2),
+        total=return_total,
+        credited_amount=credited,
         # 2026-05-25: vendor returns now land as `paid` (= processed /
         # terminal). The /returns/{id}/approve endpoint stays for legacy
         # data but isn't used by the new UI.
@@ -960,6 +1181,9 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
                     await adjust_stock_atomic(
                         db, item_id=r.item_id, branch_id=bill.branch_id,
                         delta=-int(r.return_qty),
+                        movement_type="vendor_return",
+                        source_type="vendor_return",
+                        source_ref=ret.id,
                     )
                 except ValueError:
                     raise HTTPException(
@@ -969,13 +1193,11 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
                 allocation_json = json.dumps([{"batch_id": None, "consumed": int(r.return_qty)}])
             else:
                 # 2026-05-31: subtract from THIS BILL's own lot(s) only — the
-                # batch(es) this bill created (source_ref == bill.id). Cap is
-                # the lot's CURRENT remaining (e.g. received 100, sold 50 →
-                # only 50 returnable). FEFO order among the bill's lots if it
-                # somehow created more than one for the item.
+                # batch(es) this receipt created (GRN id, or legacy bill id).
+                stock_ref = bill.grn_id or bill.id
                 bill_batches = (await db.execute(
                     select(ItemBatch).where(
-                        ItemBatch.source_ref == bill.id,
+                        ItemBatch.source_ref == stock_ref,
                         ItemBatch.item_id == r.item_id,
                         ItemBatch.branch_id == bill.branch_id,
                     ).order_by(ItemBatch.expiry_date.asc())
@@ -1005,6 +1227,9 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
                         branch_id=bill.branch_id,
                         qty=int(r.return_qty),
                         explicit_allocation=split,
+                        movement_type="vendor_return",
+                        source_type="vendor_return",
+                        source_ref=ret.id,
                     )
                 except ValueError:
                     raise HTTPException(
@@ -1028,6 +1253,19 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
             batch_allocation=allocation_json,
         ))
 
+    bill.total = round(max(0.0, float(bill.total or 0) - return_total), 2)
+    bill.paid_amount = round(max(0.0, bill_paid - credited), 2)
+    if bill.paid_amount >= bill.total:
+        bill.status = "paid"
+    elif bill.paid_amount > 0:
+        bill.status = "partial"
+    else:
+        bill.status = "pending"
+
+    await recalc_bill_after_vendor_credit(db, bill.id)
+
+    await sync_vendor_outstanding(db, bill.vendor_id)
+
     await db.commit()
     await db.refresh(ret)
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == ret.id))
@@ -1044,8 +1282,34 @@ async def approve_return(return_id: str, db: AsyncSession = Depends(get_db)):
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == return_id))
     return _return_dict(ret, li_res.scalars().all())
 
+
+@router.post("/returns/{return_id}/void", dependencies=[Depends(require_perm("purchases.edit"))])
+async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+    """Soft-void a vendor return — reverses stock + bill adjustments but keeps the row."""
+    res = await db.execute(
+        select(VendorReturn)
+        .options(selectinload(VendorReturn.line_items))
+        .where(VendorReturn.id == return_id)
+    )
+    ret = res.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    if getattr(ret, "voided", False):
+        return {"status": "void", "number": ret.number}
+
+    await _reverse_vendor_return_effects(db, ret)
+    ret.voided = True
+    ret.voided_at = datetime.now().strftime("%Y-%m-%d")
+    await db.flush()
+    await recalc_bill_after_vendor_credit(db, ret.bill_id)
+    if ret.vendor_id:
+        await sync_vendor_outstanding(db, ret.vendor_id)
+    await db.commit()
+    return {"status": "void", "number": ret.number}
+
 # ─── HELPER ───────────────────────────────────────────────────────────────────
 def _return_dict(r, items=None):
+    voided = bool(getattr(r, "voided", False))
     d = {
         "id": r.id, "number": r.number,
         "billId": r.bill_id, "billNumber": r.bill_number,
@@ -1054,7 +1318,11 @@ def _return_dict(r, items=None):
         "date": r.date, "reason": r.reason,
         "subtotal": r.subtotal, "taxTotal": r.tax_total,
         "total": r.total, "creditedAmount": r.credited_amount,
-        "status": str(r.status.value) if hasattr(r.status, "value") else str(r.status),
+        "status": "void" if voided else (
+            str(r.status.value) if hasattr(r.status, "value") else str(r.status)
+        ),
+        "voided": voided,
+        "voidedAt": getattr(r, "voided_at", None),
         "notes": r.notes,
     }
     if items is not None:
@@ -1087,6 +1355,9 @@ def _bill_dict(b, items=None):
         # 2026-05-24: payment_mode now persisted. Legacy rows return None.
         "paymentMode": getattr(b, "payment_mode", None),
         "status": str(b.status.value) if hasattr(b.status, "value") else str(b.status),
+        "creditedAmount": float(getattr(b, "credited_amount", 0) or 0),
+        "returnStatus": getattr(b, "return_status", None) or "none",
+        "grnId": getattr(b, "grn_id", None),
         "notes": b.notes,
     }
     if items is not None:
@@ -1131,7 +1402,8 @@ class PurchaseOrderCreate(BaseModel):
     date: Optional[str] = None
     expected_date: Optional[str] = None
     items: List[PurchaseOrderLineIn]
-    discount: float = 0           # cart-level percent OR amount? amount here, matches SO.
+    discount: float = 0
+    number: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -1214,6 +1486,200 @@ def _calc_po_lines(lines):
 def _po_terminal(po) -> bool:
     s = str(po.status.value) if hasattr(po.status, "value") else str(po.status)
     return s in ("converted", "cancelled")
+
+
+async def _next_grn_number(db: AsyncSession) -> str:
+    count = (await db.execute(select(func.count(GoodsReceiptNote.id)))).scalar() or 0
+    return f"GRN-{datetime.now().year}-{500 + count:04d}"
+
+
+async def _next_bill_number(db: AsyncSession) -> str:
+    count = (await db.execute(select(func.count(PurchaseBill.id)))).scalar() or 0
+    return f"PUR-{datetime.now().year}-{400 + count:04d}"
+
+
+async def _create_grn_received(
+    db: AsyncSession,
+    *,
+    vendor_id: str,
+    vendor_name: str,
+    branch_id: str,
+    branch_name: str,
+    date: str,
+    line_rows: list,
+    discount: float = 0,
+    notes: Optional[str] = None,
+    created_by: str = "Staff",
+    purchase_order_id: Optional[str] = None,
+    po_number: Optional[str] = None,
+    number: Optional[str] = None,
+) -> GoodsReceiptNote:
+    """Create a received GRN and move stock. `line_rows` is
+    [(line, line_net, line_tax), ...] where line has item_id, name, qty,
+    cost, tax_rate, discount, batch_number, mfg_date, expiry_date."""
+    subtotal = sum(ln for _, ln, _ in line_rows)
+    tax_total = sum(lt for _, _, lt in line_rows)
+    total = round(subtotal + tax_total - (discount or 0), 2)
+
+    async def _alloc_grn() -> str:
+        return await _next_grn_number(db)
+
+    grn_number = await resolve_number(
+        db,
+        requested=number,
+        model=GoodsReceiptNote,
+        allocate=_alloc_grn,
+    )
+    grn = GoodsReceiptNote(
+        id=str(uuid.uuid4()),
+        number=grn_number,
+        vendor_id=vendor_id,
+        vendor_name=vendor_name,
+        branch_id=branch_id,
+        branch_name=branch_name or branch_id,
+        purchase_order_id=purchase_order_id,
+        po_number=po_number,
+        date=date,
+        subtotal=round(subtotal, 2),
+        tax_total=round(tax_total, 2),
+        discount=round(discount or 0, 2),
+        total=total,
+        status=GRNStatus.received,
+        notes=notes,
+        created_by=created_by,
+    )
+    db.add(grn)
+    receipt_lines: list[ReceiptLine] = []
+    for line, line_net, line_tax in line_rows:
+        qty = int(getattr(line, "received_qty", None) or getattr(line, "qty", 0) or 0)
+        db.add(GRNLineItem(
+            id=str(uuid.uuid4()),
+            grn_id=grn.id,
+            po_line_id=getattr(line, "po_line_id", None) or getattr(line, "id", None),
+            item_id=line.item_id,
+            name=line.name,
+            ordered_qty=getattr(line, "ordered_qty", None),
+            received_qty=qty,
+            cost=line.cost,
+            tax_rate=getattr(line, "tax_rate", 0) or 0,
+            discount=getattr(line, "discount", 0) or 0,
+            line_total=round(line_net + line_tax, 2),
+            batch_number=getattr(line, "batch_number", None),
+            mfg_date=getattr(line, "mfg_date", None),
+            expiry_date=getattr(line, "expiry_date", None),
+        ))
+        receipt_lines.append(ReceiptLine(
+            item_id=line.item_id,
+            name=line.name,
+            qty=qty,
+            cost=line.cost,
+            batch_number=getattr(line, "batch_number", None),
+            mfg_date=getattr(line, "mfg_date", None),
+            expiry_date=getattr(line, "expiry_date", None),
+        ))
+    try:
+        await receive_lines_to_stock(
+            db,
+            grn_id=grn.id,
+            branch_id=branch_id,
+            vendor_id=vendor_id,
+            received_date=date,
+            lines=receipt_lines,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await db.flush()
+    await db.refresh(grn, attribute_names=["line_items"])
+    return grn
+
+
+async def _create_bill_for_grn(
+    db: AsyncSession,
+    grn: GoodsReceiptNote,
+    *,
+    due_date: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    payment_ref: str = "",
+    notes: Optional[str] = None,
+    paid_amount: float = 0.0,
+) -> PurchaseBill:
+    """Financial bill from an already-received GRN — no stock side-effect."""
+    bill_status = "paid" if paid_amount >= grn.total else "pending"
+    bill = PurchaseBill(
+        id=str(uuid.uuid4()),
+        number=await _next_bill_number(db),
+        vendor_id=grn.vendor_id,
+        vendor_name=grn.vendor_name,
+        branch_id=grn.branch_id,
+        branch_name=grn.branch_name,
+        date=grn.date,
+        due_date=due_date,
+        subtotal=grn.subtotal,
+        tax_total=grn.tax_total,
+        discount=grn.discount,
+        total=grn.total,
+        paid_amount=round(paid_amount, 2),
+        payment_mode=payment_mode,
+        payment_ref=payment_ref or "",
+        status=bill_status,
+        grn_id=grn.id,
+        notes=notes or grn.notes,
+    )
+    db.add(bill)
+    for gli in grn.line_items:
+        db.add(PurchaseLineItem(
+            id=str(uuid.uuid4()),
+            bill_id=bill.id,
+            item_id=gli.item_id,
+            name=gli.name,
+            qty=gli.received_qty,
+            cost=gli.cost,
+            tax_rate=gli.tax_rate,
+            discount=gli.discount or 0,
+            line_total=gli.line_total,
+        ))
+    # Bill must be flushed before back-linking — GRN.converted_bill_id FK
+    # points at purchase_bills.id and PostgreSQL rejects the UPDATE otherwise.
+    await db.flush()
+    grn.converted_bill_id = bill.id
+    return bill
+
+
+def _grn_dict(g, items=None):
+    d = {
+        "id": g.id,
+        "number": g.number,
+        "vendorId": g.vendor_id,
+        "vendorName": g.vendor_name,
+        "branchId": g.branch_id,
+        "branchName": g.branch_name,
+        "purchaseOrderId": g.purchase_order_id,
+        "poNumber": g.po_number,
+        "date": g.date,
+        "subtotal": g.subtotal,
+        "taxTotal": g.tax_total,
+        "discount": g.discount,
+        "total": g.total,
+        "status": str(g.status.value) if hasattr(g.status, "value") else str(g.status),
+        "convertedBillId": g.converted_bill_id,
+        "notes": g.notes,
+    }
+    if items is not None:
+        d["items"] = [{
+            "id": i.id,
+            "itemId": i.item_id,
+            "name": i.name,
+            "orderedQty": i.ordered_qty,
+            "receivedQty": i.received_qty,
+            "cost": i.cost,
+            "taxRate": i.tax_rate,
+            "discount": i.discount or 0,
+            "lineTotal": i.line_total,
+            "batchNumber": i.batch_number,
+            "mfgDate": i.mfg_date,
+            "expiryDate": i.expiry_date,
+        } for i in items]
+    return d
 
 
 # ─── PO: LIST ─────────────────────────────────────────────────────────────────
@@ -1300,8 +1766,17 @@ async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get
     if not data.items:
         raise HTTPException(400, "Purchase order must have at least one line item")
     today = datetime.now().strftime("%Y-%m-%d")
-    count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
-    po_num = f"PO-{datetime.now().year}-{1000 + count:04d}"
+
+    async def _alloc_po() -> str:
+        count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
+        return f"PO-{datetime.now().year}-{1000 + count:04d}"
+
+    po_num = await resolve_number(
+        db,
+        requested=data.number,
+        model=PurchaseOrder,
+        allocate=_alloc_po,
+    )
 
     line_rows, subtotal, tax_total = _calc_po_lines(data.items)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
@@ -1400,6 +1875,11 @@ async def update_order_status(order_id: str, body: PurchaseOrderStatusIn, db: As
         raise HTTPException(404, "Purchase order not found")
     if _po_terminal(po):
         raise HTTPException(400, "Cannot change status of a terminal-status purchase order")
+    if po.status == PurchaseOrderStatus.partially_received:
+        raise HTTPException(
+            400,
+            "Cannot cancel a PO with a pending goods receipt — bill or cancel the GRN first",
+        )
     po.status = target
     await db.commit()
     return {"status": po.status.value if hasattr(po.status, "value") else str(po.status)}
@@ -1412,18 +1892,10 @@ async def convert_order_to_bill(
     data: ConvertPOToBillIn,
     db: AsyncSession = Depends(get_db),
 ):
-    """Spawn a PurchaseBill from a PO. Walks the same receipt-side stock
-    path as a manual bill (add_batch_atomic for tracked items, aggregate
-    bump for untracked).
+    """Spawn GRN (stock) + PurchaseBill (financial) from a PO.
 
-    Per-line batch metadata can be supplied via `line_receipts` — the
-    operator captures lot # / mfg / expiry from the physical delivery at
-    convert time. Lines without an entry use auto-generated batch #s
-    (add_batch_atomic handles the default).
-
-    Payment fields parallel ConvertToInvoiceIn (SO→Invoice). If
-    payment_received=False (default) the bill lands as `pending` and is
-    settled later via /{bill_id}/payment.
+    Per-line batch metadata via `line_receipts` — captured at physical delivery.
+    Payment fields parallel SO→Invoice convert.
     """
     res = await db.execute(
         select(PurchaseOrder)
@@ -1435,6 +1907,11 @@ async def convert_order_to_bill(
         raise HTTPException(404, "Purchase order not found")
     if po.status == PurchaseOrderStatus.converted:
         raise HTTPException(400, "Purchase order already converted")
+    if po.status == PurchaseOrderStatus.partially_received:
+        raise HTTPException(
+            400,
+            "PO already has a goods receipt — open the GRN tab and create a bill from the pending receipt",
+        )
     if po.status == PurchaseOrderStatus.cancelled:
         raise HTTPException(400, "Cannot convert a cancelled purchase order")
 
@@ -1442,93 +1919,59 @@ async def convert_order_to_bill(
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
 
     today = datetime.now().strftime("%Y-%m-%d")
-    count = (await db.execute(select(func.count(PurchaseBill.id)))).scalar() or 0
-    bill_num = f"PUR-{datetime.now().year}-{400 + count:04d}"
-
     paid = po.total if data.payment_received else 0.0
-    bill_status = "paid" if paid >= po.total else "pending"
     payment_mode = data.payment_mode if data.payment_received else None
+    bill_status = "paid" if paid >= po.total else "pending"
 
-    bill = PurchaseBill(
-        id=str(uuid.uuid4()), number=bill_num,
-        vendor_id=po.vendor_id,
-        vendor_name=po.vendor_name,
-        branch_id=po.branch_id,
-        branch_name=po.branch_name,
-        date=today,
-        due_date=data.due_date,
-        subtotal=po.subtotal,
-        tax_total=po.tax_total,
-        discount=po.discount,
-        total=po.total,
-        paid_amount=round(paid, 2),
-        payment_mode=payment_mode,
-        payment_ref=data.payment_ref or "",
-        status=bill_status,
-        notes=data.notes or po.notes,
-    )
-    db.add(bill)
-
-    # Index operator-supplied receipt metadata by item_id for quick lookup.
     receipts_by_item = {}
     if data.line_receipts:
         for r in data.line_receipts:
             receipts_by_item[r.item_id] = r
 
+    line_rows = []
     for line in po.line_items:
-        db.add(PurchaseLineItem(
-            id=str(uuid.uuid4()), bill_id=bill.id,
-            item_id=line.item_id, name=line.name,
-            qty=line.qty, cost=line.cost,
-            tax_rate=line.tax_rate,
-            discount=line.discount or 0,
-            line_total=line.line_total,
-        ))
-        # Stock side-effect — same path as create_bill, just sourced from
-        # the operator's per-line receipt metadata (when provided).
-        if line.item_id:
-            recv = receipts_by_item.get(line.item_id)
-            tracked, expiry_tracked = await is_tracked(db, line.item_id)
-            if tracked:
-                if recv:
-                    date_errs = validate_batch_dates(
-                        mfg_date=recv.mfg_date,
-                        expiry_date=recv.expiry_date,
-                        received_date=today,
-                        require_expiry=expiry_tracked,
-                    )
-                    if date_errs:
-                        raise HTTPException(
-                            400,
-                            f"{line.name}: {'; '.join(date_errs)}",
-                        )
-                try:
-                    await add_batch_atomic(
-                        db,
-                        item_id=line.item_id,
-                        branch_id=po.branch_id,
-                        qty=line.qty,
-                        batch_number=recv.batch_number if recv else None,
-                        mfg_date=recv.mfg_date if recv else None,
-                        expiry_date=recv.expiry_date if recv else None,
-                        cost_price=float(line.cost or 0),
-                        vendor_id=po.vendor_id,
-                        source_type="purchase",
-                        source_ref=bill.id,
-                        received_date=today,
-                    )
-                except ValueError as e:
-                    raise HTTPException(400, f"{line.name}: {e}")
-            else:
-                await adjust_stock_atomic(
-                    db,
-                    item_id=line.item_id,
-                    branch_id=po.branch_id,
-                    delta=line.qty,
-                )
+        recv = receipts_by_item.get(line.item_id)
+        wrapper = type("Line", (), {
+            "item_id": line.item_id,
+            "name": line.name,
+            "qty": line.qty,
+            "cost": line.cost,
+            "tax_rate": line.tax_rate,
+            "discount": line.discount or 0,
+            "id": line.id,
+            "ordered_qty": line.qty,
+            "batch_number": recv.batch_number if recv else None,
+            "mfg_date": recv.mfg_date if recv else None,
+            "expiry_date": recv.expiry_date if recv else None,
+        })()
+        gross = round(line.qty * line.cost, 2)
+        line_net = round(gross * (1 - (line.discount or 0) / 100), 2)
+        line_tax = round(line_net * ((line.tax_rate or 0) / 100), 2)
+        line_rows.append((wrapper, line_net, line_tax))
 
-    # 2026-05-31: record a VendorPayment if the PO→Bill convert was paid, so
-    # the Payments tab stays a complete ledger (parity with create_bill).
+    grn = await _create_grn_received(
+        db,
+        vendor_id=po.vendor_id,
+        vendor_name=po.vendor_name or "",
+        branch_id=po.branch_id,
+        branch_name=po.branch_name or po.branch_id,
+        date=today,
+        line_rows=line_rows,
+        discount=po.discount or 0,
+        notes=data.notes or po.notes,
+        purchase_order_id=po.id,
+        po_number=po.number,
+    )
+    bill = await _create_bill_for_grn(
+        db,
+        grn,
+        due_date=data.due_date,
+        payment_mode=payment_mode,
+        payment_ref=data.payment_ref or "",
+        notes=data.notes or po.notes,
+        paid_amount=round(paid, 2),
+    )
+
     if data.payment_received and paid > 0:
         pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
         bpay = VendorPayment(
@@ -1553,16 +1996,383 @@ async def convert_order_to_bill(
             bill_number=bill.number,
             amount=round(paid, 2),
         ))
+        await record_vendor_payment(db, bpay)
 
     po.status = PurchaseOrderStatus.converted
     po.converted_bill_id = bill.id
     await db.commit()
     return {
+        "grn_id": grn.id,
+        "grn_number": grn.number,
         "bill_id": bill.id,
         "bill_number": bill.number,
         "status": bill_status,
         "total": bill.total,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# GRN (Goods Receipt Notes) — Phase 3
+# ═════════════════════════════════════════════════════════════════════════════
+
+class GRNLineIn(BaseModel):
+    item_id: Optional[str] = None
+    name: str
+    qty: int = Field(..., gt=0)
+    cost: float
+    tax_rate: float = 0
+    discount: float = 0
+    batch_number: Optional[str] = None
+    mfg_date: Optional[str] = None
+    expiry_date: Optional[str] = None
+
+
+class GRNCreate(BaseModel):
+    vendor_id: str
+    vendor_name: str = ""
+    branch_id: str
+    branch_name: str = ""
+    date: Optional[str] = None
+    items: List[GRNLineIn]
+    discount: float = 0
+    number: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: str = "Staff"
+    purchase_order_id: Optional[str] = None
+
+
+class GRNFromPOIn(BaseModel):
+    """Receive goods from a PO — optional per-line receipt metadata."""
+    line_receipts: Optional[List[ConvertPOToBillLine]] = None
+    notes: Optional[str] = None
+    created_by: str = "Staff"
+
+
+class BillFromGRNIn(BaseModel):
+    due_date: Optional[str] = None
+    payment_received: bool = False
+    payment_mode: Optional[PaymentMode] = None
+    payment_ref: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, v):
+        return _coerce_payment_mode_value(v)
+
+
+@router.get("/grns/", dependencies=[Depends(require_perm("purchases.view"))])
+async def list_grns(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    vendor_id: Optional[str] = None,
+    branch_id: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    conds = []
+    if vendor_id:
+        conds.append(GoodsReceiptNote.vendor_id == vendor_id)
+    if branch_id:
+        conds.append(GoodsReceiptNote.branch_id == branch_id)
+    if status:
+        conds.append(GoodsReceiptNote.status == status)
+    if search:
+        conds.append(
+            or_(
+                GoodsReceiptNote.number.ilike(f"%{search}%"),
+                GoodsReceiptNote.vendor_name.ilike(f"%{search}%"),
+                GoodsReceiptNote.po_number.ilike(f"%{search}%"),
+            )
+        )
+    where = and_(*conds) if conds else True
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    total = int((await db.execute(
+        select(func.count(GoodsReceiptNote.id)).where(where)
+    )).scalar() or 0)
+    sort_expr = resolve_sort(
+        sort_by, sort_order,
+        {
+            "number": GoodsReceiptNote.number,
+            "vendor_name": GoodsReceiptNote.vendor_name,
+            "date": GoodsReceiptNote.date,
+            "total": GoodsReceiptNote.total,
+            "created_at": GoodsReceiptNote.created_at,
+            "status": GoodsReceiptNote.status,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    rows = (await db.execute(
+        select(GoodsReceiptNote).where(where).order_by(sort_expr).offset(sk).limit(lim)
+    )).scalars().all()
+    return paged([_grn_dict(g) for g in rows], total, sk, lim)
+
+
+@router.get("/grns/{grn_id}", dependencies=[Depends(require_perm("purchases.view"))])
+async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
+    grn = res.scalar_one_or_none()
+    if not grn:
+        raise HTTPException(404, "GRN not found")
+    li = (await db.execute(
+        select(GRNLineItem).where(GRNLineItem.grn_id == grn_id)
+    )).scalars().all()
+    return _grn_dict(grn, li)
+
+
+@router.post("/grns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
+    """Direct goods receipt (no PO). Stock moves immediately."""
+    if not data.items:
+        raise HTTPException(400, "GRN must have at least one line")
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    po = None
+    if data.purchase_order_id:
+        po_res = await db.execute(
+            select(PurchaseOrder)
+            .options(selectinload(PurchaseOrder.line_items))
+            .where(PurchaseOrder.id == data.purchase_order_id)
+        )
+        po = po_res.scalar_one_or_none()
+        if not po:
+            raise HTTPException(404, "Purchase order not found")
+        if po.status == PurchaseOrderStatus.cancelled:
+            raise HTTPException(400, "Cannot receive against a cancelled PO")
+        if po.status == PurchaseOrderStatus.converted:
+            raise HTTPException(400, "PO already fully converted — use a new PO for additional receipts")
+        if po.status == PurchaseOrderStatus.partially_received:
+            raise HTTPException(
+                400,
+                "PO already has a pending goods receipt — bill the existing GRN or cancel the PO",
+            )
+
+    line_rows, _, _ = _calc_po_lines(data.items)
+    grn = await _create_grn_received(
+        db,
+        vendor_id=data.vendor_id,
+        vendor_name=data.vendor_name,
+        branch_id=data.branch_id,
+        branch_name=data.branch_name or data.branch_id,
+        date=data.date or today,
+        line_rows=line_rows,
+        discount=data.discount or 0,
+        notes=data.notes,
+        created_by=data.created_by,
+        purchase_order_id=po.id if po else None,
+        po_number=po.number if po else None,
+        number=data.number,
+    )
+    if po is not None:
+        po.status = PurchaseOrderStatus.partially_received
+    await db.commit()
+    return {"id": grn.id, "number": grn.number, "total": grn.total, "status": grn.status.value}
+
+
+@router.post("/grns/from-po/{order_id}", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+async def receive_from_po(
+    order_id: str,
+    data: GRNFromPOIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Receive goods against a PO without creating a bill yet."""
+    res = await db.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.line_items))
+        .where(PurchaseOrder.id == order_id)
+    )
+    po = res.scalar_one_or_none()
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    if po.status == PurchaseOrderStatus.cancelled:
+        raise HTTPException(400, "Cannot receive against a cancelled PO")
+    if po.status == PurchaseOrderStatus.converted:
+        raise HTTPException(400, "PO already fully converted — use a new PO for additional receipts")
+    if po.status == PurchaseOrderStatus.partially_received:
+        raise HTTPException(
+            400,
+            "PO already has a pending goods receipt — bill the existing GRN or cancel the PO",
+        )
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    receipts_by_item = {}
+    if data.line_receipts:
+        for r in data.line_receipts:
+            receipts_by_item[r.item_id] = r
+
+    line_rows = []
+    for line in po.line_items:
+        recv = receipts_by_item.get(line.item_id)
+        wrapper = type("Line", (), {
+            "item_id": line.item_id,
+            "name": line.name,
+            "qty": line.qty,
+            "cost": line.cost,
+            "tax_rate": line.tax_rate,
+            "discount": line.discount or 0,
+            "id": line.id,
+            "ordered_qty": line.qty,
+            "batch_number": recv.batch_number if recv else None,
+            "mfg_date": recv.mfg_date if recv else None,
+            "expiry_date": recv.expiry_date if recv else None,
+        })()
+        gross = round(line.qty * line.cost, 2)
+        line_net = round(gross * (1 - (line.discount or 0) / 100), 2)
+        line_tax = round(line_net * ((line.tax_rate or 0) / 100), 2)
+        line_rows.append((wrapper, line_net, line_tax))
+
+    grn = await _create_grn_received(
+        db,
+        vendor_id=po.vendor_id,
+        vendor_name=po.vendor_name or "",
+        branch_id=po.branch_id,
+        branch_name=po.branch_name or po.branch_id,
+        date=today,
+        line_rows=line_rows,
+        discount=po.discount or 0,
+        notes=data.notes or po.notes,
+        purchase_order_id=po.id,
+        po_number=po.number,
+        created_by=data.created_by,
+    )
+    po.status = PurchaseOrderStatus.partially_received
+    await db.commit()
+    return {"id": grn.id, "number": grn.number, "total": grn.total}
+
+
+@router.post("/grns/{grn_id}/bill", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+async def create_bill_from_grn(
+    grn_id: str,
+    data: BillFromGRNIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a financial bill from a received GRN (no stock movement)."""
+    res = await db.execute(
+        select(GoodsReceiptNote)
+        .options(selectinload(GoodsReceiptNote.line_items))
+        .where(GoodsReceiptNote.id == grn_id)
+    )
+    grn = res.scalar_one_or_none()
+    if not grn:
+        raise HTTPException(404, "GRN not found")
+    grn_status = str(grn.status.value) if hasattr(grn.status, "value") else str(grn.status)
+    if grn_status != "received":
+        raise HTTPException(400, "Only received GRNs can be billed")
+    if grn.converted_bill_id:
+        raise HTTPException(400, "GRN already has a linked bill")
+
+    if data.payment_received and not (data.payment_mode or "").strip():
+        raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
+
+    paid = grn.total if data.payment_received else 0.0
+    payment_mode = data.payment_mode if data.payment_received else None
+    due_date = data.due_date
+    if not due_date and not data.payment_received:
+        vendor_row = (await db.execute(
+            select(Vendor).where(Vendor.id == grn.vendor_id)
+        )).scalar_one_or_none()
+        due_date = compute_due_date(grn.date, vendor_row.payment_terms if vendor_row else None)
+
+    bill = await _create_bill_for_grn(
+        db,
+        grn,
+        due_date=due_date,
+        payment_mode=payment_mode,
+        payment_ref=data.payment_ref or "",
+        notes=data.notes,
+        paid_amount=round(paid, 2),
+    )
+
+    if grn.purchase_order_id:
+        po = (await db.execute(
+            select(PurchaseOrder).where(PurchaseOrder.id == grn.purchase_order_id)
+        )).scalar_one_or_none()
+        if po is not None:
+            po.status = PurchaseOrderStatus.converted
+            po.converted_bill_id = bill.id
+
+    if data.payment_received and paid > 0:
+        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        bpay = VendorPayment(
+            id=str(uuid.uuid4()),
+            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            vendor_id=bill.vendor_id,
+            vendor_name=bill.vendor_name,
+            branch_id=bill.branch_id,
+            branch_name=bill.branch_name,
+            date=grn.date,
+            total_amount=round(paid, 2),
+            payment_mode=payment_mode,
+            payment_ref=data.payment_ref or "",
+            notes=f"Bill from GRN {grn.number}",
+            created_by="Staff",
+        )
+        db.add(bpay)
+        db.add(VendorPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=bpay.id,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            amount=round(paid, 2),
+        ))
+        await record_vendor_payment(db, bpay)
+
+    bill_st = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
+    if bill.vendor_id and bill_st in ("pending", "partial"):
+        await sync_vendor_outstanding(db, bill.vendor_id)
+
+    await db.commit()
+    return {
+        "bill_id": bill.id,
+        "bill_number": bill.number,
+        "grn_id": grn.id,
+        "total": bill.total,
+    }
+
+
+@router.post("/grns/{grn_id}/cancel", dependencies=[Depends(require_perm("purchases.edit"))])
+async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
+    """Cancel a received GRN — reverses stock. Blocked if billed or consumed."""
+    res = await db.execute(
+        select(GoodsReceiptNote)
+        .options(selectinload(GoodsReceiptNote.line_items))
+        .where(GoodsReceiptNote.id == grn_id)
+    )
+    grn = res.scalar_one_or_none()
+    if not grn:
+        raise HTTPException(404, "GRN not found")
+    grn_status = str(grn.status.value) if hasattr(grn.status, "value") else str(grn.status)
+    if grn_status == "cancelled":
+        return {"status": "cancelled"}
+    if grn.converted_bill_id:
+        live = (await db.execute(
+            select(PurchaseBill.id).where(PurchaseBill.id == grn.converted_bill_id)
+        )).scalar_one_or_none()
+        if live:
+            raise HTTPException(400, "Cannot cancel GRN with a live linked bill — cancel the bill first")
+    if grn_status == "received" and await grn_batches_consumed(db, grn.id):
+        raise HTTPException(400, "Cannot cancel GRN — stock from this receipt has already been consumed")
+    if grn_status == "received":
+        await reverse_grn_stock(db, grn_id=grn.id, branch_id=grn.branch_id, line_items=grn.line_items)
+    grn.status = GRNStatus.cancelled
+    await db.commit()
+    return {"status": "cancelled"}
+
+
+# ─── GET ONE BILL (after /orders/, /returns/, /payments/ static paths) ───────
+@router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
+async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
+    b = result.scalar_one_or_none()
+    if not b:
+        raise HTTPException(404, "Bill not found")
+    li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
+    return _bill_dict(b, li_res.scalars().all())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1683,20 +2493,27 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
     )).all()) if found_ids else {}
     payment_counts = dict((await db.execute(
         select(VendorPaymentAllocation.bill_id, func.count(VendorPaymentAllocation.id))
-        .where(VendorPaymentAllocation.bill_id.in_(found_ids))
+        .join(VendorPayment, VendorPaymentAllocation.payment_id == VendorPayment.id)
+        .where(
+            VendorPaymentAllocation.bill_id.in_(found_ids),
+            or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)),  # noqa: E712
+        )
         .group_by(VendorPaymentAllocation.bill_id)
     )).all()) if found_ids else {}
 
-    # Batch-consumption guard: if any batch this bill spawned has
-    # quantity < initial_qty, something was sold/transferred from it.
-    # Safe-delete would corrupt stock counts.
+    # Batch-consumption guard: batches keyed on GRN id (Phase 3) or legacy bill id.
+    stock_ref_by_bill = {b.id: (getattr(b, "grn_id", None) or b.id) for b in bills}
+    stock_refs = set(stock_ref_by_bill.values())
     bill_batches = (await db.execute(
-        select(ItemBatch).where(ItemBatch.source_ref.in_(found_ids))
-    )).scalars().all() if found_ids else []
-    consumed_bill_ids = {
-        b.source_ref for b in bill_batches
-        if (b.quantity or 0) < (b.initial_qty or 0)
-    }
+        select(ItemBatch).where(ItemBatch.source_ref.in_(stock_refs))
+    )).scalars().all() if stock_refs else []
+    ref_to_bill = {v: k for k, v in stock_ref_by_bill.items()}
+    consumed_bill_ids = set()
+    for b in bill_batches:
+        if (b.quantity or 0) < (b.initial_qty or 0):
+            bid = ref_to_bill.get(b.source_ref)
+            if bid:
+                consumed_bill_ids.add(bid)
 
     for bill in bills:
         if return_counts.get(bill.id):
@@ -1721,6 +2538,7 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
     # ones with full initial qty) + decrement aggregate stock.
     deleted = []
     stock_removed = 0
+    vendor_ids: set[str] = set()
     for bill in bills:
         snapshot = {
             "id": bill.id, "number": bill.number, "vendor_id": bill.vendor_id,
@@ -1735,7 +2553,8 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
         # untouched for tracked items — only untracked items adjusted the
         # aggregate below — so deleting a bill removed its lots from the
         # batches view while the stock count stayed inflated.)
-        bbatches = [b for b in bill_batches if b.source_ref == bill.id]
+        stock_ref = getattr(bill, "grn_id", None) or bill.id
+        bbatches = [b for b in bill_batches if b.source_ref == stock_ref]
         for b in bbatches:
             qty = int(b.quantity or 0)
             if qty > 0:
@@ -1778,9 +2597,20 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
         )).scalar_one_or_none()
         if parent_po is not None:
             parent_po.converted_bill_id = None
+        if getattr(bill, "grn_id", None):
+            linked_grn = (await db.execute(
+                select(GoodsReceiptNote).where(GoodsReceiptNote.id == bill.grn_id)
+            )).scalar_one_or_none()
+            if linked_grn is not None:
+                linked_grn.converted_bill_id = None
+                linked_grn.status = GRNStatus.cancelled
         _audit_delete(db, action="delete_purchase_bill", ref=bill.number, snapshot=snapshot)
         await db.delete(bill)
         deleted.append({"id": bill.id, "number": bill.number})
+        if bill.vendor_id:
+            vendor_ids.add(bill.vendor_id)
+    for vid in vendor_ids:
+        await sync_vendor_outstanding(db, vid)
     await db.commit()
     return {
         "deleted": deleted, "blocked": [], "count": len(deleted),
@@ -1807,6 +2637,7 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
 
     deleted = []
     stock_restored = 0
+    vendor_ids: set[str] = set()
     for ret in returns:
         snapshot = {
             "id": ret.id, "number": ret.number, "bill_id": ret.bill_id,
@@ -1849,9 +2680,31 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
                     except ValueError:
                         pass
                 stock_restored += qty
+        # Reverse bill financial adjustments made at return create.
+        bill = (await db.execute(
+            select(PurchaseBill).where(PurchaseBill.id == ret.bill_id)
+        )).scalar_one_or_none()
+        if bill is not None:
+            bill.total = round(float(bill.total or 0) + float(ret.total or 0), 2)
+            bill.paid_amount = round(
+                float(bill.paid_amount or 0) + float(ret.credited_amount or 0), 2,
+            )
+            if bill.paid_amount >= bill.total:
+                bill.status = "paid"
+            elif bill.paid_amount > 0:
+                bill.status = "partial"
+            else:
+                bill.status = "pending"
+            await recalc_bill_after_vendor_credit(db, bill.id)
+            if bill.vendor_id:
+                vendor_ids.add(bill.vendor_id)
         _audit_delete(db, action="delete_vendor_return", ref=ret.number, snapshot=snapshot)
         await db.delete(ret)
         deleted.append({"id": ret.id, "number": ret.number})
+        if ret.vendor_id:
+            vendor_ids.add(ret.vendor_id)
+    for vid in vendor_ids:
+        await sync_vendor_outstanding(db, vid)
     await db.commit()
     return {
         "deleted": deleted, "blocked": [], "count": len(deleted),
@@ -1877,6 +2730,7 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
         raise HTTPException(400, {"blocked": blocked, "message": "Some payments can't be deleted"})
 
     deleted = []
+    vendor_ids: set[str] = set()
     for pay in payments:
         snapshot = {
             "id": pay.id, "number": pay.number, "vendor_id": pay.vendor_id,
@@ -1896,8 +2750,14 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                     bill.status = "pending"
                 elif new_paid < float(bill.total or 0):
                     bill.status = "partial"
+                if bill.vendor_id:
+                    vendor_ids.add(bill.vendor_id)
         _audit_delete(db, action="delete_vendor_payment", ref=pay.number, snapshot=snapshot)
         await db.delete(pay)
         deleted.append({"id": pay.id, "number": pay.number})
+        if pay.vendor_id:
+            vendor_ids.add(pay.vendor_id)
+    for vid in vendor_ids:
+        await sync_vendor_outstanding(db, vid)
     await db.commit()
     return {"deleted": deleted, "blocked": [], "count": len(deleted)}

@@ -64,6 +64,10 @@ export default function ConvertToInvoiceModal({
   const [stockByItem, setStockByItem] = useState({})
   const [stockLoading, setStockLoading] = useState(false)
   const [pickerOpenFor, setPickerOpenFor] = useState(null)
+  // Phase 2: per-line convert qty (keyed by order_line_id).
+  const [lineQtys, setLineQtys] = useState({})
+
+  const lineKey = (line, idx) => line.order_line_id || `idx-${idx}`
 
   // Reset on every open so a previous attempt's choice doesn't bleed
   // into the next convert.
@@ -74,8 +78,13 @@ export default function ConvertToInvoiceModal({
       setNotes('')
       setStockByItem({})
       setPickerOpenFor(null)
+      const initial = {}
+      ;(lines || []).forEach((l, idx) => {
+        initial[lineKey(l, idx)] = l.qty
+      })
+      setLineQtys(initial)
     }
-  }, [open])
+  }, [open, lines])
 
   // Fetch batches per line on open. Unique by item_id so two rows of the
   // same SKU only cost one fetch (rare for SOs but cheap to handle).
@@ -130,26 +139,56 @@ export default function ConvertToInvoiceModal({
 
   const handleConfirm = () => {
     if (paymentReceived && !paymentMethod) {
-      // Inline rather than a toast — feedback is right next to the field.
       return
     }
-    // Bundle any per-line allocations into the API payload. Lines without
-    // an allocation (operator skipped, or item is not tracked) are simply
-    // omitted from the array — server falls back to auto FIFO/FEFO for
-    // those, matching the pre-2026-05-24 behavior.
     const line_allocations = []
     for (const [item_id, info] of Object.entries(stockByItem)) {
       if (!info.tracked || !info.allocation || info.allocation.length === 0) continue
       const payload = toApiPayload(info.allocation)
       if (payload) line_allocations.push({ item_id, batch_allocation: payload })
     }
-    onConfirm({
+    const body = {
       payment_received: paymentReceived,
       payment_mode: paymentReceived ? paymentMethod : null,
       notes: notes.trim() || null,
       line_allocations: line_allocations.length ? line_allocations : null,
-    })
+    }
+    const convertLines = (lines || [])
+      .map((l, idx) => {
+        if (!l.order_line_id) return null
+        const key = lineKey(l, idx)
+        const qty = Math.min(Math.max(1, parseInt(lineQtys[key], 10) || 0), l.qty)
+        if (qty <= 0) return null
+        return { order_line_id: l.order_line_id, qty }
+      })
+      .filter(Boolean)
+    if (convertLines.length > 0) {
+      body.lines = convertLines
+    }
+    onConfirm(body)
   }
+
+  const previewTotal = useMemo(() => {
+    if (!lines?.length) return source?.total
+    let subtotal = 0
+    let tax = 0
+    for (let idx = 0; idx < lines.length; idx++) {
+      const l = lines[idx]
+      const key = lineKey(l, idx)
+      const qty = Math.min(
+        Math.max(0, parseInt(lineQtys[key], 10) || 0),
+        l.qty,
+      )
+      if (qty <= 0) continue
+      const gross = qty * (l.price || 0)
+      const disc = l.discount || 0
+      const net = gross * (1 - disc / 100)
+      const lineTax = net * ((l.taxRate || 0) / 100)
+      subtotal += net
+      tax += lineTax
+    }
+    return Math.round((subtotal + tax) * 100) / 100
+  }, [lines, lineQtys, source?.total])
 
   const buttonDisabled = confirming || (paymentReceived && !paymentMethod)
 
@@ -189,7 +228,7 @@ export default function ConvertToInvoiceModal({
         <AlertBar type="blue" icon="ℹ">
           Creating invoice from <strong>{source.number}</strong>
           {source.customerName ? <> for <strong>{source.customerName}</strong></> : null}
-          {typeof source.total === 'number' ? <> · Total: <strong>{fmt(source.total)}</strong></> : null}
+          {typeof previewTotal === 'number' ? <> · Invoice total: <strong>{fmt(previewTotal)}</strong></> : null}
         </AlertBar>
       )}
 
@@ -221,6 +260,11 @@ export default function ConvertToInvoiceModal({
               </div>
             )}
             {!stockLoading && lines.map((line, idx) => {
+              const key = lineKey(line, idx)
+              const convertQty = Math.min(
+                Math.max(1, parseInt(lineQtys[key], 10) || line.qty),
+                line.qty,
+              )
               const info = (line.item_id && stockByItem[line.item_id]) || null
               const tracked = info?.tracked
               const expiryTracked = info?.expiryTracked
@@ -240,9 +284,27 @@ export default function ConvertToInvoiceModal({
                       {line.name}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-                      {line.qty} {line.qty === 1 ? 'unit' : 'units'}
+                      {line.order_line_id ? (
+                        <span>
+                          {convertQty} of {line.qty} {line.qty === 1 ? 'unit' : 'units'} to invoice
+                        </span>
+                      ) : (
+                        <span>{line.qty} {line.qty === 1 ? 'unit' : 'units'}</span>
+                      )}
                     </div>
                   </div>
+                  {line.order_line_id && line.qty > 1 && (
+                    <input
+                      type="number"
+                      className="form-input"
+                      min={1}
+                      max={line.qty}
+                      value={lineQtys[key] ?? line.qty}
+                      onChange={(e) => setLineQtys((prev) => ({ ...prev, [key]: e.target.value }))}
+                      style={{ width: 64, textAlign: 'right', fontSize: 12 }}
+                      title="Qty to invoice"
+                    />
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                     {!info && line.item_id && (
                       <span style={mutedPillStyle}>—</span>
@@ -362,7 +424,16 @@ export default function ConvertToInvoiceModal({
           open={pickerOpenFor !== null}
           onClose={() => setPickerOpenFor(null)}
           item={{ name: pickerLine.name, expiry_tracking: pickerStock.expiryTracked }}
-          qty={pickerLine.qty}
+          qty={(() => {
+            if (!pickerLine || !lines) return pickerLine?.qty || 1
+            const idx = lines.findIndex((l) => l.item_id === pickerOpenFor)
+            if (idx < 0) return pickerLine.qty
+            const key = lineKey(lines[idx], idx)
+            return Math.min(
+              Math.max(1, parseInt(lineQtys[key], 10) || lines[idx].qty),
+              lines[idx].qty,
+            )
+          })()}
           batches={pickerStock.batches}
           allocation={pickerStock.allocation}
           strategyLabel={pickerStock.expiryTracked ? 'FEFO' : 'FIFO'}

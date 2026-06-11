@@ -156,6 +156,7 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
   }
 
   const handleSubmit = async () => {
+    if (submitting) return
     if (!customer?.id) {
       toast.error('Pick a customer first')
       return

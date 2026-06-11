@@ -18,28 +18,25 @@
  * mid-edit branch swaps changing the picker results. Purchases mirror
  * the same pattern via openCreatePO / openCreateBill helpers.
  */
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { purchasesAPI, vendorsAPI } from '@/api'
-import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, EmptyState, AlertBar, PaginationBar, SortableHeader, CopyableId } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
-import BillFormModal from './BillFormModal'
-import PurchaseOrderFormModal from './PurchaseOrderFormModal'
-import ConvertPOToBillModal from './ConvertPOToBillModal'
 import VendorReturnFormModal from './VendorReturnFormModal'
 import VendorPaymentFormModal from './VendorPaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
+const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
+
 const TABS = [
   { id: 'bills',    label: 'Purchase Bills' },
   { id: 'orders',   label: 'Purchase Orders' },
-  // GRN tab dropped 2026-05-24 — was a re-skin of bills with no
-  // separate model. The Vendor Returns tab now sits in the slot.
+  { id: 'grns',     label: 'GRN (Receipts)' },
   { id: 'returns',  label: 'Vendor Returns' },
-  // 2026-05-24: standalone Payments record — mirror of sales /payments.
   { id: 'payments', label: 'Payments' },
 ]
 
@@ -54,30 +51,12 @@ function displayPaymentMode(raw) {
   return v.replace('_', ' ').toUpperCase()
 }
 
-// Convert a form's per-line discount {value, type} into the PERCENT the
-// backend expects. Mirror of the same helper in SalesPage.
-function lineDiscountToPercent(line) {
-  const qty = Number(line.qty || 0)
-  const cost = Number(line.cost || 0)
-  const gross = qty * cost
-  const raw = Math.max(0, Number(line.lineDiscount || 0))
-  if (line.lineDiscountType === '₹') {
-    if (gross <= 0) return 0
-    return Math.min(100, (raw / gross) * 100)
-  }
-  return Math.min(100, raw)
-}
-
 export default function PurchasesPage() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
   const can = useCan()
-
-  // Active branch from Topbar — single source of truth for which branch
-  // a new bill / PO will be filed under. See SalesPage.jsx for the
-  // matching pattern (activeBranchId + snapshot-at-modal-open).
-  const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
-  const activeBranch = useAppStore((s) => s.activeBranch)
-
-  const [tab, setTab]           = useState('bills')
   const [search, setSearch]     = useState('')
   const [statusF, setStatusF]   = useState('')
   const [vendorF, setVendorF]   = useState('')
@@ -89,7 +68,7 @@ export default function PurchasesPage() {
   const [billLimit, setBillLimit] = useState(DEFAULT_PAGE_SIZE)
   const [billSortBy, setBillSortBy] = useState('created_at')
   const [billSortOrder, setBillSortOrder] = useState('desc')
-  const [purchaseSummary, setPurchaseSummary] = useState(null)
+  const [billLoading, setBillLoading] = useState(false)
 
   // POs state
   const [orders, setOrders] = useState([])
@@ -98,6 +77,16 @@ export default function PurchasesPage() {
   const [orderLimit, setOrderLimit] = useState(DEFAULT_PAGE_SIZE)
   const [orderSortBy, setOrderSortBy] = useState('created_at')
   const [orderSortOrder, setOrderSortOrder] = useState('desc')
+  const [orderLoading, setOrderLoading] = useState(false)
+
+  // GRNs state (Phase 3 — stock receipt documents)
+  const [grns, setGrns] = useState([])
+  const [grnTotal, setGrnTotal] = useState(0)
+  const [grnSkip, setGrnSkip] = useState(0)
+  const [grnLimit, setGrnLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [grnSortBy, setGrnSortBy] = useState('created_at')
+  const [grnSortOrder, setGrnSortOrder] = useState('desc')
+  const [grnLoading, setGrnLoading] = useState(false)
 
   // Returns state
   const [returns, setReturns]   = useState([])
@@ -106,6 +95,7 @@ export default function PurchasesPage() {
   const [retLimit, setRetLimit] = useState(DEFAULT_PAGE_SIZE)
   const [retSortBy, setRetSortBy] = useState('created_at')
   const [retSortOrder, setRetSortOrder] = useState('desc')
+  const [retLoading, setRetLoading] = useState(false)
 
   // Payments state
   const [payments, setPayments] = useState([])
@@ -114,6 +104,7 @@ export default function PurchasesPage() {
   const [payLimit, setPayLimit] = useState(DEFAULT_PAGE_SIZE)
   const [paySortBy, setPaySortBy] = useState('created_at')
   const [paySortOrder, setPaySortOrder] = useState('desc')
+  const [payLoading, setPayLoading] = useState(false)
   const [showPayForm, setShowPayForm] = useState(false)
   const [payDetail, setPayDetail] = useState(null)
 
@@ -122,19 +113,17 @@ export default function PurchasesPage() {
   // fetches on demand.
   const [vendors, setVendors]   = useState([])
 
-  const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
 
-  // 2026-05-25: bulk-delete state. Same shape as SalesPage — one
-  // shared selectedIds Set scoped to the active tab, plus modal +
-  // blocked-rows + submitting flags. See BulkDeleteConfirmModal.
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     setSelectedIds(new Set())
+    setDeleteOneTarget(null)
     setDeleteBlocked([])
   }, [tab])
 
@@ -150,6 +139,7 @@ export default function PurchasesPage() {
   const tabRows = () => {
     if (tab === 'bills')    return bills
     if (tab === 'orders')   return orders
+    if (tab === 'grns')     return grns
     if (tab === 'returns')  return returns
     if (tab === 'payments') return payments
     return []
@@ -161,19 +151,29 @@ export default function PurchasesPage() {
     else setSelectedIds(new Set(rows.map((r) => r.id)))
   }
 
-  const selectedItemsForModal = () => {
-    const rows = tabRows().filter((r) => selectedIds.has(r.id))
-    return rows.map((r) => ({
-      id: r.id,
-      number: r.number,
-      vendorName: r.vendorName,
-      total: r.total ?? r.totalAmount,
-      status: r.status,
-    }))
+  const rowToDeleteItem = (r) => ({
+    id: r.id,
+    number: r.number,
+    vendorName: r.vendorName,
+    total: r.total ?? r.totalAmount,
+    status: r.status,
+  })
+
+  const deleteModalItems = () => {
+    if (deleteOneTarget) return [rowToDeleteItem(deleteOneTarget)]
+    return tabRows().filter((r) => selectedIds.has(r.id)).map(rowToDeleteItem)
+  }
+
+  const entityLabelForTab = () => {
+    if (tab === 'bills') return 'bill'
+    if (tab === 'orders') return 'purchase order'
+    if (tab === 'returns') return 'return'
+    if (tab === 'payments') return 'payment'
+    return 'item'
   }
 
   const submitBulkDelete = async () => {
-    const ids = Array.from(selectedIds)
+    const ids = deleteOneTarget ? [deleteOneTarget.id] : Array.from(selectedIds)
     if (ids.length === 0) return
     setDeleting(true)
     setDeleteBlocked([])
@@ -188,8 +188,10 @@ export default function PurchasesPage() {
       const stock = res?.data?.stock_removed ?? res?.stock_removed
       if (stock) extras.push(`${stock} stock units removed`)
       const extraMsg = extras.length ? ` (${extras.join(', ')})` : ''
-      toast.success(`Deleted ${count} ${tab.replace(/s$/, '')}${count === 1 ? '' : 's'}${extraMsg}`)
+      const label = entityLabelForTab()
+      toast.success(`Deleted ${count} ${label}${count === 1 ? '' : 's'}${extraMsg}`)
       setSelectedIds(new Set())
+      setDeleteOneTarget(null)
       setDeleteOpen(false)
       setListVersion((v) => v + 1)
     } catch (err) {
@@ -205,7 +207,7 @@ export default function PurchasesPage() {
   }
 
   const reversalLinesForTab = () => {
-    const n = selectedIds.size
+    const n = deleteOneTarget ? 1 : selectedIds.size
     const plural = (label) => `${n} ${label}${n === 1 ? '' : 's'}`
     if (tab === 'bills') {
       return [
@@ -216,56 +218,61 @@ export default function PurchasesPage() {
       ]
     }
     if (tab === 'orders')   return [`${plural('purchase order')} removed`, 'No stock or money changes (POs are intent-only)', 'Audit log entries written']
-    if (tab === 'returns')  return [`${plural('return')} removed`, 'No stock or money changes (vendor returns currently inert)', 'Audit log entries written']
+    if (tab === 'returns')  return [`${plural('return')} removed`, 'Stock quantities reversed on deleted return lines', 'Audit log entries written']
     if (tab === 'payments') return [`${plural('payment')} removed`, 'Bill paid_amount + status reverted per allocation', 'Audit log entries written']
     return [`${plural('item')} removed`]
   }
+
+  const tabCreateAction = () => {
+    if (tab === 'bills' && can('purchases.create')) {
+      return { label: '+ New Bill', onClick: () => navigate('/purchases/bills/new') }
+    }
+    if (tab === 'orders' && can('purchases.create')) {
+      return { label: '+ New PO', onClick: () => navigate('/purchases/orders/new') }
+    }
+    if (tab === 'grns' && can('purchases.create')) {
+      return { label: '+ New GRN', onClick: () => navigate('/purchases/grns/new') }
+    }
+    if (tab === 'returns' && can('purchases.create')) {
+      return { label: '+ New Return', onClick: () => setShowNewReturn(true) }
+    }
+    if (tab === 'payments' && can('purchases.edit')) {
+      return { label: '+ New Payment', onClick: () => setShowPayForm(true) }
+    }
+    return null
+  }
+
+  const createAction = tabCreateAction()
 
   // Modals + sub-state
   const [showDetail, setShowDetail] = useState(null)
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
-  const [showNewBill, setShowNewBill] = useState(false)
   const [showNewReturn, setShowNewReturn] = useState(false)
   const [returnDetail, setReturnDetail] = useState(null)
-  const [showOrderForm, setShowOrderForm] = useState(false)
-  const [orderSaving, setOrderSaving] = useState(false)
-  const [orderEditingId, setOrderEditingId] = useState(null)
-  const [orderEditingNumber, setOrderEditingNumber] = useState(null)
-  const [orderReadOnly, setOrderReadOnly] = useState(false)
-  const [billSaving, setBillSaving] = useState(false)
-  const [convertSource, setConvertSource] = useState(null)
-  const [converting, setConverting] = useState(false)
+  const [actionBusy, setActionBusy] = useState(null)
+  const [actionKind, setActionKind] = useState(null)
+  const [paySaving, setPaySaving] = useState(false)
+  const [cancelSaving, setCancelSaving] = useState(false)
+
+  const isRowBusy = useCallback((id) => actionBusy === id, [actionBusy])
+
+  const runRowAction = useCallback(async (id, kind, fn) => {
+    if (actionBusy) return
+    setActionBusy(id)
+    setActionKind(kind)
+    try {
+      await fn()
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
+    }
+  }, [actionBusy])
 
   // Payment modal state — same shape as SalesPage's pay-flow.
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
-
-  // Bill form. paymentReceived + paymentMethod mirror the POS checkout
-  // flow — settle in-line at create if checked, otherwise the bill
-  // lands as pending and is settled later via Record Payment.
-  const [billForm, setBillForm] = useState({
-    vendorId: '', vendorName: '',
-    branchId: activeBranchId,
-    billDate: new Date().toISOString().split('T')[0],
-    dueDate: '',
-    items: [],
-    paymentReceived: false,
-    paymentMethod: null,
-    notes: '',
-  })
-  const pbf = (k, v) => setBillForm((b) => ({ ...b, [k]: v }))
-
-  // PO form. Mirror of orderForm in SalesPage.
-  const [poForm, setPoForm] = useState({
-    vendorId: '', vendorName: '',
-    branchId: activeBranchId,
-    items: [],
-    expectedDate: '',
-    notes: '',
-  })
-  const ppof = (k, v) => setPoForm((f) => ({ ...f, [k]: v }))
 
   const loadMasters = useCallback(async () => {
     try {
@@ -283,6 +290,7 @@ export default function PurchasesPage() {
   useEffect(() => {
     setBillSkip(0)
     setOrderSkip(0)
+    setGrnSkip(0)
   }, [search, statusF, vendorF])
 
   // Bills list
@@ -291,15 +299,7 @@ export default function PurchasesPage() {
     let cancelled = false
     ;(async () => {
       try {
-        setLoading(true)
-        // 2026-05-25: dropped the silent `branch_id: activeBranchId`
-        // filter. Sales doesn't filter its invoices by active branch
-        // either — and an operator at Branch A who can't see Branch B's
-        // payables is a hidden-data trap. Branch is still IMPLICIT at
-        // create time (openCreateBill snapshots activeBranchId), but
-        // the list now shows every branch's bills. Future: an explicit
-        // Branch filter dropdown alongside Vendor/Status if anyone wants
-        // per-branch scoping.
+        setBillLoading(true)
         const raw = await purchasesAPI.list({
           skip: billSkip,
           limit: billLimit,
@@ -309,22 +309,20 @@ export default function PurchasesPage() {
           status: statusF || undefined,
           vendor_id: vendorF || undefined,
         })
-        const { items, total, summary } = unwrapPaged(raw)
+        const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setBills(items || [])
           setBillTotal(total)
-          setPurchaseSummary(summary)
         }
       } catch (err) {
         console.error('Failed to fetch purchases:', err)
         if (!cancelled) {
           setBills([])
           setBillTotal(0)
-          setPurchaseSummary(null)
         }
         toast.error('Failed to load purchases data')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setBillLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -336,6 +334,7 @@ export default function PurchasesPage() {
     let cancelled = false
     ;(async () => {
       try {
+        setOrderLoading(true)
         const raw = await purchasesAPI.orders.list({
           skip: orderSkip,
           limit: orderLimit,
@@ -356,10 +355,46 @@ export default function PurchasesPage() {
           setOrders([])
           setOrderTotal(0)
         }
+      } finally {
+        if (!cancelled) setOrderLoading(false)
       }
     })()
     return () => { cancelled = true }
   }, [tab, orderSkip, orderLimit, search, statusF, vendorF, listVersion, orderSortBy, orderSortOrder])
+
+  // GRNs list
+  useEffect(() => {
+    if (tab !== 'grns') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        setGrnLoading(true)
+        const raw = await purchasesAPI.grns.list({
+          skip: grnSkip,
+          limit: grnLimit,
+          sort_by: grnSortBy,
+          sort_order: grnSortOrder,
+          search: search || undefined,
+          status: statusF || undefined,
+          vendor_id: vendorF || undefined,
+        })
+        const { items, total } = unwrapPaged(raw)
+        if (!cancelled) {
+          setGrns(items || [])
+          setGrnTotal(total)
+        }
+      } catch (err) {
+        console.error('Failed to fetch GRNs:', err)
+        if (!cancelled) {
+          setGrns([])
+          setGrnTotal(0)
+        }
+      } finally {
+        if (!cancelled) setGrnLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, grnSkip, grnLimit, search, statusF, vendorF, listVersion, grnSortBy, grnSortOrder])
 
   // Returns list
   useEffect(() => {
@@ -367,6 +402,7 @@ export default function PurchasesPage() {
     let cancelled = false
     ;(async () => {
       try {
+        setRetLoading(true)
         const raw = await purchasesAPI.returns.list({
           skip: retSkip,
           limit: retLimit,
@@ -383,6 +419,8 @@ export default function PurchasesPage() {
           setReturns([])
           setRetTotal(0)
         }
+      } finally {
+        if (!cancelled) setRetLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -394,6 +432,7 @@ export default function PurchasesPage() {
     let cancelled = false
     ;(async () => {
       try {
+        setPayLoading(true)
         const raw = await purchasesAPI.payments.list({
           skip: paySkip,
           limit: payLimit,
@@ -410,6 +449,8 @@ export default function PurchasesPage() {
           setPayments([])
           setPayTotal(0)
         }
+      } finally {
+        if (!cancelled) setPayLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -435,81 +476,12 @@ export default function PurchasesPage() {
     setOrder(defaultOrder)
   }
 
-  const totals = useMemo(() => ({
-    total:   purchaseSummary?.amountTotal ?? 0,
-    paid:    purchaseSummary?.collectedPaid ?? 0,
-    pending: purchaseSummary?.pendingBalance ?? 0,
-    overdue: purchaseSummary?.overdueCount ?? 0,
-  }), [purchaseSummary])
-
-  // ── Bill flows ────────────────────────────────────────────────────
-  const openCreateBill = () => {
-    // Snapshot active branch at open-time. Avoids mid-fill picker swaps
-    // if the operator changes branches in the Topbar after opening.
-    setBillForm({
-      vendorId: '', vendorName: '',
-      branchId: activeBranchId,
-      billDate: new Date().toISOString().split('T')[0],
-      dueDate: '',
-      items: [],
-      paymentReceived: false,
-      paymentMethod: null,
-      notes: '',
-    })
-    setShowNewBill(true)
-  }
-
-  const saveBillForm = async () => {
-    if (!billForm.vendorId) { toast.error('Pick a vendor'); return }
-    if (billForm.items.length === 0) { toast.error('Add at least one item'); return }
-    if (!billForm.items.every((i) => i.item_id && Number(i.qty) > 0 && Number(i.cost) >= 0)) {
-      toast.error('Each line must have an item, qty > 0, and cost ≥ 0')
-      return
-    }
-    if (billForm.paymentReceived && !billForm.paymentMethod) {
-      toast.error('Pick a payment method (or uncheck Payment paid?)')
-      return
-    }
-    setBillSaving(true)
-    try {
-      const payload = {
-        vendor_id: billForm.vendorId,
-        vendor_name: billForm.vendorName,
-        branch_id: billForm.branchId,
-        branch_name: activeBranch?.name || '',
-        date: billForm.billDate,
-        due_date: billForm.dueDate || null,
-        items: billForm.items.map((i) => ({
-          item_id: i.item_id,
-          name: i.name,
-          qty: Number(i.qty),
-          cost: Number(i.cost),
-          tax_rate: Number(i.taxRate || 0),
-          discount: lineDiscountToPercent(i),
-          batch_number: i.batchTracking ? (i.batchNumber || undefined) : undefined,
-          mfg_date:     i.batchTracking ? (i.mfgDate     || undefined) : undefined,
-          expiry_date:  i.batchTracking ? (i.expiryDate  || undefined) : undefined,
-        })),
-        discount: 0,
-        payment_mode: billForm.paymentReceived ? billForm.paymentMethod : null,
-        notes: billForm.notes || null,
-      }
-      await purchasesAPI.create(payload)
-      setListVersion((v) => v + 1)
-      toast.success('Purchase bill created')
-      setShowNewBill(false)
-    } catch (err) {
-      console.error('Failed to save bill:', err)
-    } finally {
-      setBillSaving(false)
-    }
-  }
-
   const recordPayment = async () => {
-    if (!showPay) return
+    if (!showPay || paySaving) return
     const amount = Number(payAmt)
     if (!payAmt || amount <= 0) { toast.error('Enter a valid amount'); return }
     if (!payMode) { toast.error('Pick a payment method'); return }
+    setPaySaving(true)
     try {
       await purchasesAPI.payment(showPay.id, { amount, mode: payMode, ref: payRef })
       setListVersion((v) => v + 1)
@@ -517,11 +489,14 @@ export default function PurchasesPage() {
       setShowPay(null)
     } catch (err) {
       console.error('Failed to record payment:', err)
+    } finally {
+      setPaySaving(false)
     }
   }
 
   const cancelBill = async () => {
-    if (!showCancel) return
+    if (!showCancel || cancelSaving) return
+    setCancelSaving(true)
     try {
       await purchasesAPI.cancel(showCancel.id)
       setListVersion((v) => v + 1)
@@ -529,126 +504,59 @@ export default function PurchasesPage() {
       setShowCancel(null)
     } catch (err) {
       console.error('Failed to cancel bill:', err)
-    }
-  }
-
-  // ── PO flows ──────────────────────────────────────────────────────
-  const openCreatePO = () => {
-    setPoForm({
-      vendorId: '', vendorName: '',
-      branchId: activeBranchId,
-      items: [],
-      expectedDate: '',
-      notes: '',
-    })
-    setOrderEditingId(null)
-    setOrderEditingNumber(null)
-    setOrderReadOnly(false)
-    setShowOrderForm(true)
-  }
-
-  const openEditPO = (po, { readOnly = false } = {}) => {
-    setPoForm({
-      vendorId: po.vendorId || '',
-      vendorName: po.vendorName || '',
-      branchId: po.branchId || activeBranchId,
-      items: (po.items || []).map((it) => ({
-        item_id: it.itemId || null,
-        name: it.name || '',
-        qty: it.qty,
-        cost: it.cost,
-        taxRate: it.taxRate ?? 0,
-        lineDiscount: it.discount ?? 0,
-        lineDiscountType: '%',
-      })),
-      expectedDate: po.expectedDate || '',
-      notes: po.notes || '',
-    })
-    setOrderEditingId(po.id)
-    setOrderEditingNumber(po.number)
-    setOrderReadOnly(!!readOnly)
-    setShowOrderForm(true)
-  }
-
-  const savePoForm = async () => {
-    if (!poForm.vendorId) { toast.error('Pick a vendor'); return }
-    if (poForm.items.length === 0) { toast.error('Add at least one item'); return }
-    if (!poForm.items.every((i) => i.item_id && Number(i.qty) > 0 && Number(i.cost) >= 0)) {
-      toast.error('Each line must have an item, qty > 0, and cost ≥ 0')
-      return
-    }
-    setOrderSaving(true)
-    try {
-      const payload = {
-        vendor_id: poForm.vendorId,
-        vendor_name: poForm.vendorName,
-        branch_id: poForm.branchId,
-        branch_name: activeBranch?.name || '',
-        created_by: 'Staff',
-        expected_date: poForm.expectedDate || null,
-        items: poForm.items.map((i) => ({
-          item_id: i.item_id,
-          name: i.name,
-          qty: Number(i.qty),
-          cost: Number(i.cost),
-          tax_rate: Number(i.taxRate || 0),
-          discount: lineDiscountToPercent(i),
-        })),
-        discount: 0,
-        notes: poForm.notes || null,
-      }
-      if (orderEditingId) {
-        await purchasesAPI.orders.update(orderEditingId, payload)
-        toast.success('Purchase order updated')
-      } else {
-        await purchasesAPI.orders.create(payload)
-        toast.success('Purchase order created')
-      }
-      setListVersion((v) => v + 1)
-      setShowOrderForm(false)
-      setOrderEditingId(null)
-      setOrderEditingNumber(null)
-    } catch (err) {
-      console.error('Failed to save PO:', err)
     } finally {
-      setOrderSaving(false)
+      setCancelSaving(false)
     }
   }
 
-  const convertPO = async (body) => {
-    if (!convertSource || convertSource.kind !== 'order') return
-    setConverting(true)
-    try {
-      const res = await purchasesAPI.orders.convert(convertSource.id, body)
-      toast.success(`Bill ${res?.bill_number || ''} created (${res?.status || ''})`)
+  const voidVendorPayment = async (payment) => {
+    if (!payment?.id) return
+    await runRowAction(payment.id, 'void-payment', async () => {
+      await purchasesAPI.payments.void(payment.id)
       setListVersion((v) => v + 1)
-      setConvertSource(null)
-    } catch (err) {
-      console.error('Failed to convert PO:', err)
-    } finally {
-      setConverting(false)
-    }
+      toast.success(`Payment ${payment.number} voided`)
+      setPayDetail(null)
+    })
+  }
+
+  const voidVendorReturn = async (ret) => {
+    if (!ret?.id || ret.status === 'void' || ret.voided) return
+    await runRowAction(ret.id, 'void-return', async () => {
+      await purchasesAPI.returns.void(ret.id)
+      setListVersion((v) => v + 1)
+      toast.success(`Return ${ret.number} voided — bill recalculated`)
+      setReturnDetail(null)
+    })
   }
 
   const cancelPO = async (po) => {
     if (!po?.id) return
-    try {
+    await runRowAction(po.id, 'cancel-po', async () => {
       await purchasesAPI.orders.updateStatus(po.id, 'cancelled')
       setListVersion((v) => v + 1)
       toast.success(`${po.number} cancelled`)
-    } catch (err) {
-      console.error('Failed to cancel PO:', err)
-    }
+    })
   }
 
-  if (loading && tab === 'bills') {
-    return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading purchases...</div></div>
+  const billFromGrn = (grn) => {
+    if (!grn?.id) return
+    navigate(`/purchases/bills/new?fromGrn=${grn.id}`)
+  }
+
+  const cancelGrn = async (grn) => {
+    if (!grn?.id) return
+    if (!window.confirm(`Cancel ${grn.number}? This reverses received stock.`)) return
+    await runRowAction(grn.id, 'cancel-grn', async () => {
+      await purchasesAPI.grns.cancel(grn.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${grn.number} cancelled — stock reversed`)
+    })
   }
 
   return (
     <div className="page-container">
       <SectionHeader title="Purchase Management" subtitle="Vendor bills, purchase orders, and payments">
-        {selectedIds.size > 0 && can('purchases.delete') && (
+        {selectedIds.size > 0 && can('purchases.delete') && tab !== 'grns' && (
           <>
             <button className="btn btn-danger btn-sm" onClick={() => setDeleteOpen(true)}>
               🗑 Delete {selectedIds.size} selected
@@ -672,22 +580,12 @@ export default function PurchasesPage() {
           exportToCSV(exportData, `Purchases_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Purchases exported')
         }}>↓ Export</button>
-        {can('purchases.create') && (
-          <button className="btn btn-secondary btn-sm" onClick={openCreatePO}>+ New PO</button>
-        )}
-        {can('purchases.create') && (
-          <button className="btn btn-primary btn-sm" onClick={openCreateBill}>+ New Bill</button>
+        {createAction && (
+          <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
         )}
       </SectionHeader>
 
-      <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        <KPICard label="Total Purchases (Apr)" value={fmt(totals.total)} color="var(--purple)" icon="📦" />
-        <KPICard label="Paid"                  value={fmt(totals.paid)}  color="var(--green)"  icon="✅" />
-        <KPICard label="Outstanding Payables"  value={fmt(totals.pending)} color="var(--amber)" icon="💳" />
-        <KPICard label="Overdue Bills"         value={totals.overdue}    color="var(--red)"    icon="⚠️" />
-      </div>
-
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <Tabs tabs={TABS} active={tab} onChange={(id) => navigate(`/purchases?tab=${id}`)} />
 
       {/* ── BILLS ─────────────────────────────────────────────────── */}
       {tab === 'bills' && (
@@ -704,7 +602,7 @@ export default function PurchasesPage() {
             </select>
           </div>
           <Card bodyPadding={false}>
-            {bills.length === 0 ? <EmptyState icon="📋" title="No bills found" /> : (
+            <TablePanel loading={billLoading} isEmpty={!billLoading && bills.length === 0} emptyIcon="📋" emptyTitle="No bills found">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -726,6 +624,7 @@ export default function PurchasesPage() {
                     <SortableHeader label="Balance" sortKey="balance_due" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} className="text-right" align="right" />
                     <th>Mode</th>
                     <SortableHeader label="Status" sortKey="status" sortBy={billSortBy} sortOrder={billSortOrder} onSort={(k) => toggleSort(billSortBy, billSortOrder, setBillSortBy, setBillSortOrder, setBillSkip, k)} />
+                    <th>Returns</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -733,7 +632,7 @@ export default function PurchasesPage() {
                   {bills.map((b) => {
                     const balance = (b.total || 0) - (b.paidAmount || 0)
                     const canPay = b.status !== 'paid' && b.status !== 'cancelled'
-                    const canCancel = b.status !== 'paid' && b.status !== 'cancelled'
+                    const canCancel = b.status !== 'cancelled' && !(b.paidAmount > 0)
                     return (
                       <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -755,26 +654,48 @@ export default function PurchasesPage() {
                           ? <span style={{ color: 'var(--text-muted)' }}>—</span>
                           : <Chip status={b.paymentMode} label={displayPaymentMode(b.paymentMode)} />}</td>
                         <td><Chip status={b.status} /></td>
-                        <td>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(b)}>View</button>
-                            {canPay && can('purchases.edit') && <button className="btn btn-primary btn-xs" onClick={() => setShowPay(b)}>Pay</button>}
-                            {canCancel && can('purchases.edit') && <button className="btn btn-ghost btn-xs" onClick={() => setShowCancel(b)}>Cancel</button>}
-                          </div>
+                        <td><ReturnStatusChip status={b.returnStatus} /></td>
+                        <td className="text-right">
+                          <RowActionsMenu
+                            ariaLabel={`Actions for ${b.number}`}
+                            actions={[
+                              { label: 'View', disabled: isRowBusy(b.id), onClick: () => setShowDetail(b) },
+                              {
+                                label: 'Record payment',
+                                hidden: !canPay || !can('purchases.edit'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => setShowPay(b),
+                              },
+                              {
+                                label: 'Cancel bill',
+                                danger: true,
+                                hidden: !canCancel || !can('purchases.edit'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => setShowCancel(b),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                hidden: !can('purchases.delete'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => setDeleteOneTarget(b),
+                              },
+                            ]}
+                          />
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={billTotal}
               skip={billSkip}
               limit={billLimit}
               onSkipChange={setBillSkip}
               onLimitChange={setBillLimit}
-              disabled={loading}
+              disabled={billLoading}
             />
           </Card>
         </>
@@ -787,20 +708,15 @@ export default function PurchasesPage() {
             <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
             <select className="form-input" style={{ width: 140 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
               <option value="">All Status</option>
-              {['draft','confirmed','converted','cancelled'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+              {['draft','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
             </select>
             <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
               <option value="">All Vendors</option>
               {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
-            {can('purchases.create') && (
-              <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={openCreatePO}>+ New PO</button>
-            )}
           </div>
           <Card bodyPadding={false}>
-            {orders.length === 0 ? (
-              <EmptyState icon="📄" title="No purchase orders" desc="POs you create will appear here. Convert one to a Bill to receive goods." />
-            ) : (
+            <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📄" emptyTitle="No purchase orders" emptyDesc="POs you create will appear here. Convert one to a Bill to receive goods.">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -826,6 +742,8 @@ export default function PurchasesPage() {
                   {orders.map((o) => {
                     const isConverted = o.status === 'converted'
                     const isCancelled = o.status === 'cancelled'
+                    const isPartiallyReceived = o.status === 'partially_received'
+                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived
                     return (
                       <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -843,38 +761,65 @@ export default function PurchasesPage() {
                         <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(o.total || 0)}</td>
                         <td><Chip status={o.status} /></td>
                         <td>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            {!isConverted && !isCancelled && can('purchases.edit') && (
-                              <button className="btn btn-secondary btn-xs" onClick={() => openEditPO(o)}>Edit</button>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <RowActionsMenu
+                              ariaLabel={`Actions for ${o.number}`}
+                              actions={[
+                                {
+                                  label: 'View',
+                                  hidden: !(isConverted || isCancelled || isPartiallyReceived) || !can('purchases.edit'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/purchases/orders/${o.id}/edit?view=1`),
+                                },
+                                {
+                                  label: 'Edit',
+                                  hidden: !canReceiveOrConvert || !can('purchases.edit'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/purchases/orders/${o.id}/edit`),
+                                },
+                                {
+                                  label: 'Receive stock',
+                                  hidden: !canReceiveOrConvert || !can('purchases.create'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/purchases/grns/new?fromPo=${o.id}`),
+                                },
+                                {
+                                  label: 'Convert to bill',
+                                  hidden: !canReceiveOrConvert || !can('purchases.create'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/purchases/bills/new?fromPo=${o.id}`),
+                                },
+                                {
+                                  label: 'View bill',
+                                  hidden: !isConverted || !o.convertedBillId,
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => {
+                                    const bill = bills.find((x) => x.id === o.convertedBillId)
+                                    if (bill) setShowDetail(bill)
+                                    else toast('Bill not in current page — switch to Bills tab')
+                                  },
+                                },
+                                {
+                                  label: actionKind === 'cancel-po' && isRowBusy(o.id) ? 'Cancelling…' : 'Cancel PO',
+                                  danger: true,
+                                  hidden: !canReceiveOrConvert || !can('purchases.edit'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => cancelPO(o),
+                                },
+                                {
+                                  label: 'Delete',
+                                  danger: true,
+                                  hidden: !can('purchases.delete'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => setDeleteOneTarget(o),
+                                },
+                              ]}
+                            />
+                            {isPartiallyReceived && (
+                              <Tag color="var(--amber)">Bill GRN →</Tag>
                             )}
-                            {!isConverted && !isCancelled && can('purchases.create') && (
-                              <button
-                                className="btn btn-primary btn-xs"
-                                onClick={() => setConvertSource({
-                                  kind: 'order',
-                                  id: o.id,
-                                  number: o.number,
-                                  total: o.total,
-                                  vendorName: o.vendorName,
-                                  branchId: o.branchId,
-                                  // Forward PO lines to the convert modal so
-                                  // it can show batch-capture inputs for
-                                  // tracked items. Map to {item_id, name,
-                                  // qty} shape; modal lazy-fetches the
-                                  // batch_tracking + expiry_tracking flags.
-                                  lines: (o.items || []).map((li) => ({
-                                    item_id: li.itemId,
-                                    name: li.name,
-                                    qty: li.qty,
-                                  })),
-                                })}
-                              >Convert</button>
-                            )}
-                            {(isConverted || isCancelled) && (
-                              <button className="btn btn-ghost btn-xs" onClick={() => openEditPO(o, { readOnly: true })}>View</button>
-                            )}
-                            {!isConverted && !isCancelled && can('purchases.edit') && (
-                              <button className="btn btn-ghost btn-xs" onClick={() => cancelPO(o)}>Cancel</button>
+                            {isConverted && !o.convertedBillId && (
+                              <Tag color="var(--amber)">Bill removed</Tag>
                             )}
                           </div>
                         </td>
@@ -883,13 +828,96 @@ export default function PurchasesPage() {
                   })}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={orderTotal}
               skip={orderSkip}
               limit={orderLimit}
               onSkipChange={setOrderSkip}
               onLimitChange={setOrderLimit}
+              disabled={orderLoading}
+            />
+          </Card>
+        </>
+      )}
+
+      {/* ── GRNs ──────────────────────────────────────────────────── */}
+      {tab === 'grns' && (
+        <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search GRN #, vendor, PO…" />
+            <select className="form-input" style={{ width: 140 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+              <option value="">All Status</option>
+              {['received', 'cancelled'].map((s) => (
+                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+              ))}
+            </select>
+            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
+              <option value="">All Vendors</option>
+              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </div>
+          <Card bodyPadding={false}>
+            <TablePanel loading={grnLoading} isEmpty={!grnLoading && grns.length === 0} emptyIcon="📦" emptyTitle="No goods receipts" emptyDesc="Receive stock with + New GRN, or create a bill / convert a PO (those also create a GRN).">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableHeader label="GRN #" sortKey="number" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} />
+                    <th>PO #</th>
+                    <SortableHeader label="Vendor" sortKey="vendor_name" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k)} />
+                    <SortableHeader label="Date" sortKey="date" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} />
+                    <SortableHeader label="Total" sortKey="total" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} className="text-right" align="right" />
+                    <SortableHeader label="Status" sortKey="status" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k)} />
+                    <th>Bill</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grns.map((g) => {
+                    const hasBill = !!g.convertedBillId
+                    const isReceived = g.status === 'received'
+                    return (
+                      <tr key={g.id}>
+                        <td><CopyableId value={g.number} label={g.number} style={{ color: 'var(--green)', fontSize: 12 }} /></td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.poNumber || '—'}</td>
+                        <td style={{ fontWeight: 500, fontSize: 13 }}>{g.vendorName || 'N/A'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.date}</td>
+                        <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(g.total || 0)}</td>
+                        <td><Chip status={g.status} /></td>
+                        <td style={{ fontSize: 12 }}>{hasBill ? 'Linked' : '—'}</td>
+                        <td className="text-right">
+                          <RowActionsMenu
+                            ariaLabel={`Actions for ${g.number}`}
+                            actions={[
+                              {
+                                label: 'Create bill',
+                                hidden: !isReceived || hasBill || !can('purchases.create'),
+                                disabled: isRowBusy(g.id),
+                                onClick: () => billFromGrn(g),
+                              },
+                              {
+                                label: actionKind === 'cancel-grn' && isRowBusy(g.id) ? 'Cancelling…' : 'Cancel GRN',
+                                danger: true,
+                                hidden: !isReceived || hasBill || !can('purchases.edit'),
+                                disabled: isRowBusy(g.id),
+                                onClick: () => cancelGrn(g),
+                              },
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </TablePanel>
+            <PaginationBar
+              total={grnTotal}
+              skip={grnSkip}
+              limit={grnLimit}
+              onSkipChange={setGrnSkip}
+              onLimitChange={setGrnLimit}
+              disabled={grnLoading}
             />
           </Card>
         </>
@@ -898,15 +926,8 @@ export default function PurchasesPage() {
       {/* ── RETURNS ───────────────────────────────────────────────── */}
       {tab === 'returns' && (
         <>
-          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            {can('purchases.create') && (
-              <button className="btn btn-primary btn-sm" onClick={() => setShowNewReturn(true)}>+ New Return</button>
-            )}
-          </div>
           <Card bodyPadding={false}>
-            {returns.length === 0 ? (
-              <EmptyState icon="↩️" title="No vendor returns" desc="Returns to vendors will appear here." />
-            ) : (
+            <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩️" emptyTitle="No vendor returns" emptyDesc="Returns to vendors will appear here.">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -947,20 +968,40 @@ export default function PurchasesPage() {
                       <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(r.total)}</td>
                       <td style={{ fontSize: 12 }}><Chip label={r.reason} /></td>
                       <td><Chip status={r.status} /></td>
-                      <td>
-                        <button className="btn btn-ghost btn-xs" onClick={() => setReturnDetail(r)}>View</button>
+                      <td className="text-right">
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${r.number}`}
+                          actions={[
+                            { label: 'View', disabled: isRowBusy(r.id), onClick: () => setReturnDetail(r) },
+                            {
+                              label: actionKind === 'void-return' && isRowBusy(r.id) ? 'Voiding…' : 'Void',
+                              danger: true,
+                              hidden: !can('purchases.edit') || r.status === 'void' || r.voided,
+                              disabled: isRowBusy(r.id),
+                              onClick: () => voidVendorReturn(r),
+                            },
+                            {
+                              label: 'Delete',
+                              danger: true,
+                              hidden: !can('purchases.delete'),
+                              disabled: isRowBusy(r.id),
+                              onClick: () => setDeleteOneTarget(r),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={retTotal}
               skip={retSkip}
               limit={retLimit}
               onSkipChange={setRetSkip}
               onLimitChange={setRetLimit}
+              disabled={retLoading}
             />
           </Card>
         </>
@@ -969,17 +1010,8 @@ export default function PurchasesPage() {
       {/* ── PAYMENTS ──────────────────────────────────────────────── */}
       {tab === 'payments' && (
         <>
-          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            {can('purchases.edit') && (
-              <button className="btn btn-primary btn-sm" onClick={() => setShowPayForm(true)}>
-                + New Payment
-              </button>
-            )}
-          </div>
           <Card bodyPadding={false}>
-            {payments.length === 0 ? (
-              <EmptyState icon="💸" title="No payments yet" desc="Record a vendor payment to see it here." />
-            ) : (
+            <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💸" emptyTitle="No payments yet" emptyDesc="Record a vendor payment to see it here.">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1024,21 +1056,41 @@ export default function PurchasesPage() {
                         <td><span style={{ fontSize: 12 }}>{allocCount} {allocCount === 1 ? 'bill' : 'bills'}</span></td>
                         <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || '—'}</td>
-                        <td>
-                          <button className="btn btn-ghost btn-xs" onClick={() => setPayDetail(p)}>View</button>
+                        <td className="text-right">
+                          <RowActionsMenu
+                            ariaLabel={`Actions for payment ${p.number}`}
+                            actions={[
+                              { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
+                              {
+                                label: actionKind === 'void-payment' && isRowBusy(p.id) ? 'Voiding…' : 'Void',
+                                danger: true,
+                                hidden: !can('purchases.edit') || p.voided,
+                                disabled: isRowBusy(p.id),
+                                onClick: () => voidVendorPayment(p),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                hidden: !can('purchases.delete'),
+                                disabled: isRowBusy(p.id),
+                                onClick: () => setDeleteOneTarget(p),
+                              },
+                            ]}
+                          />
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={payTotal}
               skip={paySkip}
               limit={payLimit}
               onSkipChange={setPaySkip}
               onLimitChange={setPayLimit}
+              disabled={payLoading}
             />
           </Card>
         </>
@@ -1062,6 +1114,8 @@ export default function PurchasesPage() {
                 { label: 'Due Date', value: showDetail.dueDate || '—' },
                 { label: 'Payment Mode', value: displayPaymentMode(showDetail.paymentMode) },
                 { label: 'Status', value: <Chip status={showDetail.status} /> },
+                { label: 'Return Status', value: <ReturnStatusChip status={showDetail.returnStatus} /> },
+                { label: 'Credited (returns)', value: (showDetail.creditedAmount || 0) > 0 ? fmt(showDetail.creditedAmount) : '—' },
               ].map((r) => (
                 <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
@@ -1094,10 +1148,12 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Payment Modal ─────────────────────────────────────────── */}
-      <Modal open={!!showPay} onClose={() => setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm"
+      <Modal open={!!showPay} onClose={() => !paySaving && setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm"
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowPay(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={recordPayment}>Record Payment</button>
+          <button className="btn btn-secondary" onClick={() => setShowPay(null)} disabled={paySaving}>Cancel</button>
+          <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
+            {paySaving ? 'Recording…' : 'Record Payment'}
+          </button>
         </>}>
         {showPay && (() => {
           const balance = (showPay.total || 0) - (showPay.paidAmount || 0)
@@ -1134,54 +1190,23 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Cancel Bill Confirm ───────────────────────────────────── */}
-      <Modal open={!!showCancel} onClose={() => setShowCancel(null)} title="Cancel Bill" icon="⚠️" size="sm"
+      <Modal open={!!showCancel} onClose={() => !cancelSaving && setShowCancel(null)} title="Cancel Bill" icon="⚠️" size="sm"
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowCancel(null)}>Keep Bill</button>
-          <button className="btn btn-danger" onClick={cancelBill}>Cancel Bill</button>
+          <button className="btn btn-secondary" onClick={() => setShowCancel(null)} disabled={cancelSaving}>Keep Bill</button>
+          <button className="btn btn-danger" onClick={cancelBill} disabled={cancelSaving}>
+            {cancelSaving ? 'Cancelling…' : 'Cancel Bill'}
+          </button>
         </>}>
         {showCancel && (
           <>
             <AlertBar type="amber" icon="⚠">
               Cancelling <strong>{showCancel.number}</strong> marks it ignored in payable totals.
-              It does NOT reverse stock — goods already received stay in inventory. Use Vendor
-              Returns to physically return stock.
+              Void or delete any payments first. It does NOT reverse stock — goods already received
+              stay in inventory. Use Vendor Returns to physically return stock.
             </AlertBar>
           </>
         )}
       </Modal>
-
-      {/* ── Bill Form (create) ────────────────────────────────────── */}
-      <BillFormModal
-        open={showNewBill}
-        onClose={() => setShowNewBill(false)}
-        onSave={saveBillForm}
-        billForm={billForm}
-        pbf={pbf}
-        saving={billSaving}
-      />
-
-      {/* ── PO Form (create / edit / view) ────────────────────────── */}
-      <PurchaseOrderFormModal
-        open={showOrderForm}
-        onClose={() => { setShowOrderForm(false); setOrderEditingId(null); setOrderEditingNumber(null); setOrderReadOnly(false) }}
-        onSave={savePoForm}
-        poForm={poForm}
-        ppof={ppof}
-        saving={orderSaving}
-        editingNumber={orderEditingNumber}
-        readOnly={orderReadOnly}
-      />
-
-      {/* ── PO → Bill convert ─────────────────────────────────────── */}
-      <ConvertPOToBillModal
-        open={!!convertSource}
-        onClose={() => setConvertSource(null)}
-        onConfirm={convertPO}
-        title={convertSource ? `Convert ${convertSource.number}` : 'Convert to Bill'}
-        source={convertSource}
-        lines={convertSource?.lines || null}
-        confirming={converting}
-      />
 
       {/* ── Return Form ───────────────────────────────────────────── */}
       <VendorReturnFormModal
@@ -1204,7 +1229,12 @@ export default function PurchasesPage() {
         title={payDetail ? `Payment — ${payDetail.number}` : 'Payment'}
         icon="💸"
         size="md"
-        footer={<button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>
+          {can('purchases.edit') && !payDetail?.voided && (
+            <button className="btn btn-danger" onClick={() => voidVendorPayment(payDetail)}>Void Payment</button>
+          )}
+        </>}
       >
         {payDetail && (
           <>
@@ -1258,7 +1288,14 @@ export default function PurchasesPage() {
 
       {/* ── Return Detail ─────────────────────────────────────────── */}
       <Modal open={!!returnDetail} onClose={() => setReturnDetail(null)} title={`Vendor Return — ${returnDetail?.number}`} icon="↩️" size="lg"
-        footer={<button className="btn btn-secondary" onClick={() => setReturnDetail(null)}>Close</button>}>
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setReturnDetail(null)}>Close</button>
+            {can('purchases.edit') && returnDetail && returnDetail.status !== 'void' && !returnDetail.voided && (
+              <button className="btn btn-danger" onClick={() => voidVendorReturn(returnDetail)}>Void Return</button>
+            )}
+          </>
+        }>
         {returnDetail && (
           <>
             <AlertBar type="blue" icon="ℹ">
@@ -1288,18 +1325,12 @@ export default function PurchasesPage() {
         )}
       </Modal>
 
-      {/* 2026-05-25: bulk-delete confirmation. Mirror of SalesPage. */}
       <BulkDeleteConfirmModal
-        open={deleteOpen}
-        onClose={() => { setDeleteOpen(false); setDeleteBlocked([]) }}
+        open={deleteOpen || !!deleteOneTarget}
+        onClose={() => { setDeleteOpen(false); setDeleteOneTarget(null); setDeleteBlocked([]) }}
         onConfirm={submitBulkDelete}
-        entityLabel={
-          tab === 'bills'    ? 'bill' :
-          tab === 'orders'   ? 'purchase order' :
-          tab === 'returns'  ? 'vendor return' :
-          tab === 'payments' ? 'payment' : 'item'
-        }
-        items={selectedItemsForModal()}
+        entityLabel={entityLabelForTab()}
+        items={deleteModalItems()}
         blocked={deleteBlocked}
         submitting={deleting}
         reversalLines={reversalLinesForTab()}

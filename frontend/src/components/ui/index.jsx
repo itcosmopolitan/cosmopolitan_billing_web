@@ -98,6 +98,19 @@ export function Chip({ status, label, custom }) {
   return <span className={`chip ${cls}`}>{label || lbl}</span>
 }
 
+/** Credit-note / vendor-credit return flag on invoices and bills. */
+export function ReturnStatusChip({ status }) {
+  if (!status || status === 'none') {
+    return <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
+  }
+  const map = {
+    partial: { color: 'var(--amber)', label: 'Partial Return' },
+    full:    { color: 'var(--red)', label: 'Full Return' },
+  }
+  const m = map[status] || { color: 'var(--text-muted)', label: status }
+  return <Tag color={m.color}>{m.label}</Tag>
+}
+
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 export function Spinner({ size = 20, color = 'var(--accent)' }) {
   return (
@@ -106,6 +119,32 @@ export function Spinner({ size = 20, color = 'var(--accent)' }) {
       <path d="M12 2a10 10 0 0 1 10 10" stroke={color} strokeWidth="3" strokeLinecap="round" />
     </svg>
   )
+}
+
+/** Centered spinner for list/table panels while data is fetching. */
+export function TableLoadingPanel({ label = 'Loading…' }) {
+  return (
+    <div style={{
+      padding: '56px 24px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+      color: 'var(--text-muted)',
+      minHeight: 200,
+    }}>
+      <Spinner size={28} />
+      <span style={{ fontSize: 13 }}>{label}</span>
+    </div>
+  )
+}
+
+/** Show loading, empty, or table content — avoids empty-state flash during fetch. */
+export function TablePanel({ loading, isEmpty, emptyIcon, emptyTitle, emptyDesc, emptyAction, children }) {
+  if (loading) return <TableLoadingPanel />
+  if (isEmpty) return <EmptyState icon={emptyIcon} title={emptyTitle} desc={emptyDesc} action={emptyAction} />
+  return children
 }
 
 // ─── Empty State ──────────────────────────────────────────────────────────────

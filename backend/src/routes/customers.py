@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Customer
+from src.models import Customer, CustomerCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_customer
 from src.security import require_perm
@@ -152,6 +152,72 @@ async def get_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
     if not c:
         raise HTTPException(404, "Customer not found")
     return serialize_customer(c)
+
+
+@router.get("/{customer_id}/credit-ledger", dependencies=[Depends(require_perm("customers.view"))])
+async def customer_credit_ledger(
+    customer_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Append-only store-credit ledger for a customer (Sales Phase 1)."""
+    exists = (
+        await db.execute(select(Customer.id).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+    if not exists:
+        raise HTTPException(404, "Customer not found")
+
+    total = int(
+        (
+            await db.execute(
+                select(func.count(CustomerCreditEntry.id)).where(
+                    CustomerCreditEntry.customer_id == customer_id
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    rows = (
+        await db.execute(
+            select(CustomerCreditEntry)
+            .where(CustomerCreditEntry.customer_id == customer_id)
+            .order_by(CustomerCreditEntry.created_at.desc(), CustomerCreditEntry.id.desc())
+            .offset(sk)
+            .limit(lim)
+        )
+    ).scalars().all()
+
+    def _entry_type_label(t: str) -> str:
+        labels = {
+            "sale_debit": "Credit sale",
+            "payment_debit": "Credit payment",
+            "overpayment": "Overpayment credit",
+            "return_credit": "Return credit",
+            "return_void_revoke": "Return void (revoke)",
+            "void_restore": "Payment void (restore)",
+            "void_revoke": "Payment void (revoke)",
+        }
+        return labels.get(t, t.replace("_", " ").title())
+
+    items = [{
+        "id": e.id,
+        "entryType": e.entry_type,
+        "entryLabel": _entry_type_label(e.entry_type),
+        "delta": round(float(e.delta or 0), 2),
+        "balanceBefore": round(float(e.balance_before or 0), 2),
+        "balanceAfter": round(float(e.balance_after or 0), 2),
+        "sourceType": e.source_type,
+        "sourceRef": e.source_ref,
+        "sourceNumber": e.source_number,
+        "notes": e.notes,
+        "date": e.date,
+        "createdBy": e.created_by,
+        "createdAt": e.created_at.isoformat() if e.created_at else None,
+    } for e in rows]
+    return paged(items, total, sk, lim)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create"))])
 async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db)):

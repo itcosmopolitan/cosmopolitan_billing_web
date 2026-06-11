@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from src.db_dialect import additive_column_ddl, is_postgresql
+
 # Lazy engine/sessionmaker initialization to support config loading
 _engine = None
 
@@ -67,7 +69,6 @@ def get_engine():
 
         _engine = create_async_engine(engine_url, **engine_kwargs)
         _enable_sqlalchemy_query_logging(_engine)
-
     return _engine
 
 
@@ -315,6 +316,33 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # SO was deleted). Nullable; legacy converted quotes have NULL here
     # and the guard treats NULL as "no live dependency".
     ("quotations", "converted_order_id", "VARCHAR"),
+    # 2026-06-09: direct quote→invoice convert (skip SO). Nullable until
+    # conversion; mirrors converted_order_id / SalesOrder.converted_invoice_id.
+    ("quotations", "converted_invoice_id", "VARCHAR"),
+    # 2026-06-09: credit-term due date for overdue automation on sales side.
+    ("sale_invoices", "due_date", "VARCHAR"),
+    # 2026-06-09: soft void for payments (audit trail vs hard delete).
+    ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("customer_payments", "voided_at", "VARCHAR"),
+    ("vendor_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("vendor_payments", "voided_at", "VARCHAR"),
+    # Phase 0 (2026-06-09): org inventory policy + document return tracking.
+    ("organisations", "allow_overselling", "BOOLEAN DEFAULT 1 NOT NULL"),
+    ("sale_invoices", "credited_amount", "FLOAT DEFAULT 0 NOT NULL"),
+    ("sale_invoices", "return_status", "VARCHAR DEFAULT 'none'"),
+    ("purchase_bills", "credited_amount", "FLOAT DEFAULT 0 NOT NULL"),
+    ("purchase_bills", "return_status", "VARCHAR DEFAULT 'none'"),
+    # Phase 3: bill → GRN back-link (stock lives on GRN).
+    ("purchase_bills", "grn_id", "VARCHAR"),
+    # Phase 4: POS vs back-office invoice provenance (drives receipt numbering).
+    ("sale_invoices", "origin", "VARCHAR DEFAULT 'invoice'"),
+    # Phase 4: org-level POS / invoice prefix + sequence start (JSON text).
+    ("organisations", "numbering_config", "TEXT"),
+    # Purchase Phase 3 (2026-06-09): vendor advance / overpayment credit.
+    ("vendors", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
+    ("vendor_payments", "credit_applied", "FLOAT DEFAULT 0 NOT NULL"),
+    ("vendor_returns", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("vendor_returns", "voided_at", "VARCHAR"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.
@@ -342,6 +370,7 @@ async def init_schema() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _ensure_nullable_columns(conn)
+        await _ensure_pg_enum_values(conn)
         await _bootstrap_system_roles(conn)
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
@@ -397,31 +426,71 @@ async def _bootstrap_system_roles(conn) -> None:
 
 
 async def _ensure_columns(conn) -> None:
-    """For SQLite, add any missing columns from `_ADDITIVE_COLUMNS`. No-op on
-    columns that already exist."""
+    """Add any missing columns from `_ADDITIVE_COLUMNS`. Idempotent."""
+    dialect = conn.dialect.name
     for table, column, ddl_type in _ADDITIVE_COLUMNS:
-        if conn.dialect.name == "sqlite":
-            rows = (
+        if dialect == "postgresql":
+            table_exists = (
                 await conn.execute(
-                    text(f"PRAGMA table_info('{table}')")
+                    text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM information_schema.tables "
+                        "  WHERE table_schema = current_schema() AND table_name = :table"
+                        ")"
+                    ),
+                    {"table": table},
                 )
-            ).fetchall()
-            existing = {r[1] for r in rows}
-        else:
+            ).scalar()
+            if not table_exists:
+                continue
             rows = (
                 await conn.execute(
-                    text(f"""
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = '{table}'
-                    """)
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = :table"
+                    ),
+                    {"table": table},
                 )
             ).fetchall()
             existing = {r[0] for r in rows}
-
+            ddl = additive_column_ddl(ddl_type)
+        else:
+            rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
+            if not rows:
+                continue  # table not created yet (fresh partial DB)
+            existing = {r[1] for r in rows}  # row[1] = column name
+            ddl = ddl_type
         if column in existing:
             continue
-        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
+# PostgreSQL enums are created at first table migration; new Python enum
+# members added later need an explicit ALTER TYPE … ADD VALUE.
+_PG_ENUM_VALUES: list[tuple[str, str]] = [
+    ("purchaseorderstatus", "partially_received"),
+    ("salesorderstatus", "partially_invoiced"),
+]
+
+
+async def _ensure_pg_enum_values(conn) -> None:
+    """Idempotently add missing PostgreSQL enum labels."""
+    if conn.dialect.name != "postgresql":
+        return
+    for enum_name, value in _PG_ENUM_VALUES:
+        exists = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM pg_enum e "
+                    "JOIN pg_type t ON e.enumtypid = t.oid "
+                    "WHERE t.typname = :enum AND e.enumlabel = :val"
+                ),
+                {"enum": enum_name, "val": value},
+            )
+        ).scalar()
+        if exists:
+            continue
+        await conn.execute(text(f"ALTER TYPE {enum_name} ADD VALUE '{value}'"))
 
 
 async def _ensure_nullable_columns(conn) -> None:

@@ -205,6 +205,7 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
   }, [invoice, returnQtys])
 
   const handleSubmit = async () => {
+    if (submitting) return
     if (!invoice) {
       toast.error('Pick an invoice first')
       return

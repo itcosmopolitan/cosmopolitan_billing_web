@@ -170,7 +170,6 @@ export const usePOSStore = create((set, get) => ({
   paymentMethod: null,
   splitPayments: [],
   heldBills: [],
-  billNumber: 'POS-2024-1848',
   notes: '',
 
   // Cart actions
@@ -280,12 +279,13 @@ export const usePOSStore = create((set, get) => ({
   setNotes: (n) => set({ notes: n }),
 
   holdBill: () => {
-    const { cart, customer, discountPct, billNumber, heldBills, paymentReceived, paymentMethod } = get()
+    const { cart, customer, discountPct, heldBills, paymentReceived, paymentMethod } = get()
     if (cart.length === 0) return
+    const label = `Hold #${heldBills.length + 1}`
     set({
       heldBills: [...heldBills, {
         id: Date.now(),
-        billNumber,
+        billNumber: label,
         cart: cart.map((i) => applyLineCalc(i)),
         customer,
         discountPct,

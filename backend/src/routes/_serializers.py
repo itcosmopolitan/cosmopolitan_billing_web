@@ -109,6 +109,7 @@ def serialize_vendor(v) -> dict:
         "gstin": v.gstin,
         "payment_terms": v.payment_terms,
         "outstanding": v.outstanding,
+        "credit_balance": getattr(v, "credit_balance", 0) or 0,
         "total_purchases": v.total_purchases,
     }
 

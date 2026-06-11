@@ -1,13 +1,8 @@
 /**
  * Purchases > Payments > "+ New Payment" modal.
  *
- * Mirror of sales/PaymentFormModal. Differences:
- *   • Vendor picker (strict) instead of Customer picker.
- *   • Bills (PUR-...) instead of invoices (INV-...).
- *   • NO overpayment-to-credit — vendors don't have a credit_balance
- *     field yet. Allocations > bill balance get inline red warning +
- *     are clamped by the backend (which 400s if any allocation exceeds
- *     its bill's balance). UX clamps on submit for the same outcome.
+ * Mirror of sales/PaymentFormModal. Overpayment routes to vendor.credit_balance;
+ * credit mode settles bills from stored vendor advance.
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
@@ -89,7 +84,7 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
 
   const totals = useMemo(() => {
     let allocated = 0
-    let overpay = 0
+    let credit = 0
     let count = 0
     for (const b of bills) {
       if (!checkedIds.has(b.id)) continue
@@ -97,24 +92,35 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
       const amt = Number(applyById[b.id]) || 0
       const balance = (b.total || 0) - (b.paidAmount || 0)
       allocated += amt
-      overpay += Math.max(0, amt - balance)
+      credit += Math.max(0, amt - balance)
     }
     return {
       allocated: Math.round(allocated * 100) / 100,
-      overpay: Math.round(overpay * 100) / 100,
+      credit: Math.round(credit * 100) / 100,
       count,
     }
   }, [bills, checkedIds, applyById])
 
+  const avail = Number(vendor?.credit || 0)
+  const creditMode = paymentMode === 'credit'
+  const creditInsufficient = creditMode && totals.allocated > avail + 0.001
+
+  const seedApplyToBalances = () => {
+    const seed = {}
+    bills.forEach((b) => {
+      const bal = Math.max(0, (b.total || 0) - (b.paidAmount || 0))
+      seed[b.id] = String(bal.toFixed(2))
+    })
+    setApplyById(seed)
+  }
+
   const handleSubmit = async () => {
+    if (submitting) return
     if (!vendor?.id) { toast.error('Pick a vendor first'); return }
     if (totals.count === 0) { toast.error('Select at least one bill'); return }
     if (!paymentMode) { toast.error('Pick a payment method'); return }
-    // Vendor payments REJECT overpay (no credit_balance on Vendor yet).
-    // Surfacing the message client-side is friendlier than waiting on
-    // the backend 400.
-    if (totals.overpay > 0) {
-      toast.error(`Allocation exceeds bill balance by ${fmt(totals.overpay)}. Reduce or split.`)
+    if (creditMode && creditInsufficient) {
+      toast.error(`Insufficient vendor credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
       return
     }
     const allocations = []
@@ -136,7 +142,15 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
         notes: notes.trim() || null,
         allocations,
       })
-      toast.success(`Payment ${res.number} recorded`)
+      const credit = Number(res?.credit_applied || 0)
+      if (credit > 0) {
+        toast.success(
+          `Payment ${res.number} recorded. ${fmt(credit)} credited to ${vendor.name}`,
+          { duration: 5000 },
+        )
+      } else {
+        toast.success(`Payment ${res.number} recorded`)
+      }
       onSaved?.(res)
       onClose()
     } catch (err) {
@@ -146,7 +160,7 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
     }
   }
 
-  const buttonDisabled = submitting || !vendor || totals.count === 0 || !paymentMode || totals.overpay > 0
+  const buttonDisabled = submitting || !vendor || totals.count === 0 || !paymentMode || creditInsufficient
 
   return (
     <Modal
@@ -167,7 +181,11 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
       <FormGroup label="Vendor" required>
         <VendorPicker
           value={vendor}
-          onPick={(v) => setVendor({ id: v.id, name: v.name })}
+          onPick={(v) => setVendor({
+            id: v.id,
+            name: v.name,
+            credit: v.credit_balance || v.creditBalance || 0,
+          })}
           onClear={() => {
             setVendor(null)
             setBills([])
@@ -198,6 +216,9 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                   <AlertBar type="blue" icon="ℹ">
                     {bills.length} pending {bills.length === 1 ? 'bill' : 'bills'} ·{' '}
                     <strong>{fmt(totalBalance)}</strong> outstanding
+                    {avail > 0 && (
+                      <> · <strong>{fmt(avail)}</strong> vendor credit available</>
+                    )}
                   </AlertBar>
                 )
               })()}
@@ -242,7 +263,7 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                     const checked = checkedIds.has(b.id)
                     const balance = (b.total || 0) - (b.paidAmount || 0)
                     const apply = Number(applyById[b.id]) || 0
-                    const overpay = checked ? Math.max(0, apply - balance) : 0
+                    const excess = checked && !creditMode ? Math.max(0, apply - balance) : 0
                     return (
                       <tr key={b.id} style={!checked ? { opacity: 0.55 } : null}>
                         <td>
@@ -267,7 +288,7 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                             className="form-input"
                             type="number"
                             value={applyById[b.id] || ''}
-                            disabled={!checked}
+                            disabled={!checked || creditMode}
                             onChange={(e) =>
                               setApplyById((prev) => ({ ...prev, [b.id]: e.target.value }))
                             }
@@ -276,9 +297,9 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                               textAlign: 'right', fontVariantNumeric: 'tabular-nums',
                             }}
                           />
-                          {overpay > 0 && (
-                            <div style={{ fontSize: 10.5, color: 'var(--red)', marginTop: 2 }}>
-                              Exceeds balance by {fmt(overpay)}
+                          {excess > 0 && (
+                            <div style={{ fontSize: 10.5, color: 'var(--amber)', marginTop: 2 }}>
+                              Excess {fmt(excess)} → vendor credit
                             </div>
                           )}
                         </td>
@@ -294,6 +315,12 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                     <span style={totalsLabelStyle}>Total Selected</span>
                     <span style={totalsValueStyle}>{totals.count} {totals.count === 1 ? 'bill' : 'bills'}</span>
                   </div>
+                  {totals.credit > 0 && (
+                    <div style={totalsRowStyle}>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>Vendor Credit</span>
+                      <span className="mono" style={{ ...totalsValueStyle, color: 'var(--amber)' }}>{fmt(totals.credit)}</span>
+                    </div>
+                  )}
                   <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
                     <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Allocated</span>
                     <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{fmt(totals.allocated)}</span>
@@ -303,8 +330,16 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
                 <FormGroup label="Method" required>
-                  <select className="form-input" value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
-                    {['cash', 'card', 'upi', 'bank_transfer'].map((m) => (
+                  <select
+                    className="form-input"
+                    value={paymentMode}
+                    onChange={(e) => {
+                      const mode = e.target.value
+                      setPaymentMode(mode)
+                      if (mode === 'credit') seedApplyToBalances()
+                    }}
+                  >
+                    {['cash', 'card', 'upi', 'bank_transfer', 'credit'].map((m) => (
                       <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
                     ))}
                   </select>
@@ -315,9 +350,15 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                     value={paymentRef}
                     onChange={(e) => setPaymentRef(e.target.value)}
                     placeholder="UTR / NEFT / cheque #"
+                    disabled={creditMode}
                   />
                 </FormGroup>
               </div>
+              {creditMode && creditInsufficient && (
+                <AlertBar type="red" icon="⚠">
+                  Insufficient vendor credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
+                </AlertBar>
+              )}
               <FormGroup label="Notes (optional)">
                 <textarea
                   className="form-input"

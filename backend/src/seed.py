@@ -88,6 +88,7 @@ async def seed():
             state_code="33",
             financial_year="Apr-Mar",
             tax_pricing_mode="inclusive",
+            allow_overselling=True,
         ))
 
         for cfg in DEFAULT_NUMBERING:

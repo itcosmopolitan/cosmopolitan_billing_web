@@ -14,31 +14,13 @@
  * branch picker, matching the sales SO modal. Vendor uses the strict
  * VendorPicker; items use the shared InventoryItemPicker.
  */
-import { fmt } from '@/utils/helpers'
 import { Modal, FormGroup } from '@/components/ui'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import VendorPicker from './VendorPicker'
+import DocumentNumberField from '@/components/DocumentNumberField'
+import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
-// Same shape as sales/OrderFormModal — supports % or ₹ per-line discount
-// via lineDiscountType. Backend stores percent only (parent's save mapper
-// converts ₹ → % before POST).
-function lineDiscountAmount(it, gross) {
-  const raw = Math.max(0, Number(it.lineDiscount || 0))
-  if (it.lineDiscountType === '₹') return Math.min(gross, raw)
-  return Math.min(gross, gross * (Math.min(raw, 100) / 100))
-}
-
-function computeTotals(items) {
-  let gross = 0
-  let discount = 0
-  items.forEach((it) => {
-    // Note: purchase lines use `cost`, not `price`. Same math, different name.
-    const g = Number(it.qty || 0) * Number(it.cost || 0)
-    gross += g
-    discount += lineDiscountAmount(it, g)
-  })
-  return { gross, discount, total: Math.max(0, gross - discount) }
-}
+// Per-row discount via lineDiscountType. Backend stores percent only.
 
 export default function PurchaseOrderFormModal({
   open,
@@ -49,6 +31,8 @@ export default function PurchaseOrderFormModal({
   saving = false,
   editingNumber = null,
   readOnly = false,
+  /** When true, render only the form body (for full-page DocumentFormShell). */
+  embedded = false,
 }) {
   const isEdit = !!editingNumber
   const title = readOnly
@@ -105,30 +89,21 @@ export default function PurchaseOrderFormModal({
     ppof('items', next)
   }
 
-  const totals = computeTotals(poForm.items)
+  const disableLineDiscount = readOnly || shouldDisableLineDiscount(poForm.discount)
 
-  return (
-    <Modal
-      open={open}
-      onClose={saving ? () => {} : onClose}
-      title={title}
-      icon="📦"
-      size="lg"
-      footer={
-        <>
-          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
-            {readOnly ? 'Close' : 'Cancel'}
-          </button>
-          {!readOnly && (
-            <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-              {saveLabel}
-            </button>
-          )}
-        </>
-      }
-    >
-      {/* Header: Vendor + Expected Date. Branch is implicit. */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+  const formBody = (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <DocumentNumberField
+          label="PO #"
+          docType="purchase_order"
+          branchId={poForm.branchId}
+          value={poForm.number}
+          onChange={(v) => ppof('number', v)}
+          isEdit={isEdit}
+          editingNumber={editingNumber}
+          readOnly={readOnly}
+        />
         <FormGroup label="Vendor" required>
           <VendorPicker
             disabled={readOnly}
@@ -195,14 +170,14 @@ export default function PurchaseOrderFormModal({
                       onChange={e => { const n = [...poForm.items]; n[i].cost = e.target.value; ppof('items', n) }} />
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <input className="form-input" type="number" disabled={readOnly}
+                    <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
+                      <input className="form-input" type="number" disabled={readOnly || disableLineDiscount}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={e => { const n = [...poForm.items]; n[i].lineDiscount = e.target.value; ppof('items', n) }} />
                       <button
                         type="button"
-                        disabled={readOnly}
+                        disabled={readOnly || disableLineDiscount}
                         onClick={() => toggleDiscountType(i)}
                         title={type === '%' ? 'Switch to amount (₹)' : 'Switch to percent (%)'}
                         style={discountToggleStyle}
@@ -230,44 +205,50 @@ export default function PurchaseOrderFormModal({
         )}
       </FormGroup>
 
-      {poForm.items.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-          <div style={{ minWidth: 240 }}>
-            <div style={totalsRowStyle}>
-              <span style={totalsLabelStyle}>Subtotal</span>
-              <span className="mono" style={totalsValueStyle}>{fmt(totals.gross)}</span>
-            </div>
-            {totals.discount > 0 && (
-              <div style={totalsRowStyle}>
-                <span style={totalsLabelStyle}>Discount</span>
-                <span className="mono" style={{ ...totalsValueStyle, color: 'var(--green)' }}>−{fmt(totals.discount)}</span>
-              </div>
-            )}
-            <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
-              <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Total</span>
-              <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{fmt(totals.total)}</span>
-            </div>
-          </div>
-        </div>
-      )}
+      <DocumentTotalsStrip
+        items={poForm.items}
+        entityDiscount={poForm.discount}
+        entityDiscountType={poForm.discountType || '%'}
+        onEntityDiscountChange={readOnly ? undefined : (v) => ppof('discount', v)}
+        onEntityDiscountTypeChange={readOnly ? undefined : (t) => ppof('discountType', t)}
+        readOnly={readOnly}
+        lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+      />
 
       <FormGroup label="Notes">
         <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
           value={poForm.notes} onChange={e => ppof('notes', e.target.value)} />
       </FormGroup>
+    </>
+  )
+
+  if (embedded) return formBody
+
+  return (
+    <Modal
+      open={open}
+      onClose={saving ? () => {} : onClose}
+      title={title}
+      icon="📦"
+      size="lg"
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>
+            {readOnly ? 'Close' : 'Cancel'}
+          </button>
+          {!readOnly && (
+            <button className="btn btn-primary" onClick={onSave} disabled={saving}>
+              {saveLabel}
+            </button>
+          )}
+        </>
+      }
+    >
+      {formBody}
     </Modal>
   )
 }
 
-const totalsRowStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'baseline',
-  padding: '3px 0',
-  fontSize: 13,
-}
-const totalsLabelStyle = { color: 'var(--text-muted)' }
-const totalsValueStyle = { color: 'var(--text-primary)' }
 const numInputStyle = {
   textAlign: 'right',
   fontVariantNumeric: 'tabular-nums',

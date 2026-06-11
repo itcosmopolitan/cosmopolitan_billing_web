@@ -156,6 +156,7 @@ export const salesAPI = {
     get:    (id)     => api.get(`/sales/returns/${id}`),
     // body shape — see ConvertToInvoiceIn / SalesReturnCreate in routes/sales.py
     create: (data)   => api.post('/sales/returns/', data),
+    void:   (id)     => api.post(`/sales/returns/${id}/void`),
   },
   // 2026-05-24: multi-invoice payments — operator picks a customer,
   // selects pending invoices, allocates an amount per invoice. Backend
@@ -166,6 +167,7 @@ export const salesAPI = {
     list:   (params) => api.get('/sales/payments/', { params }),
     get:    (id)     => api.get(`/sales/payments/${id}`),
     create: (data)   => api.post('/sales/payments/', data),
+    void:   (id)     => api.post(`/sales/payments/${id}/void`),
   },
   // 2026-05-25: bulk-delete endpoints. All-or-nothing semantics:
   // backend returns 400 with { detail: { blocked: [...], message } }
@@ -184,10 +186,11 @@ export const salesAPI = {
     // PR 2 follow-up (2026-05-23): full edit. Server rejects 400 when
     // the quote is in a terminal status (accepted / converted / rejected).
     update:  (id, data) => api.put(`/sales/quotations/${id}`, data),
-    updateStatus:   (id, status) => api.patch(`/sales/quotations/${id}/status`, { status }),
+    updateStatus:   (id, status) => api.patch(`/sales/quotations/${id}/status`, null, { params: { status } }),
     // PR 2: convert quotation → sales order (server copies prices verbatim
     // + marks the quote `accepted`). Returns the new SO's id + number.
     convertToOrder: (id)         => api.post(`/sales/quotations/${id}/convert-to-order`),
+    convertToInvoice: (id, body) => api.post(`/sales/quotations/${id}/convert-to-invoice`, body),
   },
 }
 
@@ -210,17 +213,27 @@ export const purchasesAPI = {
     updateStatus: (id, status) => api.patch(`/purchases/orders/${id}/status`, { status }),
     convert:      (id, body) => api.post(`/purchases/orders/${id}/convert`, body),
   },
+  grns: {
+    list:       (params) => api.get('/purchases/grns/', { params }),
+    get:        (id)     => api.get(`/purchases/grns/${id}`),
+    create:     (data)   => api.post('/purchases/grns/', data),
+    fromPo:     (poId, data) => api.post(`/purchases/grns/from-po/${poId}`, data),
+    bill:       (id, body) => api.post(`/purchases/grns/${id}/bill`, body),
+    cancel:     (id)     => api.post(`/purchases/grns/${id}/cancel`),
+  },
   returns: {
     list:    (params) => api.get('/purchases/returns/', { params }),
     get:     (id)     => api.get(`/purchases/returns/${id}`),
     create:  (data)   => api.post('/purchases/returns/', data),
     approve: (id)     => api.post(`/purchases/returns/${id}/approve`),
+    void:    (id)     => api.post(`/purchases/returns/${id}/void`),
   },
   // Multi-bill vendor payments — mirror of salesAPI.payments.
   payments: {
     list:   (params) => api.get('/purchases/payments/', { params }),
     get:    (id)     => api.get(`/purchases/payments/${id}`),
     create: (data)   => api.post('/purchases/payments/', data),
+    void:   (id)     => api.post(`/purchases/payments/${id}/void`),
   },
   // Bulk delete — same shape as salesAPI.bulkDelete.
   bulkDelete: {
@@ -235,6 +248,7 @@ export const purchasesAPI = {
 export const customersAPI = {
   list:   (params) => api.get('/customers/',          { params }),
   get:    (id)     => api.get(`/customers/${id}`),
+  creditLedger: (id, params) => api.get(`/customers/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/customers/', data),
   update: (id, data) => api.put(`/customers/${id}`, data),
 }
@@ -243,6 +257,7 @@ export const customersAPI = {
 export const vendorsAPI = {
   list:   (params) => api.get('/vendors/',            { params }),
   get:    (id)     => api.get(`/vendors/${id}`),
+  creditLedger: (id, params) => api.get(`/vendors/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/vendors/', data),
   update: (id, data) => api.put(`/vendors/${id}`, data),
 }
@@ -295,6 +310,7 @@ export const reportsAPI = {
   purchaseSummary: (params) => api.get('/reports/purchase-summary', { params }),
   taxSummary:      (params) => api.get('/reports/tax-summary',      { params }),
   stockMovement:   (params) => api.get('/reports/stock-movement',   { params }),
+  documentTrail:   (params) => api.get('/reports/document-trail',   { params }),
   branchCompare:   (params) => api.get('/reports/branch-comparison',{ params }),
   marginAnalysis:  (params) => api.get('/reports/margin-analysis',  { params }),
 }
@@ -326,10 +342,14 @@ export const permissionsAPI = {
 export const settingsAPI = {
   getOrganisation: (config) => api.get('/settings/organisation', config),
   updateOrganisation: (data) => api.put('/settings/organisation', data),
+  patchOrganisation: (data) => api.patch('/settings/organisation', data),
   getInvoiceTemplate: (config) => api.get('/settings/invoice-template', config),
   updateInvoiceTemplate: (data) => api.put('/settings/invoice-template', data),
   listNumbering: (config) => api.get('/settings/numbering', config),
   updateNumbering: (docType, data) => api.put(`/settings/numbering/${docType}`, data),
+  previewNumber: (docType, branchId) => api.get('/settings/numbering/preview', {
+    params: { doc_type: docType, branch_id: branchId || undefined },
+  }),
 }
 
 // ─── Tax rates ───────────────────────────────────────────────────────────────

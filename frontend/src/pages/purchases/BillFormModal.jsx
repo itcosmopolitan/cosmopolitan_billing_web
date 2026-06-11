@@ -20,28 +20,12 @@
  * That all happens server-side in create_bill.
  */
 import { Fragment } from 'react'
-import { fmt } from '@/utils/helpers'
 import { todayISO } from '@/utils/batchDates'
 import { Modal, FormGroup, AlertBar } from '@/components/ui'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import VendorPicker from './VendorPicker'
-
-function lineDiscountAmount(it, gross) {
-  const raw = Math.max(0, Number(it.lineDiscount || 0))
-  if (it.lineDiscountType === '₹') return Math.min(gross, raw)
-  return Math.min(gross, gross * (Math.min(raw, 100) / 100))
-}
-
-function computeTotals(items) {
-  let gross = 0
-  let discount = 0
-  items.forEach((it) => {
-    const g = Number(it.qty || 0) * Number(it.cost || 0)
-    gross += g
-    discount += lineDiscountAmount(it, g)
-  })
-  return { gross, discount, total: Math.max(0, gross - discount) }
-}
+import DocumentNumberField from '@/components/DocumentNumberField'
+import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
 export default function BillFormModal({
   open,
@@ -50,8 +34,17 @@ export default function BillFormModal({
   billForm,
   pbf,                     // patcher
   saving = false,
+  /** `bill` (default) or `grn` — GRN mode hides payment fields and labels receipt date. */
+  mode = 'bill',
+  conversionLabel = null,
+  /** When true, render only the form body (for full-page DocumentFormShell). */
+  embedded = false,
 }) {
+  const isGrn = mode === 'grn'
   const pickedIds = billForm.items.map((it) => it.item_id).filter(Boolean)
+  const title = conversionLabel
+    ? (isGrn ? `Receive Stock — from ${conversionLabel}` : `Create Bill — from ${conversionLabel}`)
+    : (isGrn ? 'New Goods Receipt (GRN)' : 'New Purchase Bill')
 
   const handlePick = (i, inv) => {
     const next = [...billForm.items]
@@ -94,31 +87,19 @@ export default function BillFormModal({
     pbf('items', next)
   }
 
-  const totals = computeTotals(billForm.items)
-
-  // Any tracked items in the cart? Used to show the batch-capture hint
-  // alert at the top of the items section. Avoids overwhelming operators
-  // who only buy untracked items.
   const hasTrackedItems = billForm.items.some((it) => it.batchTracking)
+  const disableLineDiscount = shouldDisableLineDiscount(billForm.discount)
 
-  return (
-    <Modal
-      open={open}
-      onClose={saving ? () => {} : onClose}
-      title="New Purchase Bill"
-      icon="📋"
-      size="lg"
-      footer={
-        <>
-          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save Bill'}
-          </button>
-        </>
-      }
-    >
-      {/* Row 1: Vendor + Bill Date */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+  const formBody = (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <DocumentNumberField
+          label={isGrn ? 'GRN #' : 'Bill #'}
+          docType={isGrn ? 'grn' : 'purchase_bill'}
+          branchId={billForm.branchId}
+          value={billForm.number}
+          onChange={(v) => pbf('number', v)}
+        />
         <FormGroup label="Vendor" required>
           <VendorPicker
             value={billForm.vendorId
@@ -134,56 +115,65 @@ export default function BillFormModal({
             }}
           />
         </FormGroup>
-        <FormGroup label="Bill Date">
+        <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
           <input className="form-input" type="date"
             value={billForm.billDate || todayISO()}
             onChange={(e) => pbf('billDate', e.target.value)} />
         </FormGroup>
       </div>
 
-      {/* Row 2: Due Date + Payment checkbox (with method dropdown when checked) */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <FormGroup label="Due Date">
-          <input className="form-input" type="date"
-            value={billForm.dueDate || ''}
-            onChange={(e) => pbf('dueDate', e.target.value)} />
-        </FormGroup>
-        <FormGroup label="Payment">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '8px 10px',
-              border: `1.5px solid ${billForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
-              background: billForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
-              borderRadius: 6, cursor: 'pointer',
-              fontSize: 13, fontWeight: 500,
-              color: billForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
-            }}>
-              <input
-                type="checkbox"
-                checked={!!billForm.paymentReceived}
-                onChange={(e) => pbf('paymentReceived', e.target.checked)}
-                style={{ accentColor: 'var(--accent)' }}
-              />
-              <span>Payment paid?</span>
-            </label>
-            {billForm.paymentReceived && (
-              <select
-                className="form-input"
-                value={billForm.paymentMethod || ''}
-                onChange={(e) => pbf('paymentMethod', e.target.value || null)}
-                style={{ fontSize: 13 }}
-              >
-                <option value="" disabled>Select method…</option>
-                <option value="cash">💵 Cash</option>
-                <option value="card">💳 Card</option>
-                <option value="upi">📱 UPI</option>
-                <option value="bank_transfer">🏦 Bank Transfer</option>
-              </select>
-            )}
-          </div>
-        </FormGroup>
-      </div>
+      {!isGrn && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+          <FormGroup label="Due Date">
+            <input className="form-input" type="date"
+              value={billForm.dueDate || ''}
+              onChange={(e) => pbf('dueDate', e.target.value)} />
+          </FormGroup>
+          <FormGroup label="Payment">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 10px',
+                border: `1.5px solid ${billForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
+                background: billForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
+                borderRadius: 6, cursor: 'pointer',
+                fontSize: 13, fontWeight: 500,
+                color: billForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={!!billForm.paymentReceived}
+                  onChange={(e) => pbf('paymentReceived', e.target.checked)}
+                  style={{ accentColor: 'var(--accent)' }}
+                />
+                <span>Payment paid?</span>
+              </label>
+              {billForm.paymentReceived && (
+                <select
+                  className="form-input"
+                  value={billForm.paymentMethod || ''}
+                  onChange={(e) => pbf('paymentMethod', e.target.value || null)}
+                  style={{ fontSize: 13 }}
+                >
+                  <option value="" disabled>Select method…</option>
+                  <option value="cash">💵 Cash</option>
+                  <option value="card">💳 Card</option>
+                  <option value="upi">📱 UPI</option>
+                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                </select>
+              )}
+            </div>
+          </FormGroup>
+        </div>
+      )}
+
+      {isGrn && (
+        <div style={{ marginBottom: 16 }}>
+          <AlertBar type="blue" icon="ℹ️">
+            Stock is added immediately. Create a bill later from the GRN tab via <strong>To Bill</strong>.
+          </AlertBar>
+        </div>
+      )}
 
       <FormGroup label="Items" required>
         {hasTrackedItems && (
@@ -237,13 +227,14 @@ export default function BillFormModal({
                         onChange={(e) => { const n = [...billForm.items]; n[i].cost = e.target.value; pbf('items', n) }} />
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <input className="form-input" type="number"
+                      <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
+                        <input className="form-input" type="number" disabled={disableLineDiscount}
                           style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                           value={it.lineDiscount || 0}
                           onChange={(e) => { const n = [...billForm.items]; n[i].lineDiscount = e.target.value; pbf('items', n) }} />
                         <button
                           type="button"
+                          disabled={disableLineDiscount}
                           onClick={() => toggleDiscountType(i)}
                           title={type === '%' ? 'Switch to amount (₹)' : 'Switch to percent (%)'}
                           style={discountToggleStyle}
@@ -305,45 +296,46 @@ export default function BillFormModal({
         </button>
       </FormGroup>
 
-      {billForm.items.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-          <div style={{ minWidth: 240 }}>
-            <div style={totalsRowStyle}>
-              <span style={totalsLabelStyle}>Subtotal</span>
-              <span className="mono" style={totalsValueStyle}>{fmt(totals.gross)}</span>
-            </div>
-            {totals.discount > 0 && (
-              <div style={totalsRowStyle}>
-                <span style={totalsLabelStyle}>Discount</span>
-                <span className="mono" style={{ ...totalsValueStyle, color: 'var(--green)' }}>−{fmt(totals.discount)}</span>
-              </div>
-            )}
-            <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
-              <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Total</span>
-              <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{fmt(totals.total)}</span>
-            </div>
-          </div>
-        </div>
-      )}
+      <DocumentTotalsStrip
+        items={billForm.items}
+        entityDiscount={billForm.discount}
+        entityDiscountType={billForm.discountType || '%'}
+        onEntityDiscountChange={(v) => pbf('discount', v)}
+        onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
+        lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+      />
 
       <FormGroup label="Notes">
         <textarea className="form-input" style={{ height: 72 }}
           value={billForm.notes || ''}
           onChange={(e) => pbf('notes', e.target.value)} />
       </FormGroup>
+    </>
+  )
+
+  if (embedded) return formBody
+
+  return (
+    <Modal
+      open={open}
+      onClose={saving ? () => {} : onClose}
+      title={title}
+      icon={isGrn ? '📦' : '📋'}
+      size="lg"
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn btn-primary" onClick={onSave} disabled={saving}>
+            {saving ? 'Saving…' : (isGrn ? 'Receive Stock' : 'Save Bill')}
+          </button>
+        </>
+      }
+    >
+      {formBody}
     </Modal>
   )
 }
 
-const totalsRowStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'baseline',
-  padding: '3px 0',
-  fontSize: 13,
-}
-const totalsLabelStyle = { color: 'var(--text-muted)' }
-const totalsValueStyle = { color: 'var(--text-primary)' }
 // 2026-05-31: labeled batch-capture fields (Batch # / Mfg / Expiry).
 const batchFieldStyle = {
   display: 'flex',

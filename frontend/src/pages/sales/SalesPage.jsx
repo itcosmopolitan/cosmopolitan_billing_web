@@ -1,17 +1,13 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
-import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, FormGroup, EmptyState, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
-import QuoteFormModal from './QuoteFormModal'
-import OrderFormModal from './OrderFormModal'
 import ReturnFormModal from './ReturnFormModal'
-import ConvertToInvoiceModal from './ConvertToInvoiceModal'
 import PaymentFormModal from './PaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
@@ -30,25 +26,7 @@ const TABS = [
   { id: 'payments',  label: 'Payments' },
 ]
 
-// 2026-05-24: per-line discount can be expressed as % or ₹ in the
-// SO/Quote modals (via the inline toggle). Backend only stores percent
-// (matches `_calc_lines` + the just-fixed `create_quotation`). This
-// helper converts the form's per-line discount + type pair into the
-// PERCENT value the backend expects. Clamps to [0, 100] so an over-eager
-// amount entry (e.g. ₹600 on a ₹500 line) doesn't push the line total
-// negative server-side.
-function lineDiscountToPercent(line) {
-  const qty = Number(line.qty || 0)
-  const price = Number(line.price || 0)
-  const gross = qty * price
-  const raw = Math.max(0, Number(line.lineDiscount || 0))
-  if (line.lineDiscountType === '₹') {
-    if (gross <= 0) return 0
-    return Math.min(100, (raw / gross) * 100)
-  }
-  // '%' (default; also covers legacy rows without the type flag).
-  return Math.min(100, raw)
-}
+const VALID_TABS = new Set(TABS.map((t) => t.id))
 
 // Source-of-truth for renderable payment-method values — mirrors the
 // PaymentMode Literal in backend/src/routes/sales.py AND the POS payment
@@ -71,8 +49,13 @@ function displayPaymentMode(raw) {
 
 export default function SalesPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const can = useCan()
-  const [tab, setTab]           = useState('invoices')
+  const tabParam = searchParams.get('tab')
+  const tab = VALID_TABS.has(tabParam) ? tabParam : 'invoices'
+  const setTab = useCallback((id) => {
+    navigate(`/sales?tab=${id}`, { replace: true })
+  }, [navigate])
   const [search, setSearch]     = useState('')
   const [statusF, setStatusF]   = useState('')
   // Branch filter removed 2026-05-23: the Topbar's active-branch picker
@@ -97,7 +80,6 @@ export default function SalesPage() {
   const [invLimit, setInvLimit] = useState(DEFAULT_PAGE_SIZE)
   const [invSortBy, setInvSortBy] = useState('created_at')
   const [invSortOrder, setInvSortOrder] = useState('desc')
-  const [salesSummary, setSalesSummary] = useState(null)
   const [quotations, setQuotations] = useState([])
   const [quoteTotal, setQuoteTotal] = useState(0)
   const [quoteSkip, setQuoteSkip] = useState(0)
@@ -123,43 +105,12 @@ export default function SalesPage() {
   const [retListVersion, setRetListVersion] = useState(0)
   const [payListVersion, setPayListVersion] = useState(0)
 
-  const [loading, setLoading]   = useState(true)
+  const [invLoading, setInvLoading] = useState(false)
+  const [quoteLoading, setQuoteLoading] = useState(false)
+  const [orderLoading, setOrderLoading] = useState(false)
+  const [retLoading, setRetLoading] = useState(false)
+  const [payLoading, setPayLoading] = useState(false)
   const [branches, setBranches] = useState([])
-
-  // 2026-05-24: SO/Quote no longer have an inline branch picker — the
-  // active branch from the Topbar is the single source of truth. If the
-  // operator wants to write an SO/Quote for a different branch, they
-  // switch the active branch first. This eliminates the bug where the
-  // form silently defaulted to 'br-001' and the InventoryItemPicker then
-  // showed "Out of stock" for items that were actually in stock at the
-  // operator's real branch.
-  //
-  // The `|| 'br-001'` fallback only triggers on the very first session
-  // before the store hydrates, or in tests. Once activeBranch is set
-  // (always within the first few ms post-login), it wins.
-  const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
-
-  const [showQuoteForm, setShowQuoteForm] = useState(false)
-  const [quoteForm, setQuoteForm] = useState({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, validUntil: '', notes: '' })
-  const pqf = (k, v) => setQuoteForm(f => ({...f, [k]: v}))
-
-  // Order form modal state. Same pattern as quoteForm — parent owns the
-  // state, modal is stateless and renders against it. The same modal does
-  // create / edit / view; the parent toggles `orderEditingNumber` +
-  // `orderReadOnly` to flip modes. See OrderFormModal.jsx.
-  const [showOrderForm, setShowOrderForm] = useState(false)
-  const [orderForm, setOrderForm] = useState({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, expectedDate: '', notes: '' })
-  const pof = (k, v) => setOrderForm(f => ({...f, [k]: v}))
-  const [orderSaving, setOrderSaving] = useState(false)
-  const [orderEditingId, setOrderEditingId] = useState(null)         // null = create
-  const [orderEditingNumber, setOrderEditingNumber] = useState(null) // shown in title for edit/view
-  const [orderReadOnly, setOrderReadOnly] = useState(false)
-
-  // Quote form modal — same edit/view flag pair.
-  const [quoteSaving, setQuoteSaving] = useState(false)
-  const [quoteEditingId, setQuoteEditingId] = useState(null)
-  const [quoteEditingNumber, setQuoteEditingNumber] = useState(null)
-  const [quoteReadOnly, setQuoteReadOnly] = useState(false)
 
   // New Return modal — fully self-contained (manages its own state); we
   // only flip the open flag.
@@ -171,6 +122,7 @@ export default function SalesPage() {
   // alert; the operator deselects + retries.
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
 
@@ -267,11 +219,57 @@ export default function SalesPage() {
     }
   }
 
-  // Reversal preview lines for the confirm modal — entity-specific copy.
-  const reversalLinesForTab = () => {
-    const n = selectedIds.size
+  const requestDeleteOne = (row, entityLabel, tabKey) => {
+    setDeleteOneTarget({ id: row.id, number: row.number, label: entityLabel, tabKey })
+  }
+
+  const confirmDeleteOne = async () => {
+    if (!deleteOneTarget) return
+    setDeleting(true)
+    setDeleteBlocked([])
+    try {
+      const ids = [deleteOneTarget.id]
+      const tabKey = deleteOneTarget.tabKey
+      let res
+      if (tabKey === 'invoices') {
+        res = await salesAPI.bulkDelete.invoices(ids)
+        setSalesListVersion((v) => v + 1)
+      } else if (tabKey === 'orders') {
+        res = await salesAPI.bulkDelete.orders(ids)
+        setOrderListVersion((v) => v + 1)
+      } else if (tabKey === 'quotes') {
+        res = await salesAPI.bulkDelete.quotations(ids)
+        setQuoteListVersion((v) => v + 1)
+      } else if (tabKey === 'returns') {
+        res = await salesAPI.bulkDelete.returns(ids)
+        setRetListVersion((v) => v + 1)
+      } else if (tabKey === 'payments') {
+        res = await salesAPI.bulkDelete.payments(ids)
+        setPayListVersion((v) => v + 1)
+      }
+      const count = res?.count || 1
+      const extras = []
+      if (res?.stock_restored) extras.push(`${res.stock_restored} stock units restored`)
+      if (res?.credit_refunded) extras.push(`${fmt(res.credit_refunded)} credit refunded`)
+      const extraMsg = extras.length ? ` (${extras.join(', ')})` : ''
+      toast.success(`Deleted ${count} ${deleteOneTarget.label}${extraMsg}`)
+      setDeleteOneTarget(null)
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      if (detail && Array.isArray(detail.blocked)) {
+        setDeleteBlocked(detail.blocked)
+      } else {
+        console.error('Delete failed:', err)
+      }
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const reversalLinesForTabKey = (tabKey) => {
+    const n = deleteOneTarget ? 1 : selectedIds.size
     const plural = (label) => `${n} ${label}${n === 1 ? '' : 's'}`
-    if (tab === 'invoices') {
+    if (tabKey === 'invoices') {
       return [
         `${plural('invoice')} removed`,
         'Stock restored on each invoice line (aggregate add-back)',
@@ -279,10 +277,10 @@ export default function SalesPage() {
         'Audit log entries written per deletion',
       ]
     }
-    if (tab === 'orders') return [`${plural('sales order')} removed`, 'No stock or credit changes (SOs are intent-only)', 'Audit log entries written']
-    if (tab === 'quotes') return [`${plural('quotation')} removed`, 'No downstream effects', 'Audit log entries written']
-    if (tab === 'returns') return [`${plural('return')} removed`, 'Credit refunds revoked from customer balance (if any)', 'Audit log entries written']
-    if (tab === 'payments') return [`${plural('payment')} removed`, 'Invoice paid_amount + status reverted per allocation', 'Credit-mode payments restore credit balance', 'Audit log entries written']
+    if (tabKey === 'orders') return [`${plural('sales order')} removed`, 'No stock or credit changes (SOs are intent-only)', 'Audit log entries written']
+    if (tabKey === 'quotes') return [`${plural('quotation')} removed`, 'No downstream effects', 'Audit log entries written']
+    if (tabKey === 'returns') return [`${plural('return')} removed`, 'Credit refunds revoked from customer balance (if any)', 'Audit log entries written']
+    if (tabKey === 'payments') return [`${plural('payment')} removed`, 'Invoice paid_amount + status reverted per allocation', 'Credit-mode payments restore credit balance', 'Audit log entries written']
     return [`${plural('item')} removed`]
   }
 
@@ -295,15 +293,26 @@ export default function SalesPage() {
   const [paySortBy, setPaySortBy] = useState('created_at')
   const [paySortOrder, setPaySortOrder] = useState('desc')
   const [payDetail, setPayDetail] = useState(null)
+  const [showCancelInvoice, setShowCancelInvoice] = useState(null)
 
-  // Reusable convert-to-invoice prompt. `convertSource` carries which SO
-  // (or future intent) is being converted so the modal can show the
-  // right header summary + invoke the right backend endpoint on confirm.
-  const [convertSource, setConvertSource] = useState(null)  // { kind: 'order', id, number, total, customerName } | null
-  const [converting, setConverting] = useState(false)
-  // (Removed 2026-05-23) `setShowQuoteDetail` placeholder state — the
-  // Quotation row's View button now opens QuoteFormModal in read-only
-  // mode via openQuoteEdit(q, { readOnly: true }).
+  const [actionBusy, setActionBusy] = useState(null)
+  const [actionKind, setActionKind] = useState(null)
+  const [paySaving, setPaySaving] = useState(false)
+  const [cancelSaving, setCancelSaving] = useState(false)
+
+  const isRowBusy = useCallback((id) => actionBusy === id, [actionBusy])
+
+  const runRowAction = useCallback(async (id, kind, fn) => {
+    if (actionBusy) return
+    setActionBusy(id)
+    setActionKind(kind)
+    try {
+      await fn()
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
+    }
+  }, [actionBusy])
   const [salesListVersion, setSalesListVersion] = useState(0)
   const [quoteListVersion, setQuoteListVersion] = useState(0)
 
@@ -349,14 +358,11 @@ export default function SalesPage() {
   }, [showPayment])
 
   useEffect(() => {
-    if (tab !== 'invoices') {
-      setLoading(false)
-      return
-    }
+    if (tab !== 'invoices') return
     let cancelled = false
     ;(async () => {
       try {
-        setLoading(true)
+        setInvLoading(true)
         const raw = await salesAPI.list({
           skip: invSkip,
           limit: invLimit,
@@ -367,22 +373,20 @@ export default function SalesPage() {
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
-        const { items, total, summary } = unwrapPaged(raw)
+        const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setInvoices(items || [])
           setInvoiceTotal(total)
-          setSalesSummary(summary)
         }
       } catch (err) {
         console.error('Failed to fetch sales:', err)
         if (!cancelled) {
           setInvoices([])
           setInvoiceTotal(0)
-          setSalesSummary(null)
         }
         toast.error('Failed to load sales data')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setInvLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -393,6 +397,7 @@ export default function SalesPage() {
     let cancelled = false
     ;(async () => {
       try {
+        setQuoteLoading(true)
         const raw = await salesAPI.quotations.list({
           skip: quoteSkip,
           limit: quoteLimit,
@@ -409,6 +414,8 @@ export default function SalesPage() {
           setQuotations([])
           setQuoteTotal(0)
         }
+      } finally {
+        if (!cancelled) setQuoteLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -425,6 +432,7 @@ export default function SalesPage() {
     let cancelled = false
     ;(async () => {
       try {
+        setOrderLoading(true)
         const raw = await salesAPI.orders.list({
           skip: orderSkip,
           limit: orderLimit,
@@ -438,6 +446,8 @@ export default function SalesPage() {
         }
       } catch {
         if (!cancelled) { setOrders([]); setOrderTotal(0) }
+      } finally {
+        if (!cancelled) setOrderLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -448,9 +458,7 @@ export default function SalesPage() {
     let cancelled = false
     ;(async () => {
       try {
-        // Sales Phase 1 PR 2: salesAPI.returns is now an object
-        // ({list, get, create}) backed by the real SalesReturn table —
-        // the SAMPLE_RETURNS endpoint is gone.
+        setRetLoading(true)
         const raw = await salesAPI.returns.list({
           skip: retSkip,
           limit: retLimit,
@@ -467,19 +475,19 @@ export default function SalesPage() {
           setReturns([])
           setRetTotal(0)
         }
+      } finally {
+        if (!cancelled) setRetLoading(false)
       }
     })()
     return () => { cancelled = true }
   }, [tab, retSkip, retLimit, retSortBy, retSortOrder, retListVersion])
 
-  // Payments tab — paged list backed by GET /sales/payments/. Covers
-  // payments recorded via BOTH entry points (multi-invoice + Pay button
-  // on the Invoices tab).
   useEffect(() => {
     if (tab !== 'payments') return
     let cancelled = false
     ;(async () => {
       try {
+        setPayLoading(true)
         const raw = await salesAPI.payments.list({
           skip: paySkip,
           limit: payLimit,
@@ -496,6 +504,8 @@ export default function SalesPage() {
           setPayments([])
           setPayTotal(0)
         }
+      } finally {
+        if (!cancelled) setPayLoading(false)
       }
     })()
     return () => { cancelled = true }
@@ -513,23 +523,6 @@ export default function SalesPage() {
     setOrder(defaultOrder)
   }
 
-  const totals = useMemo(() => ({
-    total:   salesSummary?.amountTotal ?? 0,
-    paid:    salesSummary?.collectedPaid ?? 0,
-    credit:  salesSummary?.creditPending ?? 0,
-    overdue: salesSummary?.overdueTotal ?? 0,
-  }), [salesSummary])
-
-  // Sales Phase 1 (2026-05-23): validation aligned with the backend.
-  //   • Amount must be > 0
-  //   • Method must be picked (was implicitly defaulted before)
-  //   • Walk-in overpayment is blocked client-side (server also rejects
-  //     with 400, but inline feedback is friendlier)
-  //   • Customer overpayment is allowed and shows the credited amount in
-  //     the success toast using the server's echo
-  // Fetch the customer's credit balance when the Record Payment modal
-  // opens for a customer invoice (walk-ins skip — they can't draw credit).
-  // Drives the "credit" method's availability + the "₹X available" hint.
   useEffect(() => {
     if (!showPayment?.customerId) { setPayCustCredit(null); return }
     let cancelled = false
@@ -545,6 +538,7 @@ export default function SalesPage() {
   }, [showPayment])
 
   const recordPayment = async () => {
+    if (paySaving) return
     const amount = Number(payAmt)
     if (!payAmt || amount <= 0) { toast.error('Enter a valid amount'); return }
     if (!payMode) { toast.error('Pick a payment method'); return }
@@ -564,6 +558,7 @@ export default function SalesPage() {
         return
       }
     }
+    setPaySaving(true)
     try {
       const res = await salesAPI.payment(showPayment.id, { amount, mode: payMode, ref: payRef })
       setSalesListVersion((v) => v + 1)
@@ -585,275 +580,86 @@ export default function SalesPage() {
       // Toast already fired by the global axios interceptor with the
       // server's detail (e.g. "Walk-in invoice — reduce amount to ₹X" or
       // "Invoice already settled"). Don't double-toast here.
-    }
-  }
-
-  const saveQuotation = async () => {
-    // Strict customer mode (2026-05-24): every SO/Quote must reference a
-    // real Customer row. Picker is the only entry point; checking
-    // customerId rather than customerName is what enforces "no walk-in
-    // typed name" — see CustomerPicker docstring.
-    if (!quoteForm.customerId) {
-      toast.error('Pick a customer (or add one via the Customers page)')
-      return
-    }
-    if (quoteForm.items.length === 0) {
-      toast.error('Add at least one item')
-      return
-    }
-    // Validate all items have name and qty
-    if (!quoteForm.items.every(i => i.name && Number(i.qty) > 0 && Number(i.price) > 0)) {
-      toast.error('Each item must have name, qty, and price')
-      return
-    }
-    try {
-      const payload = {
-        customer_name: quoteForm.customerName,
-        customer_id: quoteForm.customerId || null,
-        branch_id: quoteForm.branchId,
-        branch_name: branches.find(b => b.id === quoteForm.branchId)?.name || '',
-        created_by: 'Staff',
-        valid_until: quoteForm.validUntil,
-        items: quoteForm.items.map(i => ({
-          item_id: i.item_id || null,
-          name: i.name,
-          qty: Number(i.qty),
-          price: Number(i.price),
-          tax_rate: Number(i.taxRate || 0),
-          // Backend stores percent — convert ₹ entries here.
-          line_discount: lineDiscountToPercent(i),
-        })),
-        discount: Number(quoteForm.discount),
-        notes: quoteForm.notes
-      }
-      setQuoteSaving(true)
-      if (quoteEditingId) {
-        await salesAPI.quotations.update(quoteEditingId, payload)
-        toast.success('Quotation updated')
-      } else {
-        await salesAPI.quotations.create(payload)
-        toast.success('Quotation created successfully')
-      }
-      setQuoteSkip(0)
-      setQuoteListVersion((v) => v + 1)
-      await loadBranches()
-      setShowQuoteForm(false)
-      setQuoteForm({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, validUntil: '', notes: '' })
-      setQuoteEditingId(null)
-      setQuoteEditingNumber(null)
-      setQuoteReadOnly(false)
-    } catch (err) {
-      console.error('Failed to save quotation:', err)
-      // Global axios interceptor already toasted with server detail —
-      // don't double-toast a generic message here.
     } finally {
-      setQuoteSaving(false)
+      setPaySaving(false)
     }
   }
 
-  // Open quote modal in edit / view mode. Mirrors openOrderEdit.
-  // Quotes carry `line_discount` (percent) per LineItemIn from the
-  // invoice schema reuse — surfaced as `lineDiscount` here.
-  const openQuoteEdit = (q, { readOnly = false } = {}) => {
-    setQuoteForm({
-      customerName: q.customerName || '',
-      customerId: q.customerId || '',
-      branchId: q.branchId || activeBranchId,
-      items: (q.items || []).map(it => ({
-        item_id: it.itemId || null,
-        name: it.name || '',
-        qty: it.qty,
-        price: it.price,
-        taxRate: it.taxRate ?? 0,
-        lineDiscount: it.discount ?? 0,
-        // Backend stores percent. Operator can toggle to ₹ in the
-        // modal; toggleDiscountType auto-converts the value.
-        lineDiscountType: '%',
-      })),
-      discount: q.discount || 0,
-      validUntil: q.validUntil || '',
-      notes: q.notes || '',
-    })
-    setQuoteEditingId(q.id)
-    setQuoteEditingNumber(q.number)
-    setQuoteReadOnly(!!readOnly)
-    setShowQuoteForm(true)
-  }
-
-  const closeQuoteForm = () => {
-    setShowQuoteForm(false)
-    setQuoteEditingId(null)
-    setQuoteEditingNumber(null)
-    setQuoteReadOnly(false)
-    setQuoteForm({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, validUntil: '', notes: '' })
-  }
-
-  // The + Create Quotation button uses this to SNAPSHOT the current
-  // active branch into the form at open-time. Without the snapshot, a
-  // branch switch in the Topbar between page-mount and clicking + Create
-  // would leave the form pointing at the stale mount-time branch (the
-  // post-close / post-save resets already use activeBranchId, but those
-  // never ran on a fresh page).
-  const openCreateQuote = () => {
-    setQuoteForm({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, validUntil: '', notes: '' })
-    setQuoteEditingId(null)
-    setQuoteEditingNumber(null)
-    setQuoteReadOnly(false)
-    setShowQuoteForm(true)
-  }
-
-  // ── PR 2: Sales Order create ──────────────────────────────────────────
-  // Same validation shape as quotations; the only differences are
-  // expectedDate (vs validUntil) and the convert flow that comes later.
-  const saveOrder = async () => {
-    // See saveQuotation for the rationale on the customerId check.
-    if (!orderForm.customerId) {
-      toast.error('Pick a customer (or add one via the Customers page)')
-      return
-    }
-    if (orderForm.items.length === 0) {
-      toast.error('Add at least one item')
-      return
-    }
-    if (!orderForm.items.every(i => i.name && Number(i.qty) > 0 && Number(i.price) > 0)) {
-      toast.error('Each item must have name, qty, and price')
-      return
-    }
-    setOrderSaving(true)
+  const cancelInvoice = async () => {
+    if (!showCancelInvoice || cancelSaving) return
+    setCancelSaving(true)
     try {
-      const payload = {
-        customer_name: orderForm.customerName,
-        customer_id: orderForm.customerId || null,
-        branch_id: orderForm.branchId,
-        branch_name: branches.find(b => b.id === orderForm.branchId)?.name || '',
-        created_by: 'Staff',
-        expected_date: orderForm.expectedDate || null,
-        items: orderForm.items.map(i => ({
-          item_id: i.item_id || null,
-          name: i.name,
-          qty: Number(i.qty),
-          price: Number(i.price),
-          tax_rate: Number(i.taxRate || 0),
-          // Backend stores percent — convert ₹ entries here.
-          discount: lineDiscountToPercent(i),
-        })),
-        discount: Number(orderForm.discount),
-        notes: orderForm.notes,
-      }
-      if (orderEditingId) {
-        await salesAPI.orders.update(orderEditingId, payload)
-        toast.success('Sales order updated')
-      } else {
-        await salesAPI.orders.create(payload)
-        toast.success('Sales order created')
-      }
-      setOrderSkip(0)
-      setOrderListVersion((v) => v + 1)
-      setShowOrderForm(false)
-      setOrderForm({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, expectedDate: '', notes: '' })
-      setOrderEditingId(null)
-      setOrderEditingNumber(null)
-      setOrderReadOnly(false)
-    } catch (err) {
-      console.error('Failed to save order:', err)
-      // Global axios interceptor already toasted with server detail
-    } finally {
-      setOrderSaving(false)
-    }
-  }
-
-  // Open the order modal in edit mode. Pre-fills from the row object —
-  // we don't refetch detail unless items are missing (list endpoint
-  // returns items via _so_dict). Edit only legal when the SO isn't in a
-  // terminal status; UI hides the Edit button for those, so this is a
-  // defense-in-depth assertion.
-  const openOrderEdit = (so, { readOnly = false } = {}) => {
-    setOrderForm({
-      customerName: so.customerName || '',
-      customerId: so.customerId || '',
-      branchId: so.branchId || activeBranchId,
-      items: (so.items || []).map(it => ({
-        item_id: it.itemId || null,
-        name: it.name || '',
-        qty: it.qty,
-        price: it.price,
-        taxRate: it.taxRate ?? 0,
-        lineDiscount: it.discount ?? 0,
-        // Backend stores percent. Operator can toggle to ₹ in the
-        // modal; toggleDiscountType auto-converts the value.
-        lineDiscountType: '%',
-      })),
-      discount: so.discount || 0,
-      expectedDate: so.expectedDate || '',
-      notes: so.notes || '',
-    })
-    setOrderEditingId(so.id)
-    setOrderEditingNumber(so.number)
-    setOrderReadOnly(!!readOnly)
-    setShowOrderForm(true)
-  }
-
-  // Single onClose handler used by both create and edit modes.
-  const closeOrderForm = () => {
-    setShowOrderForm(false)
-    setOrderEditingId(null)
-    setOrderEditingNumber(null)
-    setOrderReadOnly(false)
-    setOrderForm({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, expectedDate: '', notes: '' })
-  }
-
-  // See openCreateQuote — same snapshot trick for the sales order flow.
-  const openCreateOrder = () => {
-    setOrderForm({ customerName: '', customerId: '', branchId: activeBranchId, items: [], discount: 0, expectedDate: '', notes: '' })
-    setOrderEditingId(null)
-    setOrderEditingNumber(null)
-    setOrderReadOnly(false)
-    setShowOrderForm(true)
-  }
-
-  // ── PR 2: Sales Order → Invoice convert ───────────────────────────────
-  // The shared ConvertToInvoiceModal hands us {payment_received,
-  // payment_mode, notes} from its checkbox + dropdown. Server creates
-  // the SaleInvoice (paid or pending), locks the SO at status=converted,
-  // returns the new invoice's id/number/total. We bump both order +
-  // invoice list versions so both tabs reflect reality on next view.
-  const convertOrder = async (body) => {
-    if (!convertSource || convertSource.kind !== 'order') return
-    setConverting(true)
-    try {
-      const res = await salesAPI.orders.convert(convertSource.id, body)
-      toast.success(
-        `Invoice ${res?.invoice_number || ''} created (${res?.status || ''})`,
-      )
-      setOrderListVersion((v) => v + 1)
+      await salesAPI.cancel(showCancelInvoice.id)
       setSalesListVersion((v) => v + 1)
-      setConvertSource(null)
+      toast.success(`${showCancelInvoice.number} cancelled — stock restored`)
+      setShowCancelInvoice(null)
+      setShowDetail(null)
     } catch (err) {
-      console.error('Failed to convert order:', err)
+      console.error('Failed to cancel invoice:', err)
     } finally {
-      setConverting(false)
+      setCancelSaving(false)
     }
   }
 
-  // ── PR 2: Quotation → Sales Order convert ─────────────────────────────
-  // No payment prompt here — the order itself doesn't carry payment
-  // state. The order's own convert-to-invoice (above) is what prompts
-  // for payment.
-  const convertQuoteToOrder = async (quote) => {
+  const voidPayment = async (payment) => {
+    if (!payment?.id) return
+    await runRowAction(payment.id, 'void-payment', async () => {
+      await salesAPI.payments.void(payment.id)
+      setPayListVersion((v) => v + 1)
+      setSalesListVersion((v) => v + 1)
+      toast.success(`Payment ${payment.number} voided`)
+      setPayDetail(null)
+    })
+  }
+
+  const voidReturn = async (ret) => {
+    if (!ret?.id || ret.status === 'void') return
+    await runRowAction(ret.id, 'void-return', async () => {
+      await salesAPI.returns.void(ret.id)
+      setRetListVersion((v) => v + 1)
+      setSalesListVersion((v) => v + 1)
+      toast.success(`Credit note ${ret.number} voided — invoice recalculated`)
+    })
+  }
+
+  const updateQuoteStatus = async (quote, status) => {
     if (!quote?.id) return
-    try {
-      const res = await salesAPI.quotations.convertToOrder(quote.id)
-      toast.success(`Sales order ${res?.order_number || ''} created from ${quote.number}`)
+    await runRowAction(quote.id, `quote-${status}`, async () => {
+      await salesAPI.quotations.updateStatus(quote.id, status)
+      toast.success(`Quotation marked ${status}`)
       setQuoteListVersion((v) => v + 1)
-      setOrderListVersion((v) => v + 1)
-    } catch (err) {
-      console.error('Failed to convert quotation:', err)
-    }
+    })
   }
 
-  if (loading) {
-    return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading sales...</div></div>
+  const entityLabelForTab = (tabKey) => {
+    if (tabKey === 'invoices') return 'invoice'
+    if (tabKey === 'orders') return 'sales order'
+    if (tabKey === 'quotes') return 'quotation'
+    if (tabKey === 'returns') return 'return'
+    if (tabKey === 'payments') return 'payment'
+    return 'item'
   }
+
+  const tabCreateAction = () => {
+    if (tab === 'invoices' && can('invoices.create')) {
+      return { label: '+ New Invoice', onClick: () => navigate('/sales/invoices/new') }
+    }
+    if (tab === 'orders' && can('invoices.create')) {
+      return { label: '+ New Sales Order', onClick: () => navigate('/sales/orders/new') }
+    }
+    if (tab === 'quotes' && can('invoices.create')) {
+      return { label: '+ Create Quotation', onClick: () => navigate('/sales/quotations/new') }
+    }
+    if (tab === 'returns' && can('invoices.create')) {
+      return { label: '+ New Return', onClick: () => setShowReturnForm(true) }
+    }
+    if (tab === 'payments' && can('invoices.edit')) {
+      return { label: '+ New Payment', onClick: () => setShowPayForm(true) }
+    }
+    return null
+  }
+
+  const createAction = tabCreateAction()
 
   return (
     <div className="page-container">
@@ -884,20 +690,10 @@ export default function SalesPage() {
           exportToCSV(exportData, `Sales_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Sales exported')
         }}>↓ Export</button>
-        {can('invoices.create') && (
-          <button className="btn btn-secondary btn-sm" onClick={() => toast('Quotation feature coming soon')}>+ Quotation</button>
-        )}
-        {can('pos.use', 'invoices.create') && (
-          <button className="btn btn-primary btn-sm" onClick={() => navigate('/pos')}>+ New Sale</button>
+        {createAction && (
+          <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
         )}
       </SectionHeader>
-
-      <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        <KPICard label="Total Sales (Today)" value={fmt(totals.total)} color="var(--accent)" icon="💰" />
-        <KPICard label="Collected"           value={fmt(totals.paid)}  color="var(--green)"  icon="✅" />
-        <KPICard label="On Credit"           value={fmt(totals.credit)} color="var(--amber)" icon="📋" />
-        <KPICard label="Overdue"             value={fmt(totals.overdue)} color="var(--red)"  icon="⚠️" />
-      </div>
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
@@ -917,7 +713,7 @@ export default function SalesPage() {
           </div>
 
           <Card bodyPadding={false}>
-            {invoices.length === 0 ? <EmptyState icon="🧾" title="No invoices found" /> : (
+            <TablePanel loading={invLoading} isEmpty={!invLoading && invoices.length === 0} emptyIcon="🧾" emptyTitle="No invoices found">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -939,6 +735,7 @@ export default function SalesPage() {
                     <SortableHeader label="Paid" sortKey="paid_amount" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
                     <SortableHeader label="Mode" sortKey="payment_mode" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                     <SortableHeader label="Status" sortKey="status" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                    <th>Returns</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -967,25 +764,47 @@ export default function SalesPage() {
                         ? <span style={{ color: 'var(--text-muted)' }}>—</span>
                         : <Tag>{displayPaymentMode(inv.paymentMode)}</Tag>}</td>
                       <td><Chip status={inv.status} /></td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(inv)}>View</button>
-                          {['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit') &&
-                            <button className="btn btn-primary btn-xs" onClick={() => setShowPayment(inv)}>Pay</button>}
-                        </div>
+                      <td><ReturnStatusChip status={inv.returnStatus} /></td>
+                      <td className="text-right">
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${inv.number}`}
+                          actions={[
+                            { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
+                            {
+                              label: 'Record payment',
+                              hidden: !(['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit')),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setShowPayment(inv),
+                            },
+                            {
+                              label: 'Cancel invoice',
+                              danger: true,
+                              hidden: inv.status === 'cancelled' || inv.paidAmount > 0 || !can('invoices.cancel'),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setShowCancelInvoice(inv),
+                            },
+                            {
+                              label: 'Delete',
+                              danger: true,
+                              hidden: !can('invoices.delete'),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => requestDeleteOne(inv, 'invoice', 'invoices'),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={invoiceTotal}
               skip={invSkip}
               limit={invLimit}
               onSkipChange={setInvSkip}
               onLimitChange={setInvLimit}
-              disabled={loading}
+              disabled={invLoading}
             />
           </Card>
         </>
@@ -993,15 +812,8 @@ export default function SalesPage() {
 
       {tab === 'quotes' && (
         <>
-          {can('invoices.create') && (
-            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14}}>
-              <button className="btn btn-primary btn-sm" onClick={openCreateQuote}>+ Create Quotation</button>
-            </div>
-          )}
           <Card bodyPadding={false}>
-            {quotations.length === 0 ? (
-              <EmptyState icon="📄" title="No quotations" desc="No quotations created yet" />
-            ) : (
+            <TablePanel loading={quoteLoading} isEmpty={!quoteLoading && quotations.length === 0} emptyIcon="📄" emptyTitle="No quotations" emptyDesc="No quotations created yet">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1041,25 +853,67 @@ export default function SalesPage() {
                       <td className="text-right mono">{fmt(q.total)}</td>
                       <td><Chip status={q.status === 'sent' ? 'active' : q.status === 'accepted' ? 'success' : 'draft'} label={q.status.charAt(0).toUpperCase() + q.status.slice(1)} /></td>
                       <td>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          {/* Editable (draft / sent) → Edit + Convert.
-                              Locked (accepted / converted / rejected)
-                              → View only. Matches PUT
-                              /sales/quotations/{id} server-side check. */}
-                          {!['converted', 'accepted', 'rejected'].includes(q.status) && can('invoices.edit') && (
-                            <button className="btn btn-secondary btn-xs" onClick={() => openQuoteEdit(q)}>
-                              Edit
-                            </button>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <RowActionsMenu
+                            ariaLabel={`Actions for ${q.number}`}
+                            actions={[
+                              {
+                                label: 'Edit',
+                                hidden: ['converted', 'accepted', 'rejected'].includes(q.status) || !can('invoices.edit'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => navigate(`/sales/quotations/${q.id}/edit`),
+                              },
+                              {
+                                label: actionKind === 'quote-sent' && isRowBusy(q.id) ? 'Updating…' : 'Mark sent',
+                                hidden: q.status !== 'draft' || !can('invoices.edit'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => updateQuoteStatus(q, 'sent'),
+                              },
+                              {
+                                label: actionKind === 'quote-accepted' && isRowBusy(q.id) ? 'Updating…' : 'Accept',
+                                hidden: q.status !== 'sent' || !can('invoices.edit'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => updateQuoteStatus(q, 'accepted'),
+                              },
+                              {
+                                label: actionKind === 'quote-rejected' && isRowBusy(q.id) ? 'Updating…' : 'Reject',
+                                danger: true,
+                                hidden: q.status !== 'sent' || !can('invoices.edit'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => updateQuoteStatus(q, 'rejected'),
+                              },
+                              {
+                                label: 'Convert to order',
+                                hidden: ['converted', 'rejected'].includes(q.status) || !can('invoices.create'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => navigate(`/sales/orders/new?fromQuote=${q.id}`),
+                              },
+                              {
+                                label: 'Convert to invoice',
+                                hidden: ['converted', 'rejected'].includes(q.status) || !can('invoices.create'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => navigate(`/sales/invoices/new?fromQuote=${q.id}`),
+                              },
+                              {
+                                label: 'View',
+                                hidden: !['converted', 'accepted', 'rejected'].includes(q.status),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => navigate(`/sales/quotations/${q.id}/edit?view=1`),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                hidden: !can('invoices.delete'),
+                                disabled: isRowBusy(q.id),
+                                onClick: () => requestDeleteOne(q, 'quotation', 'quotes'),
+                              },
+                            ]}
+                          />
+                          {q.convertedOrderId && (
+                            <Tag color="var(--accent)">SO linked</Tag>
                           )}
-                          {!['converted', 'rejected'].includes(q.status) && can('invoices.create') && (
-                            <button className="btn btn-primary btn-xs" onClick={() => convertQuoteToOrder(q)}>
-                              Convert to Order
-                            </button>
-                          )}
-                          {['converted', 'accepted', 'rejected'].includes(q.status) && (
-                            <button className="btn btn-ghost btn-xs" onClick={() => openQuoteEdit(q, { readOnly: true })}>
-                              View
-                            </button>
+                          {q.convertedInvoiceId && (
+                            <Tag color="var(--green)">Invoiced</Tag>
                           )}
                         </div>
                       </td>
@@ -1067,59 +921,23 @@ export default function SalesPage() {
                   ))}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={quoteTotal}
               skip={quoteSkip}
               limit={quoteLimit}
               onSkipChange={setQuoteSkip}
               onLimitChange={setQuoteLimit}
+              disabled={quoteLoading}
             />
           </Card>
-
-          <QuoteFormModal
-            open={showQuoteForm}
-            onClose={closeQuoteForm}
-            onSave={saveQuotation}
-            quoteForm={quoteForm}
-            pqf={pqf}
-            branches={branches}
-            saving={quoteSaving}
-            editingNumber={quoteEditingNumber}
-            readOnly={quoteReadOnly}
-          />
         </>
       )}
 
-      {/* PR 2 modals — rendered at the page root so they can open from any
-          tab. ConvertToInvoiceModal serves the SO-convert flow today; the
-          quote-convert flow is fire-and-forget (no payment prompt needed
-          since the order itself doesn't carry payment state). */}
-      <OrderFormModal
-        open={showOrderForm}
-        onClose={closeOrderForm}
-        onSave={saveOrder}
-        orderForm={orderForm}
-        pof={pof}
-        branches={branches}
-        saving={orderSaving}
-        editingNumber={orderEditingNumber}
-        readOnly={orderReadOnly}
-      />
       <ReturnFormModal
         open={showReturnForm}
         onClose={() => setShowReturnForm(false)}
         onSaved={() => { setRetListVersion((v) => v + 1); setSalesListVersion((v) => v + 1) }}
-      />
-      <ConvertToInvoiceModal
-        open={!!convertSource}
-        onClose={() => setConvertSource(null)}
-        onConfirm={convertOrder}
-        title={convertSource ? `Convert ${convertSource.number}` : 'Convert to Invoice'}
-        source={convertSource}
-        lines={convertSource?.lines || null}
-        branchId={convertSource?.branchId || null}
-        confirming={converting}
       />
 
       <PaymentFormModal
@@ -1135,20 +953,14 @@ export default function SalesPage() {
           re-rendered per tab. The submit handler routes to the right
           API based on the current tab. */}
       <BulkDeleteConfirmModal
-        open={deleteOpen}
-        onClose={() => { setDeleteOpen(false); setDeleteBlocked([]) }}
-        onConfirm={submitBulkDelete}
-        entityLabel={
-          tab === 'invoices' ? 'invoice' :
-          tab === 'orders'   ? 'sales order' :
-          tab === 'quotes'   ? 'quotation' :
-          tab === 'returns'  ? 'credit note' :
-          tab === 'payments' ? 'payment' : 'item'
-        }
-        items={selectedItemsForModal()}
+        open={deleteOpen || !!deleteOneTarget}
+        onClose={() => { setDeleteOpen(false); setDeleteBlocked([]); setDeleteOneTarget(null) }}
+        onConfirm={deleteOneTarget ? confirmDeleteOne : submitBulkDelete}
+        entityLabel={deleteOneTarget ? deleteOneTarget.label : entityLabelForTab(tab)}
+        items={deleteOneTarget ? [{ id: deleteOneTarget.id, number: deleteOneTarget.number }] : selectedItemsForModal()}
         blocked={deleteBlocked}
         submitting={deleting}
-        reversalLines={reversalLinesForTab()}
+        reversalLines={reversalLinesForTabKey(deleteOneTarget?.tabKey || tab)}
       />
 
       {/* Payment detail (read-only) — shows allocations + credit. */}
@@ -1158,7 +970,12 @@ export default function SalesPage() {
         title={payDetail ? `Payment — ${payDetail.number}` : 'Payment'}
         icon="💰"
         size="md"
-        footer={<button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>
+          {can('invoices.edit') && !payDetail?.voided && (
+            <button className="btn btn-danger" onClick={() => voidPayment(payDetail)}>Void Payment</button>
+          )}
+        </>}
       >
         {payDetail && (
           <>
@@ -1216,21 +1033,8 @@ export default function SalesPage() {
 
       {tab === 'returns' && (
         <>
-          {/* Sales Phase 1 PR 2: real Credit Notes / Returns. + New
-              button opens the ReturnFormModal (invoice picker → line
-              picker → refund method). Columns match the new API shape
-              (camelCase: invoiceNumber, refundMethod, total). */}
-          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            {can('invoices.create') && (
-              <button className="btn btn-primary btn-sm" onClick={() => setShowReturnForm(true)}>
-                + New Return
-              </button>
-            )}
-          </div>
           <Card bodyPadding={false}>
-            {returns.length === 0 ? (
-              <EmptyState icon="↩" title="No credit notes" desc="Process a return to generate a credit note" />
-            ) : (
+            <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩" emptyTitle="No credit notes" emptyDesc="Process a return to generate a credit note">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1252,6 +1056,7 @@ export default function SalesPage() {
                     <th>Refund</th>
                     <th>Reason</th>
                     <SortableHeader label="Status" sortKey="status" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1280,17 +1085,40 @@ export default function SalesPage() {
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
                       <td><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
+                      <td>
+                        {can('invoices.edit') && r.status !== 'void' && (
+                          <RowActionsMenu
+                            ariaLabel={`Actions for ${r.number}`}
+                            actions={[
+                              {
+                                label: actionKind === 'void-return' && isRowBusy(r.id) ? 'Voiding…' : 'Void',
+                                danger: true,
+                                disabled: isRowBusy(r.id),
+                                onClick: () => voidReturn(r),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                hidden: !can('invoices.delete'),
+                                disabled: isRowBusy(r.id),
+                                onClick: () => requestDeleteOne(r, 'return', 'returns'),
+                              },
+                            ]}
+                          />
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={retTotal}
               skip={retSkip}
               limit={retLimit}
               onSkipChange={setRetSkip}
               onLimitChange={setRetLimit}
+              disabled={retLoading}
             />
           </Card>
         </>
@@ -1298,22 +1126,8 @@ export default function SalesPage() {
 
       {tab === 'payments' && (
         <>
-          {/* 2026-05-24: Payments tab. The "+ New Payment" button opens
-              the multi-invoice picker modal. Single-invoice payments
-              still happen via the row Pay button on the Invoices tab —
-              both write paths create CustomerPayment rows so this list
-              is complete regardless of entry point. */}
-          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            {can('invoices.edit') && (
-              <button className="btn btn-primary btn-sm" onClick={() => setShowPayForm(true)}>
-                + New Payment
-              </button>
-            )}
-          </div>
           <Card bodyPadding={false}>
-            {payments.length === 0 ? (
-              <EmptyState icon="💰" title="No payments yet" desc="Record a payment to see it here." />
-            ) : (
+            <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💰" emptyTitle="No payments yet" emptyDesc="Record a payment to see it here.">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1362,21 +1176,41 @@ export default function SalesPage() {
                         <td className="text-right mono" style={{ color: (p.creditApplied || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>
                           {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : '—'}
                         </td>
-                        <td>
-                          <button className="btn btn-ghost btn-xs" onClick={() => setPayDetail(p)}>View</button>
+                        <td className="text-right">
+                          <RowActionsMenu
+                            ariaLabel={`Actions for payment ${p.number}`}
+                            actions={[
+                              { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
+                              {
+                                label: actionKind === 'void-payment' && isRowBusy(p.id) ? 'Voiding…' : 'Void',
+                                danger: true,
+                                hidden: !can('invoices.edit') || p.voided,
+                                disabled: isRowBusy(p.id),
+                                onClick: () => voidPayment(p),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                hidden: !can('invoices.delete'),
+                                disabled: isRowBusy(p.id),
+                                onClick: () => requestDeleteOne(p, 'payment', 'payments'),
+                              },
+                            ]}
+                          />
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={payTotal}
               skip={paySkip}
               limit={payLimit}
               onSkipChange={setPaySkip}
               onLimitChange={setPayLimit}
+              disabled={payLoading}
             />
           </Card>
         </>
@@ -1384,25 +1218,8 @@ export default function SalesPage() {
 
       {tab === 'orders' && (
         <>
-          {/* Sales Phase 1 PR 2 (2026-05-23): real Sales Orders. + New
-              opens OrderFormModal; each row gets a Convert button (when
-              not already converted) that opens the shared
-              ConvertToInvoiceModal. */}
-          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            {can('invoices.create') && (
-              <button className="btn btn-primary btn-sm" onClick={openCreateOrder}>
-                + New Sales Order
-              </button>
-            )}
-          </div>
           <Card bodyPadding={false}>
-            {orders.length === 0 ? (
-              <EmptyState
-                icon="📦"
-                title="No sales orders"
-                desc="Create one directly or convert a quotation."
-              />
-            ) : (
+            <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📦" emptyTitle="No sales orders" emptyDesc="Create one directly or convert a quotation.">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1427,6 +1244,7 @@ export default function SalesPage() {
                 <tbody>
                   {orders.map((o) => {
                     const isConverted = o.status === 'converted'
+                    const isPartial = o.status === 'partially_invoiced'
                     const isCancelled = o.status === 'cancelled'
                     return (
                       <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
@@ -1443,48 +1261,51 @@ export default function SalesPage() {
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                         <td className="text-right mono">{fmt(o.total)}</td>
-                        <td><Chip status={isConverted ? 'paid' : isCancelled ? 'inactive' : 'active'} label={(o.status || '').charAt(0).toUpperCase() + (o.status || '').slice(1)} /></td>
+                        <td><Chip status={isConverted ? 'paid' : isPartial ? 'pending' : isCancelled ? 'inactive' : 'active'} label={(o.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /></td>
                         <td>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            {/* Editable (draft / confirmed) → Edit +
-                                Convert. Locked (converted / cancelled)
-                                → View only. Matches the server-side
-                                check in PUT /sales/orders/{id}. */}
-                            {!isConverted && !isCancelled && can('invoices.edit') && (
-                              <button className="btn btn-secondary btn-xs" onClick={() => openOrderEdit(o)}>
-                                Edit
-                              </button>
-                            )}
-                            {!isConverted && !isCancelled && can('invoices.create') && (
-                              <button
-                                className="btn btn-primary btn-xs"
-                                onClick={() => setConvertSource({
-                                  kind: 'order',
-                                  id: o.id,
-                                  number: o.number,
-                                  total: o.total,
-                                  customerName: o.customerName,
-                                  branchId: o.branchId,
-                                  // Forward the SO's line items so the
-                                  // convert modal can render the stock
-                                  // allocation section. Map to the
-                                  // {item_id, name, qty} shape the modal
-                                  // expects (snake_case item_id matches
-                                  // the form's existing convention).
-                                  lines: (o.items || []).map((li) => ({
-                                    item_id: li.itemId,
-                                    name: li.name,
-                                    qty: li.qty,
-                                  })),
-                                })}
-                              >
-                                Convert
-                              </button>
-                            )}
-                            {(isConverted || isCancelled) && (
-                              <button className="btn btn-ghost btn-xs" onClick={() => openOrderEdit(o, { readOnly: true })}>
-                                View
-                              </button>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <RowActionsMenu
+                              ariaLabel={`Actions for ${o.number}`}
+                              actions={[
+                                {
+                                  label: 'Edit',
+                                  hidden: isConverted || isCancelled || !can('invoices.edit'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/sales/orders/${o.id}/edit`),
+                                },
+                                {
+                                  label: 'Convert to invoice',
+                                  hidden: isConverted || isCancelled || !can('invoices.create'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/sales/invoices/new?fromOrder=${o.id}`),
+                                },
+                                {
+                                  label: 'View',
+                                  hidden: !(isConverted || isCancelled),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => navigate(`/sales/orders/${o.id}/edit?view=1`),
+                                },
+                                {
+                                  label: 'View invoice',
+                                  hidden: !(isConverted || isPartial) || !o.convertedInvoiceId,
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => {
+                                    const inv = invoices.find((i) => i.id === o.convertedInvoiceId)
+                                    if (inv) setShowDetail(inv)
+                                    else toast('Invoice not in current page — switch to Invoices tab')
+                                  },
+                                },
+                                {
+                                  label: 'Delete',
+                                  danger: true,
+                                  hidden: !can('invoices.delete'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => requestDeleteOne(o, 'sales order', 'orders'),
+                                },
+                              ]}
+                            />
+                            {isConverted && !o.convertedInvoiceId && (
+                              <Tag color="var(--amber)">Invoice removed</Tag>
                             )}
                           </div>
                         </td>
@@ -1493,13 +1314,14 @@ export default function SalesPage() {
                   })}
                 </tbody>
               </table>
-            )}
+            </TablePanel>
             <PaginationBar
               total={orderTotal}
               skip={orderSkip}
               limit={orderLimit}
               onSkipChange={setOrderSkip}
               onLimitChange={setOrderLimit}
+              disabled={orderLoading}
             />
           </Card>
         </>
@@ -1510,6 +1332,9 @@ export default function SalesPage() {
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
           <button className="btn btn-secondary" onClick={() => { setShowReceipt(showDetail); setShowDetail(null) }}>🖨 Receipt</button>
+          {showDetail?.status !== 'cancelled' && !(showDetail?.paidAmount > 0) && can('invoices.cancel') && (
+            <button className="btn btn-danger" onClick={() => { setShowCancelInvoice(showDetail); setShowDetail(null) }}>Cancel Invoice</button>
+          )}
           {['pending','partial','overdue'].includes(showDetail?.status) && <button className="btn btn-primary" onClick={() => { setShowPayment(showDetail); setShowDetail(null) }}>Record Payment</button>}
         </>}>
         {showDetail && (
@@ -1522,6 +1347,8 @@ export default function SalesPage() {
                 { label: 'Date', value: showDetail.date },
                 { label: 'Payment Mode', value: displayPaymentMode(showDetail.paymentMode) },
                 { label: 'Status', value: <Chip status={showDetail.status} /> },
+                { label: 'Return Status', value: <ReturnStatusChip status={showDetail.returnStatus} /> },
+                { label: 'Credited (returns)', value: showDetail.creditedAmount > 0 ? fmt(showDetail.creditedAmount) : '—' },
               ].map((r) => (
                 <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
@@ -1556,10 +1383,12 @@ export default function SalesPage() {
       </Modal>
 
       {/* Payment Modal */}
-      <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm"
+      <Modal open={!!showPayment} onClose={() => !paySaving && setShowPayment(null)} title="Record Payment" icon="💳" size="sm"
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowPayment(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={recordPayment}>Record Payment</button>
+          <button className="btn btn-secondary" onClick={() => setShowPayment(null)} disabled={paySaving}>Cancel</button>
+          <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
+            {paySaving ? 'Recording…' : 'Record Payment'}
+          </button>
         </>}>
         {showPayment && (() => {
           const balance = (showPayment.total || 0) - (showPayment.paidAmount || 0)
@@ -1638,6 +1467,22 @@ export default function SalesPage() {
             </>
           )
         })()}
+      </Modal>
+
+      {/* Cancel Invoice Confirm */}
+      <Modal open={!!showCancelInvoice} onClose={() => !cancelSaving && setShowCancelInvoice(null)} title="Cancel Invoice" icon="⚠️" size="sm"
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setShowCancelInvoice(null)} disabled={cancelSaving}>Keep Invoice</button>
+          <button className="btn btn-danger" onClick={cancelInvoice} disabled={cancelSaving}>
+            {cancelSaving ? 'Cancelling…' : 'Cancel Invoice'}
+          </button>
+        </>}>
+        {showCancelInvoice && (
+          <AlertBar type="amber" icon="⚠">
+            Cancelling <strong>{showCancelInvoice.number}</strong> restores stock and marks the invoice
+            void. Void or delete any payments first — invoices with active payments cannot be cancelled.
+          </AlertBar>
+        )}
       </Modal>
 
       {/* Receipt Modal */}

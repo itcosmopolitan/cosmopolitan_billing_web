@@ -12,6 +12,10 @@ export default function CustomersPage() {
   const [typeF, setTypeF]       = useState('')
   const [showAdd, setShowAdd]   = useState(false)
   const [showDetail, setShowDetail] = useState(null)
+  const [ledgerCustomer, setLedgerCustomer] = useState(null)
+  const [ledgerEntries, setLedgerEntries] = useState([])
+  const [ledgerLoading, setLedgerLoading] = useState(false)
+  const [ledgerTotal, setLedgerTotal] = useState(0)
   const [customers, setCustomers] = useState([])
   const [custTotal, setCustTotal] = useState(0)
   const [custSkip, setCustSkip] = useState(0)
@@ -143,6 +147,30 @@ export default function CustomersPage() {
 
   const creditUsedPct = (c) => c.creditLimit > 0 ? Math.min(100, (c.outstanding / c.creditLimit) * 100) : 0
 
+  const openCreditLedger = async (customer) => {
+    setLedgerCustomer(customer)
+    setLedgerLoading(true)
+    setLedgerEntries([])
+    try {
+      const raw = await customersAPI.creditLedger(customer.id, { skip: 0, limit: 100 })
+      const { items, total } = unwrapPaged(raw)
+      setLedgerEntries(items || [])
+      setLedgerTotal(total || 0)
+    } catch (err) {
+      console.error('Failed to load credit ledger:', err)
+      toast.error('Failed to load credit ledger')
+      setLedgerCustomer(null)
+    } finally {
+      setLedgerLoading(false)
+    }
+  }
+
+  const entryTypeColor = (type) => {
+    if (type?.includes('debit') || type?.includes('revoke')) return 'var(--red)'
+    if (type?.includes('credit') || type?.includes('overpayment') || type?.includes('restore')) return 'var(--green)'
+    return 'var(--text-primary)'
+  }
+
   return (
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
@@ -271,14 +299,16 @@ export default function CustomersPage() {
 
       {/* Detail Modal */}
       <Modal open={!!showDetail} onClose={()=>setShowDetail(null)} title={showDetail?.name} icon="👤" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowDetail(null)}>Close</button><button className="btn btn-primary" onClick={()=>toast('Opening ledger…')}>View Ledger</button></>}>
+        footer={<><button className="btn btn-secondary" onClick={()=>setShowDetail(null)}>Close</button><button className="btn btn-primary" onClick={()=>{ openCreditLedger(showDetail); setShowDetail(null) }}>View Credit Ledger</button></>}>
         {showDetail && (
           <>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
               {[
                 {label:'Phone', value:showDetail.phone},{label:'Email', value:showDetail.email||'—'},
                 {label:'GSTIN', value:showDetail.gstIn||'—'},{label:'Type', value:showDetail.type==='wholesale'?'Wholesale':'Retail'},
-                {label:'Credit Limit', value:fmt(showDetail.creditLimit)},{label:'Outstanding', value:<span style={{color:showDetail.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(showDetail.outstanding)}</span>},
+                {label:'Credit Limit', value:fmt(showDetail.creditLimit)},
+                {label:'Outstanding', value:<span style={{color:showDetail.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(showDetail.outstanding)}</span>},
+                {label:'Store Credit', value:<span style={{color:showDetail.creditBalance>0?'var(--accent)':'var(--text-muted)'}}>{showDetail.creditBalance>0?fmt(showDetail.creditBalance):'—'}</span>},
                 {label:'Total Purchases', value:fmt(showDetail.totalPurchases)},{label:'Status', value:<Chip status={showDetail.active?'active':'inactive'}/>},
               ].map(r=>(
                 <div key={r.label} style={{padding:'10px 12px',background:'var(--bg-raised)',borderRadius:8}}>
@@ -291,6 +321,61 @@ export default function CustomersPage() {
               <AlertBar type="amber" icon="⚠️">
                 Outstanding balance of <strong>{fmt(showDetail.outstanding)}</strong> — {Math.round(creditUsedPct(showDetail))}% of credit limit used.
               </AlertBar>
+            )}
+          </>
+        )}
+      </Modal>
+
+      {/* Credit Ledger */}
+      <Modal
+        open={!!ledgerCustomer}
+        onClose={() => setLedgerCustomer(null)}
+        title={`Credit Ledger — ${ledgerCustomer?.name || ''}`}
+        icon="💳"
+        size="lg"
+        footer={<button className="btn btn-secondary" onClick={() => setLedgerCustomer(null)}>Close</button>}
+      >
+        {ledgerCustomer && (
+          <>
+            <div style={{ display:'flex', gap:16, marginBottom:16, flexWrap:'wrap' }}>
+              <div style={{ padding:'10px 14px', background:'var(--bg-raised)', borderRadius:8 }}>
+                <div style={{ fontSize:11, color:'var(--text-muted)' }}>Current balance</div>
+                <div style={{ fontSize:18, fontWeight:600, color:'var(--accent)' }}>{fmt(ledgerCustomer.creditBalance)}</div>
+              </div>
+              <div style={{ padding:'10px 14px', background:'var(--bg-raised)', borderRadius:8 }}>
+                <div style={{ fontSize:11, color:'var(--text-muted)' }}>Ledger entries</div>
+                <div style={{ fontSize:18, fontWeight:600 }}>{ledgerTotal}</div>
+              </div>
+            </div>
+            {ledgerLoading ? (
+              <div style={{ padding:24, textAlign:'center', color:'var(--text-muted)' }}>Loading ledger…</div>
+            ) : ledgerEntries.length === 0 ? (
+              <EmptyState icon="💳" title="No credit movements yet" subtitle="Overpayments and return credits will appear here." />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Reference</th>
+                    <th className="text-right" style={{textAlign:'right'}}>Change</th>
+                    <th className="text-right" style={{textAlign:'right'}}>Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledgerEntries.map(e => (
+                    <tr key={e.id}>
+                      <td style={{ fontSize:12 }}>{e.date}</td>
+                      <td style={{ fontSize:12 }}>{e.entryLabel || e.entryType}</td>
+                      <td style={{ fontSize:12, color:'var(--text-muted)' }}>{e.sourceNumber || e.sourceType || '—'}</td>
+                      <td className="text-right mono" style={{ color: entryTypeColor(e.entryType), textAlign:'right' }}>
+                        {e.delta >= 0 ? '+' : ''}{fmt(e.delta)}
+                      </td>
+                      <td className="text-right mono" style={{ textAlign:'right' }}>{fmt(e.balanceAfter)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </>
         )}
