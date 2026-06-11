@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Branch, ItemStock
-from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.routes._serializers import serialize_branch
-from src.security import require_perm
+from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
+from src.routes._serializers import get_user_branch_ids, serialize_branch
+from src.security import current_user, enforce_branch_access, require_perm
 
 router = APIRouter()
 
@@ -38,13 +38,25 @@ class BranchUpdate(BaseModel):
 async def list_branches(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    page_no: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user = Depends(current_user),
 ):
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
-    total = int((await db.execute(select(func.count(Branch.id)))).scalar() or 0)
+    if page_no is not None or per_page is not None:
+        _, pp, sk, lim = pagination_from_page(page_no, per_page)
+    else:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
+
+    accessible = None
+    if not getattr(user, "all_branches", False):
+        accessible = await get_user_branch_ids(db, user.id)
+        if not accessible:
+            return paged_list([], 0, sk, lim)
+
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -59,12 +71,20 @@ async def list_branches(
         default_key="name",
         default_order="asc",
     )
-    result = await db.execute(select(Branch).order_by(sort_expr).offset(sk).limit(lim))
+    query = select(Branch)
+    if accessible is not None:
+        query = query.where(Branch.id.in_(accessible))
+    # Count rows from the query's subquery to avoid joining the outer
+    # `branches` table with the subquery (prevents SAWarning about a
+    # cartesian product when SQLAlchemy composes FROM elements).
+    count_stmt = select(func.count()).select_from(query.subquery())
+    total = int((await db.execute(count_stmt)).scalar() or 0)
+    result = await db.execute(query.order_by(sort_expr).offset(sk).limit(lim))
     items = [serialize_branch(b) for b in result.scalars().all()]
-    return paged(items, total, sk, lim)
+    return paged_list(items, total, sk, lim)
 
 @router.get("/{branch_id}")
-async def get_branch(branch_id: str, db: AsyncSession = Depends(get_db)):
+async def get_branch(branch_id: str = Depends(enforce_branch_access), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Branch).where(Branch.id == branch_id))
     b = result.scalar_one_or_none()
     if not b:
@@ -92,7 +112,10 @@ async def update_branch(branch_id: str, data: BranchUpdate, db: AsyncSession = D
     return {"message": "Updated"}
 
 @router.get("/{branch_id}/stock-summary")
-async def stock_summary(branch_id: str, db: AsyncSession = Depends(get_db)):
+async def stock_summary(
+    branch_id: str = Depends(enforce_branch_access),
+    db: AsyncSession = Depends(get_db),
+):
     from sqlalchemy import func
     result = await db.execute(
         select(func.count(ItemStock.id), func.sum(ItemStock.quantity))

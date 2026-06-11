@@ -6,4 +6,8 @@ echo "Starting Cosmopolitan Pro Production..."
 
 cd /app/backend
 
-exec uvicorn src.main:app --host 0.0.0.0 --port 10000
+exec gunicorn -k uvicorn.workers.UvicornWorker src.main:app \
+  --workers 2 \
+  --threads 4 \
+  --bind 0.0.0.0:$PORT \
+  --timeout 120

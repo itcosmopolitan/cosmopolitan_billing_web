@@ -18,10 +18,10 @@ from src.database import get_db
 from src.models import User
 from src.security import (
     create_access_token,
-    hash_password,
+    hash_password_async,
     require_user,
     user_with_permissions,
-    verify_password,
+    verify_password_async,
 )
 
 router = APIRouter()
@@ -55,7 +55,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     auth_error = HTTPException(status_code=401, detail="Invalid email or password")
     if not user or not user.active:
         raise auth_error
-    if not verify_password(data.password, user.hashed_password or ""):
+    if not await verify_password_async(data.password, user.hashed_password or ""):
         raise auth_error
 
     user.last_login = datetime.utcnow()
@@ -100,14 +100,14 @@ async def change_password(
     rotated in v1 — see docs/USERS_AND_ROLES.md §10 Phase 4 for the
     token-revocation follow-up.
     """
-    if not verify_password(data.old_password, user.hashed_password or ""):
+    if not await verify_password_async(data.old_password, user.hashed_password or ""):
         raise HTTPException(401, "Current password is incorrect")
     if len(data.new_password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(400, f"New password must be at least {MIN_PASSWORD_LENGTH} characters")
     if data.new_password == data.old_password:
         raise HTTPException(400, "New password must be different from the current password")
 
-    user.hashed_password = hash_password(data.new_password)
+    user.hashed_password = await hash_password_async(data.new_password)
     user.must_change_password = False
     await db.commit()
     return {"message": "Password changed", "must_change_password": False}

@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
 
-# Lazy engine initialization to support config loading
+# Lazy engine/sessionmaker initialization to support config loading
 _engine = None
-logger = logging.getLogger("cosmopolitan.database")
+
+_async_sessionmaker = None
 
 def get_engine():
     """Initialize and return the database engine
@@ -65,6 +66,7 @@ def get_engine():
 
         _engine = create_async_engine(engine_url, **engine_kwargs)
         _enable_sqlalchemy_query_logging(_engine)
+
     return _engine
 
 
@@ -219,9 +221,12 @@ def _enable_sqlalchemy_query_logging(engine):
 
 def get_async_session():
     """Get SQLAlchemy async session factory"""
-    return sessionmaker(
-        get_engine(), class_=AsyncSession, expire_on_commit=False
-    )
+    global _async_sessionmaker
+    if _async_sessionmaker is None:
+        _async_sessionmaker = sessionmaker(
+            get_engine(), class_=AsyncSession, expire_on_commit=False
+        )
+    return _async_sessionmaker
 
 class Base(DeclarativeBase):
     pass

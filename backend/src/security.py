@@ -6,6 +6,7 @@ and `require_user`; Phase 2 adds `require_perm(*needed)`.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -32,20 +33,36 @@ def _to_bytes(pw: str) -> bytes:
     return pw.encode("utf-8")[:_BCRYPT_MAX_BYTES]
 
 
-def hash_password(pw: str) -> str:
-    """Bcrypt-hash a plaintext password and return the hash as a UTF-8 string."""
+def _hash_password_sync(pw: str) -> str:
     return bcrypt.hashpw(_to_bytes(pw), bcrypt.gensalt()).decode("utf-8")
 
 
-def verify_password(pw: str, stored_hash: str) -> bool:
-    """Constant-time verify; safely returns False for empty / non-bcrypt hashes
-    (e.g. legacy sha256 hex from before the bcrypt switch)."""
+def _verify_password_sync(pw: str, stored_hash: str) -> bool:
     if not stored_hash:
         return False
     try:
         return bcrypt.checkpw(_to_bytes(pw), stored_hash.encode("utf-8"))
     except (ValueError, TypeError):
         return False
+
+
+def hash_password(pw: str) -> str:
+    """Bcrypt-hash a plaintext password and return the hash as a UTF-8 string."""
+    return _hash_password_sync(pw)
+
+
+def verify_password(pw: str, stored_hash: str) -> bool:
+    """Constant-time verify; safely returns False for empty / non-bcrypt hashes
+    (e.g. legacy sha256 hex from before the bcrypt switch)."""
+    return _verify_password_sync(pw, stored_hash)
+
+
+async def hash_password_async(pw: str) -> str:
+    return await asyncio.to_thread(_hash_password_sync, pw)
+
+
+async def verify_password_async(pw: str, stored_hash: str) -> bool:
+    return await asyncio.to_thread(_verify_password_sync, pw, stored_hash)
 
 
 # ─── Token helpers ────────────────────────────────────────────────────────────
@@ -178,6 +195,43 @@ def require_perm(*needed: str):
         )
 
     return _dep
+
+
+async def _ensure_branch_access_allowed(
+    branch_id: str,
+    user: User,
+    db: AsyncSession,
+) -> str:
+    """Raise 403 when the authenticated user cannot access the requested branch."""
+    if getattr(user, "all_branches", False):
+        return branch_id
+    from src.routes._serializers import get_user_branch_ids
+
+    branch_ids = await get_user_branch_ids(db, user.id)
+    if branch_id not in branch_ids:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied for branch {branch_id}",
+        )
+    return branch_id
+
+
+async def enforce_branch_access(
+    branch_id: str,
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> str:
+    return await _ensure_branch_access_allowed(branch_id, user, db)
+
+
+async def enforce_branch_access_optional(
+    branch_id: Optional[str] = None,
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[str]:
+    if branch_id is None:
+        return None
+    return await _ensure_branch_access_allowed(branch_id, user, db)
 
 
 # ─── Serialization with expanded permissions ────────────────────────────────

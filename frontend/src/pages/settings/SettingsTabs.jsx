@@ -10,7 +10,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { settingsAPI, taxRatesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { Card, AlertBar, Tag, Modal, FormGroup, FormRow } from '@/components/ui'
+import { Card, AlertBar, Tag, Modal, FormGroup, FormRow, PaginationBar, SortableHeader, Chip, RowActionsMenu } from '@/components/ui'
+import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import {
   apiToConfig,
   configToApi,
@@ -49,31 +50,70 @@ function previewFormat(prefix, formatStr, seq) {
 export function TaxConfigTab() {
   const can = useCan()
   const [rates, setRates] = useState([])
+  const [taxTotal, setTaxTotal] = useState(0)
+  const [taxSkip, setTaxSkip] = useState(0)
+  const [taxLimit, setTaxLimit] = useState(DEFAULT_PAGE_SIZE)
+  const [taxSortBy, setTaxSortBy] = useState('rate')
+  const [taxSortOrder, setTaxSortOrder] = useState('asc')
+  const [taxListVersion, setTaxListVersion] = useState(0)
+  const [taxHasMorePage, setTaxHasMorePage] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(EMPTY_TAX_FORM)
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
-  const loadRates = useCallback(async (signal) => {
-    try {
-      setLoading(true)
-      const data = await taxRatesAPI.list(signal ? { signal } : undefined)
-      setRates(Array.isArray(data) ? data : [])
-    } catch (err) {
-      if (err?.code === 'ERR_CANCELED') return
-      console.error(err)
-      setRates([])
-    } finally {
-      if (!signal?.aborted) setLoading(false)
+  const syncPageLimit = (perPage, limit) => {
+    const effective = perPage ?? limit
+    if (effective) setTaxLimit((prev) => (prev === effective ? prev : effective))
+  }
+
+  const onTaxSort = (key) => {
+    if (taxSortBy === key) setTaxSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))
+    else {
+      setTaxSortBy(key)
+      setTaxSortOrder('asc')
     }
-  }, [])
+    setTaxSkip(0)
+  }
 
   useEffect(() => {
     const controller = new AbortController()
-    loadRates(controller.signal)
-    return () => controller.abort()
-  }, [loadRates])
+    let cancelled = false
+    ;(async () => {
+      try {
+        setLoading(true)
+        const raw = await taxRatesAPI.list({
+          skip: taxSkip,
+          limit: taxLimit,
+          sort_by: taxSortBy,
+          sort_order: taxSortOrder,
+          active_only: false,
+        }, { signal: controller.signal })
+        const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
+        if (!cancelled) {
+          setRates(items || [])
+          setTaxTotal(total)
+          setTaxHasMorePage(hasMorePage)
+          syncPageLimit(perPage, limit)
+        }
+      } catch (err) {
+        if (err?.code === 'ERR_CANCELED') return
+        console.error(err)
+        if (!cancelled) {
+          setRates([])
+          setTaxTotal(0)
+          setTaxHasMorePage(false)
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [taxSkip, taxLimit, taxListVersion, taxSortBy, taxSortOrder])
 
   const openCreate = () => {
     setEditing(null)
@@ -117,22 +157,18 @@ export function TaxConfigTab() {
       setShowModal(false)
       setEditing(null)
       setForm(EMPTY_TAX_FORM)
-      await loadRates()
+      setTaxListVersion((v) => v + 1)
     } catch (err) {
       console.error(err)
     }
   }
 
-  const deleteTax = async (tax) => {
-    if (tax.is_system) {
-      toast.error('Default tax rates cannot be deleted')
-      return
-    }
-    if (!window.confirm(`Delete "${tax.label}" (${tax.rate}%)?`)) return
+  const toggleTaxActive = async (tax) => {
+    const nextActive = !tax.is_active
     try {
-      await taxRatesAPI.delete(tax.id)
-      toast.success('Tax rate deleted')
-      await loadRates()
+      await taxRatesAPI.update(tax.id, { is_active: nextActive })
+      toast.success(nextActive ? 'Tax rate marked as active' : 'Tax rate marked as inactive')
+      setTaxListVersion((v) => v + 1)
     } catch (err) {
       console.error(err)
     }
@@ -156,44 +192,66 @@ export function TaxConfigTab() {
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
             Loading tax rates…
           </div>
-        ) : rates.length === 0 ? (
+        ) : taxTotal === 0 ? (
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
             No tax rates configured. Add 0% and 8% or create custom rates.
           </div>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th className="text-right">Rate</th>
-                <th>Description</th>
-                <th>Applicable To</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rates.filter((r) => r.active !== false).map((r) => (
-                <tr key={r.id}>
-                  <td className="text-right">
-                    <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>
-                      {r.rate}%
-                    </span>
-                  </td>
-                  <td><span style={{ fontWeight: 500 }}>{r.label}</span></td>
-                  <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.examples || '—'}</td>
-                  <td>
-                    {can('settings.edit') && (
-                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                        <button className="btn btn-ghost btn-xs" onClick={() => openEdit(r)}>Edit</button>
-                        {!r.is_system && (
-                          <button className="btn btn-danger btn-xs" onClick={() => deleteTax(r)}>Delete</button>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableHeader label="Rate" sortKey="rate" sortBy={taxSortBy} sortOrder={taxSortOrder} onSort={onTaxSort} className="text-right" align="right" />
+                    <SortableHeader label="Description" sortKey="label" sortBy={taxSortBy} sortOrder={taxSortOrder} onSort={onTaxSort} />
+                    <SortableHeader label="Applicable To" sortKey="examples" sortBy={taxSortBy} sortOrder={taxSortOrder} onSort={onTaxSort} />
+                    <SortableHeader label="Status" sortKey="is_active" sortBy={taxSortBy} sortOrder={taxSortOrder} onSort={onTaxSort} />
+                    <th style={{ width: 48 }} aria-label="Actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rates.map((r) => (
+                    <tr key={r.id}>
+                      <td className="text-right">
+                        <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>
+                          {r.rate}%
+                        </span>
+                      </td>
+                      <td><span style={{ fontWeight: 500 }}>{r.label}</span></td>
+                      <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.examples || '—'}</td>
+                      <td><Chip status={r.is_active ? 'active' : 'inactive'} /></td>
+                      <td className="text-right">
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${r.label}`}
+                          actions={[
+                            {
+                              label: 'Edit tax rate',
+                              hidden: !can('settings.edit'),
+                              onClick: () => openEdit(r),
+                            },
+                            {
+                              label: r.is_active ? 'Mark as inactive' : 'Mark as active',
+                              hidden: !can('settings.edit'),
+                              onClick: () => toggleTaxActive(r),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              total={taxTotal}
+              skip={taxSkip}
+              limit={taxLimit}
+              hasMorePage={taxHasMorePage}
+              onSkipChange={setTaxSkip}
+              onLimitChange={setTaxLimit}
+              disabled={loading}
+            />
+          </>
         )}
       </Card>
 

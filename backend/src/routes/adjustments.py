@@ -23,10 +23,12 @@ from src.models import (
     ItemBatch,
     ItemStock,
     StockAdjustment,
+    User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._stock_adjust_apply import apply_stock_adjustment
-from src.security import require_perm
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.routes._serializers import get_user_branch_ids
 
 router = APIRouter()
 
@@ -45,6 +47,12 @@ class AdjustmentCreate(BaseModel):
 class AdjustmentReject(BaseModel):
     rejected_by: str = "Manager"
     rejection_notes: Optional[str] = None
+    ref_number: str
+
+
+class AdjustmentApprove(BaseModel):
+    approved_by: str = "Manager"
+    ref_number: str
 
 
 def _serialize(ar: AdjustmentRequest) -> dict:
@@ -84,31 +92,6 @@ def _serialize(ar: AdjustmentRequest) -> dict:
 
 
 _VALID_STATUSES = {s.value for s in AdjustmentStatus}
-
-
-async def _adjustment_summary(
-    db: AsyncSession, *, branch_id: Optional[str] = None
-) -> dict[str, int]:
-    """Counts per status for KPI cards (not filtered by the list tab's status)."""
-    base = select(func.count(AdjustmentRequest.id))
-    if branch_id:
-        base = base.where(AdjustmentRequest.branch_id == branch_id)
-
-    async def _count(status: Optional[AdjustmentStatus]) -> int:
-        q = base
-        if status is not None:
-            q = q.where(AdjustmentRequest.status == status)
-        return int((await db.execute(q)).scalar() or 0)
-
-    pending = await _count(AdjustmentStatus.pending)
-    approved = await _count(AdjustmentStatus.approved)
-    rejected = await _count(AdjustmentStatus.rejected)
-    return {
-        "pending": pending,
-        "approved": approved,
-        "rejected": rejected,
-        "total": pending + approved + rejected,
-    }
 
 
 _REF_SEQ_TAIL = re.compile(r"(\d+)$")
@@ -188,6 +171,24 @@ async def _allocate_adjustment_ref(db: AsyncSession, branch_id: str) -> str:
     )
 
 
+async def _lock_request(
+    db: AsyncSession, request_id: str, *, ref_number: str
+) -> AdjustmentRequest:
+    """Load a request row with FOR UPDATE to block concurrent approve/reject/delete."""
+    ar = (
+        await db.execute(
+            select(AdjustmentRequest)
+            .where(AdjustmentRequest.id == request_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not ar:
+        raise HTTPException(404, "Adjustment request not found")
+    if ar.ref_number != ref_number:
+        raise HTTPException(400, "Adjustment reference number does not match")
+    return ar
+
+
 async def _snapshot_before_qty(
     db: AsyncSession, *, item_id: str, branch_id: str, batch_id: Optional[str]
 ) -> int:
@@ -208,12 +209,13 @@ async def _snapshot_before_qty(
 @router.get("/", dependencies=[Depends(require_perm("adjustments.view"))])
 async def list_adjustments(
     status: Optional[str] = None,
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     if status is not None and status not in _VALID_STATUSES:
         raise HTTPException(400, f"Invalid status; use one of: {', '.join(sorted(_VALID_STATUSES))}")
@@ -242,16 +244,27 @@ async def list_adjustments(
     if branch_id:
         q = q.where(AdjustmentRequest.branch_id == branch_id)
         cq = cq.where(AdjustmentRequest.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        q = q.where(AdjustmentRequest.branch_id.in_(branch_ids))
+        cq = cq.where(AdjustmentRequest.branch_id.in_(branch_ids))
     total = int((await db.execute(cq)).scalar() or 0)
     rows = (await db.execute(q.offset(sk).limit(lim))).scalars().all()
-    summary = await _adjustment_summary(db, branch_id=branch_id)
-    return paged([_serialize(ar) for ar in rows], total, sk, lim, summary=summary)
+    return paged([_serialize(ar) for ar in rows], total, sk, lim)
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("adjustments.create"))])
-async def create_adjustment(data: AdjustmentCreate, db: AsyncSession = Depends(get_db)):
+async def create_adjustment(
+    data: AdjustmentCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     if data.new_qty < 0:
         raise HTTPException(400, "new_qty must be >= 0")
+
+    await enforce_branch_access(data.branch_id, user=user, db=db)
 
     branch_name = (
         await db.execute(
@@ -311,18 +324,21 @@ async def create_adjustment(data: AdjustmentCreate, db: AsyncSession = Depends(g
 @router.post("/{request_id}/approve", dependencies=[Depends(require_perm("adjustments.approve"))])
 async def approve_adjustment(
     request_id: str,
-    approved_by: str = "Manager",
+    body: AdjustmentApprove,
     db: AsyncSession = Depends(get_db),
 ):
-    ar = (
-        await db.execute(
-            select(AdjustmentRequest).where(AdjustmentRequest.id == request_id)
-        )
-    ).scalar_one_or_none()
-    if not ar:
-        raise HTTPException(404, "Adjustment request not found")
+    ar = await _lock_request(db, request_id, ref_number=body.ref_number)
+
+    if ar.status == AdjustmentStatus.approved:
+        await db.commit()
+        return {
+            "status": "approved",
+            "ref_number": ar.ref_number,
+            "approved_by": ar.approved_by,
+            "already_processed": True,
+        }
     if ar.status != AdjustmentStatus.pending:
-        raise HTTPException(400, f"Request is already {ar.status}")
+        raise HTTPException(400, f"Request is already {ar.status.value}")
 
     try:
         await apply_stock_adjustment(
@@ -347,32 +363,34 @@ async def approve_adjustment(
         after_qty=ar.new_qty,
         reason=ar.reason,
         notes=ar.notes,
-        adjusted_by=approved_by,
+        adjusted_by=body.approved_by,
         request_id=ar.id,
     )
     db.add(audit)
     ar.status = AdjustmentStatus.approved
-    ar.approved_by = approved_by
+    ar.approved_by = body.approved_by
     ar.resolved_at = datetime.utcnow()
     await db.commit()
-    return {"status": "approved", "ref_number": ar.ref_number, "approved_by": approved_by}
+    return {"status": "approved", "ref_number": ar.ref_number, "approved_by": body.approved_by}
 
 
 @router.post("/{request_id}/reject", dependencies=[Depends(require_perm("adjustments.approve"))])
 async def reject_adjustment(
     request_id: str,
-    body: AdjustmentReject = AdjustmentReject(),
+    body: AdjustmentReject,
     db: AsyncSession = Depends(get_db),
 ):
-    ar = (
-        await db.execute(
-            select(AdjustmentRequest).where(AdjustmentRequest.id == request_id)
-        )
-    ).scalar_one_or_none()
-    if not ar:
-        raise HTTPException(404, "Adjustment request not found")
+    ar = await _lock_request(db, request_id, ref_number=body.ref_number)
+
+    if ar.status == AdjustmentStatus.rejected:
+        await db.commit()
+        return {
+            "status": "rejected",
+            "ref_number": ar.ref_number,
+            "already_processed": True,
+        }
     if ar.status != AdjustmentStatus.pending:
-        raise HTTPException(400, f"Request is already {ar.status}")
+        raise HTTPException(400, f"Request is already {ar.status.value}")
 
     ar.status = AdjustmentStatus.rejected
     ar.rejected_by = body.rejected_by
@@ -380,3 +398,33 @@ async def reject_adjustment(
     ar.resolved_at = datetime.utcnow()
     await db.commit()
     return {"status": "rejected", "ref_number": ar.ref_number}
+
+
+@router.delete("/{request_id}", dependencies=[Depends(require_perm("adjustments.delete"))])
+async def delete_adjustment(
+    request_id: str,
+    ref_number: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a pending adjustment request.
+
+    Only pending requests may be deleted — approved requests have already
+    changed stock and have an audit log; rejected requests are kept for history.
+    """
+    ar = await _lock_request(db, request_id, ref_number=ref_number)
+    if ar.status != AdjustmentStatus.pending:
+        status = ar.status.value if hasattr(ar.status, "value") else str(ar.status)
+        if ar.status == AdjustmentStatus.approved:
+            raise HTTPException(
+                400,
+                "Approved adjustments cannot be deleted — stock was already updated. "
+                "Submit a new adjustment to reverse if needed.",
+            )
+        raise HTTPException(
+            400,
+            f"Only pending adjustments can be deleted; this request is {status}",
+        )
+
+    await db.delete(ar)
+    await db.commit()
+    return {"status": "deleted", "ref_number": ref_number}

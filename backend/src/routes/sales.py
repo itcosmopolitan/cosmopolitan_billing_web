@@ -29,7 +29,8 @@ from src.routes._atomic import (
     is_tracked,
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
-from src.security import require_perm
+from src.routes._serializers import get_user_branch_ids
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
 
@@ -213,7 +214,7 @@ async def _sales_list_summary(db: AsyncSession, conds):
 # ─── LIST ─────────────────────────────────────────────────────────────────────
 @router.get("/", dependencies=[Depends(require_perm("invoices.view"))])
 async def list_invoices(
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     customer_id: Optional[str] = None,
     search: Optional[str] = None,
@@ -224,10 +225,16 @@ async def list_invoices(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to)
+    if branch_id is None and not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        conds.append(SaleInvoice.branch_id.in_(branch_ids))
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -290,12 +297,13 @@ async def list_returns(
 # ─── QUOTATIONS ───────────────────────────────────────────────────────────────
 @router.get("/quotations/", dependencies=[Depends(require_perm("invoices.view"))])
 async def list_quotations(
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """List all quotations"""
     sk = normalize_skip(skip)
@@ -321,6 +329,12 @@ async def list_quotations(
     if branch_id:
         q = q.where(Quotation.branch_id == branch_id)
         q_count = q_count.where(Quotation.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        q = q.where(Quotation.branch_id.in_(branch_ids))
+        q_count = q_count.where(Quotation.branch_id.in_(branch_ids))
     total = int((await db.execute(q_count)).scalar() or 0)
     result = await db.execute(q.offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
@@ -328,12 +342,13 @@ async def list_quotations(
     return paged(items_out, total, sk, lim)
 
 @router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm("invoices.view"))])
-async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db)):
+async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Get a specific quotation"""
     result = await db.execute(select(Quotation).options(selectinload(Quotation.line_items)).where(Quotation.id == quote_id))
     quote = result.unique().scalar_one_or_none()
     if not quote:
         raise HTTPException(404, "Quotation not found")
+    await enforce_branch_access(quote.branch_id, user=user, db=db)
     return _quote_dict(quote, quote.line_items)
 
 @router.post("/quotations/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
@@ -453,17 +468,19 @@ async def list_credit_purchases(
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
-async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
+async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await enforce_branch_access(inv.branch_id, user=user, db=db)
     li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
     return _inv_dict(inv, li_res.scalars().all())
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
 async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("invoices.create")), db: AsyncSession = Depends(get_db)):
+
     if not data.items:
         raise HTTPException(400, "Invoice must have at least one line item")
     for i in data.items:
@@ -494,6 +511,8 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         total = round(subtotal + tax_total - data.discount, 2)
     paid      = total if data.payment_mode not in ("credit",) else 0.0
     status    = "paid" if paid >= total else "pending"
+
+    await enforce_branch_access(data.branch_id, user=user, db=db)
 
     inv_num = await allocate_number(
         db, "sales_invoice", branch_id=data.branch_id

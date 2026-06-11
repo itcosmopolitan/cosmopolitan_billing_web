@@ -11,10 +11,11 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.document_numbering import allocate_number
-from src.models import PurchaseBill, PurchaseLineItem, ReturnLineItem, Vendor, VendorReturn
+from src.models import PurchaseBill, PurchaseLineItem, ReturnLineItem, User, Vendor, VendorReturn
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked
-from src.security import require_perm
+from src.routes._serializers import get_user_branch_ids
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
 
@@ -121,7 +122,7 @@ async def _purchase_bills_summary(db: AsyncSession, conds):
 # ─── LIST ─────────────────────────────────────────────────────────────────────
 @router.get("/", dependencies=[Depends(require_perm("purchases.view"))])
 async def list_bills(
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     vendor_id: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
@@ -132,10 +133,16 @@ async def list_bills(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to)
+    if branch_id is None and not getattr(user, "all_branches", False):
+        branch_ids = await get_user_branch_ids(db, user.id)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        conds.append(PurchaseBill.branch_id.in_(branch_ids))
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -160,7 +167,6 @@ async def list_bills(
     )
     if conds:
         q = q.where(and_(*conds))
-    if conds:
         count_r = await db.execute(select(func.count(PurchaseBill.id)).where(and_(*conds)))
     else:
         count_r = await db.execute(select(func.count(PurchaseBill.id)))
@@ -173,17 +179,18 @@ async def list_bills(
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
-async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
+async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(b.branch_id, user=user, db=db)
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
     return _bill_dict(b, li_res.scalars().all())
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
-async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db)):
+async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     if not data.items:
         raise HTTPException(400, "Purchase bill must have at least one line item")
     for i in data.items:
@@ -197,6 +204,8 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db)):
     bill_num = await allocate_number(
         db, "purchase_bill", branch_id=data.branch_id
     )
+
+    await enforce_branch_access(data.branch_id, user=user, db=db)
 
     bill = PurchaseBill(
         id=str(uuid.uuid4()), number=bill_num,

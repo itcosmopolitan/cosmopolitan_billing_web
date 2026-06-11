@@ -6,13 +6,14 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Item, Organisation, TaxRate
+from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.security import require_perm
 from src.tax_calc import VALID_TAX_PRICING_MODES, normalize_tax_pricing_mode
 
@@ -29,7 +30,7 @@ class TaxRateUpdate(BaseModel):
     rate: Optional[float] = Field(default=None, ge=0, le=100)
     label: Optional[str] = Field(default=None, min_length=1, max_length=80)
     examples: Optional[str] = None
-    active: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 
 class TaxSettingsUpdate(BaseModel):
@@ -44,14 +45,58 @@ async def _get_organisation(db: AsyncSession) -> Organisation:
 
 
 def _serialize(t: TaxRate) -> dict:
-    return {
+    row = {
         "id": t.id,
         "rate": t.rate,
         "label": t.label,
         "examples": t.examples or "",
-        "active": bool(t.active),
+        "is_active": bool(t.active),
         "is_system": bool(t.is_system),
     }
+    if not t.active:
+        row["tax_id"] = t.id
+    return row
+
+
+def _parse_csv_ids(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _parse_csv_rates(raw: Optional[str]) -> list[float]:
+    if not raw:
+        return []
+    rates: list[float] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            rates.append(float(part))
+        except ValueError:
+            continue
+    return rates
+
+
+def _active_list_filter(
+    active_only: bool,
+    include_inactive_tax_ids: Optional[str],
+    include_inactive_rates: Optional[str],
+):
+    """Active taxes, plus optional inactive rows referenced by id or item rate."""
+    if not active_only:
+        return None
+    extra = []
+    ids = _parse_csv_ids(include_inactive_tax_ids)
+    rates = _parse_csv_rates(include_inactive_rates)
+    if ids:
+        extra.append(TaxRate.id.in_(ids))
+    if rates:
+        extra.append((TaxRate.active == False) & (TaxRate.rate.in_(rates)))
+    if not extra:
+        return TaxRate.active == True
+    return or_(TaxRate.active == True, *extra)
 
 
 async def _item_count_for_rate(db: AsyncSession, rate: float) -> int:
@@ -61,11 +106,56 @@ async def _item_count_for_rate(db: AsyncSession, rate: float) -> int:
 
 
 @router.get("/")
-async def list_tax_rates(db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(
-        select(TaxRate).order_by(TaxRate.rate.asc(), TaxRate.label.asc())
-    )).scalars().all()
-    return [_serialize(t) for t in rows]
+async def list_tax_rates(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    page_no: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    active_only: bool = Query(True),
+    include_inactive_tax_ids: Optional[str] = Query(
+        None,
+        description="Comma-separated tax ids to include even when inactive (e.g. item still on that rate)",
+    ),
+    include_inactive_rates: Optional[str] = Query(
+        None,
+        description="Comma-separated rates whose inactive tax rows should be included",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    if page_no is not None or per_page is not None:
+        _, pp, sk, lim = pagination_from_page(page_no, per_page)
+    else:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
+    visibility = _active_list_filter(
+        active_only, include_inactive_tax_ids, include_inactive_rates,
+    )
+    count_q = select(func.count(TaxRate.id))
+    if visibility is not None:
+        count_q = count_q.where(visibility)
+    total = int((await db.execute(count_q)).scalar() or 0)
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "rate": TaxRate.rate,
+            "label": TaxRate.label,
+            "examples": TaxRate.examples,
+            "active": TaxRate.active,
+            "is_active": TaxRate.active,
+            "created_at": TaxRate.created_at,
+        },
+        default_key="rate",
+        default_order="asc",
+    )
+    list_q = select(TaxRate)
+    if visibility is not None:
+        list_q = list_q.where(visibility)
+    result = await db.execute(list_q.order_by(sort_expr).offset(sk).limit(lim))
+    items = [_serialize(t) for t in result.scalars().all()]
+    return paged_list(items, total, sk, lim)
 
 
 @router.get("/settings")
@@ -154,8 +244,8 @@ async def update_tax_rate(tax_id: str, data: TaxRateUpdate, db: AsyncSession = D
         tax.label = data.label.strip()
     if data.examples is not None:
         tax.examples = data.examples.strip()
-    if data.active is not None and not tax.is_system:
-        tax.active = data.active
+    if data.is_active is not None:
+        tax.active = data.is_active
     await db.commit()
     await db.refresh(tax)
     return _serialize(tax)

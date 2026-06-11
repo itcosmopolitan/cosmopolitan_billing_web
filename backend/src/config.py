@@ -4,7 +4,7 @@ Uses pydantic-settings to load from environment variables with sensible defaults
 """
 from typing import List
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 

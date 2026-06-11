@@ -34,6 +34,7 @@ from src.routes import (
     adjustments,
     users,
     vendors,
+    summaries,
 )
 
 # ─── Load Configuration ────────────────────────────────────────────────────
@@ -118,6 +119,7 @@ app.include_router(sales.router,      prefix=f"{PREFIX}/sales",     tags=["Sales
 app.include_router(purchases.router,  prefix=f"{PREFIX}/purchases", tags=["Purchases"])
 app.include_router(transfers.router,  prefix=f"{PREFIX}/transfers", tags=["Transfers"])
 app.include_router(adjustments.router, prefix=f"{PREFIX}/adjustments", tags=["Adjustments"])
+app.include_router(summaries.router,    prefix=f"{PREFIX}/summaries",    tags=["Summaries"])
 app.include_router(cash.router,       prefix=f"{PREFIX}/cash",      tags=["Cash"])
 app.include_router(reports.router,    prefix=f"{PREFIX}/reports",   tags=["Reports"])
 app.include_router(users.router,      prefix=f"{PREFIX}/users",     tags=["Users"])
