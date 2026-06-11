@@ -74,7 +74,11 @@ async def list_branches(
     query = select(Branch)
     if accessible is not None:
         query = query.where(Branch.id.in_(accessible))
-    total = int((await db.execute(select(func.count(Branch.id)).select_from(query.subquery()))).scalar() or 0)
+    # Count rows from the query's subquery to avoid joining the outer
+    # `branches` table with the subquery (prevents SAWarning about a
+    # cartesian product when SQLAlchemy composes FROM elements).
+    count_stmt = select(func.count()).select_from(query.subquery())
+    total = int((await db.execute(count_stmt)).scalar() or 0)
     result = await db.execute(query.order_by(sort_expr).offset(sk).limit(lim))
     items = [serialize_branch(b) for b in result.scalars().all()]
     return paged_list(items, total, sk, lim)

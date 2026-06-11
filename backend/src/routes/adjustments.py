@@ -28,6 +28,7 @@ from src.models import (
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._stock_adjust_apply import apply_stock_adjustment
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.routes._serializers import get_user_branch_ids
 
 router = APIRouter()
 
