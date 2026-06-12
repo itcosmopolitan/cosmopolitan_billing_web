@@ -28,6 +28,7 @@ from src.routes._atomic import (
     consume_batches_atomic,
     is_tracked,
 )
+from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import get_user_branch_ids
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
@@ -478,7 +479,8 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
-async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("invoices.create")), db: AsyncSession = Depends(get_db)):
+
     if not data.items:
         raise HTTPException(400, "Invoice must have at least one line item")
     for i in data.items:
@@ -625,6 +627,7 @@ async def create_invoice(data: SaleCreate, db: AsyncSession = Depends(get_db), u
                     )
 
     await db.commit()
+    invalidate_dashboard_cache_for_user(user.id)
     await db.refresh(inv)
     return {"id": inv.id, "number": inv_num, "total": round(total, 2), "status": status}
 

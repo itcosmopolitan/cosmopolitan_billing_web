@@ -2,11 +2,17 @@
 Cosmopolitan Pro — FastAPI Backend
 Multi-branch retail billing & POS platform
 """
+import asyncio
+import logging
+import time
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
+
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from src import config
 from src.database import init_schema
@@ -53,6 +59,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+logger = logging.getLogger("cosmopolitan.main")
+logging.basicConfig(level=logging.INFO)
+
+@app.middleware("http")
+async def log_request_duration(request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.exception(
+            "Request failed %s %s in %.2fms",
+            request.method,
+            request.url.path,
+            elapsed_ms,
+            exc_info=exc,
+        )
+        raise
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s completed in %.2fms %s",
+        request.method,
+        request.url.path,
+        elapsed_ms,
+        response.status_code,
+    )
+    response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.2f}"
+    return response
+
+
+@app.exception_handler(asyncio.TimeoutError)
+async def timeout_exception_handler(request, exc):
+    logger.warning("Request timeout for %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=504,
+        content={"detail": "Request timed out. Please narrow the date range or try again later."},
+    )
+
+
+@app.exception_handler(SQLAlchemyTimeoutError)
+async def sqlalchemy_timeout_exception_handler(request, exc):
+    logger.warning("Database timeout for %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=504,
+        content={"detail": "A database timeout occurred. Please narrow the date range or try again later."},
+    )
+
+
 # ─── Routers ──────────────────────────────────────────────────────────────────
 PREFIX = "/api/v1"
 app.include_router(auth.router,       prefix=f"{PREFIX}/auth",      tags=["Auth"])
@@ -76,8 +130,13 @@ app.include_router(taxes.router,       prefix=f"{PREFIX}/taxes",       tags=["Ta
 
 @app.on_event("startup")
 async def startup():
-    # Creates tables, applies additive column migrations, backfills role_id (D6).
-    await init_schema()
+    logger.info("Starting FastAPI application startup")
+    try:
+        await init_schema()
+        logger.info("FastAPI application startup completed")
+    except Exception:
+        logger.exception("Application startup failed during database initialization")
+        raise
 
 @app.get("/api/health")
 async def health():

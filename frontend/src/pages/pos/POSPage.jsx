@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
 import { itemsAPI, customersAPI, salesAPI } from '@/api'
+import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
@@ -46,6 +48,7 @@ const mapSeedCustomersForBranch = (branchId) =>
 
 export default function POSPage() {
   const can = useCan()
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [activeCat, setActiveCat] = useState('all')
@@ -354,6 +357,7 @@ export default function POSPage() {
         return next
       })
       await refreshProductStock()
+      queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
       toast.success(`Sale ${result.number} completed!`)
     } catch (err) {
       console.error('Failed to complete sale:', err)
