@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { reportsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { fmt, fmtDate, fmtNum, exportToCSV } from '@/utils/helpers'
+import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
 import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
@@ -434,6 +435,7 @@ export default function ReportsPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [runKey, setRunKey] = useState(Date.now())
+  const [tab, setTab] = useState('sales')
 
   const selectedReport = REPORT_MAP[reportType]
   const reportOptions = REPORT_CATEGORIES.find((item) => item.id === category)?.reports || []
@@ -496,29 +498,31 @@ export default function ReportsPage() {
         setTotal(0)
       } finally {
         setLoading(false)
-        const [s, p, t, b, m, stk] = await Promise.all([
-          reportsAPI.salesSummary(params).catch(() => null),
-          reportsAPI.purchaseSummary(params).catch(() => null),
-          reportsAPI.taxSummary({ date_from: dateFrom, date_to: dateTo }).catch(() => null),
-          reportsAPI.branchCompare().catch(() => []),
-          reportsAPI.marginAnalysis().catch(() => null),
-          reportsAPI.stockMovement({
-            branch_id: branchF || undefined,
-            date_from: dateFrom,
-            date_to: dateTo,
-            limit: 500,
-          }).catch(() => null),
-        ])
-        if (cancelled) return
-        setSalesSummary(s)
-        setPurchaseSummary(p)
-        setTaxSummary(t)
-        setBranchCompare(Array.isArray(b) ? b : [])
-        setMarginData(m)
-        setStockData(stk)
-      } catch (e) {
-        // Toast already fired by axios interceptor.
-        console.error(e)
+        try {
+          const [s, p, t, b, m, stk] = await Promise.all([
+            reportsAPI.salesSummary(params).catch(() => null),
+            reportsAPI.purchaseSummary(params).catch(() => null),
+            reportsAPI.taxSummary({ date_from: dateFrom, date_to: dateTo }).catch(() => null),
+            reportsAPI.branchCompare().catch(() => []),
+            reportsAPI.marginAnalysis().catch(() => null),
+            reportsAPI.stockMovement({
+              branch_id: branchId || undefined,
+              date_from: dateFrom,
+              date_to: dateTo,
+              limit: 500,
+            }).catch(() => null),
+          ])
+          if (cancelled) return
+          setSalesSummary(s)
+          setPurchaseSummary(p)
+          setTaxSummary(t)
+          setBranchCompare(Array.isArray(b) ? b : [])
+          setMarginData(m)
+          setStockData(stk)
+        } catch (e) {
+          // Toast already fired by axios interceptor.
+          console.error(e)
+        }
       }
     }
 
@@ -573,68 +577,8 @@ export default function ReportsPage() {
     if (!rows || rows.length === 0) {
       toast.error('No data available to export.')
       return
-    if (tab === 'sales') {
-      exportData = SALES_INVOICES.map(i => ({
-        'Invoice #': i.number,
-        'Date': i.date,
-        'Customer': i.customerName,
-        'Branch': i.branchName,
-        'Cashier': i.cashier,
-        'Taxable (₹)': i.subtotal,
-        'GST (₹)': i.taxTotal,
-        'Discount (₹)': i.discount,
-        'Total (₹)': i.total,
-        'Mode': i.paymentMode.toUpperCase(),
-        'Status': i.status.toUpperCase(),
-      }))
-      filename = `Sales_Register_${dateFrom}_to_${dateTo}.csv`
-    } else if (tab === 'purchase') {
-      exportData = PURCHASE_BILLS.map(b => ({
-        'Bill #': b.number,
-        'Date': b.date,
-        'Vendor': b.vendorName,
-        'Branch': b.branchName,
-        'Subtotal (₹)': b.subtotal,
-        'GST Paid (₹)': b.taxTotal,
-        'Total (₹)': b.total,
-        'Paid (₹)': b.paidAmount,
-        'Status': b.status.toUpperCase(),
-      }))
-      filename = `Purchase_Register_${dateFrom}_to_${dateTo}.csv`
-    } else if (tab === 'tax') {
-      exportData = [
-        ...TAX_OUTPUT.map(r => ({
-          'Type': 'Output (Sales)',
-          'GST Rate': r.rate,
-          'Taxable': r.taxable,
-          'CGST/IGST': r.cgst,
-          'SGST': r.sgst,
-          'Total Tax': r.cgst + r.sgst,
-        })),
-        ...TAX_INPUT.map(r => ({
-          'Type': 'Input (Purchases)',
-          'GST Rate': r.rate,
-          'Taxable': r.taxable,
-          'CGST/IGST': r.cgst,
-          'SGST': r.sgst,
-          'Total ITC': r.cgst + r.sgst,
-        }))
-      ]
-      filename = `GST_Summary_${dateFrom}_to_${dateTo}.csv`
-    } else if (tab === 'stock') {
-      exportData = stockRows.map(r => ({
-        'Item': r.item_name,
-        'SKU': r.sku,
-        'Opening Stock': r.opening,
-        'Purchased': r.purchases_in,
-        'Sold': r.sales_out,
-        'Transferred': r.transfers_net,
-        'Adjusted': r.adjustments,
-        'Closing Stock': r.closing,
-        'Variance': r.variance,
-      }))
-      filename = `Stock_Movement_${dateFrom}_to_${dateTo}.csv`
     }
+
     const exportData = rows.map((row) => {
       const entry = {}
       selectedReport.columns.forEach((col) => {
@@ -643,6 +587,7 @@ export default function ReportsPage() {
       })
       return entry
     })
+
     exportToCSV(exportData, `${selectedReport.label.replace(/\s+/g, '_')}_${dateFrom}_to_${dateTo}.csv`)
     toast.success('Excel export ready')
   }
