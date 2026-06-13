@@ -366,8 +366,11 @@ async def init_schema() -> None:
     await _wait_for_connection(engine)
     start = time.perf_counter()
     logger.info("Starting schema initialization")
+    async with engine.connect() as ddl_conn:
+        await (await ddl_conn.execution_options(isolation_level="AUTOCOMMIT")).run_sync(
+            Base.metadata.create_all
+        )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _ensure_nullable_columns(conn)
         await _ensure_pg_enum_values(conn)
@@ -581,16 +584,16 @@ async def _bootstrap_invoice_template(conn) -> None:
         {
             "id": cfg["id"],
             "header_style": cfg["header_style"],
-            "show_attr": 1 if cfg["show_attr"] else 0,
-            "show_size": 1 if cfg["show_size"] else 0,
-            "show_disc": 1 if cfg["show_disc"] else 0,
-            "show_hsn": 1 if cfg["show_hsn"] else 0,
+            "show_attr": bool(cfg["show_attr"]),
+            "show_size": bool(cfg["show_size"]),
+            "show_disc": bool(cfg["show_disc"]),
+            "show_hsn": bool(cfg["show_hsn"]),
             "tax_mode": cfg["tax_mode"],
-            "show_customer": 1 if cfg["show_customer"] else 0,
-            "show_payment": 1 if cfg["show_payment"] else 0,
-            "show_printed_date": 1 if cfg["show_printed_date"] else 0,
-            "show_store": 1 if cfg["show_store"] else 0,
-            "show_cashier": 1 if cfg["show_cashier"] else 0,
+            "show_customer": bool(cfg["show_customer"]),
+            "show_payment": bool(cfg["show_payment"]),
+            "show_printed_date": bool(cfg["show_printed_date"]),
+            "show_store": bool(cfg["show_store"]),
+            "show_cashier": bool(cfg["show_cashier"]),
             "footer_msg": cfg["footer_msg"],
             "footer_note": cfg["footer_note"],
         },
