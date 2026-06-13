@@ -24,6 +24,10 @@ export default function VendorsPage() {
   const [historyVendor, setHistoryVendor] = useState(null)
   const [historyData, setHistoryData] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [ledgerVendor, setLedgerVendor] = useState(null)
+  const [ledgerEntries, setLedgerEntries] = useState([])
+  const [ledgerTotal, setLedgerTotal] = useState(0)
+  const [ledgerLoading, setLedgerLoading] = useState(false)
   const [form, setForm]       = useState({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
 
@@ -146,6 +150,33 @@ export default function VendorsPage() {
     }
   }
 
+  const openCreditLedger = async (vendor) => {
+    setLedgerVendor({
+      ...vendor,
+      creditBalance: vendor.credit_balance || 0,
+    })
+    setLedgerLoading(true)
+    setLedgerEntries([])
+    try {
+      const raw = await vendorsAPI.creditLedger(vendor.id, { skip: 0, limit: 100 })
+      const { items, total } = unwrapPaged(raw)
+      setLedgerEntries(items || [])
+      setLedgerTotal(total || 0)
+    } catch (err) {
+      console.error('Failed to load vendor credit ledger:', err)
+      toast.error('Failed to load credit ledger')
+      setLedgerVendor(null)
+    } finally {
+      setLedgerLoading(false)
+    }
+  }
+
+  const entryTypeColor = (type) => {
+    if (type?.includes('debit') || type?.includes('revoke')) return 'var(--red)'
+    if (type?.includes('credit') || type?.includes('overpayment') || type?.includes('restore')) return 'var(--green)'
+    return 'var(--text-primary)'
+  }
+
   const totals = {
     total: vendorTotal,
     outstanding: vendors.reduce((s,v)=>s+v.outstanding,0),
@@ -198,6 +229,7 @@ export default function VendorsPage() {
                 <th>GSTIN</th>
                 <SortableHeader label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
                 <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                <th className="text-right" style={{ textAlign: 'right' }}>Credit</th>
                 <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
                 <th></th>
               </tr>
@@ -216,11 +248,17 @@ export default function VendorsPage() {
                   <td style={{fontSize:12,fontFamily:'DM Mono,monospace'}}>{v.gstin||'—'}</td>
                   <td><Tag>{v.payment_terms}</Tag></td>
                   <td className="text-right mono" style={{color:v.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(v.outstanding)}</td>
+                  <td className="text-right mono" style={{ color: (v.credit_balance || 0) > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                    {fmt(v.credit_balance || 0)}
+                  </td>
                   <td className="text-right mono">{fmt(v.total_purchases)}</td>
                   <td>
                     <div style={{display:'flex',gap:4}}>
                       {can('vendors.edit') && (
                         <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
+                      )}
+                      {(v.credit_balance || 0) > 0 && (
+                        <button className="btn btn-ghost btn-xs" onClick={() => openCreditLedger(v)}>Credit</button>
                       )}
                       <button className="btn btn-primary btn-xs" onClick={() => openHistory(v)}>History</button>
                     </div>
@@ -294,6 +332,60 @@ export default function VendorsPage() {
               </tbody>
             </table>
           </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!ledgerVendor}
+        onClose={() => setLedgerVendor(null)}
+        title={`Vendor Credit — ${ledgerVendor?.name || ''}`}
+        icon="💳"
+        size="lg"
+        footer={<button className="btn btn-secondary" onClick={() => setLedgerVendor(null)}>Close</button>}
+      >
+        {ledgerVendor && (
+          <>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+              <div style={{ padding: '10px 14px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Current advance</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--accent)' }}>{fmt(ledgerVendor.creditBalance)}</div>
+              </div>
+              <div style={{ padding: '10px 14px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ledger entries</div>
+                <div style={{ fontSize: 18, fontWeight: 600 }}>{ledgerTotal}</div>
+              </div>
+            </div>
+            {ledgerLoading ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>Loading ledger…</div>
+            ) : ledgerEntries.length === 0 ? (
+              <EmptyState icon="💳" title="No credit movements yet" subtitle="Overpayments will appear here." />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Reference</th>
+                    <th className="text-right" style={{ textAlign: 'right' }}>Change</th>
+                    <th className="text-right" style={{ textAlign: 'right' }}>Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledgerEntries.map((e) => (
+                    <tr key={e.id}>
+                      <td style={{ fontSize: 12 }}>{e.date}</td>
+                      <td style={{ fontSize: 12 }}>{e.entryLabel || e.entryType}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{e.sourceNumber || e.sourceType || '—'}</td>
+                      <td className="text-right mono" style={{ color: entryTypeColor(e.entryType), textAlign: 'right' }}>
+                        {e.delta >= 0 ? '+' : ''}{fmt(e.delta)}
+                      </td>
+                      <td className="text-right mono" style={{ textAlign: 'right' }}>{fmt(e.balanceAfter)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
         )}
       </Modal>
     </div>

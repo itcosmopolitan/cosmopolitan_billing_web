@@ -370,6 +370,43 @@ const REPORT_MAP = REPORT_CATEGORIES.reduce((map, category) => {
   })
   return map
 }, {})
+// Phase 5: stock movement + document trail are wired to live API.
+// Sales/purchase register detail tables still use seed data (no paged endpoints yet).
+
+const TABS = [
+  { id: 'sales',     label: '📈 Sales Register' },
+  { id: 'purchase',  label: '📦 Purchase Register' },
+  { id: 'tax',       label: '🧾 Tax Summary (GST)' },
+  { id: 'stock',     label: '📊 Stock Movement' },
+  { id: 'trail',     label: '🔗 Document Trail' },
+  { id: 'branch',    label: '🏪 Branch Comparison' },
+  { id: 'margin',    label: '💹 Margin Analysis' },
+]
+
+const TRAIL_LABELS = {
+  quotation: 'Quotation',
+  sales_order: 'Sales Order',
+  invoice: 'Invoice',
+  credit_note: 'Credit Note',
+  customer_payment: 'Customer Payment',
+  purchase_order: 'Purchase Order',
+  grn: 'GRN',
+  purchase_bill: 'Purchase Bill',
+  vendor_return: 'Vendor Return',
+  vendor_payment: 'Vendor Payment',
+}
+
+const TT = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{ background:'var(--bg-raised)', border:'1px solid var(--border-default)', borderRadius:8, padding:'10px 14px', fontSize:12 }}>
+      <div style={{ fontWeight:600, marginBottom:5 }}>{label}</div>
+      {payload.map(p => <div key={p.name} style={{ color:p.color }}>
+        {p.name}: <span style={{ fontFamily:'DM Mono' }}>{fmt(p.value)}</span>
+      </div>)}
+    </div>
+  )
+}
 
 const DEFAULT_CATEGORY = REPORT_CATEGORIES[0].id
 const DEFAULT_REPORT = REPORT_CATEGORIES[0].reports[0].id
@@ -420,6 +457,17 @@ export default function ReportsPage() {
     setSkip(0)
     setRunKey(Date.now())
   }, [reportType])
+  // Live API data per tab. KPIs render from these; detail tables still use
+  // seed (Phase 4 backlog).
+  const [salesSummary, setSalesSummary] = useState(null)
+  const [purchaseSummary, setPurchaseSummary] = useState(null)
+  const [taxSummaryData, setTaxSummary] = useState(null)
+  const [branchCompare, setBranchCompare] = useState([])
+  const [marginData, setMarginData] = useState(null)
+  const [stockData, setStockData] = useState(null)
+  const [trailNumber, setTrailNumber] = useState('')
+  const [trailResult, setTrailResult] = useState(null)
+  const [trailLoading, setTrailLoading] = useState(false)
 
   useEffect(() => {
     if (!selectedReport) return
@@ -448,11 +496,58 @@ export default function ReportsPage() {
         setTotal(0)
       } finally {
         setLoading(false)
+        const [s, p, t, b, m, stk] = await Promise.all([
+          reportsAPI.salesSummary(params).catch(() => null),
+          reportsAPI.purchaseSummary(params).catch(() => null),
+          reportsAPI.taxSummary({ date_from: dateFrom, date_to: dateTo }).catch(() => null),
+          reportsAPI.branchCompare().catch(() => []),
+          reportsAPI.marginAnalysis().catch(() => null),
+          reportsAPI.stockMovement({
+            branch_id: branchF || undefined,
+            date_from: dateFrom,
+            date_to: dateTo,
+            limit: 500,
+          }).catch(() => null),
+        ])
+        if (cancelled) return
+        setSalesSummary(s)
+        setPurchaseSummary(p)
+        setTaxSummary(t)
+        setBranchCompare(Array.isArray(b) ? b : [])
+        setMarginData(m)
+        setStockData(stk)
+      } catch (e) {
+        // Toast already fired by axios interceptor.
+        console.error(e)
       }
     }
 
     fetchData()
   }, [selectedReport, branchId, dateFrom, dateTo, search, sortBy, sortOrder, skip, limit, runKey])
+  // Helpers — fall back to seed-derived numbers when the API hasn't replied
+  // yet, so the page stays usable on first paint.
+  const seedSalesTotal = useMemo(() => SALES_INVOICES.reduce((s, i) => s + i.total, 0), [])
+  const seedPurchaseTotal = useMemo(() => PURCHASE_BILLS.reduce((s, b) => s + b.total, 0), [])
+  const seedSalesCount = SALES_INVOICES.length
+  const seedPurchaseCount = PURCHASE_BILLS.length
+  const stockRows = stockData?.items ?? []
+
+  const handleTrailSearch = async () => {
+    const num = trailNumber.trim()
+    if (!num) {
+      toast.error('Enter a document number (e.g. INV-2026-2001)')
+      return
+    }
+    setTrailLoading(true)
+    try {
+      const res = await reportsAPI.documentTrail({ number: num })
+      setTrailResult(res)
+    } catch {
+      setTrailResult(null)
+    } finally {
+      setTrailLoading(false)
+    }
+  }
 
   const handleGenerate = () => {
     if (!dateFrom || !dateTo) {
@@ -478,6 +573,67 @@ export default function ReportsPage() {
     if (!rows || rows.length === 0) {
       toast.error('No data available to export.')
       return
+    if (tab === 'sales') {
+      exportData = SALES_INVOICES.map(i => ({
+        'Invoice #': i.number,
+        'Date': i.date,
+        'Customer': i.customerName,
+        'Branch': i.branchName,
+        'Cashier': i.cashier,
+        'Taxable (₹)': i.subtotal,
+        'GST (₹)': i.taxTotal,
+        'Discount (₹)': i.discount,
+        'Total (₹)': i.total,
+        'Mode': i.paymentMode.toUpperCase(),
+        'Status': i.status.toUpperCase(),
+      }))
+      filename = `Sales_Register_${dateFrom}_to_${dateTo}.csv`
+    } else if (tab === 'purchase') {
+      exportData = PURCHASE_BILLS.map(b => ({
+        'Bill #': b.number,
+        'Date': b.date,
+        'Vendor': b.vendorName,
+        'Branch': b.branchName,
+        'Subtotal (₹)': b.subtotal,
+        'GST Paid (₹)': b.taxTotal,
+        'Total (₹)': b.total,
+        'Paid (₹)': b.paidAmount,
+        'Status': b.status.toUpperCase(),
+      }))
+      filename = `Purchase_Register_${dateFrom}_to_${dateTo}.csv`
+    } else if (tab === 'tax') {
+      exportData = [
+        ...TAX_OUTPUT.map(r => ({
+          'Type': 'Output (Sales)',
+          'GST Rate': r.rate,
+          'Taxable': r.taxable,
+          'CGST/IGST': r.cgst,
+          'SGST': r.sgst,
+          'Total Tax': r.cgst + r.sgst,
+        })),
+        ...TAX_INPUT.map(r => ({
+          'Type': 'Input (Purchases)',
+          'GST Rate': r.rate,
+          'Taxable': r.taxable,
+          'CGST/IGST': r.cgst,
+          'SGST': r.sgst,
+          'Total ITC': r.cgst + r.sgst,
+        }))
+      ]
+      filename = `GST_Summary_${dateFrom}_to_${dateTo}.csv`
+    } else if (tab === 'stock') {
+      exportData = stockRows.map(r => ({
+        'Item': r.item_name,
+        'SKU': r.sku,
+        'Opening Stock': r.opening,
+        'Purchased': r.purchases_in,
+        'Sold': r.sales_out,
+        'Transferred': r.transfers_net,
+        'Adjusted': r.adjustments,
+        'Closing Stock': r.closing,
+        'Variance': r.variance,
+      }))
+      filename = `Stock_Movement_${dateFrom}_to_${dateTo}.csv`
     }
     const exportData = rows.map((row) => {
       const entry = {}
@@ -589,6 +745,160 @@ export default function ReportsPage() {
           </table>
         </div>
       </Card>
+      {/* ── STOCK MOVEMENT ──────────────────────────────────────── */}
+      {tab === 'stock' && (
+        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} titleRight={
+          <button className="btn btn-secondary btn-sm" onClick={() => {
+            const exportData = stockRows.map(r => ({
+              'Item': r.item_name,
+              'SKU': r.sku,
+              'Opening Stock': r.opening,
+              'Purchased': r.purchases_in,
+              'Sold': r.sales_out,
+              'Transferred': r.transfers_net,
+              'Adjusted': r.adjustments,
+              'Closing Stock': r.closing,
+              'Variance': r.variance,
+            }))
+            exportToCSV(exportData, `Stock_Movement_${dateFrom}_to_${dateTo}.csv`)
+            toast.success('Stock movement report exported')
+          }}>↓ Export</button>
+        } bodyPadding={false}>
+          {stockRows.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+              {stockData ? 'No stock movement in this period.' : 'Click Generate to load stock data.'}
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Item</th><th className="text-right">Opening</th><th className="text-right">Purchased</th><th className="text-right">Sold</th><th className="text-right">Transferred</th><th className="text-right">Adjusted</th><th className="text-right">Closing</th><th>Variance</th></tr></thead>
+              <tbody>
+                {stockRows.map(r => {
+                  const trans = r.transfers_net ?? ((r.transfers_in || 0) - (r.transfers_out || 0))
+                  const expected = r.opening + r.purchases_in - r.sales_out + trans
+                  const variance = r.variance ?? (r.closing - expected)
+                  return (
+                    <tr key={r.item_id || r.sku}>
+                      <td><div><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:12.5}}>{r.item_name}</div><div style={{fontSize:11,color:'var(--text-muted)'}}>{r.sku}</div></div></td>
+                      <td className="text-right mono">{r.opening}</td>
+                      <td className="text-right mono" style={{color: r.purchases_in >= 0 ? 'var(--green)' : 'var(--red)'}}>{r.purchases_in >= 0 ? '+' : ''}{r.purchases_in}</td>
+                      <td className="text-right mono" style={{color:'var(--red)'}}>-{r.sales_out}</td>
+                      <td className="text-right mono" style={{color:'var(--blue)'}}>{trans >= 0 ? '+' : ''}{trans}</td>
+                      <td className="text-right mono">{r.adjustments >= 0 ? '+' : ''}{r.adjustments}</td>
+                      <td className="text-right mono" style={{fontWeight:600,color:'var(--text-primary)'}}>{r.closing}</td>
+                      <td><span style={{fontSize:11.5,padding:'2px 8px',borderRadius:10,background:variance===0?'var(--green-bg)':variance>0?'var(--blue-bg)':'var(--red-bg)',color:variance===0?'var(--green)':variance>0?'var(--blue)':'var(--red)',fontWeight:600}}>{variance===0?'Match':variance>0?'+'+variance:variance}</span></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
+
+      {/* ── DOCUMENT TRAIL ──────────────────────────────────────── */}
+      {tab === 'trail' && (
+        <>
+          <Card title="Document Lineage Search">
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Document number (QT-, SO-, INV-, CN-, PO-, GRN-, PUR-, RET-)"
+                value={trailNumber}
+                onChange={e => setTrailNumber(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleTrailSearch()}
+                style={{ flex: 1, minWidth: 280 }}
+              />
+              <button className="btn btn-primary btn-sm" onClick={handleTrailSearch} disabled={trailLoading}>
+                {trailLoading ? 'Searching…' : 'Trace'}
+              </button>
+            </div>
+            <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+              Traces upstream and downstream links: Quote → SO → Invoice → Credit Note, or PO → GRN → Bill → Vendor Return.
+            </p>
+          </Card>
+
+          {trailResult?.chain?.length > 0 && (
+            <Card title={`Trail for ${trailResult.number}`} bodyPadding={false}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Step</th>
+                    <th>Type</th>
+                    <th>Number</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th className="text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trailResult.chain.map((node, i) => (
+                    <tr key={`${node.type}-${node.id}`}>
+                      <td className="mono" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
+                      <td>{TRAIL_LABELS[node.type] || node.type}</td>
+                      <td style={{ fontWeight: 500 }}>{node.number}</td>
+                      <td>{node.date || '—'}</td>
+                      <td><Chip label={node.status} custom={{ bg: 'var(--bg-raised)', color: 'var(--text-secondary)' }} /></td>
+                      <td className="text-right mono">{fmt(node.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+        </>
+      )}
+
+      {/* ── BRANCH COMPARISON ───────────────────────────────────── */}
+      {tab === 'branch' && (
+        <>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:20}}>
+            {(branchCompare.length > 0
+              ? branchCompare.map((b, i) => ({
+                  name: b.branch,
+                  sales: b.sales,
+                  purchases: b.purchases,
+                  color: ['#6366f1','#a78bfa','#2dd4bf','#f5a623','#22c97a','#f5485c'][i % 6],
+                }))
+              : [
+                  {name:'Male',      sales:1480000, purchases:840000, color:'#6366f1'},
+                  {name:'Addu',      sales:1120000, purchases:620000, color:'#a78bfa'},
+                  {name:'Hulhumalé', sales:860000,  purchases:480000, color:'#2dd4bf'},
+                  {name:'Felidhoo',  sales:540000,  purchases:310000, color:'#f5a623'},
+                ]
+            ).map(b=>(
+              <div key={b.name} style={{background:'var(--bg-surface)',border:'1px solid var(--border-default)',borderRadius:14,padding:18}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
+                  <span style={{width:10,height:10,borderRadius:'50%',background:b.color,display:'inline-block'}}/>
+                  <span style={{fontWeight:600,fontSize:14}}>{b.name}</span>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+                  <div><div style={{fontSize:11,color:'var(--text-muted)'}}>Sales (Apr)</div><div style={{fontSize:16,fontWeight:700,color:'var(--text-primary)'}}>{fmt(b.sales)}</div></div>
+                  <div><div style={{fontSize:11,color:'var(--text-muted)'}}>Purchases</div><div style={{fontSize:15,fontWeight:600,color:'var(--text-secondary)'}}>{fmt(b.purchases)}</div></div>
+                </div>
+                <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>Performance vs Male</div>
+                <div style={{height:6,background:'var(--bg-hover)',borderRadius:3,overflow:'hidden'}}>
+                  <div style={{height:'100%',borderRadius:3,background:b.color,width:`${Math.round(b.sales/14800)}%`,transition:'width 1s ease'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Card title="Branch Sales Comparison Chart">
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={SALES_TREND.slice(-7).map(d=>({...d,tnagar:Math.round(d.sales*0.76),vadapalani:Math.round(d.sales*0.55),velachery:Math.round(d.sales*0.35)}))} margin={{top:5,right:10,left:-10,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)"/>
+                <XAxis dataKey="date" tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false}/>
+                <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`₹${(v/1000).toFixed(0)}K`}/>
+                <Tooltip content={<TT/>}/>
+                <Legend wrapperStyle={{fontSize:11,color:'var(--text-muted)'}}/>
+                <Bar dataKey="sales"     name="Male"      fill="#6366f1" radius={[3,3,0,0]}/>
+                <Bar dataKey="tnagar"    name="Addu"      fill="#a78bfa" radius={[3,3,0,0]}/>
+                <Bar dataKey="vadapalani" name="Hulhumalé" fill="#2dd4bf" radius={[3,3,0,0]}/>
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        </>
+      )}
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>

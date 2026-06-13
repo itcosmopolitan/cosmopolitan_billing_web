@@ -19,10 +19,37 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res.data,
   (err) => {
-    const msg = err?.response?.data?.detail || err.message || 'Request failed'
+    const rawDetail = err?.response?.data?.detail
     const status = err?.response?.status
     const url = err?.config?.url || ''
     const isAuthEndpoint = url.startsWith('/auth/')
+
+    // Some endpoints return structured detail objects (e.g. bulk-delete
+    // returns `{blocked: [...], message: "..."}` so the caller can render
+    // per-row reasons inline). Pull `.message` out for the global toast;
+    // never call `toast.error()` with a non-string (react-hot-toast will
+    // render `[object Object]`). The original error stays attached on
+    // err.response.data.detail so the caller's catch block can still
+    // read the structured payload.
+    let msg
+    if (typeof rawDetail === 'string') {
+      msg = rawDetail
+    } else if (rawDetail && typeof rawDetail === 'object') {
+      msg = rawDetail.message || JSON.stringify(rawDetail)
+    } else {
+      msg = err.message || 'Request failed'
+    }
+
+    // 2026-05-25: bulk-delete endpoints surface a structured `{blocked,
+    // message}` body on guard failures. The caller mounts a confirm modal
+    // that lists the blocked rows + reasons inline — a global toast on
+    // top of that is just noise. Suppress it for this one shape.
+    const isBulkDeleteBlocked =
+      status === 400 &&
+      url.includes('/bulk-delete') &&
+      rawDetail && typeof rawDetail === 'object' &&
+      Array.isArray(rawDetail.blocked)
+
     if (status === 401) {
       // Always surface the message — silent redirect on 401 made wrong-password
       // login look broken (no toast, no UI change).
@@ -34,7 +61,7 @@ api.interceptors.response.use(
         const here = window.location.pathname
         if (here !== '/login') window.location.href = '/login'
       }
-    } else {
+    } else if (!isBulkDeleteBlocked) {
       toast.error(msg)
     }
     return Promise.reject(err)
@@ -100,13 +127,71 @@ export const salesAPI = {
   create:  (data)   => api.post('/sales/', data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
-  returns: (params) => api.get('/sales/returns', { params }),
-  creditPurchases: (params) => api.get('/sales/credit/purchases', { params }),
+  // creditPurchases endpoint removed 2026-05-23 (Sales Phase 1) — see
+  // ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md. The same data is
+  // available via salesAPI.list({ payment_mode: 'credit' }) if needed.
+
+  // Sales Phase 1 PR 2 (2026-05-23): real Sales Orders + Sales Returns
+  // (real, persisted — replaces the SAMPLE_RETURNS hardcoded list).
+  orders: {
+    list:         (params)        => api.get('/sales/orders/', { params }),
+    get:          (id)            => api.get(`/sales/orders/${id}`),
+    create:       (data)          => api.post('/sales/orders/', data),
+    // PR 2 follow-up (2026-05-23): full replace of editable fields +
+    // items. Server rejects with 400 when the SO is in a terminal status
+    // (converted / cancelled) — UI hides the Edit affordance for those.
+    update:       (id, data)      => api.put(`/sales/orders/${id}`, data),
+    updateStatus: (id, status)    => api.patch(`/sales/orders/${id}/status`, null, { params: { status } }),
+    // body = { payment_received: bool, payment_mode: string|null, notes: string|null }
+    convert:      (id, body)      => api.post(`/sales/orders/${id}/convert`, body),
+  },
+  returns: {
+    // 2026-05-24: trailing slash on list + create is LOAD-BEARING.
+    // The backend registers `/{invoice_id}` BEFORE `/returns/`; without
+    // the trailing slash, `/sales/returns` matches `/{invoice_id}` with
+    // invoice_id="returns" → 404 "Invoice not found" toast firing on
+    // every visit to the Returns tab. The same pattern as `/orders/` +
+    // `/quotations/` (both use trailing slash).
+    list:   (params) => api.get('/sales/returns/', { params }),
+    get:    (id)     => api.get(`/sales/returns/${id}`),
+    // body shape — see ConvertToInvoiceIn / SalesReturnCreate in routes/sales.py
+    create:   (data) => api.post('/sales/returns/', data),
+    void:     (id)   => api.post(`/sales/returns/${id}/void`),
+    undoVoid: (id)   => api.post(`/sales/returns/${id}/undo-void`),
+  },
+  // 2026-05-24: multi-invoice payments — operator picks a customer,
+  // selects pending invoices, allocates an amount per invoice. Backend
+  // also writes a CustomerPayment row when the legacy single-invoice
+  // POST /sales/{id}/payment endpoint runs, so this list reflects every
+  // payment regardless of entry point. Trailing slash same rationale.
+  payments: {
+    list:   (params) => api.get('/sales/payments/', { params }),
+    get:    (id)     => api.get(`/sales/payments/${id}`),
+    create: (data)   => api.post('/sales/payments/', data),
+    void:   (id)     => api.post(`/sales/payments/${id}/void`),
+  },
+  // 2026-05-25: bulk-delete endpoints. All-or-nothing semantics:
+  // backend returns 400 with { detail: { blocked: [...], message } }
+  // if any row is blocked. On success: { deleted: [...], count, ... }.
+  bulkDelete: {
+    invoices:   (ids) => api.post('/sales/bulk-delete', { ids }),
+    orders:     (ids) => api.post('/sales/orders/bulk-delete', { ids }),
+    quotations: (ids) => api.post('/sales/quotations/bulk-delete', { ids }),
+    returns:    (ids) => api.post('/sales/returns/bulk-delete', { ids }),
+    payments:   (ids) => api.post('/sales/payments/bulk-delete', { ids }),
+  },
   quotations: {
     list:    (params) => api.get('/sales/quotations/', { params }),
     get:     (id)     => api.get(`/sales/quotations/${id}`),
     create:  (data)   => api.post('/sales/quotations/', data),
-    updateStatus: (id, status) => api.patch(`/sales/quotations/${id}/status`, { status }),
+    // PR 2 follow-up (2026-05-23): full edit. Server rejects 400 when
+    // the quote is in a terminal status (accepted / converted / rejected).
+    update:  (id, data) => api.put(`/sales/quotations/${id}`, data),
+    updateStatus:   (id, status) => api.patch(`/sales/quotations/${id}/status`, null, { params: { status } }),
+    // PR 2: convert quotation → sales order (server copies prices verbatim
+    // + marks the quote `accepted`). Returns the new SO's id + number.
+    convertToOrder: (id)         => api.post(`/sales/quotations/${id}/convert-to-order`),
+    convertToInvoice: (id, body) => api.post(`/sales/quotations/${id}/convert-to-invoice`, body),
   },
 }
 
@@ -115,19 +200,58 @@ export const purchasesAPI = {
   list:    (params) => api.get('/purchases/',         { params }),
   get:     (id)     => api.get(`/purchases/${id}`),
   create:  (data)   => api.post('/purchases/', data),
+  update:  (id, data) => api.put(`/purchases/${id}`, data),
   payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
+  // 2026-05-24: cancel endpoint added. Sales has the equivalent.
+  // Bills are immutable — only Record Payment + Cancel are allowed.
+  cancel:  (id)     => api.post(`/purchases/${id}/cancel`),
+  // Purchase Orders — mirror of salesAPI.orders. PO is the intent doc;
+  // convert spawns a bill (which is what moves stock + creates batches).
+  orders: {
+    list:         (params) => api.get('/purchases/orders/',          { params }),
+    get:          (id)     => api.get(`/purchases/orders/${id}`),
+    create:       (data)   => api.post('/purchases/orders/', data),
+    update:       (id, data) => api.put(`/purchases/orders/${id}`, data),
+    updateStatus: (id, status) => api.patch(`/purchases/orders/${id}/status`, { status }),
+    convert:      (id, body) => api.post(`/purchases/orders/${id}/convert`, body),
+  },
+  grns: {
+    list:       (params) => api.get('/purchases/grns/', { params }),
+    get:        (id)     => api.get(`/purchases/grns/${id}`),
+    create:     (data)   => api.post('/purchases/grns/', data),
+    fromPo:     (poId, data) => api.post(`/purchases/grns/from-po/${poId}`, data),
+    bill:       (id, body) => api.post(`/purchases/grns/${id}/bill`, body),
+    cancel:     (id)     => api.post(`/purchases/grns/${id}/cancel`),
+  },
   returns: {
     list:    (params) => api.get('/purchases/returns/', { params }),
     get:     (id)     => api.get(`/purchases/returns/${id}`),
-    create:  (data)   => api.post('/purchases/returns/', data),
-    approve: (id)     => api.post(`/purchases/returns/${id}/approve`),
-  }
+    create:   (data) => api.post('/purchases/returns/', data),
+    approve:  (id)   => api.post(`/purchases/returns/${id}/approve`),
+    void:     (id)   => api.post(`/purchases/returns/${id}/void`),
+    undoVoid: (id)   => api.post(`/purchases/returns/${id}/undo-void`),
+  },
+  // Multi-bill vendor payments — mirror of salesAPI.payments.
+  payments: {
+    list:   (params) => api.get('/purchases/payments/', { params }),
+    get:    (id)     => api.get(`/purchases/payments/${id}`),
+    create: (data)   => api.post('/purchases/payments/', data),
+    void:   (id)     => api.post(`/purchases/payments/${id}/void`),
+  },
+  // Bulk delete — same shape as salesAPI.bulkDelete.
+  bulkDelete: {
+    bills:    (ids) => api.post('/purchases/bulk-delete', { ids }),
+    orders:   (ids) => api.post('/purchases/orders/bulk-delete', { ids }),
+    returns:  (ids) => api.post('/purchases/returns/bulk-delete', { ids }),
+    payments: (ids) => api.post('/purchases/payments/bulk-delete', { ids }),
+  },
 }
 
 // ─── Customers ────────────────────────────────────────────────────────────────
 export const customersAPI = {
   list:   (params) => api.get('/customers/',          { params }),
   get:    (id)     => api.get(`/customers/${id}`),
+  creditLedger: (id, params) => api.get(`/customers/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/customers/', data),
   update: (id, data) => api.put(`/customers/${id}`, data),
 }
@@ -136,6 +260,7 @@ export const customersAPI = {
 export const vendorsAPI = {
   list:   (params) => api.get('/vendors/',            { params }),
   get:    (id)     => api.get(`/vendors/${id}`),
+  creditLedger: (id, params) => api.get(`/vendors/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/vendors/', data),
   update: (id, data) => api.put(`/vendors/${id}`, data),
 }
@@ -212,6 +337,10 @@ export const reportsAPI = {
   vendorOutstanding:     (params) => api.get('/reports/vendor-outstanding', { params }),
   branchCompare:         (params) => api.get('/reports/branch-comparison',{ params }),
   marginAnalysis:        (params) => api.get('/reports/margin-analysis',  { params }),
+
+  documentTrail:   (params) => api.get('/reports/document-trail',   { params }),
+  branchCompare:   (params) => api.get('/reports/branch-comparison',{ params }),
+  marginAnalysis:  (params) => api.get('/reports/margin-analysis',  { params }),
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -241,10 +370,14 @@ export const permissionsAPI = {
 export const settingsAPI = {
   getOrganisation: (config) => api.get('/settings/organisation', config),
   updateOrganisation: (data) => api.put('/settings/organisation', data),
+  patchOrganisation: (data) => api.patch('/settings/organisation', data),
   getInvoiceTemplate: (config) => api.get('/settings/invoice-template', config),
   updateInvoiceTemplate: (data) => api.put('/settings/invoice-template', data),
   listNumbering: (config) => api.get('/settings/numbering', config),
   updateNumbering: (docType, data) => api.put(`/settings/numbering/${docType}`, data),
+  previewNumber: (docType, branchId) => api.get('/settings/numbering/preview', {
+    params: { doc_type: docType, branch_id: branchId || undefined },
+  }),
 }
 
 // ─── Tax rates ───────────────────────────────────────────────────────────────

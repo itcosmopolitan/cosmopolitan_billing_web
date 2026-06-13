@@ -93,9 +93,10 @@ export function Receipt({ sale, branch }) {
           <tbody>
             ${(sale.items || []).map((item) => {
               const discount = item.discount ?? item.discPercent ?? 0
+              const taxMark = (item.taxRate ?? 0) > 0 ? ' <strong>(T)</strong>' : ''
               return `
                 <tr>
-                  <td>${item.name}</td>
+                  <td>${item.name}${taxMark}</td>
                   ${config.showHsn ? `<td>${item.hsnCode || item.hsn_code || ''}</td>` : ''}
                   ${config.showAttr ? `<td>${item.attribute || item.batch || ''}</td>` : ''}
                   ${config.showSize ? `<td>${item.size || item.package || ''}</td>` : ''}
@@ -235,9 +236,11 @@ export function Receipt({ sale, branch }) {
           <div style={{ textAlign: 'right' }}>Price</div>
           <div style={{ textAlign: 'right' }}>Total</div>
         </div>
-        {(sale.items || []).map((item, index) => (
+        {(sale.items || []).map((item, index) => {
+          const taxMark = (item.taxRate ?? 0) > 0 ? <strong>(T)</strong> : null
+          return (
           <div key={index} style={{ display: 'grid', gridTemplateColumns: getColumnStructure(config), gap: 6, padding: '4px 0', fontSize: 10.5 }}>
-            <div>{item.name}</div>
+            <div>{item.name}{taxMark}</div>
             {config.showHsn && <div>{item.hsnCode || item.hsn_code || ''}</div>}
             {config.showAttr && <div>{item.attribute || item.batch || ''}</div>}
             {config.showSize && <div>{item.size || item.package || ''}</div>}
@@ -246,7 +249,8 @@ export function Receipt({ sale, branch }) {
             <div style={{ textAlign: 'right' }}>{fmt(item.price)}</div>
             <div style={{ textAlign: 'right' }}>{fmt(item.lineTotal || item.qty * item.price)}</div>
           </div>
-        ))}
+        )
+        })}
 
         <div style={{ borderTop: '1px dashed #999', margin: '10px 0' }} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 11, marginBottom: 2 }}>

@@ -4,15 +4,17 @@ Settings — organisation profile and document numbering configuration.
 from __future__ import annotations
 
 import uuid
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.document_numbering import get_counter_seq, serialize_numbering
+from src.document_numbering import get_counter_seq, peek_next_number, serialize_numbering
 from src.invoice_template_defaults import (
     DEFAULT_INVOICE_TEMPLATE,
     DEFAULT_INVOICE_TEMPLATE_ID,
@@ -24,17 +26,33 @@ from src.invoice_template_defaults import (
 from src.models import (
     DocumentNumberCounter,
     DocumentNumbering,
+    GoodsReceiptNote,
     InvoiceTemplateSettings,
     Organisation,
+    PurchaseOrder,
+    SalesOrder,
 )
-from src.security import require_perm
+from src.routes._numbering import parse_numbering_config, serialize_numbering_config
+from src.security import current_user, require_perm
 
 router = APIRouter()
 
 VALID_FINANCIAL_YEARS = ("Apr-Mar", "Jan-Dec")
 
 
+class NumberingEntry(BaseModel):
+    prefix: str = Field(..., min_length=1, max_length=12)
+    start: int = Field(..., ge=1, le=999999)
+
+
+class NumberingConfig(BaseModel):
+    pos: NumberingEntry
+    invoice: NumberingEntry
+
+
 class OrganisationUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     gstin: Optional[str] = Field(None, max_length=20)
     pan: Optional[str] = Field(None, max_length=16)
@@ -42,9 +60,19 @@ class OrganisationUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=32)
     email: Optional[str] = Field(None, max_length=120)
     website: Optional[str] = Field(None, max_length=200)
-    state_code: Optional[str] = Field(None, max_length=4)
-    financial_year: Optional[str] = Field(None, max_length=16)
-    logo_url: Optional[str] = Field(None, max_length=500)
+    state_code: Optional[str] = Field(None, max_length=4, alias="stateCode")
+    financial_year: Optional[str] = Field(None, max_length=16, alias="financialYear")
+    logo_url: Optional[str] = Field(None, max_length=500, alias="logoUrl")
+    allow_overselling: Optional[bool] = Field(None, alias="allowOverselling")
+    numbering_config: Optional[NumberingConfig] = Field(None, alias="numberingConfig")
+
+
+def _numbering_out(raw: Optional[str]) -> dict[str, Any]:
+    cfg = parse_numbering_config(raw)
+    return {
+        "pos": {"prefix": cfg["pos"]["prefix"], "start": cfg["pos"]["start"]},
+        "invoice": {"prefix": cfg["invoice"]["prefix"], "start": cfg["invoice"]["start"]},
+    }
 
 
 def _serialize_organisation(org: Organisation) -> dict:
@@ -60,6 +88,8 @@ def _serialize_organisation(org: Organisation) -> dict:
         "state_code": org.state_code or "33",
         "financial_year": org.financial_year or "Apr-Mar",
         "logo_url": org.logo_url or "",
+        "allowOverselling": bool(getattr(org, "allow_overselling", True)),
+        "numberingConfig": _numbering_out(getattr(org, "numbering_config", None)),
     }
 
 
@@ -83,6 +113,8 @@ async def get_organisation(db: AsyncSession = Depends(get_db)):
             "state_code": "33",
             "financial_year": "Apr-Mar",
             "logo_url": "",
+            "allowOverselling": True,
+            "numberingConfig": _numbering_out(None),
         }
     return _serialize_organisation(org)
 
@@ -113,9 +145,63 @@ async def update_organisation(
             raise HTTPException(400, "Company name is required")
         payload["name"] = name
 
+    # Apply scalar fields from payload for create path / legacy PUT clients.
     for key, val in payload.items():
+        if key in ("allow_overselling", "numbering_config"):
+            continue
         setattr(org, key, val if val is not None else "")
 
+    await _apply_organisation_update(org, data)
+    await db.commit()
+    await db.refresh(org)
+    return _serialize_organisation(org)
+
+
+async def _apply_organisation_update(org: Organisation, data: OrganisationUpdate) -> None:
+    if data.name is not None:
+        org.name = data.name
+    if data.gstin is not None:
+        org.gstin = data.gstin
+    if data.pan is not None:
+        org.pan = data.pan
+    if data.address is not None:
+        org.address = data.address
+    if data.phone is not None:
+        org.phone = data.phone
+    if data.email is not None:
+        org.email = data.email
+    if data.website is not None:
+        org.website = data.website
+    if data.state_code is not None:
+        org.state_code = data.state_code
+    if data.financial_year is not None:
+        org.financial_year = data.financial_year
+    if data.logo_url is not None:
+        org.logo_url = data.logo_url
+    if data.allow_overselling is not None:
+        org.allow_overselling = data.allow_overselling
+    if data.numbering_config is not None:
+        merged = parse_numbering_config(None)
+        merged["pos"] = {
+            "prefix": data.numbering_config.pos.prefix.strip().upper(),
+            "start": data.numbering_config.pos.start,
+        }
+        merged["invoice"] = {
+            "prefix": data.numbering_config.invoice.prefix.strip().upper(),
+            "start": data.numbering_config.invoice.start,
+        }
+        org.numbering_config = serialize_numbering_config(merged)
+
+
+@router.patch("/organisation", dependencies=[Depends(require_perm("settings.edit"))])
+async def patch_organisation(
+    data: OrganisationUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    org = await _get_organisation(db)
+    if not org:
+        raise HTTPException(404, "Organisation not configured")
+    await _apply_organisation_update(org, data)
     await db.commit()
     await db.refresh(org)
     return _serialize_organisation(org)
@@ -144,6 +230,31 @@ async def list_numbering(db: AsyncSession = Depends(get_db)):
             # Per-branch: show the configured starting / minimum sequence.
             out.append(serialize_numbering(row, int(row.next_seq or 1)))
     return out
+
+
+@router.get("/numbering/preview")
+async def preview_document_number(
+    doc_type: str,
+    branch_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(current_user),
+):
+    """Peek the next document number without reserving it (form default)."""
+    dt = doc_type.strip().lower()
+    if dt in ("quotation", "sales_invoice", "purchase_bill", "pos_receipt", "credit_note", "stock_transfer", "stock_adjustment"):
+        number = await peek_next_number(db, dt, branch_id=branch_id)
+        return {"doc_type": dt, "number": number}
+    year = datetime.now().year
+    if dt == "sales_order":
+        count = (await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0
+        return {"doc_type": dt, "number": f"SO-{year}-{1000 + count}"}
+    if dt == "purchase_order":
+        count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
+        return {"doc_type": dt, "number": f"PO-{year}-{1000 + count:04d}"}
+    if dt == "grn":
+        count = (await db.execute(select(func.count(GoodsReceiptNote.id)))).scalar() or 0
+        return {"doc_type": dt, "number": f"GRN-{year}-{500 + count:04d}"}
+    raise HTTPException(400, f"Unknown document type: {doc_type}")
 
 
 @router.put(

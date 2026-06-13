@@ -160,10 +160,16 @@ export const usePOSStore = create((set, get) => ({
   customer: null,
   discountPct: 0,
   discountAmt: 0,
-  paymentMethod: 'cash',
+  // Sales Phase 1 (2026-05-23): payment is now two fields — a checkbox
+  // ("Payment received?") + a method dropdown (Cash / Card / UPI /
+  // Bank Transfer). Default unchecked so the operator must consciously
+  // confirm receipt before the sale is recorded as paid. When unchecked,
+  // POSPage submits with payment_mode=null → backend creates an unpaid
+  // (pending) invoice. See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
+  paymentReceived: false,
+  paymentMethod: null,
   splitPayments: [],
   heldBills: [],
-  billNumber: 'POS-2024-1848',
   notes: '',
 
   // Cart actions
@@ -253,19 +259,46 @@ export const usePOSStore = create((set, get) => ({
   setLineDiscountPct: (id, pct) => get().setLineDiscount(id, pct, 'pct'),
   setLineDiscountFlat: (id, amt) => get().setLineDiscount(id, amt, 'flat'),
 
-  clearCart: () => set({ cart: [], customer: null, discountPct: 0, discountAmt: 0, notes: '' }),
+  clearCart: () => set({
+    cart: [], customer: null, discountPct: 0, discountAmt: 0, notes: '',
+    // PR 1: reset payment fields so the next sale starts fresh + unchecked.
+    paymentReceived: false, paymentMethod: null,
+  }),
 
   setCustomer: (customer) => set({ customer }),
   setDiscount: (pct, amt) => set({ discountPct: pct, discountAmt: amt }),
+  // PR 1: dual-setter for the new payment UX. setPaymentReceived(true)
+  // is harmless without a method (POSPage validates at submit); setting
+  // false also clears the method so a held bill resumed with the box
+  // unchecked doesn't carry a stale leftover.
+  setPaymentReceived: (received) => set((s) => ({
+    paymentReceived: !!received,
+    paymentMethod: received ? s.paymentMethod : null,
+  })),
   setPaymentMethod: (m) => set({ paymentMethod: m }),
   setNotes: (n) => set({ notes: n }),
 
   holdBill: () => {
-    const { cart, customer, discountPct, billNumber, heldBills } = get()
+    const { cart, customer, discountPct, heldBills, paymentReceived, paymentMethod } = get()
     if (cart.length === 0) return
+    const label = `Hold #${heldBills.length + 1}`
     set({
-      heldBills: [...heldBills, { id: Date.now(), billNumber, cart: cart.map((i) => applyLineCalc(i)), customer, discountPct, heldAt: new Date() }],
+      heldBills: [...heldBills, {
+        id: Date.now(),
+        billNumber: label,
+        cart: cart.map((i) => applyLineCalc(i)),
+        customer,
+        discountPct,
+        // PR 1: persist the new payment fields so resume restores the
+        // operator's state. Older held bills (created before this version)
+        // won't have these and the migration in resumeBill below handles
+        // them.
+        paymentReceived,
+        paymentMethod,
+        heldAt: new Date(),
+      }],
       cart: [], customer: null, discountPct: 0,
+      paymentReceived: false, paymentMethod: null,
     })
   },
 
@@ -273,10 +306,30 @@ export const usePOSStore = create((set, get) => ({
     const { heldBills } = get()
     const bill = heldBills.find((b) => b.id === heldId)
     if (!bill) return
+    // Migration for held bills created before Sales Phase 1:
+    //   • Legacy `paymentMethod: 'credit'`  → unchecked, no method
+    //     (pre-2026-05-25 'credit' meant "no payment". Post-cutover
+    //     it's a real method — but legacy held bills predate that.
+    //     Held bills are in-memory only so this branch is harmless
+    //     after the first page reload.)
+    //   • Legacy `paymentMethod: <other>`   → checked + that method
+    //   • Missing fields entirely (very old) → unchecked, no method
+    let resumedReceived = false
+    let resumedMethod = null
+    if ('paymentReceived' in bill) {
+      // New-shape held bill — restore as-is.
+      resumedReceived = !!bill.paymentReceived
+      resumedMethod = bill.paymentMethod ?? null
+    } else if (bill.paymentMethod && bill.paymentMethod !== 'credit') {
+      resumedReceived = true
+      resumedMethod = bill.paymentMethod
+    }
     set({
       cart: bill.cart.map((i) => normalizeCartItem(i)),
       customer: bill.customer,
       discountPct: bill.discountPct,
+      paymentReceived: resumedReceived,
+      paymentMethod: resumedMethod,
       heldBills: heldBills.filter((b) => b.id !== heldId),
     })
   },

@@ -87,6 +87,11 @@ def serialize_customer(c) -> dict:
         "branch_id": c.branch_id,
         "credit_limit": c.credit_limit,
         "outstanding": c.outstanding,
+        # Money we owe the customer (overpayments + returns refunded as
+        # credit). Always ≥0. Frontend Customers table + Credit Notes tab
+        # render this alongside `outstanding` without auto-netting — both
+        # numbers can be non-zero at the same time.
+        "credit_balance": float(getattr(c, "credit_balance", 0) or 0),
         "total_purchases": c.total_purchases,
         "customer_type": c.type,
         "active": c.active,
@@ -104,6 +109,7 @@ def serialize_vendor(v) -> dict:
         "gstin": v.gstin,
         "payment_terms": v.payment_terms,
         "outstanding": v.outstanding,
+        "credit_balance": getattr(v, "credit_balance", 0) or 0,
         "total_purchases": v.total_purchases,
     }
 

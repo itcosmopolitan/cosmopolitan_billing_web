@@ -695,7 +695,7 @@ async def update_item_branches(
     if not item:
         raise HTTPException(404, "Item not found")
 
-    branch_ids = {b.id for b in (await db.execute(select(Branch.id))).scalars().all()}
+    branch_ids = set((await db.execute(select(Branch.id))).scalars().all())
     for bc in data.branches:
         if bc.branch_id not in branch_ids:
             raise HTTPException(400, f"Unknown branch: {bc.branch_id}")
@@ -884,20 +884,24 @@ async def create_item_batch(
         require_expiry=bool(item.expiry_tracking),
     ))
 
-    batch = await add_batch_atomic(
-        db,
-        item_id=item_id,
-        branch_id=data.branch_id,
-        qty=int(data.qty),
-        batch_number=data.batch_number,
-        mfg_date=data.mfg_date,
-        expiry_date=data.expiry_date,
-        cost_price=float(data.cost_price or item.cost_price or 0),
-        vendor_id=data.vendor_id,
-        source_type="manual",
-        received_date=data.received_date,
-        notes=data.notes,
-    )
+    try:
+        batch = await add_batch_atomic(
+            db,
+            item_id=item_id,
+            branch_id=data.branch_id,
+            qty=int(data.qty),
+            batch_number=data.batch_number,
+            mfg_date=data.mfg_date,
+            expiry_date=data.expiry_date,
+            cost_price=float(data.cost_price or item.cost_price or 0),
+            vendor_id=data.vendor_id,
+            source_type="manual",
+            received_date=data.received_date,
+            notes=data.notes,
+        )
+    except ValueError as e:
+        # Duplicate batch number for this item/branch (see add_batch_atomic).
+        raise HTTPException(400, str(e))
     await db.commit()
     return _batch_dict(batch, item_name=item.name)
 

@@ -11,8 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
 
+from src.db_dialect import additive_column_ddl
+
 # Lazy engine/sessionmaker initialization to support config loading
 _engine = None
+
 logger = logging.getLogger("cosmopolitan.database")
 _async_sessionmaker = None
 
@@ -282,6 +285,64 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("invoice_template_settings", "footer_note", "TEXT DEFAULT ''"),
     ("item_branch_config", "cost_price", "FLOAT"),
     ("stock_adjustments", "request_id", "VARCHAR"),
+    # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
+    # `outstanding` so the two intents don't sign-flip on each other.
+    ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
+    # 2026-05-24: parity with sale_invoices.payment_mode on vendor bills.
+    ("purchase_bills", "payment_mode", "VARCHAR"),
+    # 2026-05-24: per-line discount on purchase bills (percent).
+    ("purchase_line_items", "discount", "FLOAT DEFAULT 0 NOT NULL"),
+    # 2026-05-25: link vendor return lines back to the originating bill
+    # line. Lets the backend reject over-returning (cumulative return_qty
+    # across all returns for this bill > bill_line.qty). Nullable so
+    # legacy return rows still load; the create_return validation
+    # gracefully falls back to (item_id, name) matching when the column
+    # is null. Parity with sales_return_line_items.invoice_line_id.
+    ("return_line_items", "bill_line_id", "VARCHAR"),
+    # 2026-05-31: per-line stock-consumption ledger for vendor returns, so
+    # deleting a return can reverse the exact lots it drained. JSON text;
+    # NULL for legacy returns that never moved stock (those must not be
+    # re-added on delete). See routes/purchases.create_return.
+    ("return_line_items", "batch_allocation", "TEXT"),
+    # 2026-05-31: batch-aware returns. The sale line remembers which lots it
+    # consumed; the sales-return line remembers which lots it restored to
+    # (for the per-batch cumulative cap + delete reversal). JSON text.
+    ("sale_line_items", "batch_allocation", "TEXT"),
+    ("sales_return_line_items", "batch_allocation", "TEXT"),
+    # 2026-05-30: back-pointer from a quotation to the sales order it
+    # spawned. Lets the bulk-delete guard check whether a LIVE sales
+    # order still depends on the quote (the `status='converted'` flag
+    # never resets, so it falsely blocked quote deletion even after the
+    # SO was deleted). Nullable; legacy converted quotes have NULL here
+    # and the guard treats NULL as "no live dependency".
+    ("quotations", "converted_order_id", "VARCHAR"),
+    # 2026-06-09: direct quote→invoice convert (skip SO). Nullable until
+    # conversion; mirrors converted_order_id / SalesOrder.converted_invoice_id.
+    ("quotations", "converted_invoice_id", "VARCHAR"),
+    # 2026-06-09: credit-term due date for overdue automation on sales side.
+    ("sale_invoices", "due_date", "VARCHAR"),
+    # 2026-06-09: soft void for payments (audit trail vs hard delete).
+    ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("customer_payments", "voided_at", "VARCHAR"),
+    ("vendor_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("vendor_payments", "voided_at", "VARCHAR"),
+    # Phase 0 (2026-06-09): org inventory policy + document return tracking.
+    ("organisations", "allow_overselling", "BOOLEAN DEFAULT 1 NOT NULL"),
+    ("sale_invoices", "credited_amount", "FLOAT DEFAULT 0 NOT NULL"),
+    ("sale_invoices", "return_status", "VARCHAR DEFAULT 'none'"),
+    ("purchase_bills", "credited_amount", "FLOAT DEFAULT 0 NOT NULL"),
+    ("purchase_bills", "return_status", "VARCHAR DEFAULT 'none'"),
+    # Phase 3: bill → GRN back-link (stock lives on GRN).
+    ("purchase_bills", "grn_id", "VARCHAR"),
+    # Phase 4: POS vs back-office invoice provenance (drives receipt numbering).
+    ("sale_invoices", "origin", "VARCHAR DEFAULT 'invoice'"),
+    # Phase 4: org-level POS / invoice prefix + sequence start (JSON text).
+    ("organisations", "numbering_config", "TEXT"),
+    # Purchase Phase 3 (2026-06-09): vendor advance / overpayment credit.
+    ("vendors", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
+    ("vendor_payments", "credit_applied", "FLOAT DEFAULT 0 NOT NULL"),
+    ("vendor_returns", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("vendor_returns", "voided_at", "VARCHAR"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.
@@ -305,10 +366,14 @@ async def init_schema() -> None:
     await _wait_for_connection(engine)
     start = time.perf_counter()
     logger.info("Starting schema initialization")
+    async with engine.connect() as ddl_conn:
+        await (await ddl_conn.execution_options(isolation_level="AUTOCOMMIT")).run_sync(
+            Base.metadata.create_all
+        )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
         await _ensure_columns(conn)
         await _ensure_nullable_columns(conn)
+        await _ensure_pg_enum_values(conn)
         await _bootstrap_system_roles(conn)
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
@@ -316,6 +381,7 @@ async def init_schema() -> None:
         await _backfill_role_ids(conn)
         await _backfill_item_branch_config(conn)
         await _migrate_adjustment_requests_per_branch_ref(conn)
+        await _repair_return_invoice_totals(conn)
     logger.info("Schema initialization completed in %.2f seconds", time.perf_counter() - start)
 
 
@@ -364,31 +430,71 @@ async def _bootstrap_system_roles(conn) -> None:
 
 
 async def _ensure_columns(conn) -> None:
-    """For SQLite, add any missing columns from `_ADDITIVE_COLUMNS`. No-op on
-    columns that already exist."""
+    """Add any missing columns from `_ADDITIVE_COLUMNS`. Idempotent."""
+    dialect = conn.dialect.name
     for table, column, ddl_type in _ADDITIVE_COLUMNS:
-        if conn.dialect.name == "sqlite":
-            rows = (
+        if dialect == "postgresql":
+            table_exists = (
                 await conn.execute(
-                    text(f"PRAGMA table_info('{table}')")
+                    text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM information_schema.tables "
+                        "  WHERE table_schema = current_schema() AND table_name = :table"
+                        ")"
+                    ),
+                    {"table": table},
                 )
-            ).fetchall()
-            existing = {r[1] for r in rows}
-        else:
+            ).scalar()
+            if not table_exists:
+                continue
             rows = (
                 await conn.execute(
-                    text(f"""
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = '{table}'
-                    """)
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = :table"
+                    ),
+                    {"table": table},
                 )
             ).fetchall()
             existing = {r[0] for r in rows}
-
+            ddl = additive_column_ddl(ddl_type)
+        else:
+            rows = (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
+            if not rows:
+                continue  # table not created yet (fresh partial DB)
+            existing = {r[1] for r in rows}  # row[1] = column name
+            ddl = ddl_type
         if column in existing:
             continue
-        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
+# PostgreSQL enums are created at first table migration; new Python enum
+# members added later need an explicit ALTER TYPE … ADD VALUE.
+_PG_ENUM_VALUES: list[tuple[str, str]] = [
+    ("purchaseorderstatus", "partially_received"),
+    ("salesorderstatus", "partially_invoiced"),
+]
+
+
+async def _ensure_pg_enum_values(conn) -> None:
+    """Idempotently add missing PostgreSQL enum labels."""
+    if conn.dialect.name != "postgresql":
+        return
+    for enum_name, value in _PG_ENUM_VALUES:
+        exists = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM pg_enum e "
+                    "JOIN pg_type t ON e.enumtypid = t.oid "
+                    "WHERE t.typname = :enum AND e.enumlabel = :val"
+                ),
+                {"enum": enum_name, "val": value},
+            )
+        ).scalar()
+        if exists:
+            continue
+        await conn.execute(text(f"ALTER TYPE {enum_name} ADD VALUE '{value}'"))
 
 
 async def _ensure_nullable_columns(conn) -> None:
@@ -479,16 +585,16 @@ async def _bootstrap_invoice_template(conn) -> None:
         {
             "id": cfg["id"],
             "header_style": cfg["header_style"],
-            "show_attr": 1 if cfg["show_attr"] else 0,
-            "show_size": 1 if cfg["show_size"] else 0,
-            "show_disc": 1 if cfg["show_disc"] else 0,
-            "show_hsn": 1 if cfg["show_hsn"] else 0,
+            "show_attr": bool(cfg["show_attr"]),
+            "show_size": bool(cfg["show_size"]),
+            "show_disc": bool(cfg["show_disc"]),
+            "show_hsn": bool(cfg["show_hsn"]),
             "tax_mode": cfg["tax_mode"],
-            "show_customer": 1 if cfg["show_customer"] else 0,
-            "show_payment": 1 if cfg["show_payment"] else 0,
-            "show_printed_date": 1 if cfg["show_printed_date"] else 0,
-            "show_store": 1 if cfg["show_store"] else 0,
-            "show_cashier": 1 if cfg["show_cashier"] else 0,
+            "show_customer": bool(cfg["show_customer"]),
+            "show_payment": bool(cfg["show_payment"]),
+            "show_printed_date": bool(cfg["show_printed_date"]),
+            "show_store": bool(cfg["show_store"]),
+            "show_cashier": bool(cfg["show_cashier"]),
             "footer_msg": cfg["footer_msg"],
             "footer_note": cfg["footer_note"],
         },
@@ -717,3 +823,67 @@ async def _migrate_adjustment_requests_per_branch_ref(conn) -> None:
             "UNIQUE (branch_id, ref_number)"
         )
     )
+
+
+async def _repair_return_invoice_totals(conn) -> None:
+    """One-time repair: restore sale_invoices.total and paid_amount that were
+    incorrectly reduced by the pre-fix return creation flow.
+
+    The old code did `inv.total -= return.total` and (for cash) `inv.paid_amount -= credited`.
+    The correct approach: total and paid_amount are immutable after invoice creation;
+    only credited_amount changes. This repair uses subtotal+tax_total-discount (never mutated)
+    as the source-of-truth original total.
+
+    Idempotent: the guard `expected_total - total > 0.01` only matches rows that
+    were mutated downward. After the first repair run, total == expected_total, so
+    subsequent startups are no-ops.
+    """
+    table_names = await _existing_tables(conn, ["sale_invoices", "sales_returns"])
+    if "sale_invoices" not in table_names:
+        return
+
+    # Step 1: restore inv.total = original (subtotal + tax_total - discount)
+    await conn.execute(text("""
+        UPDATE sale_invoices
+        SET total = subtotal + tax_total - COALESCE(discount, 0)
+        WHERE (subtotal + tax_total - COALESCE(discount, 0)) - total > 0.01
+          AND COALESCE(credited_amount, 0) > 0
+    """))
+
+    if "sales_returns" not in table_names:
+        return
+
+    # Step 2: restore inv.paid_amount reduced by cash-method returns.
+    # Add back credited_amount from each active (processed) cash return for this invoice.
+    # Same guard as above — only fires on rows where total was mutated.
+    if conn.dialect.name == "postgresql":
+        await conn.execute(text("""
+            UPDATE sale_invoices inv
+            SET paid_amount = inv.paid_amount + COALESCE(cr.cash_credited, 0)
+            FROM (
+                SELECT invoice_id, SUM(credited_amount) AS cash_credited
+                FROM sales_returns
+                WHERE status = 'processed'
+                  AND refund_method = 'cash'
+                  AND COALESCE(credited_amount, 0) > 0
+                GROUP BY invoice_id
+            ) cr
+            WHERE inv.id = cr.invoice_id
+              AND (inv.subtotal + inv.tax_total - COALESCE(inv.discount, 0)) - inv.paid_amount > 0.01
+              AND COALESCE(inv.credited_amount, 0) > 0
+        """))
+    else:
+        # SQLite correlated subquery
+        await conn.execute(text("""
+            UPDATE sale_invoices
+            SET paid_amount = paid_amount + COALESCE((
+                SELECT SUM(credited_amount)
+                FROM sales_returns
+                WHERE invoice_id = sale_invoices.id
+                  AND status = 'processed'
+                  AND refund_method = 'cash'
+                  AND COALESCE(credited_amount, 0) > 0
+            ), 0)
+            WHERE (subtotal + tax_total - COALESCE(discount, 0)) - paid_amount > 0.01
+              AND COALESCE(credited_amount, 0) > 0
+        """))
