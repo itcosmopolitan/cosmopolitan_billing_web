@@ -26,6 +26,7 @@ import InvoiceFormPage from '@/pages/sales/InvoiceFormPage'
 import PurchasesPage from '@/pages/purchases/PurchasesPage'
 import PurchaseOrderFormPage from '@/pages/purchases/PurchaseOrderFormPage'
 import BillFormPage from '@/pages/purchases/BillFormPage'
+import BillEditPage from '@/pages/purchases/BillEditPage'
 import CustomersPage from '@/pages/customers/CustomersPage'
 import VendorsPage   from '@/pages/vendors/VendorsPage'
 import CashPage      from '@/pages/cash/CashPage'
@@ -71,6 +72,7 @@ function AppShell() {
             <Route path="/purchases/orders/new" element={<RequirePerm perm="purchases.create"><PurchaseOrderFormPage mode="create" /></RequirePerm>} />
             <Route path="/purchases/orders/:orderId/edit" element={<RequirePerm perm="purchases.edit"><PurchaseOrderFormPage mode="edit" /></RequirePerm>} />
             <Route path="/purchases/bills/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="bill" /></RequirePerm>} />
+            <Route path="/purchases/bills/:billId/edit" element={<RequirePerm perm="purchases.edit"><BillEditPage /></RequirePerm>} />
             <Route path="/purchases/grns/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="grn" /></RequirePerm>} />
             <Route path="/customers"  element={<RequirePerm perm="customers.view"><CustomersPage /></RequirePerm>} />
             <Route path="/vendors"    element={<RequirePerm perm="vendors.view"><VendorsPage /></RequirePerm>} />

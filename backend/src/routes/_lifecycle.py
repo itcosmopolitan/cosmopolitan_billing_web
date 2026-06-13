@@ -43,9 +43,13 @@ def _recompute_invoice_status(inv) -> None:
         return
     total = float(inv.total or 0)
     paid = float(inv.paid_amount or 0)
-    if paid >= total:
+    # credited_amount (from active credit notes) counts as effective settlement —
+    # an invoice with a full return is considered paid even if no cash changed hands.
+    credited = float(getattr(inv, "credited_amount", 0) or 0)
+    effective = paid + credited
+    if effective >= total - 0.01:
         inv.status = InvoiceStatus.paid
-    elif paid > 0:
+    elif effective > 0.01:
         inv.status = InvoiceStatus.partial
     else:
         inv.status = InvoiceStatus.pending
@@ -83,7 +87,7 @@ async def recalc_invoice_after_cn(db: AsyncSession, invoice_id: str) -> None:
         or 0
     )
     inv.credited_amount = round(credited, 2)
-    original_total = round(float(inv.total or 0) + credited, 2)
+    original_total = float(inv.total or 0)  # total is now stable (never mutated by returns)
     if credited <= 0:
         inv.return_status = DocumentReturnStatus.none.value
     elif original_total > 0 and credited >= original_total - 0.01:

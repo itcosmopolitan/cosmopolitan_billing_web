@@ -695,7 +695,7 @@ async def update_item_branches(
     if not item:
         raise HTTPException(404, "Item not found")
 
-    branch_ids = {b.id for b in (await db.execute(select(Branch.id))).scalars().all()}
+    branch_ids = set((await db.execute(select(Branch.id))).scalars().all())
     for bc in data.branches:
         if bc.branch_id not in branch_ids:
             raise HTTPException(400, f"Unknown branch: {bc.branch_id}")

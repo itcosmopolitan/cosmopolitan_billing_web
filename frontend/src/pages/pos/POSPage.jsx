@@ -450,6 +450,70 @@ export default function POSPage() {
     }
   }
 
+  // Barcode / Enter-key handler: exact barcode or SKU match → add to cart + clear search.
+  // USB barcode scanners act as HID keyboards: they type the barcode then press Enter.
+  // Step 1: check already-loaded products (fast, no API call).
+  // Step 2: if not found, do a targeted API lookup for items not yet in the current page.
+  const handleBarcodeEnter = useCallback(async (term) => {
+    if (!term) return
+    const inMemory = products.find((p) => p.barcode === term || p.sku === term)
+    if (inMemory) {
+      const stock = inMemory.available_stock ?? 0
+      const inCart = cart.find((i) => i.id === inMemory.id)?.qty ?? 0
+      if (!allowOverselling && stock <= 0) {
+        toast.error(`${inMemory.name} is out of stock`)
+      } else if (!allowOverselling && inCart + 1 > stock) {
+        toast.error(`Only ${stock} available for ${inMemory.name}`)
+      } else {
+        store.addItem({
+          id: inMemory.id, name: inMemory.name, price: inMemory.selling_price,
+          taxRate: inMemory.tax_rate || 0, sku: inMemory.sku, emoji: inMemory.emoji,
+          costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
+          availableStock: stock, batchTracking: Boolean(inMemory.batch_tracking),
+          expiryTracking: Boolean(inMemory.expiry_tracking),
+        })
+        toast.success(inMemory.name, { duration: 800 })
+        setSearch('')
+      }
+      return
+    }
+    // Not in current page — query backend for an exact barcode/SKU match.
+    try {
+      const raw = await itemsAPI.list({
+        branch_id: activeBranch?.id || 'br-001',
+        search: term,
+        per_page: 10,
+        pos_mode: true,
+      })
+      const rows = unwrapPaged(raw).items || []
+      const exact = rows.find((p) => p.barcode === term || p.sku === term)
+      const hit = exact || (rows.length === 1 ? rows[0] : null)
+      if (hit) {
+        const stock = hit.available_stock ?? 0
+        const inCart = cart.find((i) => i.id === hit.id)?.qty ?? 0
+        if (!allowOverselling && stock <= 0) {
+          toast.error(`${hit.name} is out of stock`)
+        } else if (!allowOverselling && inCart + 1 > stock) {
+          toast.error(`Only ${stock} available for ${hit.name}`)
+        } else {
+          store.addItem({
+            id: hit.id, name: hit.name, price: hit.selling_price,
+            taxRate: hit.tax_rate || 0, sku: hit.sku, emoji: hit.emoji,
+            costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
+            availableStock: stock, batchTracking: Boolean(hit.batch_tracking),
+            expiryTracking: Boolean(hit.expiry_tracking),
+          })
+          toast.success(hit.name, { duration: 800 })
+          setSearch('')
+        }
+      } else {
+        toast.error(`No item found for "${term}"`)
+      }
+    } catch {
+      toast.error('Barcode lookup failed')
+    }
+  }, [products, activeBranch?.id, allowOverselling, cart, store])
+
   const cartTotals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
   const {
     netSubtotal: subtotal,
@@ -590,9 +654,22 @@ export default function POSPage() {
               <circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.4" />
               <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
             </svg>
-            <input ref={searchRef} className="form-input" style={{ paddingLeft: 32 }} placeholder="Search item, SKU, barcode… (F2)" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
+            <input
+              ref={searchRef}
+              className="form-input"
+              style={{ paddingLeft: 32 }}
+              placeholder="Search item, SKU, barcode… (F2)"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleBarcodeEnter(search.trim()) } }}
+              autoFocus
+            />
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={() => toast('Connect to USB barcode scanner')}>📷 Scan</button>
+          <button
+            className="btn btn-secondary btn-sm"
+            title="Focus input then scan barcode"
+            onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
+          >📷 Scan</button>
           {can('invoices.create') && (
             <button className="btn btn-secondary btn-sm" onClick={() => setShowRefund(true)}>↩ Refund</button>
           )}

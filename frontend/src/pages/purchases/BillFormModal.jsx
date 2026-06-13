@@ -39,6 +39,8 @@ export default function BillFormModal({
   conversionLabel = null,
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
+  /** When true, hide payment fields (editing an existing bill — payment is handled separately). */
+  editMode = false,
 }) {
   const isGrn = mode === 'grn'
   const pickedIds = billForm.items.map((it) => it.item_id).filter(Boolean)
@@ -122,7 +124,7 @@ export default function BillFormModal({
         </FormGroup>
       </div>
 
-      {!isGrn && (
+      {!isGrn && !editMode && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
           <FormGroup label="Due Date">
             <input className="form-input" type="date"
@@ -163,6 +165,16 @@ export default function BillFormModal({
                 </select>
               )}
             </div>
+          </FormGroup>
+        </div>
+      )}
+
+      {editMode && (
+        <div style={{ marginBottom: 16 }}>
+          <FormGroup label="Due Date">
+            <input className="form-input" type="date"
+              value={billForm.dueDate || ''}
+              onChange={(e) => pbf('dueDate', e.target.value)} />
           </FormGroup>
         </div>
       )}

@@ -111,7 +111,7 @@ async def adjust_stock_atomic(
                 "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
                 "VALUES (:id, :item_id, :branch_id, :delta) "
                 "ON CONFLICT(item_id, branch_id) DO UPDATE "
-                "SET quantity = quantity + :delta"
+                "SET quantity = item_stock.quantity + EXCLUDED.quantity"
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -120,27 +120,6 @@ async def adjust_stock_atomic(
                 "delta": delta,
             },
         )
-        if result.rowcount == 0:
-            db.add(ItemStock(
-                id=str(uuid.uuid4()),
-                item_id=item_id,
-                branch_id=branch_id,
-                quantity=delta,
-            ))
-            await db.flush()
-            await record_stock_movement(
-                db,
-                item_id=item_id,
-                branch_id=branch_id,
-                delta=delta,
-                before_qty=0,
-                after_qty=delta,
-                movement_type=movement_type,
-                source_type=source_type,
-                source_ref=source_ref,
-                created_by=created_by,
-            )
-            return delta
     else:
         # Decrement: WHERE quantity + delta >= 0 prevents oversell.
         result = await db.execute(

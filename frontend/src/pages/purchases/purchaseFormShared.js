@@ -75,6 +75,7 @@ export function billFromRow(doc, branchId) {
     vendorId: doc.vendorId || '',
     vendorName: doc.vendorName || '',
     billDate: doc.date || new Date().toISOString().split('T')[0],
+    dueDate: doc.dueDate || '',
     items: mapPurchaseLines(doc.items),
     discount: doc.discount || 0,
     discountType: '₹',

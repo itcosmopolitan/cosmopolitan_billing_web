@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
 
-from src.db_dialect import additive_column_ddl, is_postgresql
+from src.db_dialect import additive_column_ddl
 
 # Lazy engine/sessionmaker initialization to support config loading
 _engine = None
@@ -381,6 +381,7 @@ async def init_schema() -> None:
         await _backfill_role_ids(conn)
         await _backfill_item_branch_config(conn)
         await _migrate_adjustment_requests_per_branch_ref(conn)
+        await _repair_return_invoice_totals(conn)
     logger.info("Schema initialization completed in %.2f seconds", time.perf_counter() - start)
 
 
@@ -822,3 +823,67 @@ async def _migrate_adjustment_requests_per_branch_ref(conn) -> None:
             "UNIQUE (branch_id, ref_number)"
         )
     )
+
+
+async def _repair_return_invoice_totals(conn) -> None:
+    """One-time repair: restore sale_invoices.total and paid_amount that were
+    incorrectly reduced by the pre-fix return creation flow.
+
+    The old code did `inv.total -= return.total` and (for cash) `inv.paid_amount -= credited`.
+    The correct approach: total and paid_amount are immutable after invoice creation;
+    only credited_amount changes. This repair uses subtotal+tax_total-discount (never mutated)
+    as the source-of-truth original total.
+
+    Idempotent: the guard `expected_total - total > 0.01` only matches rows that
+    were mutated downward. After the first repair run, total == expected_total, so
+    subsequent startups are no-ops.
+    """
+    table_names = await _existing_tables(conn, ["sale_invoices", "sales_returns"])
+    if "sale_invoices" not in table_names:
+        return
+
+    # Step 1: restore inv.total = original (subtotal + tax_total - discount)
+    await conn.execute(text("""
+        UPDATE sale_invoices
+        SET total = subtotal + tax_total - COALESCE(discount, 0)
+        WHERE (subtotal + tax_total - COALESCE(discount, 0)) - total > 0.01
+          AND COALESCE(credited_amount, 0) > 0
+    """))
+
+    if "sales_returns" not in table_names:
+        return
+
+    # Step 2: restore inv.paid_amount reduced by cash-method returns.
+    # Add back credited_amount from each active (processed) cash return for this invoice.
+    # Same guard as above — only fires on rows where total was mutated.
+    if conn.dialect.name == "postgresql":
+        await conn.execute(text("""
+            UPDATE sale_invoices inv
+            SET paid_amount = inv.paid_amount + COALESCE(cr.cash_credited, 0)
+            FROM (
+                SELECT invoice_id, SUM(credited_amount) AS cash_credited
+                FROM sales_returns
+                WHERE status = 'processed'
+                  AND refund_method = 'cash'
+                  AND COALESCE(credited_amount, 0) > 0
+                GROUP BY invoice_id
+            ) cr
+            WHERE inv.id = cr.invoice_id
+              AND (inv.subtotal + inv.tax_total - COALESCE(inv.discount, 0)) - inv.paid_amount > 0.01
+              AND COALESCE(inv.credited_amount, 0) > 0
+        """))
+    else:
+        # SQLite correlated subquery
+        await conn.execute(text("""
+            UPDATE sale_invoices
+            SET paid_amount = paid_amount + COALESCE((
+                SELECT SUM(credited_amount)
+                FROM sales_returns
+                WHERE invoice_id = sale_invoices.id
+                  AND status = 'processed'
+                  AND refund_method = 'cash'
+                  AND COALESCE(credited_amount, 0) > 0
+            ), 0)
+            WHERE (subtotal + tax_total - COALESCE(discount, 0)) - paid_amount > 0.01
+              AND COALESCE(credited_amount, 0) > 0
+        """))

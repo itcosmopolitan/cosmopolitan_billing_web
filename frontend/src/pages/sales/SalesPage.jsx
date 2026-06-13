@@ -56,8 +56,11 @@ export default function SalesPage() {
   const setTab = useCallback((id) => {
     navigate(`/sales?tab=${id}`, { replace: true })
   }, [navigate])
-  const [search, setSearch]     = useState('')
-  const [statusF, setStatusF]   = useState('')
+  const [search, setSearch]       = useState('')
+  const [invStatusF, setInvStatusF]     = useState('')
+  const [quoteStatusF, setQuoteStatusF] = useState('')
+  const [orderStatusF, setOrderStatusF] = useState('')
+  const [retStatusF, setRetStatusF]     = useState('')
   // Branch filter removed 2026-05-23: the Topbar's active-branch picker
   // already scopes everything the operator sees; a second filter in the
   // invoice tab was duplicative and confusing.
@@ -336,7 +339,11 @@ export default function SalesPage() {
 
   useEffect(() => {
     setInvSkip(0)
-  }, [search, statusF, dateFrom, dateTo])
+    setQuoteSkip(0)
+    setOrderSkip(0)
+    setRetSkip(0)
+    setPaySkip(0)
+  }, [search, invStatusF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
 
   // Prefill the Record-Payment amount with the invoice's outstanding
   // balance whenever the modal opens. This single source of truth
@@ -369,7 +376,7 @@ export default function SalesPage() {
           sort_by: invSortBy,
           sort_order: invSortOrder,
           search: search || undefined,
-          status: statusF || undefined,
+          status: invStatusF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -390,7 +397,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, invSkip, invLimit, search, statusF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
+  }, [tab, invSkip, invLimit, search, invStatusF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
 
   useEffect(() => {
     if (tab !== 'quotes') return
@@ -403,6 +410,10 @@ export default function SalesPage() {
           limit: quoteLimit,
           sort_by: quoteSortBy,
           sort_order: quoteSortOrder,
+          search: search || undefined,
+          status: quoteStatusF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -419,7 +430,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder])
+  }, [tab, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, dateFrom, dateTo])
 
   // Credit Purchases tab was removed 2026-05-23 (Sales Phase 1). No
   // separate data-fetch effect — same invoices are available via the main
@@ -438,6 +449,10 @@ export default function SalesPage() {
           limit: orderLimit,
           sort_by: orderSortBy,
           sort_order: orderSortOrder,
+          search: search || undefined,
+          status: orderStatusF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -451,7 +466,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion])
+  }, [tab, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'returns') return
@@ -464,6 +479,10 @@ export default function SalesPage() {
           limit: retLimit,
           sort_by: retSortBy,
           sort_order: retSortOrder,
+          search: search || undefined,
+          status: retStatusF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -480,7 +499,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, retSkip, retLimit, retSortBy, retSortOrder, retListVersion])
+  }, [tab, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, search, retStatusF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'payments') return
@@ -493,6 +512,9 @@ export default function SalesPage() {
           limit: payLimit,
           sort_by: paySortBy,
           sort_order: paySortOrder,
+          search: search || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -509,7 +531,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, payListVersion])
+  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, dateFrom, dateTo])
 
   // Tab-aware sort handler for the four list tabs in this page. Each tab
   // owns its own sortBy/sortOrder pair; the closure picks them up.
@@ -622,6 +644,16 @@ export default function SalesPage() {
     })
   }
 
+  const undoVoidReturn = async (ret) => {
+    if (!ret?.id || ret.status !== 'void') return
+    await runRowAction(ret.id, 'undo-void-return', async () => {
+      await salesAPI.returns.undoVoid(ret.id)
+      setRetListVersion((v) => v + 1)
+      setSalesListVersion((v) => v + 1)
+      toast.success(`Credit note ${ret.number} restored — invoice recalculated`)
+    })
+  }
+
   const updateQuoteStatus = async (quote, status) => {
     if (!quote?.id) return
     await runRowAction(quote.id, `quote-${status}`, async () => {
@@ -701,7 +733,7 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search invoice #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+            <select className="form-input" style={{ width: 140 }} value={invStatusF} onChange={(e) => setInvStatusF(e.target.value)}>
               <option value="">All Status</option>
               {['paid', 'pending', 'partial', 'overdue', 'draft'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
             </select>
@@ -812,6 +844,15 @@ export default function SalesPage() {
 
       {tab === 'quotes' && (
         <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search quote #, customer…" />
+            <select className="form-input" style={{ width: 140 }} value={quoteStatusF} onChange={(e) => setQuoteStatusF(e.target.value)}>
+              <option value="">All Status</option>
+              {['draft','sent','accepted','rejected','converted'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+            </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
           <Card bodyPadding={false}>
             <TablePanel loading={quoteLoading} isEmpty={!quoteLoading && quotations.length === 0} emptyIcon="📄" emptyTitle="No quotations" emptyDesc="No quotations created yet">
               <table className="data-table">
@@ -1033,6 +1074,15 @@ export default function SalesPage() {
 
       {tab === 'returns' && (
         <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search return #, customer…" />
+            <select className="form-input" style={{ width: 140 }} value={retStatusF} onChange={(e) => setRetStatusF(e.target.value)}>
+              <option value="">All Status</option>
+              {['pending','processed','void'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+            </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩" emptyTitle="No credit notes" emptyDesc="Process a return to generate a credit note">
               <table className="data-table">
@@ -1086,26 +1136,31 @@ export default function SalesPage() {
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
                       <td><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
                       <td>
-                        {can('invoices.edit') && r.status !== 'void' && (
-                          <RowActionsMenu
-                            ariaLabel={`Actions for ${r.number}`}
-                            actions={[
-                              {
-                                label: actionKind === 'void-return' && isRowBusy(r.id) ? 'Voiding…' : 'Void',
-                                danger: true,
-                                disabled: isRowBusy(r.id),
-                                onClick: () => voidReturn(r),
-                              },
-                              {
-                                label: 'Delete',
-                                danger: true,
-                                hidden: !can('invoices.delete'),
-                                disabled: isRowBusy(r.id),
-                                onClick: () => requestDeleteOne(r, 'return', 'returns'),
-                              },
-                            ]}
-                          />
-                        )}
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${r.number}`}
+                          actions={[
+                            {
+                              label: actionKind === 'void-return' && isRowBusy(r.id) ? 'Voiding…' : 'Void',
+                              danger: true,
+                              hidden: !can('invoices.edit') || r.status === 'void',
+                              disabled: isRowBusy(r.id),
+                              onClick: () => voidReturn(r),
+                            },
+                            {
+                              label: actionKind === 'undo-void-return' && isRowBusy(r.id) ? 'Restoring…' : 'Undo Void',
+                              hidden: !can('invoices.edit') || r.status !== 'void',
+                              disabled: isRowBusy(r.id),
+                              onClick: () => undoVoidReturn(r),
+                            },
+                            {
+                              label: 'Delete',
+                              danger: true,
+                              hidden: !can('invoices.delete'),
+                              disabled: isRowBusy(r.id),
+                              onClick: () => requestDeleteOne(r, 'return', 'returns'),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -1126,6 +1181,11 @@ export default function SalesPage() {
 
       {tab === 'payments' && (
         <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, customer…" />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💰" emptyTitle="No payments yet" emptyDesc="Record a payment to see it here.">
               <table className="data-table">
@@ -1218,6 +1278,15 @@ export default function SalesPage() {
 
       {tab === 'orders' && (
         <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search SO #, customer…" />
+            <select className="form-input" style={{ width: 160 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
+              <option value="">All Status</option>
+              {['draft','confirmed','partially_invoiced','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g,' ').replace(/\b\w/g,(c)=>c.toUpperCase())}</option>)}
+            </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📦" emptyTitle="No sales orders" emptyDesc="Create one directly or convert a quotation.">
               <table className="data-table">
@@ -1376,7 +1445,10 @@ export default function SalesPage() {
               {(showDetail.discount || 0) > 0 && <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--green)' }}><span>Discount</span><span className="mono">-{fmt(showDetail.discount)}</span></div>}
               <div style={{ display: 'flex', gap: 80, fontSize: 17, fontWeight: 700 }}><span>Total</span><span className="mono" style={{ color: 'var(--accent)' }}>{fmt(showDetail.total)}</span></div>
               <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--green)' }}><span>Paid</span><span className="mono">{fmt(showDetail.paidAmount || 0)}</span></div>
-              {(showDetail.total || 0) > (showDetail.paidAmount || 0) && <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--red)' }}><span>Balance Due</span><span className="mono">{fmt((showDetail.total || 0) - (showDetail.paidAmount || 0))}</span></div>}
+              {(() => {
+                const balDue = Math.round(((showDetail.total || 0) - (showDetail.paidAmount || 0) - (showDetail.creditedAmount || 0)) * 100) / 100
+                return balDue > 0.01 ? <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--red)' }}><span>Balance Due</span><span className="mono">{fmt(balDue)}</span></div> : null
+              })()}
             </div>
           </>
         )}

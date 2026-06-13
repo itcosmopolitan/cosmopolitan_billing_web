@@ -155,8 +155,9 @@ export const salesAPI = {
     list:   (params) => api.get('/sales/returns/', { params }),
     get:    (id)     => api.get(`/sales/returns/${id}`),
     // body shape — see ConvertToInvoiceIn / SalesReturnCreate in routes/sales.py
-    create: (data)   => api.post('/sales/returns/', data),
-    void:   (id)     => api.post(`/sales/returns/${id}/void`),
+    create:   (data) => api.post('/sales/returns/', data),
+    void:     (id)   => api.post(`/sales/returns/${id}/void`),
+    undoVoid: (id)   => api.post(`/sales/returns/${id}/undo-void`),
   },
   // 2026-05-24: multi-invoice payments — operator picks a customer,
   // selects pending invoices, allocates an amount per invoice. Backend
@@ -199,6 +200,7 @@ export const purchasesAPI = {
   list:    (params) => api.get('/purchases/',         { params }),
   get:     (id)     => api.get(`/purchases/${id}`),
   create:  (data)   => api.post('/purchases/', data),
+  update:  (id, data) => api.put(`/purchases/${id}`, data),
   payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
   // 2026-05-24: cancel endpoint added. Sales has the equivalent.
   // Bills are immutable — only Record Payment + Cancel are allowed.
@@ -224,9 +226,10 @@ export const purchasesAPI = {
   returns: {
     list:    (params) => api.get('/purchases/returns/', { params }),
     get:     (id)     => api.get(`/purchases/returns/${id}`),
-    create:  (data)   => api.post('/purchases/returns/', data),
-    approve: (id)     => api.post(`/purchases/returns/${id}/approve`),
-    void:    (id)     => api.post(`/purchases/returns/${id}/void`),
+    create:   (data) => api.post('/purchases/returns/', data),
+    approve:  (id)   => api.post(`/purchases/returns/${id}/approve`),
+    void:     (id)   => api.post(`/purchases/returns/${id}/void`),
+    undoVoid: (id)   => api.post(`/purchases/returns/${id}/undo-void`),
   },
   // Multi-bill vendor payments — mirror of salesAPI.payments.
   payments: {

@@ -31,6 +31,7 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
   // Snapshot of dates when edit opens — used to allow unchanged past expiry.
   const [editSnapshot, setEditSnapshot] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
+  const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
     if (!item) return
@@ -118,6 +119,7 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
     if (formMode === 'add') {
       if (!form.qty || Number(form.qty) <= 0) { toast.error('Enter a positive qty'); return }
       if (!checkDates()) return
+      setSaving(true)
       try {
         await itemsAPI.batches.create(item.id, {
           branch_id: branchId,
@@ -134,11 +136,14 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
         onChanged?.()
       } catch (err) {
         console.error('Failed to add batch:', err)
+      } finally {
+        setSaving(false)
       }
       return
     }
     if (formMode === 'edit' && editingId) {
       if (!checkDates()) return
+      setSaving(true)
       try {
         await itemsAPI.batches.patch(editingId, {
           batch_number: form.batch_number || undefined,
@@ -152,6 +157,8 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
         onChanged?.()
       } catch (err) {
         console.error('Failed to patch batch:', err)
+      } finally {
+        setSaving(false)
       }
     }
   }
@@ -265,9 +272,9 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
             </FormGroup>
           </FormRow>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
-            <button className="btn btn-secondary btn-sm" onClick={closeForm}>Cancel</button>
-            <button className="btn btn-primary btn-sm" onClick={submitForm}>
-              {isEdit ? 'Save Changes' : 'Save Batch'}
+            <button className="btn btn-secondary btn-sm" onClick={closeForm} disabled={saving}>Cancel</button>
+            <button className="btn btn-primary btn-sm" onClick={submitForm} disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Batch'}
             </button>
           </div>
         </div>

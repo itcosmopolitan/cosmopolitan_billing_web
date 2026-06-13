@@ -57,9 +57,14 @@ export default function PurchasesPage() {
   const tabParam = searchParams.get('tab')
   const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
   const can = useCan()
-  const [search, setSearch]     = useState('')
-  const [statusF, setStatusF]   = useState('')
-  const [vendorF, setVendorF]   = useState('')
+  const [search, setSearch]       = useState('')
+  const [billStatusF, setBillStatusF]   = useState('')
+  const [orderStatusF, setOrderStatusF] = useState('')
+  const [grnStatusF, setGrnStatusF]     = useState('')
+  const [retStatusF, setRetStatusF]     = useState('')
+  const [vendorF, setVendorF]     = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo]     = useState('')
 
   // Bills state
   const [bills, setBills]       = useState([])
@@ -291,7 +296,9 @@ export default function PurchasesPage() {
     setBillSkip(0)
     setOrderSkip(0)
     setGrnSkip(0)
-  }, [search, statusF, vendorF])
+    setRetSkip(0)
+    setPaySkip(0)
+  }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, vendorF, dateFrom, dateTo])
 
   // Bills list
   useEffect(() => {
@@ -306,8 +313,10 @@ export default function PurchasesPage() {
           sort_by: billSortBy,
           sort_order: billSortOrder,
           search: search || undefined,
-          status: statusF || undefined,
+          status: billStatusF || undefined,
           vendor_id: vendorF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -326,7 +335,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, billSkip, billLimit, search, statusF, vendorF, listVersion, billSortBy, billSortOrder])
+  }, [tab, billSkip, billLimit, search, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
 
   // Orders list — same no-branch-filter policy as bills (see above).
   useEffect(() => {
@@ -341,8 +350,10 @@ export default function PurchasesPage() {
           sort_by: orderSortBy,
           sort_order: orderSortOrder,
           search: search || undefined,
-          status: statusF || undefined,
+          status: orderStatusF || undefined,
           vendor_id: vendorF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -360,7 +371,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, orderSkip, orderLimit, search, statusF, vendorF, listVersion, orderSortBy, orderSortOrder])
+  }, [tab, orderSkip, orderLimit, search, orderStatusF, vendorF, dateFrom, dateTo, listVersion, orderSortBy, orderSortOrder])
 
   // GRNs list
   useEffect(() => {
@@ -375,8 +386,10 @@ export default function PurchasesPage() {
           sort_by: grnSortBy,
           sort_order: grnSortOrder,
           search: search || undefined,
-          status: statusF || undefined,
+          status: grnStatusF || undefined,
           vendor_id: vendorF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -394,7 +407,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, grnSkip, grnLimit, search, statusF, vendorF, listVersion, grnSortBy, grnSortOrder])
+  }, [tab, grnSkip, grnLimit, search, grnStatusF, vendorF, dateFrom, dateTo, listVersion, grnSortBy, grnSortOrder])
 
   // Returns list
   useEffect(() => {
@@ -408,6 +421,11 @@ export default function PurchasesPage() {
           limit: retLimit,
           sort_by: retSortBy,
           sort_order: retSortOrder,
+          search: search || undefined,
+          status: retStatusF || undefined,
+          vendor_id: vendorF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -424,7 +442,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, retSkip, retLimit, listVersion, retSortBy, retSortOrder])
+  }, [tab, retSkip, retLimit, listVersion, retSortBy, retSortOrder, search, retStatusF, vendorF, dateFrom, dateTo])
 
   // Payments list
   useEffect(() => {
@@ -438,6 +456,10 @@ export default function PurchasesPage() {
           limit: payLimit,
           sort_by: paySortBy,
           sort_order: paySortOrder,
+          search: search || undefined,
+          vendor_id: vendorF || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -454,7 +476,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, listVersion])
+  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, dateFrom, dateTo])
 
   // Prefill payment amount when the modal opens — same UX as
   // SalesPage's record-payment flow.
@@ -529,6 +551,16 @@ export default function PurchasesPage() {
     })
   }
 
+  const undoVoidVendorReturn = async (ret) => {
+    if (!ret?.id || (!ret.voided && ret.status !== 'void')) return
+    await runRowAction(ret.id, 'undo-void-return', async () => {
+      await purchasesAPI.returns.undoVoid(ret.id)
+      setListVersion((v) => v + 1)
+      toast.success(`Return ${ret.number} restored — bill recalculated`)
+      setReturnDetail(null)
+    })
+  }
+
   const cancelPO = async (po) => {
     if (!po?.id) return
     await runRowAction(po.id, 'cancel-po', async () => {
@@ -592,7 +624,7 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search bill #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+            <select className="form-input" style={{ width: 140 }} value={billStatusF} onChange={(e) => setBillStatusF(e.target.value)}>
               <option value="">All Status</option>
               {['paid','pending','partial','overdue','cancelled'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
             </select>
@@ -600,6 +632,8 @@ export default function PurchasesPage() {
               <option value="">All Vendors</option>
               {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={billLoading} isEmpty={!billLoading && bills.length === 0} emptyIcon="📋" emptyTitle="No bills found">
@@ -632,6 +666,7 @@ export default function PurchasesPage() {
                   {bills.map((b) => {
                     const balance = (b.total || 0) - (b.paidAmount || 0)
                     const canPay = b.status !== 'paid' && b.status !== 'cancelled'
+                    const canEdit = b.status !== 'paid' && b.status !== 'cancelled'
                     const canCancel = b.status !== 'cancelled' && !(b.paidAmount > 0)
                     return (
                       <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
@@ -660,6 +695,12 @@ export default function PurchasesPage() {
                             ariaLabel={`Actions for ${b.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(b.id), onClick: () => setShowDetail(b) },
+                              {
+                                label: 'Edit',
+                                hidden: !canEdit || !can('purchases.edit'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => navigate(`/purchases/bills/${b.id}/edit`),
+                              },
                               {
                                 label: 'Record payment',
                                 hidden: !canPay || !can('purchases.edit'),
@@ -706,7 +747,7 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+            <select className="form-input" style={{ width: 140 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
               <option value="">All Status</option>
               {['draft','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
             </select>
@@ -714,6 +755,8 @@ export default function PurchasesPage() {
               <option value="">All Vendors</option>
               {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📄" emptyTitle="No purchase orders" emptyDesc="POs you create will appear here. Convert one to a Bill to receive goods.">
@@ -846,7 +889,7 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search GRN #, vendor, PO…" />
-            <select className="form-input" style={{ width: 140 }} value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+            <select className="form-input" style={{ width: 140 }} value={grnStatusF} onChange={(e) => setGrnStatusF(e.target.value)}>
               <option value="">All Status</option>
               {['received', 'cancelled'].map((s) => (
                 <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
@@ -856,6 +899,8 @@ export default function PurchasesPage() {
               <option value="">All Vendors</option>
               {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={grnLoading} isEmpty={!grnLoading && grns.length === 0} emptyIcon="📦" emptyTitle="No goods receipts" emptyDesc="Receive stock with + New GRN, or create a bill / convert a PO (those also create a GRN).">
@@ -926,6 +971,19 @@ export default function PurchasesPage() {
       {/* ── RETURNS ───────────────────────────────────────────────── */}
       {tab === 'returns' && (
         <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search return #, vendor…" />
+            <select className="form-input" style={{ width: 140 }} value={retStatusF} onChange={(e) => setRetStatusF(e.target.value)}>
+              <option value="">All Status</option>
+              {['draft','approved','void'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+            </select>
+            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
+              <option value="">All Vendors</option>
+              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩️" emptyTitle="No vendor returns" emptyDesc="Returns to vendors will appear here.">
               <table className="data-table">
@@ -981,6 +1039,12 @@ export default function PurchasesPage() {
                               onClick: () => voidVendorReturn(r),
                             },
                             {
+                              label: actionKind === 'undo-void-return' && isRowBusy(r.id) ? 'Restoring…' : 'Undo Void',
+                              hidden: !can('purchases.edit') || (!r.voided && r.status !== 'void'),
+                              disabled: isRowBusy(r.id),
+                              onClick: () => undoVoidVendorReturn(r),
+                            },
+                            {
                               label: 'Delete',
                               danger: true,
                               hidden: !can('purchases.delete'),
@@ -1010,6 +1074,15 @@ export default function PurchasesPage() {
       {/* ── PAYMENTS ──────────────────────────────────────────────── */}
       {tab === 'payments' && (
         <>
+          <div className="filter-bar">
+            <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, vendor…" />
+            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
+              <option value="">All Vendors</option>
+              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💸" emptyTitle="No payments yet" emptyDesc="Record a vendor payment to see it here.">
               <table className="data-table">

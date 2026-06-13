@@ -135,6 +135,7 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
       const tally = {}
       for (const r of allReturns) {
         if (r.invoiceId !== full.id) continue
+        if (r.status === 'void') continue  // voided returns don't count against the cap
         for (const li of r.items || []) {
           if (!li.invoiceLineId) continue
           tally[li.invoiceLineId] = (tally[li.invoiceLineId] || 0) + Number(li.returnQty || 0)
@@ -191,9 +192,13 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
     for (const il of invoice.items || []) {
       const q = returnQtys[il.id] || 0
       if (q > 0) anyReturned = true
-      const gross = q * Number(il.price || 0)
-      const t = gross * (Number(il.taxRate || 0) / 100)
-      subtotal += gross
+      // il.lineTotal = taxable base (pre-tax). Multiply by (1 + rate%) to get
+      // the amount the customer actually paid for those units — correct for both
+      // inclusive and exclusive pricing modes.
+      const unitBase = Number(il.lineTotal || 0) / Math.max(1, Number(il.qty || 1))
+      const lineBase = q * unitBase
+      const t = Math.round(lineBase * (Number(il.taxRate || 0) / 100) * 100) / 100
+      subtotal += lineBase
       tax += t
     }
     return {
@@ -344,8 +349,8 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
                 {(invoice.items || []).map((il) => {
                   const remaining = remainingFor(il)
                   const q = returnQtys[il.id] || 0
-                  const lineGross = q * Number(il.price || 0)
-                  const lineWithTax = lineGross * (1 + Number(il.taxRate || 0) / 100)
+                  const unitBase = Number(il.lineTotal || 0) / Math.max(1, Number(il.qty || 1))
+                  const lineWithTax = Math.round(q * unitBase * (1 + Number(il.taxRate || 0) / 100) * 100) / 100
                   const disabled = remaining === 0
                   const batches = sourceBatches(il)
                   const showBatchPanel = batches.length > 0 && q > 0

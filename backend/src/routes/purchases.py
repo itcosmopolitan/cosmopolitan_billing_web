@@ -12,12 +12,14 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.document_numbering import allocate_number, resolve_number
+from src.tax_calc import line_tax_amount, line_taxable_amount, normalize_tax_pricing_mode
 from src.models import (
     AuditLog,
     GRNLineItem,
     GRNStatus,
     GoodsReceiptNote,
     ItemBatch,
+    Organisation,
     PurchaseBill,
     PurchaseLineItem,
     PurchaseOrder,
@@ -126,6 +128,25 @@ class PurchaseCreate(BaseModel):
     @classmethod
     def _coerce_payment_mode(cls, v):
         return _coerce_payment_mode_value(v)
+
+
+class BillLineUpdate(BaseModel):
+    item_id: Optional[str] = None
+    name: str
+    qty: int = Field(..., gt=0)
+    cost: float
+    tax_rate: float = 0
+    discount: float = 0
+
+
+class BillUpdate(BaseModel):
+    vendor_id: Optional[str] = None
+    vendor_name: Optional[str] = None
+    date: Optional[str] = None
+    due_date: Optional[str] = None
+    items: List[BillLineUpdate]
+    discount: float = 0
+    notes: Optional[str] = None
 
 
 class PaymentIn(BaseModel):
@@ -258,15 +279,16 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
     # without subtracting line discount + treated cart discount as a flat
     # subtract from post-tax total. New: per-line net = gross × (1 − pct/100),
     # tax computed on net, cart discount applied post-tax.
+    tax_mode = await _get_org_tax_mode(db)
     line_rows = []  # list[(item, line_net, line_tax)]
     subtotal = 0.0
     tax_total = 0.0
     for item in data.items:
         gross = round(item.qty * item.cost, 2)
         line_net = round(gross * (1 - (item.discount or 0) / 100), 2)
-        line_tax = round(line_net * ((item.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
         line_rows.append((item, line_net, line_tax))
-        subtotal += line_net
+        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
         tax_total += line_tax
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
@@ -343,6 +365,37 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
             notes=data.notes,
             paid_amount=paid_amount,
         )
+        # Propagate any batch metadata corrections the user made on the bill
+        # form (expiry_date, mfg_date) back to the ItemBatch and GRNLineItem
+        # records so they stay in sync.
+        if data.items:
+            for item_in in data.items:
+                if not item_in.item_id:
+                    continue
+                if not (item_in.expiry_date is not None or item_in.mfg_date is not None):
+                    continue
+                batch_q = select(ItemBatch).where(
+                    ItemBatch.item_id == item_in.item_id,
+                    ItemBatch.source_ref == grn.id,
+                )
+                if item_in.batch_number:
+                    batch_q = batch_q.where(ItemBatch.batch_number == item_in.batch_number)
+                batch = (await db.execute(batch_q)).scalar_one_or_none()
+                if batch:
+                    if item_in.expiry_date is not None:
+                        batch.expiry_date = item_in.expiry_date or None
+                    if item_in.mfg_date is not None:
+                        batch.mfg_date = item_in.mfg_date or None
+                grn_line_q = select(GRNLineItem).where(
+                    GRNLineItem.grn_id == grn.id,
+                    GRNLineItem.item_id == item_in.item_id,
+                )
+                grn_line = (await db.execute(grn_line_q)).scalar_one_or_none()
+                if grn_line:
+                    if item_in.expiry_date is not None:
+                        grn_line.expiry_date = item_in.expiry_date or None
+                    if item_in.mfg_date is not None:
+                        grn_line.mfg_date = item_in.mfg_date or None
         if grn.purchase_order_id:
             po = (await db.execute(
                 select(PurchaseOrder).where(PurchaseOrder.id == grn.purchase_order_id)
@@ -365,6 +418,7 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
             purchase_order_id=po.id if po else None,
             po_number=po.number if po else None,
             number=data.number,
+            tax_mode=tax_mode,
         )
         bill = await _create_bill_for_grn(
             db,
@@ -575,6 +629,76 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
     await sync_vendor_outstanding(db, b.vendor_id)
     await db.commit()
     return {"status": "cancelled"}
+
+
+# ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
+@router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit"))])
+async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    """Edit a pending or partial bill. Replaces line items and recalculates
+    totals. Paid and cancelled bills are locked — use vendor returns or
+    Record Payment to adjust settled bills."""
+    from sqlalchemy import delete as sa_delete
+    result = await db.execute(
+        select(PurchaseBill)
+        .options(selectinload(PurchaseBill.line_items))
+        .where(PurchaseBill.id == bill_id)
+    )
+    bill = result.scalar_one_or_none()
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
+    bill_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
+    if bill_status in ("paid", "cancelled"):
+        raise HTTPException(400, f"Cannot edit a {bill_status} bill")
+    if not data.items:
+        raise HTTPException(400, "Bill must have at least one line item")
+
+    tax_mode = await _get_org_tax_mode(db)
+    subtotal = 0.0
+    tax_total_val = 0.0
+    line_rows = []
+    for item in data.items:
+        gross = round(item.qty * item.cost, 2)
+        line_net = round(gross * (1 - (item.discount or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
+        line_rows.append((item, line_net, line_tax))
+        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
+        tax_total_val += line_tax
+    total = round(subtotal + tax_total_val - (data.discount or 0), 2)
+
+    if data.vendor_id:
+        bill.vendor_id = data.vendor_id
+    if data.vendor_name is not None:
+        bill.vendor_name = data.vendor_name
+    if data.date:
+        bill.date = data.date
+    bill.due_date = data.due_date
+    bill.subtotal = round(subtotal, 2)
+    bill.tax_total = round(tax_total_val, 2)
+    bill.discount = round(data.discount or 0, 2)
+    bill.total = total
+    bill.notes = data.notes
+
+    await db.execute(sa_delete(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
+    for item, line_net, line_tax in line_rows:
+        line_taxable = line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
+        db.add(PurchaseLineItem(
+            id=str(uuid.uuid4()),
+            bill_id=bill_id,
+            item_id=item.item_id,
+            name=item.name,
+            qty=item.qty,
+            cost=item.cost,
+            tax_rate=item.tax_rate,
+            discount=item.discount or 0,
+            line_total=round(line_taxable + line_tax, 2),
+        ))
+
+    if bill.vendor_id:
+        await sync_vendor_outstanding(db, bill.vendor_id)
+    await db.commit()
+    li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
+    return _bill_dict(bill, li_res.scalars().all())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -982,6 +1106,7 @@ async def list_returns(
     vendor_id: Optional[str] = None,
     branch_id: Optional[str] = None,
     status: Optional[str] = None,
+    search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     sort_by: Optional[str] = None,
@@ -999,6 +1124,8 @@ async def list_returns(
         conds.append(VendorReturn.branch_id == branch_id)
     if status:
         conds.append(VendorReturn.status == status)
+    if search:
+        conds.append(or_(VendorReturn.number.ilike(f"%{search}%"), VendorReturn.vendor_name.ilike(f"%{search}%")))
     if date_from:
         conds.append(VendorReturn.date >= date_from)
     if date_to:
@@ -1094,6 +1221,7 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
     # Validate every requested return line + collect the resolved
     # (return_line_in, bill_line, line_net, line_tax) tuples so we
     # don't have to re-resolve in the persistence loop below.
+    tax_mode = await _get_org_tax_mode(db)
     return_rows = []
     subtotal = 0.0
     tax_total = 0.0
@@ -1120,9 +1248,9 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
                 f"({bill_line.qty} received, {prior} already returned)",
             )
         line_net = round(r.return_qty * r.cost, 2)
-        line_tax = round(line_net * (r.tax_rate / 100), 2)
+        line_tax = line_tax_amount(line_net, r.tax_rate or 0, tax_mode)
         return_rows.append((r, bill_line, line_net, line_tax))
-        subtotal += line_net
+        subtotal += line_taxable_amount(line_net, r.tax_rate or 0, tax_mode)
         tax_total += line_tax
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1307,6 +1435,121 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"status": "void", "number": ret.number}
 
+
+@router.post("/returns/{return_id}/undo-void", dependencies=[Depends(require_perm("purchases.edit"))])
+async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get_db)):
+    """Restore a voided vendor return — re-applies stock + bill adjustments.
+
+    Blocked if another active return has already consumed the same line
+    quantities or reduced the bill balance to the point where re-applying
+    this one would push it negative (double-entry prevention).
+    """
+    res = await db.execute(
+        select(VendorReturn)
+        .options(selectinload(VendorReturn.line_items))
+        .where(VendorReturn.id == return_id)
+    )
+    ret = res.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    if not getattr(ret, "voided", False):
+        return {"status": "active", "number": ret.number}
+
+    # ── Pre-flight: check for conflicts BEFORE mutating anything ──────────────
+    bill = (await db.execute(
+        select(PurchaseBill).where(PurchaseBill.id == ret.bill_id)
+    )).scalar_one_or_none()
+    if bill is None:
+        raise HTTPException(404, "Original bill not found")
+
+    # Guard 1: bill total must not go negative after re-applying this return.
+    new_bill_total = round(float(bill.total or 0) - float(ret.total or 0), 2)
+    if new_bill_total < -0.01:
+        raise HTTPException(
+            400,
+            f"Cannot undo void: the bill balance is already ₹{round(float(bill.total or 0), 2)} "
+            f"and re-applying {ret.number} (₹{round(float(ret.total or 0), 2)}) would make it "
+            f"negative. Another active vendor return has likely consumed the same amount. "
+            f"Void that return first, then undo this one."
+        )
+
+    # Guard 2: per-line quantity — no item returned more times than received.
+    already_returned = await _already_returned_for_bill(db, ret.bill_id)
+    bill_lines = (await db.execute(
+        select(PurchaseLineItem).where(PurchaseLineItem.bill_id == ret.bill_id)
+    )).scalars().all()
+    bill_lines_by_id = {li.id: li for li in bill_lines}
+    conflicts = []
+    for rl in ret.line_items:
+        if not rl.bill_line_id:
+            continue
+        existing = already_returned.get(rl.bill_line_id, 0)
+        bill_line = bill_lines_by_id.get(rl.bill_line_id)
+        original_qty = int(bill_line.qty or 0) if bill_line else 0
+        if existing + int(rl.return_qty or 0) > original_qty:
+            conflicts.append(rl.name or rl.bill_line_id)
+    if conflicts:
+        items_str = ", ".join(f"'{n}'" for n in conflicts[:3])
+        raise HTTPException(
+            400,
+            f"Cannot undo void: line(s) {items_str} have already been fully returned by "
+            f"another active vendor return. Void that return first, then undo this one."
+        )
+    # ── End pre-flight ─────────────────────────────────────────────────────────
+
+    # Re-apply original stock effects (re-remove from batches — inverse of void's restore).
+    for rl in ret.line_items:
+        if not rl.batch_allocation:
+            continue
+        try:
+            ledger = json.loads(rl.batch_allocation)
+        except (ValueError, TypeError):
+            ledger = []
+        for entry in ledger:
+            qty = int(entry.get("consumed") or 0)
+            if qty <= 0:
+                continue
+            batch_id = entry.get("batch_id")
+            applied = False
+            if batch_id:
+                b = (await db.execute(
+                    select(ItemBatch).where(ItemBatch.id == batch_id)
+                )).scalar_one_or_none()
+                if b is not None:
+                    await set_batch_quantity_atomic(
+                        db, batch_id=batch_id, new_qty=max(0, int(b.quantity or 0) - qty),
+                    )
+                    applied = True
+            if not applied and rl.item_id:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=rl.item_id, branch_id=ret.branch_id, delta=-qty,
+                        movement_type="vendor_return_undo_void",
+                        source_type="vendor_return", source_ref=ret.id,
+                    )
+                except ValueError:
+                    pass
+
+    # Reverse bill-side effects of the void (bill already loaded above).
+    bill.total = round(float(bill.total or 0) - float(ret.total or 0), 2)
+    bill.paid_amount = round(float(bill.paid_amount or 0) - float(ret.credited_amount or 0), 2)
+    if bill.paid_amount >= bill.total:
+        bill.status = "paid"
+    elif bill.paid_amount > 0:
+        bill.status = "partial"
+    else:
+        bill.status = "pending"
+
+    ret.voided = False
+    ret.voided_at = None
+    await db.flush()
+    await recalc_bill_after_vendor_credit(db, ret.bill_id)
+    if ret.vendor_id:
+        await sync_vendor_outstanding(db, ret.vendor_id)
+    await db.commit()
+    return {"status": "active", "number": ret.number}
+
+
 # ─── HELPER ───────────────────────────────────────────────────────────────────
 def _return_dict(r, items=None):
     voided = bool(getattr(r, "voided", False))
@@ -1465,7 +1708,12 @@ def _po_dict(po, items=None):
     return d
 
 
-def _calc_po_lines(lines):
+async def _get_org_tax_mode(db: AsyncSession) -> str:
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    return normalize_tax_pricing_mode(org_row.tax_pricing_mode if org_row else None)
+
+
+def _calc_po_lines(lines, tax_mode: str = "inclusive"):
     """Compute line totals + roll up subtotal/tax for PO line shapes.
     Mirrors routes/sales._calc_lines but reads `i.cost` instead of
     `i.price` (purchases buy AT cost, sales sell AT price). Each row in
@@ -1476,9 +1724,9 @@ def _calc_po_lines(lines):
     for i in lines:
         gross = round((i.qty or 0) * (i.cost or 0), 2)
         line_net = round(gross * (1 - (i.discount or 0) / 100), 2)
-        line_tax = round(line_net * ((i.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
         rows.append((i, line_net, line_tax))
-        subtotal += line_net
+        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
         tax_total += line_tax
     return rows, subtotal, tax_total
 
@@ -1513,11 +1761,15 @@ async def _create_grn_received(
     purchase_order_id: Optional[str] = None,
     po_number: Optional[str] = None,
     number: Optional[str] = None,
+    tax_mode: str = "inclusive",
 ) -> GoodsReceiptNote:
     """Create a received GRN and move stock. `line_rows` is
     [(line, line_net, line_tax), ...] where line has item_id, name, qty,
     cost, tax_rate, discount, batch_number, mfg_date, expiry_date."""
-    subtotal = sum(ln for _, ln, _ in line_rows)
+    if tax_mode == "inclusive":
+        subtotal = sum(ln - lt for _, ln, lt in line_rows)
+    else:
+        subtotal = sum(ln for _, ln, _ in line_rows)
     tax_total = sum(lt for _, _, lt in line_rows)
     total = round(subtotal + tax_total - (discount or 0), 2)
 
@@ -1563,7 +1815,7 @@ async def _create_grn_received(
             cost=line.cost,
             tax_rate=getattr(line, "tax_rate", 0) or 0,
             discount=getattr(line, "discount", 0) or 0,
-            line_total=round(line_net + line_tax, 2),
+            line_total=round(line_net + line_tax if tax_mode == "exclusive" else line_net, 2),
             batch_number=getattr(line, "batch_number", None),
             mfg_date=getattr(line, "mfg_date", None),
             expiry_date=getattr(line, "expiry_date", None),
@@ -1778,7 +2030,8 @@ async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get
         allocate=_alloc_po,
     )
 
-    line_rows, subtotal, tax_total = _calc_po_lines(data.items)
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
     po = PurchaseOrder(
@@ -1805,7 +2058,7 @@ async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get
             qty=line.qty, cost=line.cost,
             tax_rate=line.tax_rate,
             discount=line.discount or 0,
-            line_total=round(line_net + line_tax, 2),
+            line_total=round(line_taxable_amount(line_net, line.tax_rate or 0, tax_mode) + line_tax, 2),
         ))
     await db.commit()
     return {"id": po.id, "number": po_num, "total": total, "status": po.status.value}
@@ -1834,7 +2087,8 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
     from sqlalchemy import delete as sa_delete
     await db.execute(sa_delete(PurchaseOrderLineItem).where(PurchaseOrderLineItem.order_id == po.id))
 
-    line_rows, subtotal, tax_total = _calc_po_lines(data.items)
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
     po.vendor_id = data.vendor_id
@@ -1855,7 +2109,7 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
             qty=line.qty, cost=line.cost,
             tax_rate=line.tax_rate,
             discount=line.discount or 0,
-            line_total=round(line_net + line_tax, 2),
+            line_total=round(line_taxable_amount(line_net, line.tax_rate or 0, tax_mode) + line_tax, 2),
         ))
     await db.commit()
     return {"id": po.id, "number": po.number, "total": total, "status": po.status.value}
@@ -1928,6 +2182,7 @@ async def convert_order_to_bill(
         for r in data.line_receipts:
             receipts_by_item[r.item_id] = r
 
+    tax_mode = await _get_org_tax_mode(db)
     line_rows = []
     for line in po.line_items:
         recv = receipts_by_item.get(line.item_id)
@@ -1946,7 +2201,7 @@ async def convert_order_to_bill(
         })()
         gross = round(line.qty * line.cost, 2)
         line_net = round(gross * (1 - (line.discount or 0) / 100), 2)
-        line_tax = round(line_net * ((line.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
     grn = await _create_grn_received(
@@ -1961,6 +2216,7 @@ async def convert_order_to_bill(
         notes=data.notes or po.notes,
         purchase_order_id=po.id,
         po_number=po.number,
+        tax_mode=tax_mode,
     )
     bill = await _create_bill_for_grn(
         db,
@@ -2152,7 +2408,8 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
                 "PO already has a pending goods receipt — bill the existing GRN or cancel the PO",
             )
 
-    line_rows, _, _ = _calc_po_lines(data.items)
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, _, _ = _calc_po_lines(data.items, tax_mode)
     grn = await _create_grn_received(
         db,
         vendor_id=data.vendor_id,
@@ -2167,6 +2424,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
         purchase_order_id=po.id if po else None,
         po_number=po.number if po else None,
         number=data.number,
+        tax_mode=tax_mode,
     )
     if po is not None:
         po.status = PurchaseOrderStatus.partially_received
@@ -2200,6 +2458,7 @@ async def receive_from_po(
         )
 
     today = datetime.now().strftime("%Y-%m-%d")
+    tax_mode = await _get_org_tax_mode(db)
     receipts_by_item = {}
     if data.line_receipts:
         for r in data.line_receipts:
@@ -2223,7 +2482,7 @@ async def receive_from_po(
         })()
         gross = round(line.qty * line.cost, 2)
         line_net = round(gross * (1 - (line.discount or 0) / 100), 2)
-        line_tax = round(line_net * ((line.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
     grn = await _create_grn_received(
@@ -2239,6 +2498,7 @@ async def receive_from_po(
         purchase_order_id=po.id,
         po_number=po.number,
         created_by=data.created_by,
+        tax_mode=tax_mode,
     )
     po.status = PurchaseOrderStatus.partially_received
     await db.commit()

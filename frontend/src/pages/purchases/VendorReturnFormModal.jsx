@@ -89,6 +89,7 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
       const tally = {}
       for (const r of allReturns) {
         if (r.billId !== full.id) continue
+        if (r.voided || r.status === 'void') continue  // voided returns don't count against the cap
         for (const li of r.items || []) {
           if (!li.billLineId) continue
           tally[li.billLineId] = (tally[li.billLineId] || 0) + Number(li.returnQty || 0)
@@ -154,9 +155,14 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
     for (const li of bill.items || []) {
       const q = returnQtys[li.id] || 0
       if (q > 0) anyReturned = true
-      const gross = q * Number(li.cost || 0)
-      const t = gross * (Number(li.taxRate || 0) / 100)
-      subtotal += gross
+      // li.lineTotal = taxable + tax (total paid per line). Extract tax
+      // component using the GST-inclusive extraction formula, which works
+      // correctly for both inclusive and exclusive org pricing modes.
+      const unitTotal = Number(li.lineTotal || 0) / Math.max(1, Number(li.qty || 1))
+      const lineTotalAmt = q * unitTotal
+      const taxFrac = Number(li.taxRate || 0) / (100 + Number(li.taxRate || 0))
+      const t = Math.round(lineTotalAmt * taxFrac * 100) / 100
+      subtotal += Math.round((lineTotalAmt - t) * 100) / 100
       tax += t
     }
     return {
@@ -290,8 +296,8 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
                   const cap = Number(li.qty || 0)
                   const remaining = remainingFor(li)
                   const q = returnQtys[li.id] || 0
-                  const lineGross = q * Number(li.cost || 0)
-                  const lineWithTax = lineGross * (1 + Number(li.taxRate || 0) / 100)
+                  const unitTotal = Number(li.lineTotal || 0) / Math.max(1, Number(li.qty || 1))
+                  const lineWithTax = Math.round(q * unitTotal * 100) / 100
                   // Disabled when nothing left to return. Distinguishes
                   // "fully returned" rows (greyed + label) from "ok to
                   // return" rows.

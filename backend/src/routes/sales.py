@@ -324,13 +324,28 @@ async def list_quotations(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """List all quotations"""
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    q_count = select(func.count(Quotation.id))
+    conds = []
+    if search:
+        conds.append(or_(Quotation.number.ilike(f"%{search}%"), Quotation.customer_name.ilike(f"%{search}%")))
+    if status:
+        conds.append(Quotation.status == status)
+    if customer_id:
+        conds.append(Quotation.customer_id == customer_id)
+    if date_from:
+        conds.append(Quotation.date >= date_from)
+    if date_to:
+        conds.append(Quotation.date <= date_to)
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -347,18 +362,20 @@ async def list_quotations(
         default_key="created_at",
         default_order="desc",
     )
-    q = select(Quotation).options(selectinload(Quotation.line_items)).order_by(sort_expr)
+    q = select(Quotation).options(selectinload(Quotation.line_items))
+    q_count = select(func.count(Quotation.id))
     if branch_id:
-        q = q.where(Quotation.branch_id == branch_id)
-        q_count = q_count.where(Quotation.branch_id == branch_id)
+        conds.append(Quotation.branch_id == branch_id)
     elif not getattr(user, "all_branches", False):
         branch_ids = await get_user_branch_ids(db, user.id)
         if not branch_ids:
             return paged([], 0, sk, lim)
-        q = q.where(Quotation.branch_id.in_(branch_ids))
-        q_count = q_count.where(Quotation.branch_id.in_(branch_ids))
+        conds.append(Quotation.branch_id.in_(branch_ids))
+    if conds:
+        q = q.where(and_(*conds))
+        q_count = q_count.where(and_(*conds))
     total = int((await db.execute(q_count)).scalar() or 0)
-    result = await db.execute(q.offset(sk).limit(lim))
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
     items_out = [_quote_dict(qt, qt.line_items) for qt in quotations]
     return paged(items_out, total, sk, lim)
@@ -404,15 +421,16 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     # Now: line_discount is always a percent (0-100). Frontend is the
     # source of conversion (it offers a %/₹ toggle and converts ₹ → %
     # before POST). See OrderFormModal / QuoteFormModal.
+    tax_mode = await _get_org_tax_mode(db)
     line_rows = []  # list[(item, line_net, line_tax)]
     subtotal = 0.0
     tax_total = 0.0
     for item in data.items:
         gross = round(item.qty * item.price, 2)
         line_net = round(gross * (1 - (item.line_discount or 0) / 100), 2)
-        line_tax = round(line_net * ((item.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
         line_rows.append((item, line_net, line_tax))
-        subtotal += line_net
+        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
         tax_total += line_tax
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
@@ -481,15 +499,16 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     # (matches the invoice/sales convention); QuotationLineItem stores
     # discount as a number too — we mirror what's already done in
     # create_quotation.
+    tax_mode = await _get_org_tax_mode(db)
     subtotal = 0.0
     tax_total = 0.0
     line_rows = []
     for i in data.items:
         gross = round(i.qty * i.price, 2)
         line_net = round(gross * (1 - (i.line_discount or 0) / 100), 2)
-        line_tax = round(line_net * ((i.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
         line_rows.append((i, line_net, line_tax))
-        subtotal += line_net
+        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
         tax_total += line_tax
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
@@ -1602,12 +1621,6 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
         select(SaleInvoice).where(SaleInvoice.id == ret.invoice_id)
     )).scalar_one_or_none()
     if inv is not None:
-        method = (ret.refund_method or "cash").strip().lower()
-        inv.total = round(float(inv.total or 0) + float(ret.total or 0), 2)
-        if method == "cash":
-            inv.paid_amount = round(
-                float(inv.paid_amount or 0) + float(ret.credited_amount or 0), 2,
-            )
         _recompute_invoice_status(inv)
 
     if ret.refund_method == "credit" and ret.customer_id and (ret.credited_amount or 0) > 0:
@@ -1905,7 +1918,12 @@ def _so_dict(so, items=None):
     return d
 
 
-def _calc_lines(lines):
+async def _get_org_tax_mode(db: AsyncSession) -> str:
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    return normalize_tax_pricing_mode(org_row.tax_pricing_mode if org_row else None)
+
+
+def _calc_lines(lines, tax_mode: str = "inclusive"):
     """Compute line totals + roll up subtotal/tax for SO + quote shapes.
     Returns (line_rows, subtotal, tax_total). Each row is (line, line_net,
     line_tax) so callers can populate the ORM objects without re-doing the
@@ -1917,28 +1935,29 @@ def _calc_lines(lines):
     for i in lines:
         gross = round(i.qty * i.price, 2)
         line_net = round(gross * (1 - (i.discount or 0) / 100), 2)
-        line_tax = round(line_net * ((i.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
         rows.append((i, line_net, line_tax))
-        subtotal += line_net
+        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
         tax_total += line_tax
     return rows, subtotal, tax_total
 
 
-def _line_amounts(qty: int, price: float, discount: float, tax_rate: float) -> tuple[float, float, float]:
-    """Return (line_net, line_tax, line_total) for one SO/quote-style line."""
+def _line_amounts(qty: int, price: float, discount: float, tax_rate: float, tax_mode: str = "inclusive") -> tuple[float, float, float]:
+    """Return (line_taxable, line_tax, line_total) for one SO/quote-style line."""
     gross = round(qty * price, 2)
     line_net = round(gross * (1 - (discount or 0) / 100), 2)
-    line_tax = round(line_net * ((tax_rate or 0) / 100), 2)
-    return line_net, line_tax, round(line_net + line_tax, 2)
+    line_tax = line_tax_amount(line_net, tax_rate or 0, tax_mode)
+    line_taxable = line_taxable_amount(line_net, tax_rate or 0, tax_mode)
+    return line_taxable, line_tax, round(line_taxable + line_tax, 2)
 
 
-def _recalc_so_header(so: SalesOrder, lines: list) -> None:
+def _recalc_so_header(so: SalesOrder, lines: list, tax_mode: str = "inclusive") -> None:
     """Recompute SO subtotal/tax/total from remaining line rows."""
     subtotal = 0.0
     tax_total = 0.0
     for li in lines:
         line_net, line_tax, li.line_total = _line_amounts(
-            int(li.qty), float(li.price or 0), float(li.discount or 0), float(li.tax_rate or 0),
+            int(li.qty), float(li.price or 0), float(li.discount or 0), float(li.tax_rate or 0), tax_mode,
         )
         subtotal += line_net
         tax_total += line_tax
@@ -2012,6 +2031,7 @@ async def _link_sales_order_to_invoice(
     if not entries:
         raise HTTPException(400, "source_order_lines required when sales_order_id is set")
 
+    tax_mode = await _get_org_tax_mode(db)
     orig_subtotal = float(so.subtotal or 0)
     inv_subtotal = 0.0
     for entry in entries:
@@ -2028,6 +2048,7 @@ async def _link_sales_order_to_invoice(
             float(so_line.price or 0),
             float(so_line.discount or 0),
             float(so_line.tax_rate or 0),
+            tax_mode,
         )
         inv_subtotal += line_net
 
@@ -2048,6 +2069,7 @@ async def _link_sales_order_to_invoice(
                 float(so_line.price or 0),
                 float(so_line.discount or 0),
                 float(so_line.tax_rate or 0),
+                tax_mode,
             )
 
     if inv_discount > 0:
@@ -2071,7 +2093,7 @@ async def _link_sales_order_to_invoice(
         so.status = SalesOrderStatus.converted
         await fulfil_reservations(db, source_type="sales_order", source_ref=so.id)
     else:
-        _recalc_so_header(so, remaining_lines)
+        _recalc_so_header(so, remaining_lines, tax_mode)
         so.status = SalesOrderStatus.partially_invoiced
         await refresh_so_reservations(
             db, order_id=so.id, branch_id=so.branch_id, lines=remaining_lines,
@@ -2089,11 +2111,23 @@ async def list_orders(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    total = int((await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0)
+    conds = []
+    if search:
+        conds.append(or_(SalesOrder.number.ilike(f"%{search}%"), SalesOrder.customer_name.ilike(f"%{search}%")))
+    if status:
+        conds.append(SalesOrder.status == status)
+    if date_from:
+        conds.append(SalesOrder.date >= date_from)
+    if date_to:
+        conds.append(SalesOrder.date <= date_to)
     sort_expr = resolve_sort(
         sort_by, sort_order,
         {
@@ -2108,12 +2142,13 @@ async def list_orders(
         default_key="created_at",
         default_order="desc",
     )
-    q = (
-        select(SalesOrder)
-        .options(selectinload(SalesOrder.line_items))
-        .order_by(sort_expr).offset(sk).limit(lim)
-    )
-    rows = (await db.execute(q)).unique().scalars().all()
+    q = select(SalesOrder).options(selectinload(SalesOrder.line_items))
+    q_count = select(func.count(SalesOrder.id))
+    if conds:
+        q = q.where(and_(*conds))
+        q_count = q_count.where(and_(*conds))
+    total = int((await db.execute(q_count)).scalar() or 0)
+    rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
     out = [_so_dict(so, so.line_items) for so in rows]
     return paged(out, total, sk, lim)
 
@@ -2138,7 +2173,8 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
 
-    line_rows, subtotal, tax_total = _calc_lines(data.items)
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -2225,7 +2261,8 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
         raise HTTPException(400, "Sales order must have at least one line item")
 
     # Replace fields (status preserved). Recompute totals from new items.
-    line_rows, subtotal, tax_total = _calc_lines(data.items)
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
 
     so.customer_id = data.customer_id
@@ -2368,6 +2405,7 @@ async def convert_order_to_invoice(
         raise HTTPException(400, "Select at least one line with quantity > 0")
 
     allow_oversell = await get_allow_overselling(db)
+    tax_mode = await _get_org_tax_mode(db)
     orig_subtotal = float(so.subtotal or 0)
     inv_subtotal = 0.0
     inv_tax_total = 0.0
@@ -2377,6 +2415,7 @@ async def convert_order_to_invoice(
             float(so_line.price or 0),
             float(so_line.discount or 0),
             float(so_line.tax_rate or 0),
+            tax_mode,
         )
         inv_subtotal += line_net
         inv_tax_total += line_tax
@@ -2425,6 +2464,7 @@ async def convert_order_to_invoice(
             float(so_line.price or 0),
             float(so_line.discount or 0),
             float(so_line.tax_rate or 0),
+            tax_mode,
         )
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
@@ -2543,6 +2583,7 @@ async def convert_order_to_invoice(
                 float(so_line.price or 0),
                 float(so_line.discount or 0),
                 float(so_line.tax_rate or 0),
+                tax_mode,
             )
 
     if inv_discount > 0:
@@ -2566,7 +2607,7 @@ async def convert_order_to_invoice(
         so.status = SalesOrderStatus.converted
         await fulfil_reservations(db, source_type="sales_order", source_ref=so.id)
     else:
-        _recalc_so_header(so, remaining_lines)
+        _recalc_so_header(so, remaining_lines, tax_mode)
         so.status = SalesOrderStatus.partially_invoiced
         await refresh_so_reservations(
             db, order_id=so.id, branch_id=so.branch_id, lines=remaining_lines,
@@ -2974,13 +3015,24 @@ async def list_returns(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """List sales returns. PR 2: backed by the new SalesReturn table —
-    SAMPLE_RETURNS hardcoded list is gone."""
+    """List sales returns."""
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    total = int((await db.execute(select(func.count(SalesReturn.id)))).scalar() or 0)
+    conds = []
+    if search:
+        conds.append(or_(SalesReturn.number.ilike(f"%{search}%"), SalesReturn.customer_name.ilike(f"%{search}%")))
+    if status:
+        conds.append(SalesReturn.status == status)
+    if date_from:
+        conds.append(SalesReturn.date >= date_from)
+    if date_to:
+        conds.append(SalesReturn.date <= date_to)
     sort_expr = resolve_sort(
         sort_by, sort_order,
         {
@@ -2995,12 +3047,13 @@ async def list_returns(
         default_key="created_at",
         default_order="desc",
     )
-    q = (
-        select(SalesReturn)
-        .options(selectinload(SalesReturn.line_items))
-        .order_by(sort_expr).offset(sk).limit(lim)
-    )
-    rows = (await db.execute(q)).unique().scalars().all()
+    q = select(SalesReturn).options(selectinload(SalesReturn.line_items))
+    q_count = select(func.count(SalesReturn.id))
+    if conds:
+        q = q.where(and_(*conds))
+        q_count = q_count.where(and_(*conds))
+    total = int((await db.execute(q_count)).scalar() or 0)
+    rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
     out = [_return_dict(ret, ret.line_items) for ret in rows]
     return paged(out, total, sk, lim)
 
@@ -3053,6 +3106,134 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
         "number": ret.number,
         "credit_revoked": round(credit_revoked, 2),
     }
+
+
+@router.post("/returns/{return_id}/undo-void", dependencies=[Depends(require_perm("invoices.edit"))])
+async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+    """Restore a voided credit note to 'processed' — re-applies stock + invoice adjustments.
+
+    Blocked if another active credit note has already consumed the same line
+    quantities or reduced the invoice balance to the point where re-applying
+    this one would push it negative (double-entry prevention).
+    """
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id == return_id)
+    )
+    ret = res.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    if ret.status != SalesReturnStatus.void:
+        return {"status": str(ret.status.value if hasattr(ret.status, "value") else ret.status), "number": ret.number}
+
+    # ── Pre-flight: check for conflicts BEFORE mutating anything ──────────────
+    inv = (await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id == ret.invoice_id)
+    )).unique().scalar_one_or_none()
+    if inv is None:
+        raise HTTPException(404, "Original invoice not found")
+
+    # Guard 1: total active credit notes (after undo) must not exceed the invoice total.
+    new_credited = round(float(getattr(inv, "credited_amount", 0) or 0) + float(ret.total or 0), 2)
+    if new_credited > float(inv.total or 0) + 0.01:
+        raise HTTPException(
+            400,
+            f"Cannot undo void: re-activating {ret.number} (₹{round(float(ret.total or 0), 2)}) "
+            f"would push total credits (₹{new_credited}) above the invoice total "
+            f"(₹{round(float(inv.total or 0), 2)}). Another active credit note has already "
+            f"consumed the same amount. Void that credit note first, then undo this one."
+        )
+
+    # Guard 2: per-line quantity check — no item can be returned more times
+    # than it was originally sold.
+    already_returned = await _already_returned_for_invoice(db, ret.invoice_id)
+    inv_lines_by_id = {li.id: li for li in inv.line_items}
+    conflicts = []
+    for rl in ret.line_items:
+        if not rl.invoice_line_id:
+            continue
+        existing = already_returned.get(rl.invoice_line_id, 0)
+        inv_line = inv_lines_by_id.get(rl.invoice_line_id)
+        original_qty = int(inv_line.qty or 0) if inv_line else 0
+        if existing + int(rl.return_qty or 0) > original_qty:
+            conflicts.append(rl.name or rl.invoice_line_id)
+    if conflicts:
+        items_str = ", ".join(f"'{n}'" for n in conflicts[:3])
+        raise HTTPException(
+            400,
+            f"Cannot undo void: line(s) {items_str} have already been fully returned by "
+            f"another active credit note. Void that credit note first, then undo this one."
+        )
+    # ── End pre-flight ─────────────────────────────────────────────────────────
+
+    # Re-apply stock effects (inverse of void's _reverse_sales_return_effects).
+    for rl in ret.line_items:
+        if rl.batch_allocation:
+            try:
+                ledger = json.loads(rl.batch_allocation)
+            except (ValueError, TypeError):
+                ledger = []
+            for entry in ledger:
+                bid = entry.get("batch_id")
+                qty = int(entry.get("restored") or 0)
+                if not bid or qty <= 0:
+                    continue
+                b = (await db.execute(
+                    select(ItemBatch).where(ItemBatch.id == bid)
+                )).scalar_one_or_none()
+                if b is not None:
+                    await set_batch_quantity_atomic(db, batch_id=bid, new_qty=int(b.quantity or 0) + qty)
+                elif rl.item_id:
+                    try:
+                        await adjust_stock_atomic(
+                            db, item_id=rl.item_id, branch_id=ret.branch_id, delta=qty,
+                            movement_type="return", source_type="sales_return", source_ref=ret.id,
+                        )
+                    except ValueError:
+                        pass
+        elif rl.item_id:
+            try:
+                await adjust_stock_atomic(
+                    db, item_id=rl.item_id, branch_id=ret.branch_id,
+                    delta=int(rl.return_qty or 0),
+                )
+            except ValueError:
+                pass
+
+    # recalc_invoice_after_cn (called below) will update credited_amount,
+    # return_status, and recompute invoice status — no direct mutations needed.
+    _recompute_invoice_status(inv)
+
+    # Re-credit the customer for credit-method returns.
+    if ret.refund_method == "credit" and ret.customer_id and (ret.credited_amount or 0) > 0:
+        cust = (await db.execute(
+            select(Customer).where(Customer.id == ret.customer_id)
+        )).scalar_one_or_none()
+        if cust:
+            await adjust_customer_credit(
+                db, ret.customer_id, float(ret.credited_amount or 0),
+                entry_type="return_undo_void",
+                source_type="sales_return", source_ref=ret.id, source_number=ret.number,
+            )
+
+    ret.status = SalesReturnStatus.processed
+    await db.flush()
+    await recalc_invoice_after_cn(db, ret.invoice_id)
+    customer_ids: set[str] = set()
+    if ret.customer_id:
+        customer_ids.add(ret.customer_id)
+    inv_cid = (await db.execute(
+        select(SaleInvoice.customer_id).where(SaleInvoice.id == ret.invoice_id)
+    )).scalar_one_or_none()
+    if inv_cid:
+        customer_ids.add(inv_cid)
+    for cid in customer_ids:
+        await sync_customer_outstanding(db, cid)
+    await db.commit()
+    return {"status": "processed", "number": ret.number}
 
 
 # ─── GET ONE INVOICE (after /orders/, /returns/, /payments/ static paths) ───
@@ -3120,8 +3301,10 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
     # How much has already been returned per invoice_line_id?
     already_returned = await _already_returned_for_invoice(db, data.invoice_id)
 
+    tax_mode = await _get_org_tax_mode(db)
+
     # Validate every return line + compute totals.
-    return_rows = []  # (return_line_in, matched_inv_line, line_net, line_tax)
+    return_rows = []  # (return_line_in, matched_inv_line, line_gross, line_tax)
     subtotal = 0.0
     tax_total = 0.0
     for r in data.items:
@@ -3147,11 +3330,13 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             )
 
         # Use the original sale's price + tax_rate (returns at sale price,
-        # not current catalog price).
+        # not current catalog price). Apply the org's tax mode so inclusive
+        # prices don't get taxed a second time.
         line_gross = round(r.return_qty * (inv_line.price or 0), 2)
-        line_tax = round(line_gross * ((inv_line.tax_rate or 0) / 100), 2)
+        line_tax = line_tax_amount(line_gross, inv_line.tax_rate or 0, tax_mode)
+        line_taxable = line_taxable_amount(line_gross, inv_line.tax_rate or 0, tax_mode)
         return_rows.append((r, inv_line, line_gross, line_tax))
-        subtotal += line_gross
+        subtotal += line_taxable
         tax_total += line_tax
 
     total = round(subtotal + tax_total, 2)
@@ -3366,19 +3551,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
                 risk="low",
                 ip_address=None,
             ))
-
-    # All refund methods reduce what the customer owes by the full return
-    # value. Cash/credit additionally refund up to paid_amount (capped in
-    # `credited`); any excess return value is absorbed as a lower invoice
-    # total rather than a cash payout.
-    inv.total = round(max(0.0, (inv.total or 0) - total), 2)
-
-    if method == "cash":
-        # Reduce paid_amount by the credited amount so subsequent reports
-        # show what the cash drawer actually has. The corresponding cash-
-        # out entry is operator-managed for now (PR 3 could auto-create a
-        # CashEntry of type='out' with category='Customer Refund').
-        inv.paid_amount = round(max(0.0, (inv.paid_amount or 0) - credited), 2)
 
     _recompute_invoice_status(inv)
 
