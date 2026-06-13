@@ -28,22 +28,6 @@ from src.models import (
     Vendor,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-    CustomerPayment,
-    CustomerPaymentAllocation,
-    GoodsReceiptNote,
-    Item,
-    ItemStock,
-    PurchaseBill,
-    PurchaseOrder,
-    Quotation,
-    SaleInvoice,
-    SalesOrder,
-    SalesReturn,
-    StockMovement,
-    VendorPayment,
-    VendorPaymentAllocation,
-    VendorReturn,
-)
 from src.security import require_perm
 
 router = APIRouter()
@@ -400,8 +384,6 @@ async def sales_register(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
@@ -1860,11 +1842,24 @@ async def top_customers(
         "invoice_count": func.count(SaleInvoice.id),
         "purchase_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
         "outstanding_amount": func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0),
-        {"branch": "Anna Nagar", "code": "AN", "sales": 124850, "purchases": 48200, "transactions": 248, "margin_pct": 24.8},
-        {"branch": "T. Nagar", "code": "TN", "sales": 98400, "purchases": 32100, "transactions": 196, "margin_pct": 22.4},
-        {"branch": "Vadapalani", "code": "VD", "sales": 72600, "purchases": 24400, "transactions": 144, "margin_pct": 21.6},
-        {"branch": "Velachery", "code": "VL", "sales": 46200, "purchases": 18000, "transactions": 92, "margin_pct": 20.1},
-    ]
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "purchase_amount", "desc")
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    base = (
+        select(
+            SaleInvoice.customer_name.label("customer"),
+            func.count(SaleInvoice.id).label("invoice_count"),
+            func.coalesce(func.sum(SaleInvoice.total), 0).label("purchase_amount"),
+            func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0).label("outstanding_amount"),
+        )
+        .group_by(SaleInvoice.customer_name)
+    )
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [dict(r._mapping) for r in result.fetchall()]
+    return paged(rows, total, sk, lim)
 
 
 @router.get("/margin-analysis", dependencies=[Depends(require_perm("reports.view"))])
