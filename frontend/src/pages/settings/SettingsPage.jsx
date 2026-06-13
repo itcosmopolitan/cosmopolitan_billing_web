@@ -20,6 +20,7 @@ const EMPTY_ORG_FORM = {
   website: '',
   state_code: '33',
   financial_year: 'Apr-Mar',
+  allow_overselling: true,
 }
 
 const TABS = [
@@ -296,6 +297,7 @@ export default function SettingsPage() {
             website: data.website || '',
             state_code: data.state_code || '33',
             financial_year: data.financial_year || 'Apr-Mar',
+            allow_overselling: data.allowOverselling !== false,
           })
         }
       } catch (err) {
@@ -326,6 +328,7 @@ export default function SettingsPage() {
         website: orgForm.website?.trim() || '',
         state_code: orgForm.state_code?.trim() || '33',
         financial_year: orgForm.financial_year || 'Apr-Mar',
+        allow_overselling: orgForm.allow_overselling,
       })
       setOrgForm((prev) => ({
         ...prev,
@@ -339,6 +342,7 @@ export default function SettingsPage() {
         website: saved?.website ?? prev.website,
         state_code: saved?.state_code ?? prev.state_code,
         financial_year: saved?.financial_year ?? prev.financial_year,
+        allow_overselling: saved?.allowOverselling !== false,
       }))
       toast.success('Organisation profile saved')
     } catch (err) {
@@ -563,6 +567,20 @@ export default function SettingsPage() {
             <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
             <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             <FormGroup label="Financial Year"><select className="form-input" value={orgForm.financial_year} onChange={e=>pof('financial_year',e.target.value)} disabled={!can('settings.edit')}><option value="Apr-Mar">Apr–Mar</option><option value="Jan-Dec">Jan–Dec</option></select></FormGroup></FormRow>
+            <FormGroup label="Inventory">
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                <input
+                  type="checkbox"
+                  checked={orgForm.allow_overselling}
+                  onChange={e => pof('allow_overselling', e.target.checked)}
+                  disabled={!can('settings.edit')}
+                />
+                Allow overselling (sell below zero stock)
+              </label>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                When off, POS, invoices, and sales orders block sales that exceed available stock.
+              </div>
+            </FormGroup>
             {can('settings.edit') && (
               <div style={{marginTop:6}}>
                 <button className="btn btn-primary btn-sm" onClick={saveOrg} disabled={orgSaving || loading}>

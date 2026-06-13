@@ -15,6 +15,7 @@ from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import (
     add_batch_atomic,
     adjust_stock_atomic,
+    clamp_stock_to_zero_with_ledger,
     consume_batches_atomic,
     is_tracked,
 )
@@ -404,6 +405,9 @@ async def approve_transfer(
                     strategy=strategy,
                     preferred_batch_id=line.preferred_batch_id,
                     explicit_allocation=explicit,
+                    movement_type="transfer",
+                    source_type="transfer",
+                    source_ref=transfer_id,
                 )
             except ValueError:
                 # Two very different failure modes land here:
@@ -433,6 +437,9 @@ async def approve_transfer(
                             strategy=strategy,
                             preferred_batch_id=line.preferred_batch_id,
                             explicit_allocation=None,
+                            movement_type="transfer",
+                            source_type="transfer",
+                            source_ref=transfer_id,
                         )
                     except ValueError:
                         consumed = []
@@ -447,12 +454,14 @@ async def approve_transfer(
                         ),
                         {"i": line.item_id, "b": t.from_branch_id},
                     )
-                    await db.execute(
-                        _text(
-                            "UPDATE item_stock SET quantity = 0 "
-                            "WHERE item_id = :i AND branch_id = :b"
-                        ),
-                        {"i": line.item_id, "b": t.from_branch_id},
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=line.item_id,
+                        branch_id=t.from_branch_id,
+                        movement_type="transfer",
+                        source_type="transfer",
+                        source_ref=transfer_id,
+                        notes=f"Transfer {t.ref_number} source clamp",
                     )
             line.batch_allocation = json.dumps(consumed)
         else:
@@ -462,14 +471,19 @@ async def approve_transfer(
                     item_id=line.item_id,
                     branch_id=t.from_branch_id,
                     delta=-line.qty,
+                    movement_type="transfer",
+                    source_type="transfer",
+                    source_ref=transfer_id,
                 )
             except ValueError:
-                await db.execute(
-                    _text(
-                        "UPDATE item_stock SET quantity = 0 "
-                        "WHERE item_id = :i AND branch_id = :b"
-                    ),
-                    {"i": line.item_id, "b": t.from_branch_id},
+                await clamp_stock_to_zero_with_ledger(
+                    db,
+                    item_id=line.item_id,
+                    branch_id=t.from_branch_id,
+                    movement_type="transfer",
+                    source_type="transfer",
+                    source_ref=transfer_id,
+                    notes=f"Transfer {t.ref_number} source clamp",
                 )
     await db.commit()
     return {"status": "transit", "ref_number": t.ref_number, "approved_by": body.approved_by}
@@ -583,6 +597,9 @@ async def receive_transfer(
                 item_id=line.item_id,
                 branch_id=t.to_branch_id,
                 delta=line.qty,
+                movement_type="transfer",
+                source_type="transfer",
+                source_ref=transfer_id,
             )
     await db.commit()
     return {"status": "received", "ref_number": t.ref_number, "received_by": body.received_by}

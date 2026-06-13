@@ -98,6 +98,19 @@ export function Chip({ status, label, custom }) {
   return <span className={`chip ${cls}`}>{label || lbl}</span>
 }
 
+/** Credit-note / vendor-credit return flag on invoices and bills. */
+export function ReturnStatusChip({ status }) {
+  if (!status || status === 'none') {
+    return <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
+  }
+  const map = {
+    partial: { color: 'var(--amber)', label: 'Partial Return' },
+    full:    { color: 'var(--red)', label: 'Full Return' },
+  }
+  const m = map[status] || { color: 'var(--text-muted)', label: status }
+  return <Tag color={m.color}>{m.label}</Tag>
+}
+
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 export function Spinner({ size = 20, color = 'var(--accent)' }) {
   return (
@@ -106,6 +119,32 @@ export function Spinner({ size = 20, color = 'var(--accent)' }) {
       <path d="M12 2a10 10 0 0 1 10 10" stroke={color} strokeWidth="3" strokeLinecap="round" />
     </svg>
   )
+}
+
+/** Centered spinner for list/table panels while data is fetching. */
+export function TableLoadingPanel({ label = 'Loading…' }) {
+  return (
+    <div style={{
+      padding: '56px 24px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+      color: 'var(--text-muted)',
+      minHeight: 200,
+    }}>
+      <Spinner size={28} />
+      <span style={{ fontSize: 13 }}>{label}</span>
+    </div>
+  )
+}
+
+/** Show loading, empty, or table content — avoids empty-state flash during fetch. */
+export function TablePanel({ loading, isEmpty, emptyIcon, emptyTitle, emptyDesc, emptyAction, children }) {
+  if (loading) return <TableLoadingPanel />
+  if (isEmpty) return <EmptyState icon={emptyIcon} title={emptyTitle} desc={emptyDesc} action={emptyAction} />
+  return children
 }
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
@@ -295,6 +334,82 @@ export function Tag({ children, color }) {
   return (
     <span className="tag" style={color ? { background: color + '18', color } : {}}>
       {children}
+    </span>
+  )
+}
+
+// ─── CopyableId ───────────────────────────────────────────────────────────────
+// Renders a human-readable identifier (invoice #, bill #, PO #, etc.) next to
+// a small click-to-copy icon. Used in list rows where operators frequently
+// need to paste the ID into another field (e.g. the Returns flow which
+// requires an exact bill / invoice number).
+//
+// Behavior:
+//   • Click the icon → copies `value` to clipboard + fires a toast.
+//   • Falls back to legacy `document.execCommand('copy')` on browsers that
+//     don't expose `navigator.clipboard` (most importantly: any HTTP-served
+//     dev environment in older Edge / Safari, where `navigator.clipboard`
+//     is undefined despite the user being on a secure-ish context).
+//
+// Props:
+//   • value    — string to copy (also displayed as the visible text by default)
+//   • label    — optional alternative display text (e.g. shorter ellipsised form)
+//   • style    — passed to the wrapper for color / font tweaks
+//   • iconOnly — hide the visible text; only the icon button shows. Useful
+//                in tight cells where the ID is rendered elsewhere already.
+export function CopyableId({ value, label, style, iconOnly = false }) {
+  const handleCopy = async (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!value) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(String(value))
+      } else {
+        // Fallback for non-secure-context dev runs.
+        const ta = document.createElement('textarea')
+        ta.value = String(value)
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      // Dynamic import keeps react-hot-toast out of the primitive's
+      // import surface — callers that don't import toast elsewhere
+      // don't pay for it just by mounting a Card with a CopyableId.
+      const { default: toast } = await import('react-hot-toast')
+      toast.success(`Copied ${label || value}`, { duration: 1500 })
+    } catch (err) {
+      console.error('Copy failed:', err)
+    }
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, ...style }}>
+      {!iconOnly && <span className="mono">{label || value}</span>}
+      <button
+        type="button"
+        onClick={handleCopy}
+        title={`Copy ${value}`}
+        aria-label={`Copy ${value}`}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--text-muted)',
+          cursor: 'pointer',
+          padding: '2px 4px',
+          borderRadius: 4,
+          fontSize: 11,
+          lineHeight: 1,
+          opacity: 0.6,
+          transition: 'opacity 0.12s, color 0.12s',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--accent)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--text-muted)' }}
+      >
+        ⧉
+      </button>
     </span>
   )
 }

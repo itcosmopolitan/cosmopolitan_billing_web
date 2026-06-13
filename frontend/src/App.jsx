@@ -20,7 +20,13 @@ import NewTransferPage from '@/pages/inventory/NewTransferPage'
 import EditTransferPage from '@/pages/inventory/EditTransferPage'
 import AdjustmentsPage from '@/pages/inventory/AdjustmentsPage'
 import SalesPage     from '@/pages/sales/SalesPage'
+import QuoteFormPage from '@/pages/sales/QuoteFormPage'
+import OrderFormPage from '@/pages/sales/OrderFormPage'
+import InvoiceFormPage from '@/pages/sales/InvoiceFormPage'
 import PurchasesPage from '@/pages/purchases/PurchasesPage'
+import PurchaseOrderFormPage from '@/pages/purchases/PurchaseOrderFormPage'
+import BillFormPage from '@/pages/purchases/BillFormPage'
+import BillEditPage from '@/pages/purchases/BillEditPage'
 import CustomersPage from '@/pages/customers/CustomersPage'
 import VendorsPage   from '@/pages/vendors/VendorsPage'
 import CashPage      from '@/pages/cash/CashPage'
@@ -57,7 +63,17 @@ function AppShell() {
             <Route path="/transfers/:transferId/edit" element={<RequirePerm perm="transfers.create"><EditTransferPage /></RequirePerm>} />
             <Route path="/adjustments" element={<RequirePerm perm="adjustments.view"><AdjustmentsPage /></RequirePerm>} />
             <Route path="/sales"      element={<RequirePerm perm="invoices.view"><SalesPage /></RequirePerm>} />
+            <Route path="/sales/quotations/new" element={<RequirePerm perm="invoices.create"><QuoteFormPage mode="create" /></RequirePerm>} />
+            <Route path="/sales/quotations/:quoteId/edit" element={<RequirePerm perm="invoices.edit"><QuoteFormPage mode="edit" /></RequirePerm>} />
+            <Route path="/sales/orders/new" element={<RequirePerm perm="invoices.create"><OrderFormPage mode="create" /></RequirePerm>} />
+            <Route path="/sales/orders/:orderId/edit" element={<RequirePerm perm="invoices.edit"><OrderFormPage mode="edit" /></RequirePerm>} />
+            <Route path="/sales/invoices/new" element={<RequirePerm perm="invoices.create"><InvoiceFormPage /></RequirePerm>} />
             <Route path="/purchases"  element={<RequirePerm perm="purchases.view"><PurchasesPage /></RequirePerm>} />
+            <Route path="/purchases/orders/new" element={<RequirePerm perm="purchases.create"><PurchaseOrderFormPage mode="create" /></RequirePerm>} />
+            <Route path="/purchases/orders/:orderId/edit" element={<RequirePerm perm="purchases.edit"><PurchaseOrderFormPage mode="edit" /></RequirePerm>} />
+            <Route path="/purchases/bills/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="bill" /></RequirePerm>} />
+            <Route path="/purchases/bills/:billId/edit" element={<RequirePerm perm="purchases.edit"><BillEditPage /></RequirePerm>} />
+            <Route path="/purchases/grns/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="grn" /></RequirePerm>} />
             <Route path="/customers"  element={<RequirePerm perm="customers.view"><CustomersPage /></RequirePerm>} />
             <Route path="/vendors"    element={<RequirePerm perm="vendors.view"><VendorsPage /></RequirePerm>} />
             <Route path="/cash"       element={<RequirePerm perm="cash.view"><CashPage /></RequirePerm>} />

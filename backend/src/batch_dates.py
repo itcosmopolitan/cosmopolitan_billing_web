@@ -8,7 +8,14 @@ from typing import Optional
 
 
 def _today() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    # 2026-05-31: use LOCAL time, not UTC. Every other date in the app
+    # (invoice/bill dates, received_date passed by purchases.convert, etc.)
+    # is computed with datetime.now() — the server's local clock is the
+    # business timezone. Using utcnow() here made a locally-dated receipt
+    # look "in the future" during the evening/night window where the local
+    # date is already ahead of UTC (e.g. IST after ~18:30), producing a
+    # false "Received date cannot be in the future" on PO→Bill convert.
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def validate_batch_dates(

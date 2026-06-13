@@ -7,20 +7,31 @@ import { useAppStore } from '@/store'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, KPICard, BarList, Chip, AlertBar } from '@/components/ui'
 
-// Phase 4 follow-up: the detail tables on this page (sales register, purchase
-// register, stock movement) still iterate over seed data because the
-// equivalent paged backend endpoints (reportsAPI.salesRegister etc.) don't
-// exist yet. KPIs and aggregate panels below ARE wired to reportsAPI and
-// reflect live database state.
+// Phase 5: stock movement + document trail are wired to live API.
+// Sales/purchase register detail tables still use seed data (no paged endpoints yet).
 
 const TABS = [
   { id: 'sales',     label: '📈 Sales Register' },
   { id: 'purchase',  label: '📦 Purchase Register' },
   { id: 'tax',       label: '🧾 Tax Summary (GST)' },
   { id: 'stock',     label: '📊 Stock Movement' },
+  { id: 'trail',     label: '🔗 Document Trail' },
   { id: 'branch',    label: '🏪 Branch Comparison' },
   { id: 'margin',    label: '💹 Margin Analysis' },
 ]
+
+const TRAIL_LABELS = {
+  quotation: 'Quotation',
+  sales_order: 'Sales Order',
+  invoice: 'Invoice',
+  credit_note: 'Credit Note',
+  customer_payment: 'Customer Payment',
+  purchase_order: 'Purchase Order',
+  grn: 'GRN',
+  purchase_bill: 'Purchase Bill',
+  vendor_return: 'Vendor Return',
+  vendor_payment: 'Vendor Payment',
+}
 
 const TT = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
@@ -80,18 +91,28 @@ export default function ReportsPage() {
   const [taxSummaryData, setTaxSummary] = useState(null)
   const [branchCompare, setBranchCompare] = useState([])
   const [marginData, setMarginData] = useState(null)
+  const [stockData, setStockData] = useState(null)
+  const [trailNumber, setTrailNumber] = useState('')
+  const [trailResult, setTrailResult] = useState(null)
+  const [trailLoading, setTrailLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     const params = { branch_id: branchF || undefined, date_from: dateFrom, date_to: dateTo }
     ;(async () => {
       try {
-        const [s, p, t, b, m] = await Promise.all([
+        const [s, p, t, b, m, stk] = await Promise.all([
           reportsAPI.salesSummary(params).catch(() => null),
           reportsAPI.purchaseSummary(params).catch(() => null),
           reportsAPI.taxSummary({ date_from: dateFrom, date_to: dateTo }).catch(() => null),
           reportsAPI.branchCompare().catch(() => []),
           reportsAPI.marginAnalysis().catch(() => null),
+          reportsAPI.stockMovement({
+            branch_id: branchF || undefined,
+            date_from: dateFrom,
+            date_to: dateTo,
+            limit: 500,
+          }).catch(() => null),
         ])
         if (cancelled) return
         setSalesSummary(s)
@@ -99,6 +120,7 @@ export default function ReportsPage() {
         setTaxSummary(t)
         setBranchCompare(Array.isArray(b) ? b : [])
         setMarginData(m)
+        setStockData(stk)
       } catch (e) {
         // Toast already fired by axios interceptor.
         console.error(e)
@@ -113,6 +135,24 @@ export default function ReportsPage() {
   const seedPurchaseTotal = useMemo(() => PURCHASE_BILLS.reduce((s, b) => s + b.total, 0), [])
   const seedSalesCount = SALES_INVOICES.length
   const seedPurchaseCount = PURCHASE_BILLS.length
+  const stockRows = stockData?.items ?? []
+
+  const handleTrailSearch = async () => {
+    const num = trailNumber.trim()
+    if (!num) {
+      toast.error('Enter a document number (e.g. INV-2026-2001)')
+      return
+    }
+    setTrailLoading(true)
+    try {
+      const res = await reportsAPI.documentTrail({ number: num })
+      setTrailResult(res)
+    } catch {
+      setTrailResult(null)
+    } finally {
+      setTrailLoading(false)
+    }
+  }
 
   const handleGenerate = () => {
     if (!dateFrom || !dateTo) {
@@ -180,24 +220,17 @@ export default function ReportsPage() {
       ]
       filename = `GST_Summary_${dateFrom}_to_${dateTo}.csv`
     } else if (tab === 'stock') {
-      exportData = PRODUCTS.map(p => {
-        const open  = (p.stock['br-001']||0) + Math.floor(Math.random()*80+20)
-        const pur   = Math.floor(Math.random()*60+10)
-        const sold  = Math.floor(Math.random()*50+10)
-        const trans = Math.floor(Math.random()*10-5)
-        const adj   = Math.floor(Math.random()*4-2)
-        const close = open+pur-sold+trans+adj
-        return {
-          'Item': p.name,
-          'SKU': p.sku,
-          'Opening Stock': open,
-          'Purchased': pur,
-          'Sold': sold,
-          'Transferred': trans,
-          'Adjusted': adj,
-          'Closing Stock': close,
-        }
-      })
+      exportData = stockRows.map(r => ({
+        'Item': r.item_name,
+        'SKU': r.sku,
+        'Opening Stock': r.opening,
+        'Purchased': r.purchases_in,
+        'Sold': r.sales_out,
+        'Transferred': r.transfers_net,
+        'Adjusted': r.adjustments,
+        'Closing Stock': r.closing,
+        'Variance': r.variance,
+      }))
       filename = `Stock_Movement_${dateFrom}_to_${dateTo}.csv`
     }
 
@@ -481,56 +514,106 @@ export default function ReportsPage() {
 
       {/* ── STOCK MOVEMENT ──────────────────────────────────────── */}
       {tab === 'stock' && (
-        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} titleRight={<button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = PRODUCTS.map(p => {
-            const open  = (p.stock['br-001']||0) + Math.floor(Math.random()*80+20)
-            const pur   = Math.floor(Math.random()*60+10)
-            const sold  = Math.floor(Math.random()*50+10)
-            const trans = Math.floor(Math.random()*10-5)
-            const adj   = Math.floor(Math.random()*4-2)
-            const close = open+pur-sold+trans+adj
-            return {
-              'Item': p.name,
-              'SKU': p.sku,
-              'Opening Stock': open,
-              'Purchased': pur,
-              'Sold': sold,
-              'Transferred': trans,
-              'Adjusted': adj,
-              'Closing Stock': close,
-            }
-          })
-          exportToCSV(exportData, `Stock_Movement_${dateFrom}_to_${dateTo}.csv`)
-          toast.success('Stock movement report exported')
-        }}>↓ Export</button>} bodyPadding={false}>
-          <table className="data-table">
-            <thead><tr><th>Item</th><th className="text-right">Opening</th><th className="text-right">Purchased</th><th className="text-right">Sold</th><th className="text-right">Transferred</th><th className="text-right">Adjusted</th><th className="text-right">Closing</th><th>Variance</th></tr></thead>
-            <tbody>
-              {PRODUCTS.map(p=>{
-                const open  = (p.stock['br-001']||0) + Math.floor(Math.random()*80+20)
-                const pur   = Math.floor(Math.random()*60+10)
-                const sold  = Math.floor(Math.random()*50+10)
-                const trans = Math.floor(Math.random()*10-5)
-                const adj   = Math.floor(Math.random()*4-2)
-                const close = open+pur-sold+trans+adj
-                const expected = open+pur-sold+trans
-                const variance = close-expected
-                return (
-                  <tr key={p.id}>
-                    <td><div style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:18}}>{p.emoji}</span><div><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:12.5}}>{p.name}</div><div style={{fontSize:11,color:'var(--text-muted)'}}>{p.sku}</div></div></div></td>
-                    <td className="text-right mono">{open}</td>
-                    <td className="text-right mono" style={{color:'var(--green)'}}>+{pur}</td>
-                    <td className="text-right mono" style={{color:'var(--red)'}}>-{sold}</td>
-                    <td className="text-right mono" style={{color:'var(--blue)'}}>{trans>=0?'+':''}{trans}</td>
-                    <td className="text-right mono">{adj>=0?'+':''}{adj}</td>
-                    <td className="text-right mono" style={{fontWeight:600,color:'var(--text-primary)'}}>{close}</td>
-                    <td><span style={{fontSize:11.5,padding:'2px 8px',borderRadius:10,background:variance===0?'var(--green-bg)':variance>0?'var(--blue-bg)':'var(--red-bg)',color:variance===0?'var(--green)':variance>0?'var(--blue)':'var(--red)',fontWeight:600}}>{variance===0?'Match':variance>0?'+'+variance:variance}</span></td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} titleRight={
+          <button className="btn btn-secondary btn-sm" onClick={() => {
+            const exportData = stockRows.map(r => ({
+              'Item': r.item_name,
+              'SKU': r.sku,
+              'Opening Stock': r.opening,
+              'Purchased': r.purchases_in,
+              'Sold': r.sales_out,
+              'Transferred': r.transfers_net,
+              'Adjusted': r.adjustments,
+              'Closing Stock': r.closing,
+              'Variance': r.variance,
+            }))
+            exportToCSV(exportData, `Stock_Movement_${dateFrom}_to_${dateTo}.csv`)
+            toast.success('Stock movement report exported')
+          }}>↓ Export</button>
+        } bodyPadding={false}>
+          {stockRows.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+              {stockData ? 'No stock movement in this period.' : 'Click Generate to load stock data.'}
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Item</th><th className="text-right">Opening</th><th className="text-right">Purchased</th><th className="text-right">Sold</th><th className="text-right">Transferred</th><th className="text-right">Adjusted</th><th className="text-right">Closing</th><th>Variance</th></tr></thead>
+              <tbody>
+                {stockRows.map(r => {
+                  const trans = r.transfers_net ?? ((r.transfers_in || 0) - (r.transfers_out || 0))
+                  const expected = r.opening + r.purchases_in - r.sales_out + trans
+                  const variance = r.variance ?? (r.closing - expected)
+                  return (
+                    <tr key={r.item_id || r.sku}>
+                      <td><div><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:12.5}}>{r.item_name}</div><div style={{fontSize:11,color:'var(--text-muted)'}}>{r.sku}</div></div></td>
+                      <td className="text-right mono">{r.opening}</td>
+                      <td className="text-right mono" style={{color: r.purchases_in >= 0 ? 'var(--green)' : 'var(--red)'}}>{r.purchases_in >= 0 ? '+' : ''}{r.purchases_in}</td>
+                      <td className="text-right mono" style={{color:'var(--red)'}}>-{r.sales_out}</td>
+                      <td className="text-right mono" style={{color:'var(--blue)'}}>{trans >= 0 ? '+' : ''}{trans}</td>
+                      <td className="text-right mono">{r.adjustments >= 0 ? '+' : ''}{r.adjustments}</td>
+                      <td className="text-right mono" style={{fontWeight:600,color:'var(--text-primary)'}}>{r.closing}</td>
+                      <td><span style={{fontSize:11.5,padding:'2px 8px',borderRadius:10,background:variance===0?'var(--green-bg)':variance>0?'var(--blue-bg)':'var(--red-bg)',color:variance===0?'var(--green)':variance>0?'var(--blue)':'var(--red)',fontWeight:600}}>{variance===0?'Match':variance>0?'+'+variance:variance}</span></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </Card>
+      )}
+
+      {/* ── DOCUMENT TRAIL ──────────────────────────────────────── */}
+      {tab === 'trail' && (
+        <>
+          <Card title="Document Lineage Search">
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Document number (QT-, SO-, INV-, CN-, PO-, GRN-, PUR-, RET-)"
+                value={trailNumber}
+                onChange={e => setTrailNumber(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleTrailSearch()}
+                style={{ flex: 1, minWidth: 280 }}
+              />
+              <button className="btn btn-primary btn-sm" onClick={handleTrailSearch} disabled={trailLoading}>
+                {trailLoading ? 'Searching…' : 'Trace'}
+              </button>
+            </div>
+            <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+              Traces upstream and downstream links: Quote → SO → Invoice → Credit Note, or PO → GRN → Bill → Vendor Return.
+            </p>
+          </Card>
+
+          {trailResult?.chain?.length > 0 && (
+            <Card title={`Trail for ${trailResult.number}`} bodyPadding={false}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Step</th>
+                    <th>Type</th>
+                    <th>Number</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th className="text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trailResult.chain.map((node, i) => (
+                    <tr key={`${node.type}-${node.id}`}>
+                      <td className="mono" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
+                      <td>{TRAIL_LABELS[node.type] || node.type}</td>
+                      <td style={{ fontWeight: 500 }}>{node.number}</td>
+                      <td>{node.date || '—'}</td>
+                      <td><Chip label={node.status} custom={{ bg: 'var(--bg-raised)', color: 'var(--text-secondary)' }} /></td>
+                      <td className="text-right mono">{fmt(node.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+        </>
       )}
 
       {/* ── BRANCH COMPARISON ───────────────────────────────────── */}

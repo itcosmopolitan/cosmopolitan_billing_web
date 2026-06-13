@@ -1,32 +1,66 @@
+import json
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
-from src.document_numbering import allocate_number
+from src.document_numbering import allocate_number, resolve_number
 from src.tax_calc import line_tax_amount, line_taxable_amount, normalize_tax_pricing_mode
 from src.models import (
+    AuditLog,
+    Customer,
+    CustomerPayment,
+    CustomerPaymentAllocation,
     InvoiceStatus,
     Organisation,
+    ItemBatch,
     Quotation,
     QuotationLineItem,
     QuotationStatus,
     SaleInvoice,
     SaleLineItem,
+    SalesOrder,
+    SalesOrderLineItem,
+    SalesOrderStatus,
+    SalesReturn,
+    SalesReturnLineItem,
+    SalesReturnStatus,
     User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.routes._lifecycle import (
+    compute_due_date,
+    recalc_invoice_after_cn,
+    refresh_sale_overdue,
+    reverse_customer_payment,
+    sync_customer_outstanding,
+    _recompute_invoice_status,
+)
+from src.routes._credit_ledger import adjust_customer_credit
+from src.routes._numbering import next_sale_invoice_number
+from src.routes._payment_ledger import record_customer_payment, void_payment_record
+from src.routes._stock_ledger import (
+    fulfil_reservations,
+    get_allow_overselling,
+    get_available_qty,
+    refresh_so_reservations,
+    release_reservations,
+    reserve_for_sales_order,
+)
 from src.routes._atomic import (
+    add_batch_atomic,
     add_payment_atomic,
     adjust_stock_atomic,
+    clamp_stock_to_zero_with_ledger,
     consume_batches_atomic,
     is_tracked,
+    set_batch_quantity_atomic,
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import get_user_branch_ids
@@ -65,6 +99,50 @@ class LineItemIn(BaseModel):
     batch_allocation: Optional[List[BatchAllocationEntry]] = None
     batch_id: Optional[str] = None
 
+"""Allowed payment methods on a SALE INVOICE.
+
+These are the ONLY values that can sit on `sale_invoices.payment_mode`,
+whether the invoice is created paid via POS (`SaleCreate.payment_mode`)
+or paid later via the record-payment modal (`PaymentIn.mode`). One
+Literal, both endpoints — the POS dropdown and the record-payment
+dropdown must offer the same set (enforced UI-side too in
+SalesPage.jsx#VALID_PAYMENT_MODES and POSPage.jsx).
+
+`None` is also allowed and means "no payment received yet — invoice is
+pending". The `status='pending'` flag already carries that semantic.
+
+2026-05-25: added `'credit'` as a first-class method. Different from
+"legacy credit" (which used to mean "no payment"): the new `'credit'`
+explicitly debits `customer.credit_balance` to settle the invoice.
+Validations: customer_id required (walk-ins can't draw on credit they
+don't have), customer.credit_balance >= invoice.total. Both create_invoice
+and record_payment enforce; both atomically debit + AuditLog.
+"""
+PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
+
+
+def _coerce_payment_mode_value(v):
+    """Shared pre-validator body for PaymentMode-family Literals.
+
+    Returns None for None / empty / legacy-no-payment strings. Lowercases
+    + strips so case/whitespace noise doesn't trip the Literal.
+
+    2026-05-25: `'credit'` is NO LONGER coerced to None — it's now a
+    valid PaymentMode value. Legacy held bills that used 'credit' to
+    mean "no payment yet" will now mistakenly try to debit credit_balance;
+    that's caught + 422'd by the create_invoice validation when
+    customer_id is missing (walk-in) or credit_balance is insufficient.
+    """
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        return v
+    s = v.strip().lower()
+    if s == "":
+        return None
+    return s
+
+
 class SaleCreate(BaseModel):
     customer_id: Optional[str] = None
     customer_name: str = "Walk-in"
@@ -74,13 +152,53 @@ class SaleCreate(BaseModel):
     date: Optional[str] = None          # defaults to today
     items: List[LineItemIn]
     discount: float = 0
-    payment_mode: str = "cash"
+    number: Optional[str] = None
+    # Strict allow-list (see PaymentMode docstring above). Legacy clients
+    # that still send "credit" or "" get coerced to None by
+    # `_coerce_payment_mode` below so the contract is forgiving on input
+    # but strict on storage.
+    payment_mode: Optional[PaymentMode] = None
     notes: Optional[str] = None
+    # Phase 4: pos | invoice | sales_order | quotation (default invoice).
+    origin: Optional[str] = None
+    # Prefilled-form conversions: link the new invoice back to its source doc.
+    quotation_id: Optional[str] = None
+    sales_order_id: Optional[str] = None
+    source_order_lines: Optional[List["SourceOrderLineIn"]] = None
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, v):
+        return _coerce_payment_mode_value(v)
+
+
+class SourceOrderLineIn(BaseModel):
+    """Qty invoiced from a specific SO line when saving via the invoice form."""
+    order_line_id: str
+    qty: int = Field(..., gt=0)
 
 class PaymentIn(BaseModel):
     amount: float
-    mode: str = "bank_transfer"
+    # Sales Phase 1 (2026-05-23): `mode` is now required (was defaulted to
+    # "bank_transfer" before). Settling an invoice without recording the
+    # method loses the audit trail of what cleared it — and the new POS
+    # checkbox flow makes the operator pick a method explicitly anyway, so
+    # there's no reason this endpoint should silently default.
+    #
+    # 2026-05-24: tightened from `str` → `PaymentMode` Literal. Same
+    # allow-list as SaleCreate.payment_mode (POS). The record-payment
+    # modal in SalesPage.jsx offers the same 4 options as POS — cheque
+    # was removed at user request (POS never supported it; carrying a
+    # wider allow-list here just caused drift). Bogus values now
+    # return 422 with the expected list. The mode is also PERSISTED on
+    # the invoice (see `record_payment` → `add_payment_atomic`).
+    mode: PaymentMode
     ref: str = ""
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _coerce_mode(cls, v):
+        return _coerce_payment_mode_value(v)
 
 class QuotationCreate(BaseModel):
     customer_id: Optional[str] = None
@@ -92,48 +210,13 @@ class QuotationCreate(BaseModel):
     valid_until: Optional[str] = None
     items: List[LineItemIn]
     discount: float = 0
+    number: Optional[str] = None
     notes: Optional[str] = None
 
-# ─── SAMPLE RETURNS DATA ──────────────────────────────────────────────────────
-# Sample returns data (in production, would be stored in database)
-SAMPLE_RETURNS = [
-    {
-        "id": "cn-001",
-        "number": "CN-2024-001",
-        "customer_id": "cu-002",
-        "customer_name": "Rajesh Stores",
-        "ref_invoice": "INV-2024-1847",
-        "date": "2024-04-16",
-        "amount": 1500,
-        "reason": "Defective product - damaged packaging",
-        "status": "processed",
-        "notes": "Basmati Rice 5kg bag torn, customer requested return"
-    },
-    {
-        "id": "cn-002",
-        "number": "CN-2024-002",
-        "customer_id": "cu-004",
-        "customer_name": "Anand Traders",
-        "ref_invoice": "INV-2024-1844",
-        "date": "2024-04-15",
-        "amount": 2800,
-        "reason": "Incorrect quantity delivered",
-        "status": "processed",
-        "notes": "Received 40 units instead of 50"
-    },
-    {
-        "id": "cn-003",
-        "number": "CN-2024-003",
-        "customer_id": "cu-001",
-        "customer_name": "Priya Sharma",
-        "ref_invoice": "INV-2024-1845",
-        "date": "2024-04-14",
-        "amount": 680,
-        "reason": "Expired items returned",
-        "status": "processed",
-        "notes": "Amul Milk cartons expired before use date"
-    }
-]
+# SAMPLE_RETURNS hardcoded list (legacy placeholder data, 2026-04 era)
+# removed 2026-05-23. The real /sales/returns endpoint backed by the
+# SalesReturn table lives further down in this file (see "Sales Returns:
+# LIST"). Spec: ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
 
 
 def _sale_invoice_filters(
@@ -143,6 +226,7 @@ def _sale_invoice_filters(
     search: Optional[str],
     date_from: Optional[str],
     date_to: Optional[str],
+    origin: Optional[str] = None,
 ):
     conds = []
     if branch_id:
@@ -154,6 +238,8 @@ def _sale_invoice_filters(
             conds.append(SaleInvoice.status == status)
     if customer_id:
         conds.append(SaleInvoice.customer_id == customer_id)
+    if origin:
+        conds.append(SaleInvoice.origin == origin)
     if date_from:
         conds.append(SaleInvoice.date >= date_from)
     if date_to:
@@ -168,49 +254,6 @@ def _sale_invoice_filters(
     return conds
 
 
-async def _sales_list_summary(db: AsyncSession, conds):
-    base = and_(*conds) if conds else True
-    amount_total = float(
-        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(base))).scalar() or 0
-    )
-    collected_paid = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(
-                    and_(base, SaleInvoice.status == InvoiceStatus.paid)
-                )
-            )
-        ).scalar()
-        or 0
-    )
-    credit_pending = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0)).where(
-                    and_(base, SaleInvoice.status == InvoiceStatus.pending)
-                )
-            )
-        ).scalar()
-        or 0
-    )
-    overdue_total = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(
-                    and_(base, SaleInvoice.status == InvoiceStatus.overdue)
-                )
-            )
-        ).scalar()
-        or 0
-    )
-    return {
-        "amountTotal": amount_total,
-        "collectedPaid": collected_paid,
-        "creditPending": credit_pending,
-        "overdueTotal": overdue_total,
-    }
-
-
 # ─── LIST ─────────────────────────────────────────────────────────────────────
 @router.get("/", dependencies=[Depends(require_perm("invoices.view"))])
 async def list_invoices(
@@ -220,6 +263,7 @@ async def list_invoices(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    origin: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -229,7 +273,9 @@ async def list_invoices(
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to)
+    await refresh_sale_overdue(db, branch_id)
+    await db.commit()
+    conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to, origin)
     if branch_id is None and not getattr(user, "all_branches", False):
         branch_ids = await get_user_branch_ids(db, user.id)
         if not branch_ids:
@@ -265,34 +311,10 @@ async def list_invoices(
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     invoices = result.unique().scalars().all()
     out = [_inv_dict(inv, inv.line_items) for inv in invoices]
-    summary = await _sales_list_summary(db, conds)
-    return paged(out, total, sk, lim, summary=summary)
+    return paged(out, total, sk, lim)
 
-# ─── LIST RETURNS ────────────────────────────────────────────────────────────
-@router.get("/returns", dependencies=[Depends(require_perm("invoices.view"))])
-async def list_returns(
-    sort_by: Optional[str] = None,
-    sort_order: Optional[str] = "desc",
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
-):
-    """List all credit notes / returns. Sorted in Python because SAMPLE_RETURNS
-    is a static list — no SQL backing yet."""
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
-    key_map = {
-        "number":        lambda r: r.get("number", ""),
-        "customer_name": lambda r: r.get("customer_name", ""),
-        "ref_invoice":   lambda r: r.get("ref_invoice", ""),
-        "date":          lambda r: r.get("date", ""),
-        "amount":        lambda r: r.get("amount", 0),
-        "status":        lambda r: r.get("status", ""),
-    }
-    selected_key = sort_by if sort_by in key_map else "date"
-    desc = (sort_order or "desc").strip().lower() == "desc"
-    sorted_data = sorted(SAMPLE_RETURNS, key=key_map[selected_key], reverse=desc)
-    data = sorted_data[sk : sk + lim]
-    return paged(data, len(SAMPLE_RETURNS), sk, lim)
+# Legacy SAMPLE_RETURNS-backed /returns endpoint removed 2026-05-23 (PR 2).
+# The real persisted version lives at "Sales Returns: LIST" below.
 
 # ─── QUOTATIONS ───────────────────────────────────────────────────────────────
 @router.get("/quotations/", dependencies=[Depends(require_perm("invoices.view"))])
@@ -302,13 +324,28 @@ async def list_quotations(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """List all quotations"""
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    q_count = select(func.count(Quotation.id))
+    conds = []
+    if search:
+        conds.append(or_(Quotation.number.ilike(f"%{search}%"), Quotation.customer_name.ilike(f"%{search}%")))
+    if status:
+        conds.append(Quotation.status == status)
+    if customer_id:
+        conds.append(Quotation.customer_id == customer_id)
+    if date_from:
+        conds.append(Quotation.date >= date_from)
+    if date_to:
+        conds.append(Quotation.date <= date_to)
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -325,18 +362,20 @@ async def list_quotations(
         default_key="created_at",
         default_order="desc",
     )
-    q = select(Quotation).options(selectinload(Quotation.line_items)).order_by(sort_expr)
+    q = select(Quotation).options(selectinload(Quotation.line_items))
+    q_count = select(func.count(Quotation.id))
     if branch_id:
-        q = q.where(Quotation.branch_id == branch_id)
-        q_count = q_count.where(Quotation.branch_id == branch_id)
+        conds.append(Quotation.branch_id == branch_id)
     elif not getattr(user, "all_branches", False):
         branch_ids = await get_user_branch_ids(db, user.id)
         if not branch_ids:
             return paged([], 0, sk, lim)
-        q = q.where(Quotation.branch_id.in_(branch_ids))
-        q_count = q_count.where(Quotation.branch_id.in_(branch_ids))
+        conds.append(Quotation.branch_id.in_(branch_ids))
+    if conds:
+        q = q.where(and_(*conds))
+        q_count = q_count.where(and_(*conds))
     total = int((await db.execute(q_count)).scalar() or 0)
-    result = await db.execute(q.offset(sk).limit(lim))
+    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
     items_out = [_quote_dict(qt, qt.line_items) for qt in quotations]
     return paged(items_out, total, sk, lim)
@@ -362,14 +401,38 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have name and positive quantity")
 
-    quote_num = await allocate_number(
-        db, "quotation", branch_id=data.branch_id
+    quote_num = await resolve_number(
+        db,
+        requested=data.number,
+        model=Quotation,
+        allocate=lambda: allocate_number(db, "quotation", branch_id=data.branch_id),
     )
 
-    # Calculate totals
-    subtotal = sum(i.qty * i.price for i in data.items)
-    tax_total = sum(i.qty * i.price * (i.tax_rate / 100) for i in data.items)
-    total = subtotal + tax_total - data.discount
+    # 2026-05-24: rewrote the totals + line math to match update_quotation
+    # and _calc_lines exactly. The old code was buggy in three ways:
+    #   1. subtotal / tax_total summed line_gross WITHOUT subtracting
+    #      line_discount, so per-line discounts vanished from the rollup.
+    #   2. line_total mistreated `line_discount` as a flat amount
+    #      (subtracted directly from gross), but update_quotation +
+    #      _calc_lines treat it as a percent. Editing a created quote
+    #      would silently change the total.
+    #   3. line_total stored gross+tax−discount instead of net+tax,
+    #      which interpreted the discount as a post-tax deduction.
+    # Now: line_discount is always a percent (0-100). Frontend is the
+    # source of conversion (it offers a %/₹ toggle and converts ₹ → %
+    # before POST). See OrderFormModal / QuoteFormModal.
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows = []  # list[(item, line_net, line_tax)]
+    subtotal = 0.0
+    tax_total = 0.0
+    for item in data.items:
+        gross = round(item.qty * item.price, 2)
+        line_net = round(gross * (1 - (item.line_discount or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
+        line_rows.append((item, line_net, line_tax))
+        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
+        tax_total += line_tax
+    total = round(subtotal + tax_total - (data.discount or 0), 2)
 
     # Create quotation
     quote = Quotation(
@@ -385,13 +448,12 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
         discount=data.discount,
-        total=round(total, 2),
+        total=total,
         notes=data.notes,
     )
 
     # Add line items
-    for item in data.items:
-        line_total = item.qty * item.price + (item.qty * item.price * item.tax_rate / 100) - item.line_discount
+    for item, line_net, line_tax in line_rows:
         li = QuotationLineItem(
             id=str(uuid.uuid4()),
             quotation_id=quote.id,
@@ -401,7 +463,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
             price=item.price,
             tax_rate=item.tax_rate,
             discount=item.line_discount,
-            line_total=round(line_total, 2),
+            line_total=round(line_net + line_tax, 2),
         )
         db.add(li)
 
@@ -409,6 +471,76 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     await db.commit()
     await db.refresh(quote)
     return {"id": quote.id, "number": quote.number, "total": round(total, 2), "status": "draft"}
+
+@router.put("/quotations/{quote_id}", dependencies=[Depends(require_perm("invoices.edit"))])
+async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSession = Depends(get_db)):
+    """Full replace of an editable quotation. Editable iff status ∈
+    {draft, sent}. Converted / accepted / rejected quotes are locked —
+    editing them would orphan downstream SOs / invoices that were
+    created from the original prices. Items replaced wholesale.
+
+    LineItemIn is reused from the sale-invoice schema (it carries extra
+    fields like batch_allocation that quotes ignore — they're optional).
+    """
+    res = await db.execute(
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id == quote_id)
+    )
+    quote = res.scalar_one_or_none()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+    if quote.status in (QuotationStatus.converted, QuotationStatus.accepted, QuotationStatus.rejected):
+        raise HTTPException(400, f"Cannot edit a {quote.status.value} quotation")
+    if not data.items:
+        raise HTTPException(400, "Quotation must have at least one line item")
+
+    # Same line math as create. LineItemIn's `line_discount` is a percent
+    # (matches the invoice/sales convention); QuotationLineItem stores
+    # discount as a number too — we mirror what's already done in
+    # create_quotation.
+    tax_mode = await _get_org_tax_mode(db)
+    subtotal = 0.0
+    tax_total = 0.0
+    line_rows = []
+    for i in data.items:
+        gross = round(i.qty * i.price, 2)
+        line_net = round(gross * (1 - (i.line_discount or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
+        line_rows.append((i, line_net, line_tax))
+        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
+        tax_total += line_tax
+    total = round(subtotal + tax_total - (data.discount or 0), 2)
+
+    quote.customer_id = data.customer_id
+    quote.customer_name = data.customer_name
+    quote.branch_id = data.branch_id
+    quote.branch_name = data.branch_name or data.branch_id
+    quote.created_by = data.created_by
+    quote.date = data.date or quote.date
+    quote.valid_until = data.valid_until
+    quote.subtotal = round(subtotal, 2)
+    quote.tax_total = round(tax_total, 2)
+    quote.discount = round(data.discount or 0, 2)
+    quote.total = total
+    quote.notes = data.notes
+
+    from sqlalchemy import delete as sa_delete
+    await db.execute(
+        sa_delete(QuotationLineItem).where(QuotationLineItem.quotation_id == quote.id)
+    )
+    for line, line_net, line_tax in line_rows:
+        db.add(QuotationLineItem(
+            id=str(uuid.uuid4()), quotation_id=quote.id,
+            item_id=line.item_id, name=line.name,
+            qty=line.qty, price=line.price,
+            tax_rate=line.tax_rate,
+            discount=line.line_discount or 0,
+            line_total=round(line_net + line_tax, 2),
+        ))
+    await db.commit()
+    return {"id": quote.id, "number": quote.number, "total": total, "status": quote.status.value}
+
 
 @router.patch("/quotations/{quote_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
 async def update_quotation_status(quote_id: str, status: str, db: AsyncSession = Depends(get_db)):
@@ -422,49 +554,23 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
     quote = result.scalar_one_or_none()
     if not quote:
         raise HTTPException(404, "Quotation not found")
+    # Terminal statuses must not be rewound — e.g. flipping `converted` back
+    # to `draft` would leave a live SO while the quote looks editable again.
+    terminal = (QuotationStatus.converted, QuotationStatus.rejected, QuotationStatus.expired)
+    if quote.status in terminal and new_status != quote.status:
+        raise HTTPException(
+            400,
+            f"Cannot change status of a {quote.status.value} quotation to {new_status.value}",
+        )
     quote.status = new_status
     await db.commit()
     return {"status": quote.status.value}
 
-# ─── LIST CREDIT PURCHASES ───────────────────────────────────────────────────
-@router.get("/credit/purchases", dependencies=[Depends(require_perm("invoices.view"))])
-async def list_credit_purchases(
-    sort_by: Optional[str] = None,
-    sort_order: Optional[str] = "desc",
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-):
-    """List all invoices purchased on credit (unpaid)"""
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
-    conds = [SaleInvoice.payment_mode == "credit"]
-    sort_expr = resolve_sort(
-        sort_by,
-        sort_order,
-        {
-            "number": SaleInvoice.number,
-            "customer_name": SaleInvoice.customer_name,
-            "date": SaleInvoice.date,
-            "total": SaleInvoice.total,
-            "paid_amount": SaleInvoice.paid_amount,
-            "balance_due": (SaleInvoice.total - SaleInvoice.paid_amount),
-            "status": SaleInvoice.status,
-            "created_at": SaleInvoice.created_at,
-        },
-        default_key="created_at",
-        default_order="desc",
-    )
-    q = (
-        select(SaleInvoice)
-        .options(selectinload(SaleInvoice.line_items))
-        .where(SaleInvoice.payment_mode == "credit")
-    )
-    total = int((await db.execute(select(func.count(SaleInvoice.id)).where(and_(*conds)))).scalar() or 0)
-    result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
-    invoices = result.unique().scalars().all()
-    out = [_inv_dict(inv, inv.line_items) for inv in invoices]
-    return paged(out, total, sk, lim)
+# ─── (REMOVED 2026-05-23) GET /credit/purchases ─────────────────────────────
+# The "Credit Purchases" tab was dropped in Sales Phase 1. The list was just
+# `SaleInvoice.payment_mode == "credit"` — same data is available via the
+# main `GET /sales/` endpoint with a payment_mode filter if anyone needs it.
+# See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md for the rationale.
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
@@ -509,13 +615,52 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         total = round(sum(r[1] for r in line_rows) - data.discount, 2)
     else:
         total = round(subtotal + tax_total - data.discount, 2)
-    paid      = total if data.payment_mode not in ("credit",) else 0.0
+    is_paid_at_create = data.payment_mode is not None
+    paid      = total if is_paid_at_create else 0.0
     status    = "paid" if paid >= total else "pending"
+    due_date = None
+    if status in ("pending", "partial"):
+        due_date = compute_due_date(data.date or today, None)
+
+    # 2026-05-25: 'credit' mode debits the customer's stored credit
+    # balance. Validations:
+    #   • customer_id required — walk-ins don't have a credit balance
+    #     to draw from. 400.
+    #   • customer.credit_balance >= total — partial-credit isn't
+    #     supported in this flow (would need a split-payment UI). 400.
+    # On success, the customer.credit_balance is debited atomically +
+    # an AuditLog row is written. The debit happens BELOW after the
+    # invoice is added, so it can be rolled back together with the
+    # invoice insert if anything later in the txn fails.
+    credit_customer = None
+    if data.payment_mode == "credit":
+        if not data.customer_id:
+            raise HTTPException(400, "Credit-mode sale requires a customer (walk-ins can't draw credit)")
+        cust_row = await db.execute(
+            select(Customer).where(Customer.id == data.customer_id)
+        )
+        credit_customer = cust_row.scalar_one_or_none()
+        if not credit_customer:
+            raise HTTPException(404, f"Customer {data.customer_id} not found")
+        available = float(credit_customer.credit_balance or 0)
+        if available < total:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — customer has ₹{round(available, 2)} available, sale total is ₹{total}",
+            )
 
     await enforce_branch_access(data.branch_id, user=user, db=db)
 
-    inv_num = await allocate_number(
-        db, "sales_invoice", branch_id=data.branch_id
+    inv_origin = (data.origin or "invoice").strip().lower() or "invoice"
+    if data.quotation_id:
+        inv_origin = "quotation"
+    elif data.sales_order_id:
+        inv_origin = "sales_order"
+    inv_num = await resolve_number(
+        db,
+        requested=data.number,
+        model=SaleInvoice,
+        allocate=lambda: next_sale_invoice_number(db, inv_origin),
     )
 
     inv = SaleInvoice(
@@ -531,11 +676,19 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         discount=round(data.discount, 2),
         total=round(total, 2),
         paid_amount=round(paid, 2),
+        # Stored value is either None (no payment yet) or one of the
+        # PaymentMode literals. Old rows with "credit" predate the
+        # 2026-05-23 tightening and stay as-is — read paths still
+        # tolerate them, but no new writes produce that value.
         payment_mode=data.payment_mode,
         status=status,
+        due_date=due_date,
+        origin=inv_origin,
         notes=data.notes,
     )
     db.add(inv)
+
+    allow_oversell = await get_allow_overselling(db)
 
     for item, _line_amount, line_taxable, _line_tax in line_rows:
         li = SaleLineItem(
@@ -552,6 +705,15 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         # stock => clamp to zero rather than fail the sale (the POS can
         # oversell; audit log will pick it up in Phase 4 hardening).
         if item.item_id:
+            if not allow_oversell:
+                avail = await get_available_qty(
+                    db, item_id=item.item_id, branch_id=data.branch_id,
+                )
+                if int(item.qty) > avail:
+                    raise HTTPException(
+                        400,
+                        f"Insufficient stock for {item.name}: need {item.qty}, available {avail}",
+                    )
             tracked, expiry_tracked = await is_tracked(db, item.item_id)
             if tracked:
                 strategy = "fefo" if expiry_tracked else "fifo"
@@ -563,8 +725,9 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                     if item.batch_allocation else None
                 )
                 consumed_ok = False
+                consumed_ledger = None
                 try:
-                    await consume_batches_atomic(
+                    consumed_ledger = await consume_batches_atomic(
                         db,
                         item_id=item.item_id,
                         branch_id=data.branch_id,
@@ -572,6 +735,9 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                         strategy=strategy,
                         preferred_batch_id=item.batch_id,
                         explicit_allocation=explicit,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
                     )
                     consumed_ok = True
                 except ValueError:
@@ -580,7 +746,7 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                     # once with auto FIFO/FEFO before the destructive clamp.
                     if explicit:
                         try:
-                            await consume_batches_atomic(
+                            consumed_ledger = await consume_batches_atomic(
                                 db,
                                 item_id=item.item_id,
                                 branch_id=data.branch_id,
@@ -588,13 +754,35 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                                 strategy=strategy,
                                 preferred_batch_id=item.batch_id,
                                 explicit_allocation=None,
+                                movement_type="sale",
+                                source_type="sale_invoice",
+                                source_ref=inv.id,
                             )
                             consumed_ok = True
                         except ValueError:
                             pass
+                # 2026-05-31: persist which lots this line drew from so a
+                # return can restore stock to the SAME lots (batch-aware
+                # returns). Only the precise FIFO/FEFO/explicit path yields a
+                # ledger; the oversell-to-zero clamp below leaves it null.
+                if consumed_ledger:
+                    li.batch_allocation = json.dumps([
+                        {
+                            "batch_id": e["batch_id"],
+                            "batch_number": e.get("batch_number"),
+                            "consumed": e["consumed"],
+                            "expiry_date": e.get("expiry_date"),
+                        }
+                        for e in consumed_ledger
+                    ])
                 if not consumed_ok:
                     # Genuine shortage — drain whatever batches we have, then
-                    # zero the aggregate (POS allows oversell-to-zero).
+                    # zero the aggregate (only when overselling is allowed).
+                    if not allow_oversell:
+                        raise HTTPException(
+                            400,
+                            f"Insufficient batch stock for {item.name}",
+                        )
                     await db.execute(
                         text(
                             "UPDATE item_batches SET quantity = 0 "
@@ -602,12 +790,14 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                         ),
                         {"i": item.item_id, "b": data.branch_id},
                     )
-                    await db.execute(
-                        text(
-                            "UPDATE item_stock SET quantity = 0 "
-                            "WHERE item_id = :i AND branch_id = :b"
-                        ),
-                        {"i": item.item_id, "b": data.branch_id},
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=item.item_id,
+                        branch_id=data.branch_id,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell clamp on {inv.number}",
                     )
             else:
                 try:
@@ -616,15 +806,126 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
                         item_id=item.item_id,
                         branch_id=data.branch_id,
                         delta=-item.qty,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
                     )
                 except ValueError:
-                    await db.execute(
-                        text(
-                            "UPDATE item_stock SET quantity = 0 "
-                            "WHERE item_id = :i AND branch_id = :b"
-                        ),
-                        {"i": item.item_id, "b": data.branch_id},
+                    if not allow_oversell:
+                        raise HTTPException(
+                            400,
+                            f"Insufficient stock for {item.name}",
+                        )
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=item.item_id,
+                        branch_id=data.branch_id,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell clamp on {inv.number}",
                     )
+
+    # 2026-05-25: debit customer.credit_balance for credit-mode sales.
+    # The validation above already confirmed sufficient balance + a
+    # real customer; this just commits the debit + writes the audit
+    # trail. Same commit as the invoice insert so failure rolls back.
+    if data.payment_mode == "credit" and credit_customer is not None:
+        prev_balance, new_balance = await adjust_customer_credit(
+            db,
+            credit_customer.id,
+            -total,
+            entry_type="sale_debit",
+            source_type="sale_invoice",
+            source_ref=inv.id,
+            source_number=inv.number,
+            created_by="POS",
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=inv.number,
+            detail=(
+                f"Credit-mode sale {inv.number}: −₹{total} from "
+                f"{credit_customer.name}'s credit (was ₹{prev_balance:.2f}, "
+                f"now ₹{new_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+        # Also write a CustomerPayment row so the Payments tab shows
+        # this sale alongside cash/upi/etc payments. Parity with the
+        # record_payment retrofit below.
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=credit_customer.id,
+            customer_name=credit_customer.name,
+            branch_id=data.branch_id,
+            branch_name=data.branch_name,
+            date=today,
+            total_amount=total,
+            payment_mode="credit",
+            payment_ref="",
+            notes="POS credit-mode sale",
+            credit_applied=0.0,
+            created_by="POS",
+        )
+        db.add(pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=total,
+        ))
+        await record_customer_payment(db, pay)
+
+    # 2026-05-31: record a CustomerPayment for EVERY paid-at-POS sale (cash /
+    # card / upi / bank_transfer), not just credit-mode, so the Payments tab
+    # is a complete ledger — parity with record_payment + multi-invoice
+    # payments. Previously these settled the invoice but left no payment row,
+    # so cash-paid POS invoices were missing from the Payments tab.
+    if is_paid_at_create and data.payment_mode != "credit":
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        pos_pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=inv.customer_id,
+            customer_name=inv.customer_name or "Walk-in",
+            branch_id=data.branch_id,
+            branch_name=data.branch_name,
+            date=today,
+            total_amount=total,
+            payment_mode=data.payment_mode,
+            payment_ref="",
+            notes="POS sale",
+            credit_applied=0.0,
+            created_by="POS",
+        )
+        db.add(pos_pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pos_pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=total,
+        ))
+        await record_customer_payment(db, pos_pay)
+
+    if data.customer_id and status in ("pending", "partial"):
+        await sync_customer_outstanding(db, data.customer_id)
+
+    if data.quotation_id:
+        await _link_quotation_to_invoice(db, data.quotation_id, inv)
+    elif data.sales_order_id:
+        await _link_sales_order_to_invoice(
+            db, data.sales_order_id, inv, data.source_order_lines,
+        )
 
     await db.commit()
     invalidate_dashboard_cache_for_user(user.id)
@@ -634,37 +935,760 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/payment", dependencies=[Depends(require_perm("invoices.edit"))])
 async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db)):
-    result = await add_payment_atomic(db, invoice_id=invoice_id, amount=data.amount)
+    """Record a payment against an invoice.
+
+    Sales Phase 1 (2026-05-23) behavior:
+      • amount ≤ 0                              → 400 "amount must be > 0"
+      • invoice not found                       → 404
+      • invoice already fully paid              → 400 (no silent no-op)
+      • amount ≤ balance                        → settle (paid or partial)
+      • amount > balance + customer_id set      → settle + route excess to
+        Customer.credit_balance + write AuditLog row
+      • amount > balance + walk-in (no cust id) → 400 "reduce amount"
+      • mode field always required (Pydantic enforces — see PaymentIn)
+
+    The atomic helper returns `(paid, balance, credit_applied)`:
+      credit_applied = max(0, amount - amount_actually_landed_on_invoice).
+    We never let the invoice itself go over `total`; excess always becomes
+    customer credit (or a 400 for walk-ins).
+    """
+    # Reject already-paid invoices BEFORE calling the atomic helper so the
+    # error message is specific. Without this, the helper would just set
+    # credit_applied = amount (since balance was already 0) and silently
+    # credit the customer — surprising behavior.
+    pre = await db.execute(
+        select(SaleInvoice.id, SaleInvoice.total, SaleInvoice.paid_amount, SaleInvoice.customer_id, SaleInvoice.number)
+        .where(SaleInvoice.id == invoice_id)
+    )
+    pre_row = pre.first()
+    if not pre_row:
+        raise HTTPException(404, "Invoice not found")
+    pre_total = float(pre_row.total or 0)
+    pre_paid = float(pre_row.paid_amount or 0)
+    pre_balance = max(0.0, pre_total - pre_paid)
+    if pre_balance <= 0:
+        raise HTTPException(400, "Invoice already settled")
+
+    # 2026-05-25: credit-mode follow-up payment. Validate + debit
+    # customer.credit_balance the same way create_invoice does.
+    # Settling a pending invoice from existing credit is a common
+    # workflow (operator records the payment AFTER the sale).
+    credit_customer = None
+    if data.mode == "credit":
+        if not pre_row.customer_id:
+            raise HTTPException(400, "Credit-mode payment requires a customer (walk-in invoice can't draw credit)")
+        cust_row = await db.execute(
+            select(Customer).where(Customer.id == pre_row.customer_id)
+        )
+        credit_customer = cust_row.scalar_one_or_none()
+        if not credit_customer:
+            raise HTTPException(404, f"Customer {pre_row.customer_id} not found")
+        available = float(credit_customer.credit_balance or 0)
+        if available < data.amount:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — customer has ₹{round(available, 2)} available, payment is ₹{data.amount}",
+            )
+
+    # Pass `mode` down so the atomic UPDATE also sets sale_invoices.payment_mode
+    # in the same statement (no risk of a partial update). Without this the
+    # invoice's payment_mode would stay at whatever it was at create time
+    # (None for pending invoices), making the UI Mode column lie / show "—".
+    result = await add_payment_atomic(
+        db,
+        invoice_id=invoice_id,
+        amount=data.amount,
+        mode=data.mode,
+    )
     if result is None:
-        # Either the invoice doesn't exist or amount <= 0. Differentiate.
-        exists = (await db.execute(
-            select(SaleInvoice.id).where(SaleInvoice.id == invoice_id)
-        )).scalar_one_or_none()
-        if not exists:
-            raise HTTPException(404, "Invoice not found")
         raise HTTPException(400, "amount must be > 0")
-    paid, balance = result
+    paid, balance, credit_applied = result
+
+    # Overpayment handling: route excess to customer credit OR reject for
+    # walk-ins. The pre-check above guarantees pre_balance > 0; any excess
+    # means the operator typed an amount larger than what was owed.
+    customer_credit_after: Optional[float] = None
+    if credit_applied > 0:
+        if not pre_row.customer_id:
+            # Walk-in overpayment — nothing to credit. Bail BEFORE commit so
+            # the partial UPDATE rolls back cleanly. The atomic helper
+            # already capped the invoice at `total`, so without this rollback
+            # the invoice would settle correctly but the overpayment would
+            # silently vanish.
+            await db.rollback()
+            raise HTTPException(
+                400,
+                f"Walk-in invoice — reduce amount to ₹{round(pre_balance, 2)} "
+                f"or assign a customer first to capture the ₹{credit_applied} excess as credit",
+            )
+        # Customer set — bump credit_balance + audit log.
+        # 2026-05-25: NEVER re-import Customer / AuditLog here. Both are
+        # already imported at the top of the file. A local import inside
+        # this conditional branch makes `Customer` a LOCAL variable for
+        # the entire function (Python scoping), so the retrofit code
+        # below that uses `Customer` in the credit_applied=0 path hits
+        # `UnboundLocalError` because the local was never assigned. The
+        # bug looked like a generic 500 on every legacy single-invoice
+        # payment without overpay. (Discovered 2026-05-25.)
+        cust_row = await db.execute(
+            select(Customer).where(Customer.id == pre_row.customer_id)
+        )
+        cust = cust_row.scalar_one_or_none()
+        if cust is not None:
+            cur_credit, new_credit = await adjust_customer_credit(
+                db,
+                pre_row.customer_id,
+                credit_applied,
+                entry_type="overpayment",
+                source_type="sale_invoice",
+                source_ref=invoice_id,
+                source_number=pre_row.number,
+            )
+            customer_credit_after = new_credit
+            db.add(AuditLog(
+                id=str(uuid.uuid4()),
+                action="customer_credit",
+                user_id=None,
+                user_name=None,
+                module="sales",
+                ref=pre_row.number,
+                detail=(
+                    f"Overpayment on {pre_row.number}: +₹{credit_applied} "
+                    f"credited to {cust.name} (was ₹{cur_credit:.2f}, "
+                    f"now ₹{new_credit:.2f})"
+                ),
+                risk="low",
+                ip_address=None,
+            ))
+
+    # 2026-05-24: also write a CustomerPayment + 1 allocation so the
+    # legacy single-invoice flow shows up in the new Payments tab.
+    # Same data as the per-invoice update — just a parallel record for
+    # reporting. Generated number uses the same PAY-YYYY-NNNN pattern as
+    # the multi-invoice flow so payment numbers are contiguous regardless
+    # of entry point.
+    #
+    # 2026-05-25: simplified — earlier version tried to reuse the `cust`
+    # variable from the credit-bump block above, but that variable is
+    # only assigned when credit_applied > 0. Defensive scoping was
+    # confusing readers (and easy to break). Now always look up the
+    # customer name fresh (cheap — one indexed query). Walk-in invoices
+    # (no customer_id) get "Walk-in" without a query.
+    pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+    if pre_row.customer_id:
+        cust_name_row = await db.execute(
+            select(Customer.name).where(Customer.id == pre_row.customer_id)
+        )
+        resolved_customer_name = cust_name_row.scalar() or "—"
+    else:
+        resolved_customer_name = "Walk-in"
+
+    pay = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+        customer_id=pre_row.customer_id,  # nullable for walk-ins
+        customer_name=resolved_customer_name,
+        branch_id=None,                   # not surfaced in single-invoice payload
+        branch_name=None,
+        date=datetime.now().strftime("%Y-%m-%d"),
+        total_amount=round(float(data.amount), 2),
+        payment_mode=data.mode,
+        payment_ref=data.ref or "",
+        notes=None,
+        credit_applied=round(credit_applied, 2),
+        created_by="Staff",
+    )
+    db.add(pay)
+    db.add(CustomerPaymentAllocation(
+        id=str(uuid.uuid4()),
+        payment_id=pay.id,
+        invoice_id=invoice_id,
+        invoice_number=pre_row.number,
+        amount=round(float(data.amount), 2),
+    ))
+    await record_customer_payment(db, pay)
+
+    # 2026-05-25: debit credit balance for credit-mode payments. Same
+    # pattern as create_invoice — the validation above guaranteed
+    # sufficient balance; this commits the debit + writes audit.
+    if data.mode == "credit" and credit_customer is not None:
+        prev_balance, new_balance = await adjust_customer_credit(
+            db,
+            credit_customer.id,
+            -data.amount,
+            entry_type="payment_debit",
+            source_type="sale_invoice",
+            source_ref=invoice_id,
+            source_number=pre_row.number,
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=pre_row.number,
+            detail=(
+                f"Credit-mode payment on {pre_row.number}: −₹{data.amount} "
+                f"from {credit_customer.name}'s credit (was ₹{prev_balance:.2f}, "
+                f"now ₹{new_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+
+    if pre_row.customer_id:
+        await sync_customer_outstanding(db, pre_row.customer_id)
+
     await db.commit()
     return {
         "status": "paid" if balance <= 0 else "partial",
         "paid_amount": paid,
         "balance": balance,
+        "credit_applied": credit_applied,
+        "customer_credit_balance": customer_credit_after,
     }
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MULTI-INVOICE PAYMENTS (2026-05-24)
+# ═════════════════════════════════════════════════════════════════════════════
+# Operator picks a customer → fetches their pending/partial invoices →
+# selects 1+ and records ONE payment that allocates across them.
+#
+# Same Payment model + table backs BOTH this endpoint and the single-
+# invoice path (POST /{invoice_id}/payment). The Payments tab in the
+# Sales UI shows every payment regardless of entry point.
+#
+# IMPORTANT: trailing slash on /payments/ is load-bearing (mirrors
+# /returns/ + /orders/ — see follow-up 11 in WORKSHEET.md). Without
+# it, /payments would match /{invoice_id} and 404 as "Invoice not found".
+
+
+class PaymentAllocationIn(BaseModel):
+    invoice_id: str
+    amount: float = Field(..., gt=0)
+
+
+class CustomerPaymentCreate(BaseModel):
+    customer_id: str           # required — picker is strict
+    date: Optional[str] = None
+    payment_mode: PaymentMode  # reuse the same Literal as SaleCreate
+    payment_ref: Optional[str] = None
+    notes: Optional[str] = None
+    allocations: List[PaymentAllocationIn] = Field(..., min_length=1)
+    branch_id: Optional[str] = None
+    branch_name: Optional[str] = None
+    created_by: Optional[str] = "Staff"
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, v):
+        return _coerce_payment_mode_value(v)
+
+
+def _payment_dict(p, allocations=None):
+    d = {
+        "id": p.id, "number": p.number,
+        "customerId": p.customer_id,
+        "customerName": p.customer_name or "Walk-in",
+        "branchId": p.branch_id, "branchName": p.branch_name,
+        "date": p.date,
+        "totalAmount": p.total_amount,
+        "paymentMode": p.payment_mode,
+        "paymentRef": p.payment_ref,
+        "notes": p.notes,
+        "creditApplied": p.credit_applied or 0,
+        "voided": bool(getattr(p, "voided", False)),
+        "voidedAt": getattr(p, "voided_at", None),
+        "createdBy": p.created_by,
+    }
+    if allocations is not None:
+        d["allocations"] = [{
+            "id": a.id,
+            "invoiceId": a.invoice_id,
+            "invoiceNumber": a.invoice_number,
+            "amount": a.amount,
+        } for a in allocations]
+        d["invoiceCount"] = len(allocations)
+    return d
+
+
+# ─── PAYMENTS: LIST ──────────────────────────────────────────────────────────
+@router.get("/payments/", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_payments(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    customer_id: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    search: Optional[str] = None,           # match payment number or customer name
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    conds = []
+    conds.append(or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)))  # noqa: E712
+    if customer_id:
+        conds.append(CustomerPayment.customer_id == customer_id)
+    if payment_mode:
+        conds.append(CustomerPayment.payment_mode == payment_mode)
+    if date_from:
+        conds.append(CustomerPayment.date >= date_from)
+    if date_to:
+        conds.append(CustomerPayment.date <= date_to)
+    if search:
+        s = f"%{search}%"
+        conds.append(or_(
+            CustomerPayment.number.ilike(s),
+            CustomerPayment.customer_name.ilike(s),
+        ))
+    base = and_(*conds) if conds else True
+    total = int((await db.execute(select(func.count(CustomerPayment.id)).where(base))).scalar() or 0)
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    sort_expr = resolve_sort(
+        sort_by, sort_order,
+        {
+            "number": CustomerPayment.number,
+            "customer_name": CustomerPayment.customer_name,
+            "date": CustomerPayment.date,
+            "total_amount": CustomerPayment.total_amount,
+            "payment_mode": CustomerPayment.payment_mode,
+            "created_at": CustomerPayment.created_at,
+        },
+        default_key="created_at", default_order="desc",
+    )
+    q = (
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(base)
+        .order_by(sort_expr)
+        .offset(sk)
+        .limit(lim)
+    )
+    rows = (await db.execute(q)).scalars().all()
+    out = [_payment_dict(p, p.allocations) for p in rows]
+    return paged(out, total, sk, lim)
+
+
+# ─── PAYMENTS: GET ───────────────────────────────────────────────────────────
+@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("invoices.view"))])
+async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(CustomerPayment.id == payment_id)
+    )
+    p = res.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Payment not found")
+    return _payment_dict(p, p.allocations)
+
+
+@router.post("/payments/{payment_id}/void", dependencies=[Depends(require_perm("invoices.edit"))])
+async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+    """Soft-void a payment — reverses invoice allocations + credit effects but
+    keeps the row for audit. Idempotent."""
+    res = await db.execute(
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(CustomerPayment.id == payment_id)
+    )
+    pay = res.unique().scalar_one_or_none()
+    if not pay:
+        raise HTTPException(404, "Payment not found")
+    if getattr(pay, "voided", False):
+        return {"status": "voided", "number": pay.number}
+    credit_refunded = await reverse_customer_payment(db, pay)
+    pay.voided = True
+    pay.voided_at = datetime.now().strftime("%Y-%m-%d")
+    await void_payment_record(
+        db,
+        source_document_type="customer_payment",
+        source_document_id=pay.id,
+        voided_at=pay.voided_at,
+    )
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        action="void_payment",
+        user_id=None,
+        user_name=None,
+        module="sales",
+        ref=pay.number,
+        detail=f"Voided payment {pay.number} (₹{pay.total_amount})",
+        risk="medium",
+        ip_address=None,
+    ))
+    await db.commit()
+    return {
+        "status": "voided",
+        "number": pay.number,
+        "credit_refunded": round(credit_refunded, 2),
+    }
+
+
+# ─── PAYMENTS: CREATE (multi-invoice) ────────────────────────────────────────
+@router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("invoices.edit"))])
+async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends(get_db)):
+    """Record a payment that may apply to MULTIPLE invoices in one go.
+
+    Validation chain:
+      1. Customer exists.
+      2. Every referenced invoice exists.
+      3. Every invoice belongs to this customer (rejects cross-customer
+         allocations + walk-in invoices — those don't have customer_id).
+      4. Every invoice has balance > 0 (no already-paid + no cancelled).
+      5. Each allocation amount > 0 (Pydantic guards via Field(gt=0)).
+
+    Allocation semantics:
+      • allocation.amount > invoice.balance — the excess routes to
+        customer.credit_balance + accumulates in the Payment's
+        credit_applied. Inline UI warning preview ("Excess ₹X credited")
+        keeps the operator informed before submit.
+      • Per-invoice update: paid_amount += min(amount, balance);
+        status = paid|partial; payment_mode = data.payment_mode.
+
+    Returns: { id, number, total_amount, credit_applied, allocations_count }.
+    """
+    # 1. Customer must exist (UI's CustomerPicker is strict but defence
+    #    in depth — direct API hits get rejected too).
+    cust = (await db.execute(
+        select(Customer).where(Customer.id == data.customer_id)
+    )).scalar_one_or_none()
+    if not cust:
+        raise HTTPException(404, "Customer not found")
+
+    # 2 + 3. Load all referenced invoices in one query.
+    invoice_ids = [a.invoice_id for a in data.allocations]
+    if len(set(invoice_ids)) != len(invoice_ids):
+        raise HTTPException(400, "Duplicate invoice in allocations")
+    inv_rows = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id.in_(invoice_ids))
+    )).scalars().all()
+    if len(inv_rows) != len(invoice_ids):
+        raise HTTPException(400, "One or more invoices not found")
+    inv_by_id = {inv.id: inv for inv in inv_rows}
+    for inv in inv_rows:
+        if inv.customer_id != data.customer_id:
+            raise HTTPException(
+                400,
+                f"Invoice {inv.number} does not belong to {cust.name}",
+            )
+        # 4. Status check — skip cancelled + already-paid.
+        st = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+        if st == "cancelled":
+            raise HTTPException(400, f"Invoice {inv.number} is cancelled")
+        balance = max(0.0, float(inv.total or 0) - float(inv.paid_amount or 0))
+        if balance <= 0:
+            raise HTTPException(400, f"Invoice {inv.number} already settled")
+
+    # 4b. Credit-mode draw-down (2026-05-30). Settling invoices FROM the
+    #     customer's stored credit_balance. Overpayment is nonsensical here
+    #     (we'd debit credit then re-credit the excess), so each allocation
+    #     must be <= its balance, and the customer must have enough credit
+    #     to cover the full total. These invoices already belong to `cust`
+    #     (validated in step 3), so walk-in can't reach this path.
+    requested_total = sum(float(a.amount) for a in data.allocations)
+    if data.payment_mode == "credit":
+        for a in data.allocations:
+            inv = inv_by_id[a.invoice_id]
+            bal = max(0.0, float(inv.total or 0) - float(inv.paid_amount or 0))
+            if float(a.amount) > bal + 0.001:
+                raise HTTPException(
+                    400,
+                    f"Credit mode can't overpay — {inv.number} balance is ₹{round(bal, 2)}",
+                )
+        avail = float(cust.credit_balance or 0)
+        if avail + 0.001 < requested_total:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — {cust.name} has ₹{round(avail, 2)} available, "
+                f"payment totals ₹{round(requested_total, 2)}",
+            )
+
+    # 5. Apply allocations + accumulate credit. We update each invoice's
+    #    paid_amount + payment_mode + status. The SQLAlchemy session
+    #    commit at the end is atomic — partial failures roll back.
+    total_credit = 0.0
+    total_amount = 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        inv_total = float(inv.total or 0)
+        inv_paid = float(inv.paid_amount or 0)
+        balance = max(0.0, inv_total - inv_paid)
+        applied = min(float(a.amount), balance)
+        excess = max(0.0, float(a.amount) - balance)
+        new_paid = round(inv_paid + applied, 2)
+        inv.paid_amount = new_paid
+        inv.payment_mode = data.payment_mode
+        inv.status = "paid" if new_paid >= inv_total else "partial"
+        total_credit += excess
+        total_amount += float(a.amount)
+
+    count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+    pay_num = f"PAY-{datetime.now().year}-{1000 + count:04d}"
+
+    # Bump customer.credit_balance + audit log if any excess.
+    if total_credit > 0:
+        cur_credit, new_credit = await adjust_customer_credit(
+            db,
+            data.customer_id,
+            total_credit,
+            entry_type="overpayment",
+            source_type="customer_payment",
+            source_number=pay_num,
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=None,  # multi-invoice; specific invoice ref doesn't fit
+            detail=(
+                f"Multi-invoice payment overpayment: +₹{round(total_credit, 2)} "
+                f"credited to {cust.name} (was ₹{cur_credit:.2f}, "
+                f"now ₹{new_credit:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+
+    # Create the Payment record + per-allocation rows.
+    payment = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=pay_num,
+        customer_id=data.customer_id,
+        customer_name=cust.name,
+        branch_id=data.branch_id,
+        branch_name=data.branch_name,
+        date=data.date or today,
+        total_amount=round(total_amount, 2),
+        payment_mode=data.payment_mode,
+        payment_ref=data.payment_ref or "",
+        notes=data.notes,
+        credit_applied=round(total_credit, 2),
+        created_by=data.created_by or "Staff",
+    )
+    db.add(payment)
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=payment.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=round(float(a.amount), 2),
+        ))
+    await record_customer_payment(db, payment)
+
+    # 2026-05-30: credit-mode debit. The settle loop above marked the
+    # invoices paid; now draw the total down from credit_balance + audit.
+    # Validated sufficient in step 4b; total_credit is 0 here (overpay was
+    # rejected for credit mode) so the overpay-bump block above is skipped.
+    if data.payment_mode == "credit":
+        cur_credit, new_credit = await adjust_customer_credit(
+            db,
+            data.customer_id,
+            -total_amount,
+            entry_type="payment_debit",
+            source_type="customer_payment",
+            source_ref=payment.id,
+            source_number=pay_num,
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=None,
+            user_name=None,
+            module="sales",
+            ref=None,
+            detail=(
+                f"Multi-invoice credit settlement {pay_num}: −₹{round(total_amount, 2)} "
+                f"from {cust.name} (was ₹{cur_credit:.2f}, now ₹{new_credit:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+        ))
+
+    await sync_customer_outstanding(db, data.customer_id)
+
+    await db.commit()
+    return {
+        "id": payment.id,
+        "number": pay_num,
+        "total_amount": round(total_amount, 2),
+        "credit_applied": round(total_credit, 2),
+        "allocations_count": len(data.allocations),
+    }
+
+
+# ─── HELPER ───────────────────────────────────────────────────────────────────
+async def _restock_invoice_lines(db, inv, line_items) -> int:
+    """Reverse stock deducted at invoice create/convert. Uses the per-line
+    batch_allocation ledger when present; otherwise aggregate add-back."""
+    restored = 0
+    for li in line_items:
+        if not li.item_id or not li.qty:
+            continue
+        if li.batch_allocation:
+            try:
+                ledger = json.loads(li.batch_allocation)
+            except (ValueError, TypeError):
+                ledger = []
+            for entry in ledger:
+                bid = entry.get("batch_id")
+                qty = int(entry.get("consumed") or 0)
+                if not bid or qty <= 0:
+                    continue
+                b = (await db.execute(
+                    select(ItemBatch).where(ItemBatch.id == bid)
+                )).scalar_one_or_none()
+                if b is not None:
+                    await set_batch_quantity_atomic(
+                        db, batch_id=bid, new_qty=int(b.quantity or 0) + qty,
+                    )
+                else:
+                    try:
+                        await adjust_stock_atomic(
+                            db, item_id=li.item_id, branch_id=inv.branch_id, delta=qty,
+                            movement_type="sale_reversal",
+                            source_type="sale_invoice",
+                            source_ref=inv.id,
+                        )
+                    except ValueError:
+                        pass
+                restored += qty
+        else:
+            try:
+                await adjust_stock_atomic(
+                    db, item_id=li.item_id, branch_id=inv.branch_id, delta=int(li.qty),
+                    movement_type="sale_reversal",
+                    source_type="sale_invoice",
+                    source_ref=inv.id,
+                )
+                restored += int(li.qty)
+            except ValueError:
+                pass
+    return restored
+
+
+# ─── Sales Returns: reverse effects (void / delete) ───────────────────────────
+async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> float:
+    """Undo stock + invoice + customer-credit side-effects of a processed return.
+    Returns credit_balance revoked (₹). Caller sets status=void or deletes row."""
+    credit_revoked = 0.0
+    for rl in ret.line_items:
+        if rl.batch_allocation:
+            try:
+                ledger = json.loads(rl.batch_allocation)
+            except (ValueError, TypeError):
+                ledger = []
+            for entry in ledger:
+                bid = entry.get("batch_id")
+                qty = int(entry.get("restored") or 0)
+                if not bid or qty <= 0:
+                    continue
+                b = (await db.execute(
+                    select(ItemBatch).where(ItemBatch.id == bid)
+                )).scalar_one_or_none()
+                if b is not None:
+                    await set_batch_quantity_atomic(
+                        db, batch_id=bid, new_qty=max(0, int(b.quantity or 0) - qty),
+                    )
+                elif rl.item_id:
+                    try:
+                        await adjust_stock_atomic(
+                            db, item_id=rl.item_id, branch_id=ret.branch_id, delta=-qty,
+                            movement_type="return",
+                            source_type="sales_return",
+                            source_ref=ret.id,
+                        )
+                    except ValueError:
+                        pass
+        elif rl.item_id:
+            try:
+                await adjust_stock_atomic(
+                    db, item_id=rl.item_id, branch_id=ret.branch_id,
+                    delta=-int(rl.return_qty or 0),
+                )
+            except ValueError:
+                pass
+
+    inv = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id == ret.invoice_id)
+    )).scalar_one_or_none()
+    if inv is not None:
+        _recompute_invoice_status(inv)
+
+    if ret.refund_method == "credit" and ret.customer_id and (ret.credited_amount or 0) > 0:
+        cust = (await db.execute(
+            select(Customer).where(Customer.id == ret.customer_id)
+        )).scalar_one_or_none()
+        if cust:
+            refund_amt = float(ret.credited_amount or 0)
+            await adjust_customer_credit(
+                db,
+                ret.customer_id,
+                -refund_amt,
+                entry_type="return_void_revoke",
+                source_type="sales_return",
+                source_ref=ret.id,
+                source_number=ret.number,
+            )
+            credit_revoked = refund_amt
+
+    return credit_revoked
+
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/cancel", dependencies=[Depends(require_perm("invoices.cancel"))])
 async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
-    inv = result.scalar_one_or_none()
+    res = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id == invoice_id)
+    )
+    inv = res.unique().scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv.status == "paid" and inv.paid_amount > 0:
-        raise HTTPException(400, "Cannot cancel a paid invoice. Issue a credit note instead.")
+    if inv.status == InvoiceStatus.cancelled or str(inv.status).endswith("cancelled"):
+        return {"status": "cancelled"}
+    if (inv.paid_amount or 0) > 0:
+        raise HTTPException(
+            400,
+            "Cannot cancel an invoice with payments recorded. Delete payment records first.",
+        )
+    return_count = int((await db.execute(
+        select(func.count(SalesReturn.id)).where(SalesReturn.invoice_id == invoice_id)
+    )).scalar() or 0)
+    if return_count > 0:
+        raise HTTPException(
+            400,
+            f"Cannot cancel invoice with {return_count} credit note(s). Delete returns first.",
+        )
+    pay_count = int((await db.execute(
+        select(func.count(CustomerPaymentAllocation.id))
+        .join(CustomerPayment, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
+        .where(
+            CustomerPaymentAllocation.invoice_id == invoice_id,
+            or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)),  # noqa: E712
+        )
+    )).scalar() or 0)
+    if pay_count > 0:
+        raise HTTPException(
+            400,
+            "Cannot cancel an invoice with active payment allocations. Void or delete payments first.",
+        )
+    stock_restored = await _restock_invoice_lines(db, inv, inv.line_items)
     inv.status = "cancelled"
+    if inv.customer_id:
+        await sync_customer_outstanding(db, inv.customer_id)
     await db.commit()
-    return {"status": "cancelled"}
+    return {"status": "cancelled", "stock_restored": stock_restored}
 
-# ─── HELPER ───────────────────────────────────────────────────────────────────
 def _quote_dict(quote, items=None):
     d = {
         "id": quote.id, "number": quote.number,
@@ -680,11 +1704,20 @@ def _quote_dict(quote, items=None):
         "discount": quote.discount,
         "total": quote.total,
         "status": str(quote.status.value) if hasattr(quote.status, "value") else str(quote.status),
+        "convertedOrderId": quote.converted_order_id,
+        "convertedInvoiceId": getattr(quote, "converted_invoice_id", None),
         "notes": quote.notes,
     }
     if items is not None:
+        # 2026-05-24: added `itemId` here. Quote lines have always carried
+        # `item_id` server-side (set by create_quotation), but the
+        # serializer was dropping it on read — so the SalesPage edit flow
+        # would hydrate every line as item_id=None and the new
+        # InventoryItemPicker would render legacy "no id" state. _so_dict
+        # and _return_dict already emit itemId; this brings _quote_dict
+        # in line.
         d["items"] = [{
-            "id": i.id,
+            "id": i.id, "itemId": i.item_id,
             "name": i.name, "qty": i.qty,
             "price": i.price, "taxRate": i.tax_rate,
             "discount": i.discount, "lineTotal": i.line_total,
@@ -707,12 +1740,2251 @@ def _inv_dict(inv, items=None):
         "paidAmount": inv.paid_amount,
         "paymentMode": inv.payment_mode,
         "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status),
+        "dueDate": getattr(inv, "due_date", None),
+        "creditedAmount": float(getattr(inv, "credited_amount", 0) or 0),
+        "returnStatus": getattr(inv, "return_status", None) or "none",
+        "origin": getattr(inv, "origin", None) or "invoice",
         "notes": inv.notes,
     }
     if items is not None:
         d["items"] = [{
+            "id": i.id,
+            "itemId": i.item_id,
             "name": i.name, "qty": i.qty,
             "price": i.price, "taxRate": i.tax_rate,
             "lineTotal": i.line_total,
+            # 2026-05-31: source-lot manifest so the return modal can offer
+            # per-batch restore. Parsed JSON list of {batch_id, batch_number,
+            # consumed, expiry_date}; null/absent for untracked or legacy lines.
+            "batchAllocation": (
+                json.loads(i.batch_allocation)
+                if getattr(i, "batch_allocation", None) else None
+            ),
         } for i in items]
     return d
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SALES PHASE 1 PR 2 — Sales Orders, Quotation→Order convert, Sales Returns
+# ═════════════════════════════════════════════════════════════════════════════
+# Three independent flows that share infrastructure:
+#   • SalesOrder = intent to invoice. CRUD + convert→invoice.
+#   • Quotation→Order convert = create an SO from an accepted quote.
+#   • SalesReturn = post-sale return. Validates against original invoice
+#     qty (cumulative across multiple returns), restocks via _atomic
+#     helpers, optionally credits customer.credit_balance.
+#
+# All three reuse the spec at:
+#   ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md
+
+# ─── Schemas (PR 2) ──────────────────────────────────────────────────────────
+class SalesOrderLineIn(BaseModel):
+    """Same shape as quotation lines — kept separate so the two intents
+    can evolve independently (e.g. SO might gain a per-line stock-reserve
+    flag later)."""
+    item_id: Optional[str] = None
+    name: str
+    qty: int = Field(..., gt=0)
+    price: float
+    tax_rate: float = 0
+    discount: float = 0
+
+
+class SalesOrderCreate(BaseModel):
+    customer_id: Optional[str] = None
+    customer_name: str = "Walk-in"
+    branch_id: str
+    branch_name: str = ""
+    created_by: str = "Staff"
+    date: Optional[str] = None
+    expected_date: Optional[str] = None
+    items: List[SalesOrderLineIn]
+    discount: float = 0
+    number: Optional[str] = None
+    notes: Optional[str] = None
+    quotation_id: Optional[str] = None
+
+
+class ConvertLineAllocation(BaseModel):
+    """Per-line batch allocation passed to the SO→Invoice convert flow.
+
+    The frontend (ConvertToInvoiceModal) lets the operator pick specific
+    batches for each batch-tracked line. Lines that the operator skips
+    (or untracked items) just aren't represented in the array, and the
+    server falls back to auto FIFO/FEFO for those — same lenient behavior
+    as before this field existed.
+
+    `item_id` matches the SO line's item_id. `batch_allocation` reuses the
+    same shape as POS LineItemIn.batch_allocation so the consume_batches_atomic
+    helper can accept it unchanged.
+    """
+    item_id: str
+    batch_allocation: List[BatchAllocationEntry]
+
+
+class ConvertLineQtyIn(BaseModel):
+    """Partial SO→Invoice: which order line and how many units to invoice."""
+    order_line_id: str
+    qty: int = Field(..., gt=0)
+
+
+class ConvertToInvoiceIn(BaseModel):
+    """Payload for SO→Invoice convert (and reused for the quote→order→
+    invoice double-hop). Mirrors the new POS payment UX:
+      • payment_received=False (default) → invoice created pending
+      • payment_received=True            → invoice created paid; method required
+
+    2026-05-24: added optional `line_allocations` so the operator can
+    pre-pick batches per tracked line at convert time. SO/Quote lines
+    themselves stay batch-free (Option B from the user's plan choice);
+    this is the single place the operator gets to say "use these batches"
+    before stock is moved. Missing / empty → auto FIFO/FEFO (today's path).
+
+    Phase 2: optional `lines` converts a subset of SO line qty. Omitted →
+    full convert (all lines at remaining qty). Quote direct-convert ignores
+    this field.
+    """
+    payment_received: bool = False
+    payment_mode: Optional[str] = None
+    notes: Optional[str] = None
+    line_allocations: Optional[List[ConvertLineAllocation]] = None
+    lines: Optional[List[ConvertLineQtyIn]] = None
+
+
+class ReturnBatchAlloc(BaseModel):
+    """One entry of an explicit per-batch restore split for a return line:
+    put `qty` units back into lot `batch_id`. Sum across a line's entries
+    must equal that line's return_qty."""
+    batch_id: str
+    qty: int = Field(..., gt=0)
+
+
+class SalesReturnLineIn(BaseModel):
+    # invoice_line_id is preferred (lets the backend validate against the
+    # exact original line); item_id+name are accepted as fallback for
+    # legacy invoices where line ids weren't surfaced to the UI.
+    invoice_line_id: Optional[str] = None
+    item_id: Optional[str] = None
+    name: str
+    return_qty: int = Field(..., gt=0)
+    # 2026-05-31: optional explicit per-batch restore split. When omitted,
+    # the backend distributes the return across the invoice line's source
+    # lots FEFO (nearest-expiry refilled first), capped per lot by what the
+    # invoice took from it. When present, each entry's lot must be one the
+    # invoice consumed + within its remaining cap.
+    batch_allocation: Optional[List[ReturnBatchAlloc]] = None
+
+
+class SalesReturnCreate(BaseModel):
+    invoice_id: str
+    date: Optional[str] = None
+    reason: Optional[str] = None
+    # refund_method: cash | credit | adjustment
+    #   • walk-in invoice → server forces to "cash" regardless of input
+    #   • credit → bumps customer.credit_balance (only valid with customer)
+    #   • adjustment → reduces invoice's outstanding balance (no money moves)
+    refund_method: str = "cash"
+    items: List[SalesReturnLineIn]
+    notes: Optional[str] = None
+    created_by: str = "Staff"
+
+
+# ─── Sales Order helpers ─────────────────────────────────────────────────────
+def _so_dict(so, items=None):
+    d = {
+        "id": so.id, "number": so.number,
+        "customerId": so.customer_id,
+        "customerName": so.customer_name or "Walk-in",
+        "branchId": so.branch_id,
+        "branchName": so.branch_name,
+        "createdBy": so.created_by,
+        "date": so.date,
+        "expectedDate": so.expected_date,
+        "subtotal": so.subtotal,
+        "taxTotal": so.tax_total,
+        "discount": so.discount,
+        "total": so.total,
+        "status": so.status.value if hasattr(so.status, "value") else str(so.status),
+        "convertedInvoiceId": so.converted_invoice_id,
+        "notes": so.notes,
+        "createdAt": so.created_at.isoformat() if so.created_at else None,
+    }
+    if items is not None:
+        d["items"] = [{
+            "id": i.id, "itemId": i.item_id, "name": i.name,
+            "qty": i.qty, "price": i.price, "taxRate": i.tax_rate,
+            "discount": i.discount, "lineTotal": i.line_total,
+        } for i in items]
+    return d
+
+
+async def _get_org_tax_mode(db: AsyncSession) -> str:
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    return normalize_tax_pricing_mode(org_row.tax_pricing_mode if org_row else None)
+
+
+def _calc_lines(lines, tax_mode: str = "inclusive"):
+    """Compute line totals + roll up subtotal/tax for SO + quote shapes.
+    Returns (line_rows, subtotal, tax_total). Each row is (line, line_net,
+    line_tax) so callers can populate the ORM objects without re-doing the
+    math.
+    """
+    rows = []
+    subtotal = 0.0
+    tax_total = 0.0
+    for i in lines:
+        gross = round(i.qty * i.price, 2)
+        line_net = round(gross * (1 - (i.discount or 0) / 100), 2)
+        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
+        rows.append((i, line_net, line_tax))
+        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
+        tax_total += line_tax
+    return rows, subtotal, tax_total
+
+
+def _line_amounts(qty: int, price: float, discount: float, tax_rate: float, tax_mode: str = "inclusive") -> tuple[float, float, float]:
+    """Return (line_taxable, line_tax, line_total) for one SO/quote-style line."""
+    gross = round(qty * price, 2)
+    line_net = round(gross * (1 - (discount or 0) / 100), 2)
+    line_tax = line_tax_amount(line_net, tax_rate or 0, tax_mode)
+    line_taxable = line_taxable_amount(line_net, tax_rate or 0, tax_mode)
+    return line_taxable, line_tax, round(line_taxable + line_tax, 2)
+
+
+def _recalc_so_header(so: SalesOrder, lines: list, tax_mode: str = "inclusive") -> None:
+    """Recompute SO subtotal/tax/total from remaining line rows."""
+    subtotal = 0.0
+    tax_total = 0.0
+    for li in lines:
+        line_net, line_tax, li.line_total = _line_amounts(
+            int(li.qty), float(li.price or 0), float(li.discount or 0), float(li.tax_rate or 0), tax_mode,
+        )
+        subtotal += line_net
+        tax_total += line_tax
+    so.subtotal = round(subtotal, 2)
+    so.tax_total = round(tax_total, 2)
+    so.total = round(max(0.0, subtotal + tax_total - float(so.discount or 0)), 2)
+
+
+async def _link_quotation_to_order(db: AsyncSession, quote_id: str, so: SalesOrder) -> None:
+    res = await db.execute(
+        select(Quotation).where(Quotation.id == quote_id)
+    )
+    quote = res.scalar_one_or_none()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+    if quote.status in (QuotationStatus.converted, QuotationStatus.rejected):
+        raise HTTPException(400, f"Quotation is {quote.status.value}; cannot convert")
+    quote.status = QuotationStatus.converted
+    quote.converted_order_id = so.id
+
+
+async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleInvoice) -> None:
+    res = await db.execute(
+        select(Quotation).where(Quotation.id == quote_id)
+    )
+    quote = res.scalar_one_or_none()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+    if quote.status in (QuotationStatus.converted, QuotationStatus.rejected):
+        raise HTTPException(400, f"Quotation is {quote.status.value}; cannot convert")
+    if quote.converted_order_id:
+        live_so = (await db.execute(
+            select(SalesOrder.id).where(SalesOrder.id == quote.converted_order_id)
+        )).scalar_one_or_none()
+        if live_so:
+            raise HTTPException(
+                400,
+                "Quotation has a live sales order — delete the SO first or convert it to invoice",
+            )
+    if quote.converted_invoice_id:
+        live_inv = (await db.execute(
+            select(SaleInvoice.id).where(SaleInvoice.id == quote.converted_invoice_id)
+        )).scalar_one_or_none()
+        if live_inv:
+            raise HTTPException(400, "Quotation already spawned an invoice")
+    quote.status = QuotationStatus.converted
+    quote.converted_invoice_id = inv.id
+
+
+async def _link_sales_order_to_invoice(
+    db: AsyncSession,
+    order_id: str,
+    inv: SaleInvoice,
+    source_order_lines: Optional[list],
+) -> None:
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )
+    so = res.unique().scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    if so.status == SalesOrderStatus.converted:
+        raise HTTPException(400, "Sales order already converted")
+    if so.status == SalesOrderStatus.cancelled:
+        raise HTTPException(400, "Cannot convert a cancelled sales order")
+
+    line_by_id = {li.id: li for li in so.line_items}
+    entries = source_order_lines or []
+    if not entries:
+        raise HTTPException(400, "source_order_lines required when sales_order_id is set")
+
+    tax_mode = await _get_org_tax_mode(db)
+    orig_subtotal = float(so.subtotal or 0)
+    inv_subtotal = 0.0
+    for entry in entries:
+        so_line = line_by_id.get(entry.order_line_id)
+        if not so_line:
+            raise HTTPException(400, f"Order line {entry.order_line_id} not found on this SO")
+        if entry.qty > int(so_line.qty):
+            raise HTTPException(
+                400,
+                f"Cannot invoice {entry.qty} of {so_line.name} — only {so_line.qty} remaining on the order",
+            )
+        line_net, _, _ = _line_amounts(
+            entry.qty,
+            float(so_line.price or 0),
+            float(so_line.discount or 0),
+            float(so_line.tax_rate or 0),
+            tax_mode,
+        )
+        inv_subtotal += line_net
+
+    inv_discount = 0.0
+    if orig_subtotal > 0 and float(so.discount or 0) > 0:
+        inv_discount = round(float(so.discount) * (inv_subtotal / orig_subtotal), 2)
+
+    for entry in entries:
+        so_line = line_by_id[entry.order_line_id]
+        convert_qty = int(entry.qty)
+        remaining_qty = int(so_line.qty) - convert_qty
+        if remaining_qty <= 0:
+            await db.delete(so_line)
+        else:
+            so_line.qty = remaining_qty
+            _, _, so_line.line_total = _line_amounts(
+                remaining_qty,
+                float(so_line.price or 0),
+                float(so_line.discount or 0),
+                float(so_line.tax_rate or 0),
+                tax_mode,
+            )
+
+    if inv_discount > 0:
+        so.discount = round(max(0.0, float(so.discount or 0) - inv_discount), 2)
+
+    await db.flush()
+    remaining_res = await db.execute(
+        select(SalesOrderLineItem).where(
+            SalesOrderLineItem.order_id == so.id,
+            SalesOrderLineItem.qty > 0,
+        )
+    )
+    remaining_lines = remaining_res.scalars().all()
+    fully_converted = len(remaining_lines) == 0
+
+    if fully_converted:
+        so.subtotal = 0.0
+        so.tax_total = 0.0
+        so.total = 0.0
+        so.discount = 0.0
+        so.status = SalesOrderStatus.converted
+        await fulfil_reservations(db, source_type="sales_order", source_ref=so.id)
+    else:
+        _recalc_so_header(so, remaining_lines, tax_mode)
+        so.status = SalesOrderStatus.partially_invoiced
+        await refresh_so_reservations(
+            db, order_id=so.id, branch_id=so.branch_id, lines=remaining_lines,
+        )
+
+    so.converted_invoice_id = inv.id
+    if so.customer_id:
+        await sync_customer_outstanding(db, so.customer_id)
+
+
+# ─── Sales Order: LIST ───────────────────────────────────────────────────────
+@router.get("/orders/", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_orders(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = []
+    if search:
+        conds.append(or_(SalesOrder.number.ilike(f"%{search}%"), SalesOrder.customer_name.ilike(f"%{search}%")))
+    if status:
+        conds.append(SalesOrder.status == status)
+    if date_from:
+        conds.append(SalesOrder.date >= date_from)
+    if date_to:
+        conds.append(SalesOrder.date <= date_to)
+    sort_expr = resolve_sort(
+        sort_by, sort_order,
+        {
+            "number": SalesOrder.number,
+            "customer_name": SalesOrder.customer_name,
+            "date": SalesOrder.date,
+            "expected_date": SalesOrder.expected_date,
+            "total": SalesOrder.total,
+            "status": SalesOrder.status,
+            "created_at": SalesOrder.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    q = select(SalesOrder).options(selectinload(SalesOrder.line_items))
+    q_count = select(func.count(SalesOrder.id))
+    if conds:
+        q = q.where(and_(*conds))
+        q_count = q_count.where(and_(*conds))
+    total = int((await db.execute(q_count)).scalar() or 0)
+    rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
+    out = [_so_dict(so, so.line_items) for so in rows]
+    return paged(out, total, sk, lim)
+
+
+# ─── Sales Order: GET ONE ────────────────────────────────────────────────────
+@router.get("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.view"))])
+async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )
+    so = res.scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    return _so_dict(so, so.line_items)
+
+
+# ─── Sales Order: CREATE ─────────────────────────────────────────────────────
+@router.post("/orders/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
+async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db)):
+    if not data.items:
+        raise HTTPException(400, "Sales order must have at least one line item")
+
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
+    total = round(subtotal + tax_total - (data.discount or 0), 2)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    async def _alloc_so() -> str:
+        count = (await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0
+        return f"SO-{datetime.now().year}-{1000 + count}"
+
+    so_num = await resolve_number(
+        db,
+        requested=data.number,
+        model=SalesOrder,
+        allocate=_alloc_so,
+    )
+
+    so = SalesOrder(
+        id=str(uuid.uuid4()), number=so_num,
+        customer_id=data.customer_id,
+        customer_name=data.customer_name,
+        branch_id=data.branch_id,
+        branch_name=data.branch_name or data.branch_id,
+        created_by=data.created_by,
+        date=data.date or today,
+        expected_date=data.expected_date,
+        subtotal=round(subtotal, 2),
+        tax_total=round(tax_total, 2),
+        discount=round(data.discount or 0, 2),
+        total=total,
+        status=SalesOrderStatus.confirmed,  # default to confirmed; "draft" reserved for future quick-save
+        notes=data.notes,
+    )
+    db.add(so)
+    created_lines = []
+    for line, line_net, _line_tax in line_rows:
+        li = SalesOrderLineItem(
+            id=str(uuid.uuid4()), order_id=so.id,
+            item_id=line.item_id, name=line.name,
+            qty=line.qty, price=line.price,
+            tax_rate=line.tax_rate, discount=line.discount or 0,
+            line_total=line_net,
+        )
+        db.add(li)
+        created_lines.append(li)
+    if not await get_allow_overselling(db):
+        try:
+            await reserve_for_sales_order(
+                db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    if data.quotation_id:
+        await _link_quotation_to_order(db, data.quotation_id, so)
+    # NB: no stock side-effect at create. Stock moves only when the SO is
+    # converted to an invoice (same code path as POS sales).
+    await db.commit()
+    return {"id": so.id, "number": so.number, "total": total, "status": so.status.value}
+
+
+# ─── Sales Order: UPDATE (full replace of editable fields + items) ──────────
+@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.edit"))])
+async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession = Depends(get_db)):
+    """Full replace of an SO's editable fields. Status is NOT changed here
+    (the convert flow + the dedicated `/status` PATCH handle that). Items
+    are replaced wholesale — simpler than diffing and the SO has no stock
+    side-effects until convert, so there's nothing in flight to reconcile.
+
+    Editable iff status ∈ {draft, confirmed}. Converted / cancelled orders
+    are locked — pretending to allow edits would orphan accounting state
+    (the spawned invoice would no longer match the SO it came from)."""
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )
+    so = res.scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    if so.status in (
+        SalesOrderStatus.converted,
+        SalesOrderStatus.cancelled,
+        SalesOrderStatus.partially_invoiced,
+    ):
+        raise HTTPException(400, f"Cannot edit a {so.status.value} sales order")
+    if not data.items:
+        raise HTTPException(400, "Sales order must have at least one line item")
+
+    # Replace fields (status preserved). Recompute totals from new items.
+    tax_mode = await _get_org_tax_mode(db)
+    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
+    total = round(subtotal + tax_total - (data.discount or 0), 2)
+
+    so.customer_id = data.customer_id
+    so.customer_name = data.customer_name
+    so.branch_id = data.branch_id
+    so.branch_name = data.branch_name or data.branch_id
+    so.created_by = data.created_by
+    so.date = data.date or so.date
+    so.expected_date = data.expected_date
+    so.subtotal = round(subtotal, 2)
+    so.tax_total = round(tax_total, 2)
+    so.discount = round(data.discount or 0, 2)
+    so.total = total
+    so.notes = data.notes
+
+    # Wipe + reinsert line items. cascade='all, delete-orphan' on the
+    # relationship would do it, but we clear via raw delete to keep the
+    # behavior independent of session expire/refresh quirks under SQLite.
+    from sqlalchemy import delete as sa_delete
+    await db.execute(
+        sa_delete(SalesOrderLineItem).where(SalesOrderLineItem.order_id == so.id)
+    )
+    created_lines = []
+    for line, line_net, _line_tax in line_rows:
+        li = SalesOrderLineItem(
+            id=str(uuid.uuid4()), order_id=so.id,
+            item_id=line.item_id, name=line.name,
+            qty=line.qty, price=line.price,
+            tax_rate=line.tax_rate, discount=line.discount or 0,
+            line_total=line_net,
+        )
+        db.add(li)
+        created_lines.append(li)
+    await release_reservations(db, source_type="sales_order", source_ref=so.id)
+    if so.status == SalesOrderStatus.confirmed and not await get_allow_overselling(db):
+        try:
+            await reserve_for_sales_order(
+                db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    await db.commit()
+    return {"id": so.id, "number": so.number, "total": total, "status": so.status.value}
+
+
+# ─── Sales Order: UPDATE STATUS ──────────────────────────────────────────────
+@router.patch("/orders/{order_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
+async def update_order_status(order_id: str, status: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )
+    so = res.scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    try:
+        target = SalesOrderStatus(status)
+    except ValueError:
+        raise HTTPException(400, f"Invalid status: {status}")
+    # Once an SO is converted, the only legal next status is "cancelled" —
+    # and only when there's no spawned invoice in a paid state (otherwise
+    # cancelling the SO would orphan accounting state).
+    if so.status == SalesOrderStatus.converted:
+        raise HTTPException(400, "Cannot change status of a converted sales order (cancel the invoice first)")
+    if so.status == SalesOrderStatus.partially_invoiced and target != SalesOrderStatus.cancelled:
+        raise HTTPException(
+            400,
+            "Partially invoiced orders can only be cancelled — finish converting or cancel the order",
+        )
+    prev = so.status
+    if target == SalesOrderStatus.cancelled:
+        await release_reservations(db, source_type="sales_order", source_ref=so.id)
+    elif target == SalesOrderStatus.confirmed and prev == SalesOrderStatus.draft:
+        if not await get_allow_overselling(db):
+            try:
+                await reserve_for_sales_order(
+                    db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items,
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+    so.status = target
+    await db.commit()
+    return {"status": so.status.value}
+
+
+# ─── Sales Order: CONVERT TO INVOICE ─────────────────────────────────────────
+@router.post("/orders/{order_id}/convert", dependencies=[Depends(require_perm("invoices.create"))])
+async def convert_order_to_invoice(
+    order_id: str,
+    data: ConvertToInvoiceIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Spawn a SaleInvoice from an SO (full or partial).
+
+    Phase 2 partial convert: pass `lines: [{order_line_id, qty}, …]` to
+    invoice a subset. The SO stays open at `partially_invoiced` until every
+    line is fully invoiced, then flips to `converted`.
+
+    Payment status comes from `ConvertToInvoiceIn`:
+      • payment_received=False → pending invoice
+      • payment_received=True + payment_mode set → paid invoice
+    """
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )
+    so = res.unique().scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    if so.status == SalesOrderStatus.converted:
+        raise HTTPException(400, "Sales order already converted")
+    if so.status == SalesOrderStatus.cancelled:
+        raise HTTPException(400, "Cannot convert a cancelled sales order")
+    if not so.line_items:
+        raise HTTPException(400, "Sales order has no line items")
+
+    if data.payment_received and not (data.payment_mode or "").strip():
+        raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
+
+    line_by_id = {li.id: li for li in so.line_items}
+    convert_plan: list[tuple] = []
+    if data.lines:
+        for entry in data.lines:
+            so_line = line_by_id.get(entry.order_line_id)
+            if not so_line:
+                raise HTTPException(400, f"Order line {entry.order_line_id} not found on this SO")
+            if entry.qty > int(so_line.qty):
+                raise HTTPException(
+                    400,
+                    f"Cannot invoice {entry.qty} of {so_line.name} — only {so_line.qty} remaining on the order",
+                )
+            convert_plan.append((so_line, int(entry.qty)))
+    else:
+        convert_plan = [(li, int(li.qty)) for li in so.line_items if int(li.qty) > 0]
+
+    convert_plan = [(ln, q) for ln, q in convert_plan if q > 0]
+    if not convert_plan:
+        raise HTTPException(400, "Select at least one line with quantity > 0")
+
+    allow_oversell = await get_allow_overselling(db)
+    tax_mode = await _get_org_tax_mode(db)
+    orig_subtotal = float(so.subtotal or 0)
+    inv_subtotal = 0.0
+    inv_tax_total = 0.0
+    for so_line, convert_qty in convert_plan:
+        line_net, line_tax, _ = _line_amounts(
+            convert_qty,
+            float(so_line.price or 0),
+            float(so_line.discount or 0),
+            float(so_line.tax_rate or 0),
+            tax_mode,
+        )
+        inv_subtotal += line_net
+        inv_tax_total += line_tax
+    inv_subtotal = round(inv_subtotal, 2)
+    inv_tax_total = round(inv_tax_total, 2)
+    inv_discount = 0.0
+    if orig_subtotal > 0 and float(so.discount or 0) > 0:
+        inv_discount = round(float(so.discount) * (inv_subtotal / orig_subtotal), 2)
+    inv_total = round(max(0.0, inv_subtotal + inv_tax_total - inv_discount), 2)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    inv_num = await next_sale_invoice_number(db, "sales_order")
+
+    paid = inv_total if data.payment_received else 0.0
+    status = "paid" if paid >= inv_total and inv_total > 0 else "pending"
+    payment_mode = data.payment_mode if data.payment_received else None
+
+    inv = SaleInvoice(
+        id=str(uuid.uuid4()), number=inv_num,
+        customer_id=so.customer_id,
+        customer_name=so.customer_name,
+        branch_id=so.branch_id,
+        branch_name=so.branch_name,
+        cashier=so.created_by or "Staff",
+        date=today,
+        subtotal=inv_subtotal,
+        tax_total=inv_tax_total,
+        discount=inv_discount,
+        total=inv_total,
+        paid_amount=round(paid, 2),
+        payment_mode=payment_mode,
+        status=status,
+        origin="sales_order",
+        notes=data.notes or so.notes,
+    )
+    db.add(inv)
+
+    alloc_by_item: dict = {}
+    if data.line_allocations:
+        for a in data.line_allocations:
+            alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
+
+    for so_line, convert_qty in convert_plan:
+        line_net, line_tax, line_total = _line_amounts(
+            convert_qty,
+            float(so_line.price or 0),
+            float(so_line.discount or 0),
+            float(so_line.tax_rate or 0),
+            tax_mode,
+        )
+        li = SaleLineItem(
+            id=str(uuid.uuid4()), invoice_id=inv.id,
+            item_id=so_line.item_id, name=so_line.name,
+            qty=convert_qty, price=so_line.price,
+            tax_rate=so_line.tax_rate,
+            discount=so_line.discount or 0,
+            line_total=line_total,
+        )
+        db.add(li)
+        if so_line.item_id:
+            if not allow_oversell:
+                avail = await get_available_qty(
+                    db, item_id=so_line.item_id, branch_id=so.branch_id,
+                    exclude_source_ref=so.id,
+                )
+                if convert_qty > avail:
+                    raise HTTPException(
+                        400,
+                        f"Insufficient stock for {so_line.name}: need {convert_qty}, available {avail}",
+                    )
+            tracked, expiry_tracked = await is_tracked(db, so_line.item_id)
+            if tracked:
+                strategy = "fefo" if expiry_tracked else "fifo"
+                explicit = alloc_by_item.get(so_line.item_id)
+                consumed_ok = False
+                consumed_ledger = None
+                try:
+                    consumed_ledger = await consume_batches_atomic(
+                        db, item_id=so_line.item_id, branch_id=so.branch_id,
+                        qty=convert_qty, strategy=strategy,
+                        explicit_allocation=explicit,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                    )
+                    consumed_ok = True
+                except ValueError:
+                    if explicit:
+                        try:
+                            consumed_ledger = await consume_batches_atomic(
+                                db, item_id=so_line.item_id, branch_id=so.branch_id,
+                                qty=convert_qty, strategy=strategy,
+                                explicit_allocation=None,
+                                movement_type="sale",
+                                source_type="sale_invoice",
+                                source_ref=inv.id,
+                            )
+                            consumed_ok = True
+                        except ValueError:
+                            pass
+                if consumed_ledger:
+                    li.batch_allocation = json.dumps([
+                        {
+                            "batch_id": e["batch_id"],
+                            "batch_number": e.get("batch_number"),
+                            "consumed": e["consumed"],
+                            "expiry_date": e.get("expiry_date"),
+                        }
+                        for e in consumed_ledger
+                    ])
+                if not consumed_ok:
+                    if not allow_oversell:
+                        raise HTTPException(
+                            400,
+                            f"Insufficient batch stock for {so_line.name}",
+                        )
+                    await db.execute(
+                        text(
+                            "UPDATE item_batches SET quantity = 0 "
+                            "WHERE item_id = :i AND branch_id = :b"
+                        ),
+                        {"i": so_line.item_id, "b": so.branch_id},
+                    )
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=so_line.item_id,
+                        branch_id=so.branch_id,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell clamp on SO convert {inv.number}",
+                    )
+            else:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=so_line.item_id, branch_id=so.branch_id,
+                        delta=-convert_qty,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                    )
+                except ValueError:
+                    if not allow_oversell:
+                        raise HTTPException(
+                            400,
+                            f"Insufficient stock for {so_line.name}",
+                        )
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=so_line.item_id,
+                        branch_id=so.branch_id,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell clamp on SO convert {inv.number}",
+                    )
+
+        remaining_qty = int(so_line.qty) - convert_qty
+        if remaining_qty <= 0:
+            await db.delete(so_line)
+        else:
+            so_line.qty = remaining_qty
+            _, _, so_line.line_total = _line_amounts(
+                remaining_qty,
+                float(so_line.price or 0),
+                float(so_line.discount or 0),
+                float(so_line.tax_rate or 0),
+                tax_mode,
+            )
+
+    if inv_discount > 0:
+        so.discount = round(max(0.0, float(so.discount or 0) - inv_discount), 2)
+
+    await db.flush()
+    remaining_res = await db.execute(
+        select(SalesOrderLineItem).where(
+            SalesOrderLineItem.order_id == so.id,
+            SalesOrderLineItem.qty > 0,
+        )
+    )
+    remaining_lines = remaining_res.scalars().all()
+    fully_converted = len(remaining_lines) == 0
+
+    if fully_converted:
+        so.subtotal = 0.0
+        so.tax_total = 0.0
+        so.total = 0.0
+        so.discount = 0.0
+        so.status = SalesOrderStatus.converted
+        await fulfil_reservations(db, source_type="sales_order", source_ref=so.id)
+    else:
+        _recalc_so_header(so, remaining_lines, tax_mode)
+        so.status = SalesOrderStatus.partially_invoiced
+        await refresh_so_reservations(
+            db, order_id=so.id, branch_id=so.branch_id, lines=remaining_lines,
+        )
+
+    so.converted_invoice_id = inv.id
+
+    if data.payment_received and paid > 0:
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        conv_pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=inv.customer_id,
+            customer_name=inv.customer_name or "Walk-in",
+            branch_id=inv.branch_id,
+            branch_name=inv.branch_name,
+            date=today,
+            total_amount=round(paid, 2),
+            payment_mode=payment_mode,
+            payment_ref="",
+            notes="Invoice paid at SO conversion",
+            credit_applied=0.0,
+            created_by="Staff",
+        )
+        db.add(conv_pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=conv_pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=round(paid, 2),
+        ))
+        await record_customer_payment(db, conv_pay)
+
+    if so.customer_id:
+        await sync_customer_outstanding(db, so.customer_id)
+    await db.commit()
+    return {
+        "invoice_id": inv.id,
+        "invoice_number": inv.number,
+        "status": status,
+        "total": inv.total,
+        "order_status": so.status.value if hasattr(so.status, "value") else str(so.status),
+        "order_remaining_total": round(float(so.total or 0), 2),
+        "fully_converted": fully_converted,
+    }
+
+
+# ─── Quotation → Sales Order convert ─────────────────────────────────────────
+@router.post("/quotations/{quote_id}/convert-to-order", dependencies=[Depends(require_perm("invoices.create"))])
+async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_db)):
+    """Create a SalesOrder from a Quotation. Prices, taxes, discount, and
+    line items are copied verbatim (the quote's commercial terms are the
+    point of quoting — don't re-fetch current prices). Quote status flips
+    to `accepted` if it isn't already terminal. Returns the new SO's id +
+    number so the UI can navigate to it."""
+    res = await db.execute(
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id == quote_id)
+    )
+    quote = res.scalar_one_or_none()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+    if quote.status in (QuotationStatus.converted, QuotationStatus.rejected):
+        raise HTTPException(400, f"Quotation is {quote.status.value}; cannot convert")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    count = (await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0
+    so_num = f"SO-{datetime.now().year}-{1000 + count}"
+
+    so = SalesOrder(
+        id=str(uuid.uuid4()), number=so_num,
+        customer_id=quote.customer_id,
+        customer_name=quote.customer_name,
+        branch_id=quote.branch_id,
+        branch_name=quote.branch_name,
+        created_by=quote.created_by or "Staff",
+        date=today,
+        subtotal=quote.subtotal,
+        tax_total=quote.tax_total,
+        discount=quote.discount,
+        total=quote.total,
+        status=SalesOrderStatus.confirmed,
+        notes=f"From quotation {quote.number}" + (f": {quote.notes}" if quote.notes else ""),
+    )
+    db.add(so)
+    for ql in quote.line_items:
+        db.add(SalesOrderLineItem(
+            id=str(uuid.uuid4()), order_id=so.id,
+            item_id=ql.item_id, name=ql.name,
+            qty=ql.qty, price=ql.price,
+            tax_rate=ql.tax_rate, discount=ql.discount or 0,
+            line_total=ql.line_total,
+        ))
+
+    quote.status = QuotationStatus.converted
+    quote.converted_order_id = so.id
+    await db.commit()
+    return {
+        "order_id": so.id,
+        "order_number": so.number,
+        "total": so.total,
+    }
+
+
+@router.post("/quotations/{quote_id}/convert-to-invoice", dependencies=[Depends(require_perm("invoices.create"))])
+async def convert_quote_to_invoice(
+    quote_id: str,
+    data: ConvertToInvoiceIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Spawn a SaleInvoice directly from a Quotation (skip SO). Mirrors
+    convert_order_to_invoice stock + payment semantics."""
+    res = await db.execute(
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id == quote_id)
+    )
+    quote = res.scalar_one_or_none()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+    if quote.status in (QuotationStatus.converted, QuotationStatus.rejected):
+        raise HTTPException(400, f"Quotation is {quote.status.value}; cannot convert")
+    if quote.converted_order_id:
+        live_so = (await db.execute(
+            select(SalesOrder.id).where(SalesOrder.id == quote.converted_order_id)
+        )).scalar_one_or_none()
+        if live_so:
+            raise HTTPException(
+                400,
+                "Quotation has a live sales order — delete the SO first or convert it to invoice",
+            )
+    if quote.converted_invoice_id:
+        live_inv = (await db.execute(
+            select(SaleInvoice.id).where(SaleInvoice.id == quote.converted_invoice_id)
+        )).scalar_one_or_none()
+        if live_inv:
+            raise HTTPException(400, "Quotation already spawned an invoice")
+
+    if data.payment_received and not (data.payment_mode or "").strip():
+        raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    inv_num = await next_sale_invoice_number(db, "quotation")
+    paid = quote.total if data.payment_received else 0.0
+    status = "paid" if paid >= quote.total else "pending"
+    payment_mode = data.payment_mode if data.payment_received else None
+    due_date = None
+    if status in ("pending", "partial"):
+        due_date = compute_due_date(today, None)
+
+    inv = SaleInvoice(
+        id=str(uuid.uuid4()), number=inv_num,
+        customer_id=quote.customer_id,
+        customer_name=quote.customer_name,
+        branch_id=quote.branch_id,
+        branch_name=quote.branch_name,
+        cashier=quote.created_by or "Staff",
+        date=today,
+        subtotal=quote.subtotal,
+        tax_total=quote.tax_total,
+        discount=quote.discount,
+        total=quote.total,
+        paid_amount=round(paid, 2),
+        payment_mode=payment_mode,
+        status=status,
+        due_date=due_date,
+        origin="quotation",
+        notes=data.notes or quote.notes,
+    )
+    db.add(inv)
+
+    alloc_by_item = {}
+    if data.line_allocations:
+        for a in data.line_allocations:
+            alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
+
+    for line in quote.line_items:
+        li = SaleLineItem(
+            id=str(uuid.uuid4()), invoice_id=inv.id,
+            item_id=line.item_id, name=line.name,
+            qty=line.qty, price=line.price,
+            tax_rate=line.tax_rate,
+            line_total=line.line_total,
+        )
+        db.add(li)
+        if line.item_id:
+            tracked, expiry_tracked = await is_tracked(db, line.item_id)
+            if tracked:
+                strategy = "fefo" if expiry_tracked else "fifo"
+                explicit = alloc_by_item.get(line.item_id)
+                consumed_ok = False
+                consumed_ledger = None
+                try:
+                    consumed_ledger = await consume_batches_atomic(
+                        db, item_id=line.item_id, branch_id=quote.branch_id,
+                        qty=line.qty, strategy=strategy,
+                        explicit_allocation=explicit,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                    )
+                    consumed_ok = True
+                except ValueError:
+                    if explicit:
+                        try:
+                            consumed_ledger = await consume_batches_atomic(
+                                db, item_id=line.item_id, branch_id=quote.branch_id,
+                                qty=line.qty, strategy=strategy,
+                                explicit_allocation=None,
+                                movement_type="sale",
+                                source_type="sale_invoice",
+                                source_ref=inv.id,
+                            )
+                            consumed_ok = True
+                        except ValueError:
+                            pass
+                if consumed_ledger:
+                    li.batch_allocation = json.dumps([
+                        {
+                            "batch_id": e["batch_id"],
+                            "batch_number": e.get("batch_number"),
+                            "consumed": e["consumed"],
+                            "expiry_date": e.get("expiry_date"),
+                        }
+                        for e in consumed_ledger
+                    ])
+                if not consumed_ok:
+                    await db.execute(
+                        text("UPDATE item_batches SET quantity = 0 WHERE item_id = :i AND branch_id = :b"),
+                        {"i": line.item_id, "b": quote.branch_id},
+                    )
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=line.item_id,
+                        branch_id=quote.branch_id,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell clamp on quote convert {inv.number}",
+                    )
+            else:
+                try:
+                    await adjust_stock_atomic(
+                        db, item_id=line.item_id, branch_id=quote.branch_id, delta=-line.qty,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                    )
+                except ValueError:
+                    await clamp_stock_to_zero_with_ledger(
+                        db,
+                        item_id=line.item_id,
+                        branch_id=quote.branch_id,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell clamp on quote convert {inv.number}",
+                    )
+
+    if data.payment_received and paid > 0:
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        conv_pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=inv.customer_id,
+            customer_name=inv.customer_name or "Walk-in",
+            branch_id=inv.branch_id,
+            branch_name=inv.branch_name,
+            date=today,
+            total_amount=round(paid, 2),
+            payment_mode=payment_mode,
+            payment_ref="",
+            notes=f"Invoice paid at quote {quote.number} conversion",
+            credit_applied=0.0,
+            created_by="Staff",
+        )
+        db.add(conv_pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=conv_pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=round(paid, 2),
+        ))
+        await record_customer_payment(db, conv_pay)
+
+    quote.status = QuotationStatus.converted
+    quote.converted_invoice_id = inv.id
+    if quote.customer_id:
+        await sync_customer_outstanding(db, quote.customer_id)
+    await db.commit()
+    return {
+        "invoice_id": inv.id,
+        "invoice_number": inv.number,
+        "status": status,
+        "total": inv.total,
+    }
+
+
+# ─── Sales Returns: helpers ──────────────────────────────────────────────────
+def _return_dict(ret, items=None):
+    d = {
+        "id": ret.id, "number": ret.number,
+        "invoiceId": ret.invoice_id,
+        "invoiceNumber": ret.invoice_number,
+        "customerId": ret.customer_id,
+        "customerName": ret.customer_name or "Walk-in",
+        "branchId": ret.branch_id,
+        "branchName": ret.branch_name,
+        "date": ret.date,
+        "reason": ret.reason,
+        "refundMethod": ret.refund_method,
+        "subtotal": ret.subtotal,
+        "taxTotal": ret.tax_total,
+        "total": ret.total,
+        "creditedAmount": ret.credited_amount,
+        "status": ret.status.value if hasattr(ret.status, "value") else str(ret.status),
+        "notes": ret.notes,
+        "createdBy": ret.created_by,
+        "createdAt": ret.created_at.isoformat() if ret.created_at else None,
+    }
+    if items is not None:
+        d["items"] = [{
+            "id": i.id,
+            "invoiceLineId": i.invoice_line_id,
+            "itemId": i.item_id,
+            "name": i.name,
+            "originalQty": i.original_qty,
+            "returnQty": i.return_qty,
+            "price": i.price,
+            "taxRate": i.tax_rate,
+            "lineTotal": i.line_total,
+        } for i in items]
+    return d
+
+
+async def _already_returned_for_invoice(
+    db: AsyncSession, invoice_id: str
+) -> dict[str, int]:
+    """Sum of return_qty per invoice_line_id across all SalesReturns for
+    this invoice. Used to validate that a new return's per-line qty plus
+    the cumulative prior returns doesn't exceed the original line's qty.
+
+    Returns {invoice_line_id: total_returned_qty}. invoice_line_id can
+    be None for legacy returns; those entries are excluded from the
+    per-line cap (caller falls back to name+item_id matching).
+    """
+    res = await db.execute(
+        select(
+            SalesReturnLineItem.invoice_line_id,
+            func.coalesce(func.sum(SalesReturnLineItem.return_qty), 0),
+        )
+        .join(SalesReturn, SalesReturn.id == SalesReturnLineItem.return_id)
+        .where(
+            SalesReturn.invoice_id == invoice_id,
+            SalesReturn.status == SalesReturnStatus.processed,
+            SalesReturnLineItem.invoice_line_id.is_not(None),
+        )
+        .group_by(SalesReturnLineItem.invoice_line_id)
+    )
+    return {row[0]: int(row[1] or 0) for row in res.all()}
+
+
+async def _restored_per_batch_for_invoice_line(
+    db: AsyncSession, invoice_line_id: str
+) -> dict[str, int]:
+    """Sum of qty already restored per source batch across processed returns
+    for a given invoice line. Drives the per-batch cap so cumulative restores
+    to any one lot can't exceed what the invoice took from it. Reads the
+    `batch_allocation` ledger stored on each SalesReturnLineItem."""
+    rows = (await db.execute(
+        select(SalesReturnLineItem.batch_allocation)
+        .join(SalesReturn, SalesReturn.id == SalesReturnLineItem.return_id)
+        .where(
+            SalesReturnLineItem.invoice_line_id == invoice_line_id,
+            SalesReturn.status == SalesReturnStatus.processed,
+            SalesReturnLineItem.batch_allocation.is_not(None),
+        )
+    )).scalars().all()
+    out: dict[str, int] = {}
+    for raw in rows:
+        try:
+            for e in json.loads(raw):
+                bid = e.get("batch_id")
+                if bid:
+                    out[bid] = out.get(bid, 0) + int(e.get("restored") or 0)
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+# ─── Sales Returns: LIST ─────────────────────────────────────────────────────
+# 2026-05-24: trailing slash on /returns/ is LOAD-BEARING. Without it,
+# the path `/returns` would be checked against the `/{invoice_id}` route
+# (registered earlier in this file at line ~523) and matched there,
+# routing to `get_invoice(invoice_id="returns")` → 404 "Invoice not
+# found". The frontend's `salesAPI.returns.list` calls `/sales/returns/`
+# with a trailing slash; matching that to `/returns/` here skips the
+# /{invoice_id} fallback entirely. /orders/ already follows this pattern.
+@router.get("/returns/", dependencies=[Depends(require_perm("invoices.view"))])
+async def list_returns(
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List sales returns."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conds = []
+    if search:
+        conds.append(or_(SalesReturn.number.ilike(f"%{search}%"), SalesReturn.customer_name.ilike(f"%{search}%")))
+    if status:
+        conds.append(SalesReturn.status == status)
+    if date_from:
+        conds.append(SalesReturn.date >= date_from)
+    if date_to:
+        conds.append(SalesReturn.date <= date_to)
+    sort_expr = resolve_sort(
+        sort_by, sort_order,
+        {
+            "number": SalesReturn.number,
+            "invoice_number": SalesReturn.invoice_number,
+            "customer_name": SalesReturn.customer_name,
+            "date": SalesReturn.date,
+            "total": SalesReturn.total,
+            "status": SalesReturn.status,
+            "created_at": SalesReturn.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    q = select(SalesReturn).options(selectinload(SalesReturn.line_items))
+    q_count = select(func.count(SalesReturn.id))
+    if conds:
+        q = q.where(and_(*conds))
+        q_count = q_count.where(and_(*conds))
+    total = int((await db.execute(q_count)).scalar() or 0)
+    rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
+    out = [_return_dict(ret, ret.line_items) for ret in rows]
+    return paged(out, total, sk, lim)
+
+
+# ─── Sales Returns: GET ONE ──────────────────────────────────────────────────
+@router.get("/returns/{return_id}", dependencies=[Depends(require_perm("invoices.view"))])
+async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id == return_id)
+    )
+    ret = res.scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    return _return_dict(ret, ret.line_items)
+
+
+@router.post("/returns/{return_id}/void", dependencies=[Depends(require_perm("invoices.edit"))])
+async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+    """Soft-void a credit note — reverses stock + invoice adjustments but keeps the row."""
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id == return_id)
+    )
+    ret = res.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    if ret.status == SalesReturnStatus.void:
+        return {"status": "void", "number": ret.number}
+
+    credit_revoked = await _reverse_sales_return_effects(db, ret)
+    ret.status = SalesReturnStatus.void
+    await db.flush()
+    await recalc_invoice_after_cn(db, ret.invoice_id)
+    customer_ids: set[str] = set()
+    if ret.customer_id:
+        customer_ids.add(ret.customer_id)
+    inv = (await db.execute(
+        select(SaleInvoice.customer_id).where(SaleInvoice.id == ret.invoice_id)
+    )).scalar_one_or_none()
+    if inv:
+        customer_ids.add(inv)
+    for cid in customer_ids:
+        await sync_customer_outstanding(db, cid)
+    await db.commit()
+    return {
+        "status": "void",
+        "number": ret.number,
+        "credit_revoked": round(credit_revoked, 2),
+    }
+
+
+@router.post("/returns/{return_id}/undo-void", dependencies=[Depends(require_perm("invoices.edit"))])
+async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+    """Restore a voided credit note to 'processed' — re-applies stock + invoice adjustments.
+
+    Blocked if another active credit note has already consumed the same line
+    quantities or reduced the invoice balance to the point where re-applying
+    this one would push it negative (double-entry prevention).
+    """
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id == return_id)
+    )
+    ret = res.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    if ret.status != SalesReturnStatus.void:
+        return {"status": str(ret.status.value if hasattr(ret.status, "value") else ret.status), "number": ret.number}
+
+    # ── Pre-flight: check for conflicts BEFORE mutating anything ──────────────
+    inv = (await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id == ret.invoice_id)
+    )).unique().scalar_one_or_none()
+    if inv is None:
+        raise HTTPException(404, "Original invoice not found")
+
+    # Guard 1: total active credit notes (after undo) must not exceed the invoice total.
+    new_credited = round(float(getattr(inv, "credited_amount", 0) or 0) + float(ret.total or 0), 2)
+    if new_credited > float(inv.total or 0) + 0.01:
+        raise HTTPException(
+            400,
+            f"Cannot undo void: re-activating {ret.number} (₹{round(float(ret.total or 0), 2)}) "
+            f"would push total credits (₹{new_credited}) above the invoice total "
+            f"(₹{round(float(inv.total or 0), 2)}). Another active credit note has already "
+            f"consumed the same amount. Void that credit note first, then undo this one."
+        )
+
+    # Guard 2: per-line quantity check — no item can be returned more times
+    # than it was originally sold.
+    already_returned = await _already_returned_for_invoice(db, ret.invoice_id)
+    inv_lines_by_id = {li.id: li for li in inv.line_items}
+    conflicts = []
+    for rl in ret.line_items:
+        if not rl.invoice_line_id:
+            continue
+        existing = already_returned.get(rl.invoice_line_id, 0)
+        inv_line = inv_lines_by_id.get(rl.invoice_line_id)
+        original_qty = int(inv_line.qty or 0) if inv_line else 0
+        if existing + int(rl.return_qty or 0) > original_qty:
+            conflicts.append(rl.name or rl.invoice_line_id)
+    if conflicts:
+        items_str = ", ".join(f"'{n}'" for n in conflicts[:3])
+        raise HTTPException(
+            400,
+            f"Cannot undo void: line(s) {items_str} have already been fully returned by "
+            f"another active credit note. Void that credit note first, then undo this one."
+        )
+    # ── End pre-flight ─────────────────────────────────────────────────────────
+
+    # Re-apply stock effects (inverse of void's _reverse_sales_return_effects).
+    for rl in ret.line_items:
+        if rl.batch_allocation:
+            try:
+                ledger = json.loads(rl.batch_allocation)
+            except (ValueError, TypeError):
+                ledger = []
+            for entry in ledger:
+                bid = entry.get("batch_id")
+                qty = int(entry.get("restored") or 0)
+                if not bid or qty <= 0:
+                    continue
+                b = (await db.execute(
+                    select(ItemBatch).where(ItemBatch.id == bid)
+                )).scalar_one_or_none()
+                if b is not None:
+                    await set_batch_quantity_atomic(db, batch_id=bid, new_qty=int(b.quantity or 0) + qty)
+                elif rl.item_id:
+                    try:
+                        await adjust_stock_atomic(
+                            db, item_id=rl.item_id, branch_id=ret.branch_id, delta=qty,
+                            movement_type="return", source_type="sales_return", source_ref=ret.id,
+                        )
+                    except ValueError:
+                        pass
+        elif rl.item_id:
+            try:
+                await adjust_stock_atomic(
+                    db, item_id=rl.item_id, branch_id=ret.branch_id,
+                    delta=int(rl.return_qty or 0),
+                )
+            except ValueError:
+                pass
+
+    # recalc_invoice_after_cn (called below) will update credited_amount,
+    # return_status, and recompute invoice status — no direct mutations needed.
+    _recompute_invoice_status(inv)
+
+    # Re-credit the customer for credit-method returns.
+    if ret.refund_method == "credit" and ret.customer_id and (ret.credited_amount or 0) > 0:
+        cust = (await db.execute(
+            select(Customer).where(Customer.id == ret.customer_id)
+        )).scalar_one_or_none()
+        if cust:
+            await adjust_customer_credit(
+                db, ret.customer_id, float(ret.credited_amount or 0),
+                entry_type="return_undo_void",
+                source_type="sales_return", source_ref=ret.id, source_number=ret.number,
+            )
+
+    ret.status = SalesReturnStatus.processed
+    await db.flush()
+    await recalc_invoice_after_cn(db, ret.invoice_id)
+    customer_ids: set[str] = set()
+    if ret.customer_id:
+        customer_ids.add(ret.customer_id)
+    inv_cid = (await db.execute(
+        select(SaleInvoice.customer_id).where(SaleInvoice.id == ret.invoice_id)
+    )).scalar_one_or_none()
+    if inv_cid:
+        customer_ids.add(inv_cid)
+    for cid in customer_ids:
+        await sync_customer_outstanding(db, cid)
+    await db.commit()
+    return {"status": "processed", "number": ret.number}
+
+
+# ─── GET ONE INVOICE (after /orders/, /returns/, /payments/ static paths) ───
+@router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
+async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
+    return _inv_dict(inv, li_res.scalars().all())
+
+
+# ─── Sales Returns: CREATE ───────────────────────────────────────────────────
+# 2026-05-24: trailing slash matches the LIST route above for consistency
+# (see list_returns for the full rationale). POST routes don't hit the
+# same /{invoice_id} confusion as GET (`/{invoice_id}` is GET-only) but
+# keeping the slash uniform avoids future drift if anyone adds POST
+# `/{invoice_id}/*` routes later.
+@router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
+async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_db)):
+    """Process a customer return against an existing invoice.
+
+    Flow:
+      1. Validate invoice exists + isn't cancelled.
+      2. For each return line: validate against original invoice line +
+         cumulative prior returns (no over-returning).
+      3. Determine refund_method (walk-ins forced to 'cash').
+      4. Compute totals + credited_amount (capped at invoice.paid_amount
+         for non-adjustment methods; full return total for adjustment).
+      5. Restock at the invoice's branch (NOT the operator's current
+         branch — returns are bound to where the sale happened).
+         Tracked items → new "Returns" batch via add_batch_atomic.
+         Untracked → adjust_stock_atomic +qty.
+      6. For credit method: bump customer.credit_balance + AuditLog.
+      7. For adjustment method: subtract from invoice.paid_amount only if
+         that doesn't push balance negative; remainder treated as
+         non-refundable (logged in notes).
+    """
+    if not data.items:
+        raise HTTPException(400, "Return must have at least one line item")
+
+    inv_res = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id == data.invoice_id)
+    )
+    inv = inv_res.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    # InvoiceStatus is a str-enum so direct equality works. Both
+    # representations (enum member + raw "cancelled" string set by the
+    # legacy cancel_invoice path) compare equal here.
+    if inv.status == InvoiceStatus.cancelled or str(inv.status).endswith("cancelled"):
+        raise HTTPException(400, "Cannot return against a cancelled invoice")
+
+    # Index invoice lines by id for fast lookup. Also keep a (item_id, name)
+    # secondary index for legacy lines where invoice_line_id wasn't carried
+    # through the UI.
+    inv_lines_by_id = {li.id: li for li in inv.line_items}
+    inv_lines_by_item = {
+        (li.item_id, li.name): li for li in inv.line_items if li.item_id
+    }
+
+    # How much has already been returned per invoice_line_id?
+    already_returned = await _already_returned_for_invoice(db, data.invoice_id)
+
+    tax_mode = await _get_org_tax_mode(db)
+
+    # Validate every return line + compute totals.
+    return_rows = []  # (return_line_in, matched_inv_line, line_gross, line_tax)
+    subtotal = 0.0
+    tax_total = 0.0
+    for r in data.items:
+        # Resolve which invoice line we're returning against.
+        inv_line = None
+        if r.invoice_line_id and r.invoice_line_id in inv_lines_by_id:
+            inv_line = inv_lines_by_id[r.invoice_line_id]
+        elif r.item_id and (r.item_id, r.name) in inv_lines_by_item:
+            inv_line = inv_lines_by_item[(r.item_id, r.name)]
+        if not inv_line:
+            raise HTTPException(
+                400,
+                f"Line '{r.name}' is not on invoice {inv.number} — cannot return",
+            )
+
+        prior = already_returned.get(inv_line.id, 0)
+        remaining_qty = int(inv_line.qty or 0) - prior
+        if r.return_qty > remaining_qty:
+            raise HTTPException(
+                400,
+                f"Line '{r.name}': only {remaining_qty} unit(s) remaining returnable "
+                f"(original {inv_line.qty}, already returned {prior})",
+            )
+
+        # Use the original sale's price + tax_rate (returns at sale price,
+        # not current catalog price). Apply the org's tax mode so inclusive
+        # prices don't get taxed a second time.
+        line_gross = round(r.return_qty * (inv_line.price or 0), 2)
+        line_tax = line_tax_amount(line_gross, inv_line.tax_rate or 0, tax_mode)
+        line_taxable = line_taxable_amount(line_gross, inv_line.tax_rate or 0, tax_mode)
+        return_rows.append((r, inv_line, line_gross, line_tax))
+        subtotal += line_taxable
+        tax_total += line_tax
+
+    total = round(subtotal + tax_total, 2)
+
+    # Refund method resolution.
+    is_walkin = not inv.customer_id
+    method = (data.refund_method or "cash").strip().lower()
+    if method not in ("cash", "credit", "adjustment"):
+        raise HTTPException(400, f"Invalid refund_method '{method}' — use cash | credit | adjustment")
+    if is_walkin and method == "credit":
+        # Quietly downgrade rather than 400 — the operator's intent is
+        # clear ("give them their money back"); the customer just isn't
+        # in the system to receive a credit balance entry.
+        method = "cash"
+    elif is_walkin and method == "adjustment":
+        # Adjustment on a walk-in would orphan the balance reduction.
+        # Force cash to keep the accounting clean.
+        method = "cash"
+
+    # Determine credited amount.
+    #   • cash / credit: capped at invoice.paid_amount (you can't refund
+    #     more than the customer actually paid). The excess return value
+    #     reduces the outstanding balance via the invoice update below.
+    #   • adjustment: no money moves. credited_amount = 0; instead we
+    #     reduce invoice.paid_amount? No — paid_amount is what came in.
+    #     We reduce the invoice.total to reflect that less is owed.
+    paid_amount = float(inv.paid_amount or 0)
+    if method in ("cash", "credit"):
+        credited = round(min(total, paid_amount), 2)
+    else:
+        credited = 0.0
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    count = (await db.execute(select(func.count(SalesReturn.id)))).scalar() or 0
+    ret_num = f"CN-{datetime.now().year}-{1000 + count}"
+
+    ret = SalesReturn(
+        id=str(uuid.uuid4()), number=ret_num,
+        invoice_id=inv.id, invoice_number=inv.number,
+        customer_id=inv.customer_id,
+        customer_name=inv.customer_name,
+        branch_id=inv.branch_id,         # bound to where the sale happened
+        branch_name=inv.branch_name,
+        date=data.date or today,
+        reason=data.reason,
+        refund_method=method,
+        subtotal=round(subtotal, 2),
+        tax_total=round(tax_total, 2),
+        total=total,
+        credited_amount=credited,
+        status=SalesReturnStatus.processed,
+        notes=data.notes,
+        created_by=data.created_by,
+    )
+    db.add(ret)
+    await db.flush()  # need ret.id for the line FK
+
+    for r, inv_line, line_net, _line_tax in return_rows:
+        # 2026-05-31: batch-aware restock. Restore stock to the SAME lots the
+        # invoice line consumed (preserving original expiry), capped per lot
+        # by what the invoice took, cumulative across returns. Default split
+        # is FEFO (nearest-expiry lot refilled first); operator can override
+        # via r.batch_allocation. Stored as a ledger on the return line.
+        restore_ledger = None
+        if inv_line.item_id:
+            tracked, _expiry_tracked = await is_tracked(db, inv_line.item_id)
+            if not tracked:
+                # Untracked items just bump aggregate stock.
+                await adjust_stock_atomic(
+                    db, item_id=inv_line.item_id, branch_id=inv.branch_id,
+                    delta=r.return_qty,
+                    movement_type="return",
+                    source_type="sales_return",
+                    source_ref=ret.id,
+                )
+            else:
+                src = []
+                if getattr(inv_line, "batch_allocation", None):
+                    try:
+                        src = json.loads(inv_line.batch_allocation)
+                    except (ValueError, TypeError):
+                        src = []
+                if not src:
+                    # No source manifest (legacy / oversold sale) — fall back
+                    # to a fresh "Returns" lot so the count still moves.
+                    await add_batch_atomic(
+                        db,
+                        item_id=inv_line.item_id,
+                        branch_id=inv.branch_id,
+                        qty=r.return_qty,
+                        cost_price=inv_line.price or 0,
+                        source_type="return",
+                        source_ref=ret.id,
+                        notes=f"Return on {inv.number}: {data.reason or 'no reason given'}",
+                    )
+                else:
+                    # Per-lot cap = consumed − already restored (cumulative).
+                    prior = await _restored_per_batch_for_invoice_line(db, inv_line.id)
+                    caps: dict[str, int] = {}
+                    fefo_order: list[tuple[str, str]] = []  # (expiry, batch_id)
+                    for e in src:
+                        bid = e.get("batch_id")
+                        if not bid:
+                            continue
+                        cap = int(e.get("consumed") or 0) - int(prior.get(bid, 0))
+                        if cap <= 0:
+                            continue
+                        caps[bid] = cap
+                        fefo_order.append((e.get("expiry_date") or "9999-12-31", bid))
+
+                    plan: dict[str, int] = {}
+                    if r.batch_allocation:
+                        # Explicit operator split — validate against caps.
+                        total = 0
+                        for a in r.batch_allocation:
+                            if a.batch_id not in caps:
+                                raise HTTPException(
+                                    400,
+                                    f"{inv_line.name}: batch {a.batch_id} is not a source lot for this line",
+                                )
+                            if a.qty > caps[a.batch_id]:
+                                raise HTTPException(
+                                    400,
+                                    f"{inv_line.name}: batch {a.batch_id} can take at most {caps[a.batch_id]} more",
+                                )
+                            plan[a.batch_id] = plan.get(a.batch_id, 0) + a.qty
+                            total += a.qty
+                        if total != r.return_qty:
+                            raise HTTPException(
+                                400,
+                                f"{inv_line.name}: per-batch split ({total}) must equal return qty ({r.return_qty})",
+                            )
+                    else:
+                        # Default FEFO across source lots, capped per lot.
+                        remaining = r.return_qty
+                        for _exp, bid in sorted(fefo_order):
+                            if remaining <= 0:
+                                break
+                            take = min(caps[bid], remaining)
+                            if take > 0:
+                                plan[bid] = take
+                                remaining -= take
+                        if remaining > 0:
+                            raise HTTPException(
+                                400,
+                                f"{inv_line.name}: only {r.return_qty - remaining} unit(s) can be "
+                                f"restored to the invoice's source batches (rest already returned)",
+                            )
+
+                    applied = []
+                    for bid, qty in plan.items():
+                        b = (await db.execute(
+                            select(ItemBatch).where(ItemBatch.id == bid)
+                        )).scalar_one_or_none()
+                        if b is not None:
+                            await set_batch_quantity_atomic(
+                                db, batch_id=bid, new_qty=int(b.quantity or 0) + qty,
+                            )
+                        else:
+                            # Source lot since deleted — keep the count correct.
+                            await adjust_stock_atomic(
+                                db, item_id=inv_line.item_id, branch_id=inv.branch_id, delta=qty,
+                                movement_type="return",
+                                source_type="sales_return",
+                                source_ref=ret.id,
+                            )
+                        applied.append({"batch_id": bid, "restored": qty})
+                    restore_ledger = json.dumps(applied)
+
+        db.add(SalesReturnLineItem(
+            id=str(uuid.uuid4()), return_id=ret.id,
+            invoice_line_id=inv_line.id,
+            item_id=inv_line.item_id,
+            name=inv_line.name,
+            original_qty=inv_line.qty,
+            return_qty=r.return_qty,
+            price=inv_line.price,
+            tax_rate=inv_line.tax_rate,
+            line_total=line_net,
+            batch_allocation=restore_ledger,
+        ))
+
+    # ── Money movements ──
+    if method == "credit" and inv.customer_id and credited > 0:
+        cust_res = await db.execute(
+            select(Customer).where(Customer.id == inv.customer_id)
+        )
+        cust = cust_res.scalar_one_or_none()
+        if cust is not None:
+            cur_credit, new_credit = await adjust_customer_credit(
+                db,
+                inv.customer_id,
+                credited,
+                entry_type="return_credit",
+                source_type="sales_return",
+                source_ref=ret.id,
+                source_number=ret.number,
+                created_by=data.created_by,
+            )
+            db.add(AuditLog(
+                id=str(uuid.uuid4()),
+                action="customer_credit",
+                user_id=None,
+                user_name=data.created_by,
+                module="sales",
+                ref=ret.number,
+                detail=(
+                    f"Return {ret.number} against {inv.number}: "
+                    f"+₹{credited} credited to {cust.name} "
+                    f"(was ₹{cur_credit:.2f}, now ₹{new_credit:.2f})"
+                ),
+                risk="low",
+                ip_address=None,
+            ))
+
+    _recompute_invoice_status(inv)
+
+    await recalc_invoice_after_cn(db, inv.id)
+
+    if inv.customer_id:
+        await sync_customer_outstanding(db, inv.customer_id)
+
+    await db.commit()
+    return {
+        "id": ret.id,
+        "number": ret.number,
+        "total": total,
+        "credited_amount": credited,
+        "refund_method": method,
+        "customer_credit_balance": (
+            float(cust.credit_balance)
+            if (method == "credit" and inv.customer_id and credited > 0)
+            else None
+        ),
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BULK DELETE (2026-05-25)
+# ═════════════════════════════════════════════════════════════════════════════
+# All-or-nothing semantics: every id must pass its guard, else the whole
+# batch is rejected with per-row reasons. Each delete writes an AuditLog
+# snapshot of the row before removal — hard delete + audit trail.
+#
+# Permission: `invoices.delete` for all sales-side entities. Coarse but
+# matches existing convention (no `quotes.delete` / `payments.delete`
+# in the catalog).
+#
+# Guards (per user spec):
+#   Quotation     → has Sales Order (status='converted')
+#   Sales Order   → has Invoice (status='converted')
+#   Invoice       → has any SalesReturn OR CustomerPaymentAllocation
+#                   referencing it. INCLUDING cancelled/void ones — user
+#                   chose strict (cancelled blocks too).
+#   SalesReturn   → no guards.
+#   CustomerPayment → no guards.
+#
+# Reversal effects:
+#   Invoice delete → restore stock per line (aggregate add-back for
+#                    untracked; aggregate for tracked too since we don't
+#                    track which specific batch was consumed at sale time).
+#   SalesReturn delete → if refund_method='credit', debit customer.credit_balance.
+#                        Stock-on-return reversal is N/A (not implemented today).
+#   CustomerPayment delete → per allocation: invoice.paid_amount -=
+#                            amount, status flipped. Credit-mode payments
+#                            refund customer.credit_balance += total. Overpay
+#                            credit_applied is revoked.
+
+
+class BulkDeleteIn(BaseModel):
+    """Body for every bulk-delete endpoint. List of ids to remove."""
+    ids: List[str] = Field(..., min_length=1)
+
+
+def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
+    """Write a delete audit-log row capturing the row's pre-delete state.
+
+    `snapshot` is JSON-serializable; we json.dumps it inline so the
+    AuditLog.detail column stays a single string (per existing schema).
+    """
+    import json as _json
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        action=action,
+        user_id=None,
+        user_name=None,
+        module="sales",
+        ref=ref,
+        detail=_json.dumps(snapshot, default=str),
+        risk="medium",  # delete is irreversible — bump above the default 'low'
+        ip_address=None,
+    ))
+
+
+# ─── BULK DELETE: QUOTATIONS ─────────────────────────────────────────────────
+@router.post("/quotations/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id.in_(data.ids))
+    )
+    quotes = res.unique().scalars().all()
+    found_ids = {q.id for q in quotes}
+    blocked = []
+    for qid in data.ids:
+        if qid not in found_ids:
+            blocked.append({"id": qid, "number": "?", "reason": "Quotation not found"})
+
+    # Guard by LIVE dependency, not by the `status` flag. A quote is only
+    # blocked if the sales order it spawned still exists. The status flag
+    # never resets, so keying off it falsely blocked quotes whose SO had
+    # already been deleted. We resolve the back-pointers in one query, then
+    # confirm those SO rows still exist.
+    order_ptr_ids = {q.converted_order_id for q in quotes if q.converted_order_id}
+    inv_ptr_ids = {q.converted_invoice_id for q in quotes if getattr(q, "converted_invoice_id", None)}
+    live_order_ids = set()
+    live_inv_ids = set()
+    if order_ptr_ids:
+        live_order_ids = set((await db.execute(
+            select(SalesOrder.id).where(SalesOrder.id.in_(order_ptr_ids))
+        )).scalars().all())
+    if inv_ptr_ids:
+        live_inv_ids = set((await db.execute(
+            select(SaleInvoice.id).where(SaleInvoice.id.in_(inv_ptr_ids))
+        )).scalars().all())
+    for q in quotes:
+        if q.converted_order_id and q.converted_order_id in live_order_ids:
+            blocked.append({
+                "id": q.id, "number": q.number,
+                "reason": f"Quote {q.number} has a live Sales Order — delete the SO first",
+            })
+        inv_ptr = getattr(q, "converted_invoice_id", None)
+        if inv_ptr and inv_ptr in live_inv_ids:
+            blocked.append({
+                "id": q.id, "number": q.number,
+                "reason": f"Quote {q.number} has a live Invoice — delete the invoice first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some quotations can't be deleted"})
+
+    deleted = []
+    for q in quotes:
+        snapshot = {
+            "id": q.id, "number": q.number, "customer_id": q.customer_id,
+            "customer_name": q.customer_name, "total": q.total,
+            "status": str(q.status.value) if hasattr(q.status, "value") else str(q.status),
+            "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in q.line_items],
+        }
+        _audit_delete(db, action="delete_quotation", ref=q.number, snapshot=snapshot)
+        await db.delete(q)
+        deleted.append({"id": q.id, "number": q.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+
+
+# ─── BULK DELETE: SALES ORDERS ───────────────────────────────────────────────
+@router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id.in_(data.ids))
+    )
+    orders = res.unique().scalars().all()
+    found_ids = {o.id for o in orders}
+    blocked = []
+    for oid in data.ids:
+        if oid not in found_ids:
+            blocked.append({"id": oid, "number": "?", "reason": "Sales order not found"})
+
+    # Guard by LIVE invoice, not the `status` flag (see quotation guard).
+    inv_ptr_ids = {o.converted_invoice_id for o in orders if o.converted_invoice_id}
+    live_inv_ids = set()
+    if inv_ptr_ids:
+        live_inv_ids = set((await db.execute(
+            select(SaleInvoice.id).where(SaleInvoice.id.in_(inv_ptr_ids))
+        )).scalars().all())
+    for o in orders:
+        if o.converted_invoice_id and o.converted_invoice_id in live_inv_ids:
+            blocked.append({
+                "id": o.id, "number": o.number,
+                "reason": f"SO {o.number} has a live Invoice — delete the invoice first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some sales orders can't be deleted"})
+
+    deleted = []
+    for o in orders:
+        snapshot = {
+            "id": o.id, "number": o.number, "customer_id": o.customer_id,
+            "customer_name": o.customer_name, "total": o.total,
+            "status": str(o.status.value) if hasattr(o.status, "value") else str(o.status),
+            "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in o.line_items],
+        }
+        _audit_delete(db, action="delete_sales_order", ref=o.number, snapshot=snapshot)
+        # Orphan the parent quote: clear its dangling back-pointer so it
+        # becomes deletable + no "View SO" link 404s. Do NOT revert status
+        # — a quote that was ever converted stays locked from editing /
+        # re-converting even after its SO is deleted (2026-05-31 rule,
+        # mirrors PO→bill). Status stays `converted`.
+        parent_quote = (await db.execute(
+            select(Quotation).where(Quotation.converted_order_id == o.id)
+        )).scalar_one_or_none()
+        if parent_quote is not None:
+            parent_quote.converted_order_id = None
+        await db.delete(o)
+        deleted.append({"id": o.id, "number": o.number})
+    await db.commit()
+    return {"deleted": deleted, "blocked": [], "count": len(deleted)}
+
+
+# ─── BULK DELETE: INVOICES ───────────────────────────────────────────────────
+@router.post("/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id.in_(data.ids))
+    )
+    invoices = res.unique().scalars().all()
+    found_ids = {i.id for i in invoices}
+    blocked = []
+    for iid in data.ids:
+        if iid not in found_ids:
+            blocked.append({"id": iid, "number": "?", "reason": "Invoice not found"})
+
+    # Bulk guard checks: any return or payment-allocation referencing
+    # these invoices blocks the whole batch.
+    return_counts = dict((await db.execute(
+        select(SalesReturn.invoice_id, func.count(SalesReturn.id))
+        .where(SalesReturn.invoice_id.in_(found_ids))
+        .group_by(SalesReturn.invoice_id)
+    )).all()) if found_ids else {}
+    payment_counts = dict((await db.execute(
+        select(CustomerPaymentAllocation.invoice_id, func.count(CustomerPaymentAllocation.id))
+        .join(CustomerPayment, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
+        .where(
+            CustomerPaymentAllocation.invoice_id.in_(found_ids),
+            or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)),  # noqa: E712
+        )
+        .group_by(CustomerPaymentAllocation.invoice_id)
+    )).all()) if found_ids else {}
+
+    for inv in invoices:
+        if return_counts.get(inv.id):
+            blocked.append({
+                "id": inv.id, "number": inv.number,
+                "reason": f"Invoice {inv.number} has {return_counts[inv.id]} return(s) — delete those first",
+            })
+        if payment_counts.get(inv.id):
+            blocked.append({
+                "id": inv.id, "number": inv.number,
+                "reason": f"Invoice {inv.number} has {payment_counts[inv.id]} payment(s) — delete those first",
+            })
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some invoices can't be deleted"})
+
+    # Reversal: restock per line. Aggregate add-back (we don't track which
+    # specific batch each sale line consumed). For tracked items, the
+    # operator can manually rebalance batches via the Items page if needed.
+    deleted = []
+    stock_restored = 0
+    customer_ids: set[str] = set()
+    for inv in invoices:
+        snapshot = {
+            "id": inv.id, "number": inv.number, "customer_id": inv.customer_id,
+            "customer_name": inv.customer_name, "total": inv.total,
+            "paid_amount": inv.paid_amount, "payment_mode": inv.payment_mode,
+            "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status),
+            "items": [{"id": li.id, "item_id": li.item_id, "name": li.name, "qty": li.qty, "price": li.price} for li in inv.line_items],
+        }
+        for li in inv.line_items:
+            if li.item_id and li.qty:
+                restored = await _restock_invoice_lines(db, inv, [li])
+                stock_restored += restored
+        # Orphan the parent SO (if this invoice was spawned from one): clear
+        # its dangling pointer so it becomes deletable + no "View invoice"
+        # link 404s. Do NOT revert status — an SO that was ever converted
+        # stays locked from editing / re-converting even after its invoice
+        # is deleted (2026-05-31 rule, mirrors PO→bill). Status stays
+        # `converted` (which _is_ the edit-blocking terminal state).
+        parent_so = (await db.execute(
+            select(SalesOrder).where(SalesOrder.converted_invoice_id == inv.id)
+        )).scalar_one_or_none()
+        if parent_so is not None:
+            parent_so.converted_invoice_id = None
+        _audit_delete(db, action="delete_invoice", ref=inv.number, snapshot=snapshot)
+        await db.delete(inv)
+        deleted.append({"id": inv.id, "number": inv.number})
+        if inv.customer_id:
+            customer_ids.add(inv.customer_id)
+    for cid in customer_ids:
+        await sync_customer_outstanding(db, cid)
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "stock_restored": stock_restored,
+    }
+
+
+# ─── BULK DELETE: SALES RETURNS ──────────────────────────────────────────────
+@router.post("/returns/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id.in_(data.ids))
+    )
+    returns = res.unique().scalars().all()
+    found_ids = {r.id for r in returns}
+    blocked = []
+    for rid in data.ids:
+        if rid not in found_ids:
+            blocked.append({"id": rid, "number": "?", "reason": "Return not found"})
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some returns can't be deleted"})
+
+    deleted = []
+    credit_refunded = 0.0
+    customer_ids: set[str] = set()
+    invoice_ids_to_recalc: set[str] = set()
+    for ret in returns:
+        if ret.status == SalesReturnStatus.void:
+            snapshot = {
+                "id": ret.id, "number": ret.number, "status": "void",
+            }
+            _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot)
+            await db.delete(ret)
+            deleted.append({"id": ret.id, "number": ret.number})
+            continue
+        snapshot = {
+            "id": ret.id, "number": ret.number, "invoice_id": ret.invoice_id,
+            "invoice_number": ret.invoice_number, "customer_id": ret.customer_id,
+            "refund_method": ret.refund_method, "credited_amount": ret.credited_amount,
+            "total": ret.total,
+        }
+        credit_refunded += await _reverse_sales_return_effects(db, ret)
+        if ret.customer_id:
+            customer_ids.add(ret.customer_id)
+        inv_cid = (await db.execute(
+            select(SaleInvoice.customer_id).where(SaleInvoice.id == ret.invoice_id)
+        )).scalar_one_or_none()
+        if inv_cid:
+            customer_ids.add(inv_cid)
+        _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot)
+        invoice_ids_to_recalc.add(ret.invoice_id)
+        await db.delete(ret)
+        deleted.append({"id": ret.id, "number": ret.number})
+    await db.flush()
+    for inv_id in invoice_ids_to_recalc:
+        await recalc_invoice_after_cn(db, inv_id)
+    for cid in customer_ids:
+        await sync_customer_outstanding(db, cid)
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "credit_refunded": round(credit_refunded, 2),
+    }
+
+
+# ─── BULK DELETE: CUSTOMER PAYMENTS ──────────────────────────────────────────
+@router.post("/payments/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(CustomerPayment.id.in_(data.ids))
+    )
+    payments = res.unique().scalars().all()
+    found_ids = {p.id for p in payments}
+    blocked = []
+    for pid in data.ids:
+        if pid not in found_ids:
+            blocked.append({"id": pid, "number": "?", "reason": "Payment not found"})
+    if blocked:
+        raise HTTPException(400, {"blocked": blocked, "message": "Some payments can't be deleted"})
+
+    deleted = []
+    credit_refunded = 0.0
+    customer_ids: set[str] = set()
+    for pay in payments:
+        snapshot = {
+            "id": pay.id, "number": pay.number, "customer_id": pay.customer_id,
+            "customer_name": pay.customer_name, "total_amount": pay.total_amount,
+            "payment_mode": pay.payment_mode, "credit_applied": pay.credit_applied,
+            "allocations": [{"invoice_id": a.invoice_id, "invoice_number": a.invoice_number, "amount": a.amount} for a in pay.allocations],
+        }
+        # Reversal #1: per allocation, decrement invoice.paid_amount + reset status.
+        for alloc in pay.allocations:
+            inv = (await db.execute(
+                select(SaleInvoice).where(SaleInvoice.id == alloc.invoice_id)
+            )).scalar_one_or_none()
+            if inv is not None:
+                new_paid = round(max(0.0, float(inv.paid_amount or 0) - float(alloc.amount or 0)), 2)
+                inv.paid_amount = new_paid
+                if new_paid <= 0:
+                    inv.status = "pending"
+                elif new_paid < float(inv.total or 0):
+                    inv.status = "partial"
+        # Reversal #2: credit-mode payment → refund the credit balance.
+        if pay.payment_mode == "credit" and pay.customer_id and (pay.total_amount or 0) > 0:
+            cust = (await db.execute(
+                select(Customer).where(Customer.id == pay.customer_id)
+            )).scalar_one_or_none()
+            if cust:
+                refund = float(pay.total_amount or 0)
+                await adjust_customer_credit(
+                    db,
+                    pay.customer_id,
+                    refund,
+                    entry_type="void_restore",
+                    source_type="customer_payment",
+                    source_ref=pay.id,
+                    source_number=pay.number,
+                )
+                credit_refunded += refund
+        # Reversal #3: payments that overpaid → revoke the credit_applied bump.
+        if pay.customer_id and (pay.credit_applied or 0) > 0:
+            cust = (await db.execute(
+                select(Customer).where(Customer.id == pay.customer_id)
+            )).scalar_one_or_none()
+            if cust:
+                revoke = float(pay.credit_applied or 0)
+                await adjust_customer_credit(
+                    db,
+                    pay.customer_id,
+                    -revoke,
+                    entry_type="void_revoke",
+                    source_type="customer_payment",
+                    source_ref=pay.id,
+                    source_number=pay.number,
+                )
+        _audit_delete(db, action="delete_payment", ref=pay.number, snapshot=snapshot)
+        await db.delete(pay)
+        deleted.append({"id": pay.id, "number": pay.number})
+        if pay.customer_id:
+            customer_ids.add(pay.customer_id)
+        for alloc in pay.allocations:
+            inv = (await db.execute(
+                select(SaleInvoice.customer_id).where(SaleInvoice.id == alloc.invoice_id)
+            )).scalar_one_or_none()
+            if inv:
+                customer_ids.add(inv)
+    for cid in customer_ids:
+        await sync_customer_outstanding(db, cid)
+    await db.commit()
+    return {
+        "deleted": deleted, "blocked": [], "count": len(deleted),
+        "credit_refunded": round(credit_refunded, 2),
+    }

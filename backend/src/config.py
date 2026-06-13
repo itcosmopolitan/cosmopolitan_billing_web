@@ -2,17 +2,24 @@
 Configuration management for Cosmopolitan Pro backend
 Uses pydantic-settings to load from environment variables with sensible defaults
 """
-from typing import List
-
-from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic import computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables"""
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+    )
+
     # ─── Database ──────────────────────────────────────────────────────────
-    database_url: str = "sqlite+aiosqlite:///./retailos.db"
+    # Override via DATABASE_URL in backend/.env (preferred for secrets).
+    database_url: str = (
+        "postgresql+asyncpg://avnadmin:AVNS_mgZmoo0HyTq_Bm_p-qR"
+        "@pg-39f9cb61-demverse5-501b.a.aivencloud.com:23800/defaultdb"
+    )
 
     # ─── API Configuration ─────────────────────────────────────────────────
     api_version: str = "v1"
@@ -25,18 +32,14 @@ class Settings(BaseSettings):
     # rename doesn't log every existing user out. Don't rebrand those.
 
     # ─── CORS Configuration ────────────────────────────────────────────────
-    cors_origins: List[str] = [
-        "http://localhost:3000",
-        "http://localhost:5173"
-    ]
+    # Comma-separated in .env — pydantic-settings cannot JSON-decode List[str]
+    # from a plain CSV string, so we store str and expose a parsed list below.
+    cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from comma-separated string or keep as list"""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+    @computed_field
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     # ─── JWT Configuration ────────────────────────────────────────────────
     jwt_secret_key: str = "your-secret-key-change-in-production"
@@ -58,10 +61,6 @@ class Settings(BaseSettings):
     # Disabled by default because materialized views require an external
     # refresh step. When false, dashboard APIs query source tables directly.
     dashboard_use_materialized_views: bool = False
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 # ─── Global Config Instance ────────────────────────────────────────────────
 _settings: Settings = None

@@ -7,19 +7,73 @@ requests — two callers could read the same value, both compute, both write,
 the second write silently overwriting the first. Each helper here issues
 ONE UPDATE statement so the database does the arithmetic atomically.
 
-These work on SQLite via aiosqlite; the WHERE clauses double as guards
+These work on SQLite and PostgreSQL; the WHERE clauses double as guards
 against going negative on stock or paying past the invoice total.
 """
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import asc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.batch_dates import _today
+from src.db_dialect import pg_invoice_status_case, scalar_min
 from src.models import Item, ItemBatch, ItemStock, SaleInvoice
+from src.routes._stock_ledger import get_physical_qty, record_stock_movement
+
+
+def _movement_for_batch_source(source_type: str) -> tuple[str, str]:
+    """Map batch source_type → (movement_type, source_type) for the ledger."""
+    st = (source_type or "manual").lower()
+    if st == "grn":
+        return "grn", "grn"
+    if st == "return":
+        return "return", "return"
+    if st == "transfer":
+        return "transfer", "transfer"
+    if st == "opening":
+        return "adjustment", "opening"
+    return "adjustment", st or "manual"
+
+
+async def clamp_stock_to_zero_with_ledger(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+    movement_type: str = "adjustment",
+    source_type: Optional[str] = None,
+    source_ref: Optional[str] = None,
+    created_by: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> int:
+    """Oversell path: zero aggregate stock and record the actual delta drained."""
+    current = await get_physical_qty(db, item_id=item_id, branch_id=branch_id)
+    if current <= 0:
+        return 0
+    await db.execute(
+        text(
+            "UPDATE item_stock SET quantity = 0 "
+            "WHERE item_id = :item_id AND branch_id = :branch_id"
+        ),
+        {"item_id": item_id, "branch_id": branch_id},
+    )
+    await record_stock_movement(
+        db,
+        item_id=item_id,
+        branch_id=branch_id,
+        delta=-current,
+        before_qty=current,
+        after_qty=0,
+        movement_type=movement_type,
+        source_type=source_type,
+        source_ref=source_ref,
+        notes=notes or "Oversell clamp to zero",
+        created_by=created_by,
+    )
+    return current
 
 
 async def adjust_stock_atomic(
@@ -28,6 +82,10 @@ async def adjust_stock_atomic(
     item_id: str,
     branch_id: str,
     delta: int,
+    movement_type: str = "adjustment",
+    source_type: Optional[str] = None,
+    source_ref: Optional[str] = None,
+    created_by: Optional[str] = None,
 ) -> int:
     """Apply `delta` to the (item_id, branch_id) stock row and return the new
     quantity. Creates the row if it doesn't exist (delta becomes the opening
@@ -53,7 +111,7 @@ async def adjust_stock_atomic(
                 "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
                 "VALUES (:id, :item_id, :branch_id, :delta) "
                 "ON CONFLICT(item_id, branch_id) DO UPDATE "
-                "SET quantity = quantity + :delta"
+                "SET quantity = item_stock.quantity + EXCLUDED.quantity"
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -96,7 +154,21 @@ async def adjust_stock_atomic(
             ItemStock.branch_id == branch_id,
         )
     )
-    return int(row.scalar() or 0)
+    after = int(row.scalar() or 0)
+    before = after - delta
+    await record_stock_movement(
+        db,
+        item_id=item_id,
+        branch_id=branch_id,
+        delta=delta,
+        before_qty=before,
+        after_qty=after,
+        movement_type=movement_type,
+        source_type=source_type,
+        source_ref=source_ref,
+        created_by=created_by,
+    )
+    return after
 
 
 async def set_stock_atomic(
@@ -147,10 +219,6 @@ async def is_tracked(db: AsyncSession, item_id: str) -> tuple[bool, bool]:
     return bool(r.batch_tracking), bool(r.expiry_tracking)
 
 
-def _today() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d")
-
-
 def _next_batch_number(item_id: str) -> str:
     """Auto-generated batch number when the vendor didn't supply one. Short
     + sortable: BCH-<short-uuid>. Persisted on the row so the UI is stable."""
@@ -180,11 +248,30 @@ async def add_batch_atomic(
     """
     if qty <= 0:
         return None
+    # 2026-05-31: reject duplicate operator-entered batch numbers within the
+    # same (item, branch). Scoped per-branch + active-only so it doesn't
+    # false-collide. Skipped when:
+    #   • batch_number is blank → we auto-generate a unique one below.
+    #   • source_type == "transfer" → transfer-receive legitimately recreates
+    #     a lot under its original number at the destination branch.
+    provided = (batch_number or "").strip()
+    if provided and source_type != "transfer":
+        existing = (await db.execute(
+            select(ItemBatch.batch_number).where(
+                ItemBatch.item_id == item_id,
+                ItemBatch.branch_id == branch_id,
+                ItemBatch.active == True,  # noqa: E712 - SQLAlchemy expression
+            )
+        )).scalars().all()
+        if any((bn or "").strip().lower() == provided.lower() for bn in existing):
+            raise ValueError(
+                f"Batch number '{provided}' already exists for this item at this branch"
+            )
     # If the caller forgot to flip batch_tracking but is still calling this
     # helper, set it implicitly — easier to opt-in than to error out on a
     # legitimate purchase flow.
     await db.execute(
-        text("UPDATE items SET batch_tracking = 1 WHERE id = :id"),
+        text("UPDATE items SET batch_tracking = true WHERE id = :id"),
         {"id": item_id},
     )
     batch = ItemBatch(
@@ -207,7 +294,16 @@ async def add_batch_atomic(
     db.add(batch)
     await db.flush()
     # Bump aggregate stock so the per-branch counter stays in sync.
-    await adjust_stock_atomic(db, item_id=item_id, branch_id=branch_id, delta=qty)
+    mt, st = _movement_for_batch_source(source_type)
+    await adjust_stock_atomic(
+        db,
+        item_id=item_id,
+        branch_id=branch_id,
+        delta=qty,
+        movement_type=mt,
+        source_type=st,
+        source_ref=source_ref,
+    )
     return batch
 
 
@@ -242,6 +338,10 @@ async def consume_batches_atomic(
     strategy: str = "fifo",
     preferred_batch_id: Optional[str] = None,
     explicit_allocation: Optional[list[dict]] = None,
+    movement_type: str = "sale",
+    source_type: Optional[str] = None,
+    source_ref: Optional[str] = None,
+    created_by: Optional[str] = None,
 ) -> list[dict]:
     """Deduct `qty` units across batches at (item_id, branch_id).
 
@@ -342,7 +442,16 @@ async def consume_batches_atomic(
                 "consumed": take,
                 "expiry_date": b.expiry_date,
             })
-        await adjust_stock_atomic(db, item_id=item_id, branch_id=branch_id, delta=-qty)
+        await adjust_stock_atomic(
+            db,
+            item_id=item_id,
+            branch_id=branch_id,
+            delta=-qty,
+            movement_type=movement_type,
+            source_type=source_type,
+            source_ref=source_ref,
+            created_by=created_by,
+        )
         return consumed
 
     # ── Modes 2 + 3: FIFO/FEFO with optional preferred ────────────────────
@@ -400,7 +509,16 @@ async def consume_batches_atomic(
         )
     # Mirror the deduction onto aggregate stock so untracked-consumer code
     # paths (POS subtotals, reports) keep working.
-    await adjust_stock_atomic(db, item_id=item_id, branch_id=branch_id, delta=-qty)
+    await adjust_stock_atomic(
+        db,
+        item_id=item_id,
+        branch_id=branch_id,
+        delta=-qty,
+        movement_type=movement_type,
+        source_type=source_type,
+        source_ref=source_ref,
+        created_by=created_by,
+    )
     return consumed
 
 
@@ -445,27 +563,89 @@ async def add_payment_atomic(
     *,
     invoice_id: str,
     amount: float,
-) -> Optional[tuple[float, float]]:
-    """Add `amount` to `sale_invoices.paid_amount`, clamped to `total`.
-    Returns (new_paid_amount, balance) or None if the invoice doesn't exist.
+    mode: Optional[str] = None,
+) -> Optional[tuple[float, float, float]]:
+    """Apply `amount` to `sale_invoices.paid_amount`.
 
-    The clamp + comparison happens in one statement; concurrent partial
-    payments can no longer race past the total.
+    Returns `(new_paid_amount, balance, credit_applied)` or None when the
+    invoice doesn't exist.
+
+      • new_paid_amount  — paid_amount after this call (clamped to `total`)
+      • balance          — `max(0, total - new_paid_amount)`
+      • credit_applied   — `max(0, amount - amount_actually_applied_to_invoice)`
+                            > 0 only when amount > balance. Caller decides
+                            what to do with it (route to customer credit or
+                            reject for walk-ins).
+
+    Optional `mode` — when provided, also updates `sale_invoices.payment_mode`
+    to this value in the SAME atomic UPDATE. The caller is expected to have
+    already validated `mode` against the allow-list (Pydantic Literal in
+    PaymentIn). We accept any string here to keep the helper unopinionated;
+    bad values would only land here if a caller bypassed Pydantic.
+
+    Why overwrite (not append)? The invoice has a single `payment_mode`
+    column — there's no payments-history table yet. The most useful semantic
+    for a single-value column is "method of the most recent payment", which
+    matches what the operator just did. For mixed-method invoices the column
+    will reflect the last action — full history is a Phase-N feature.
+
+    Sales Phase 1 (2026-05-23): the previous `MIN(total, paid + amt)` clamp
+    silently swallowed overpayment. We now clamp the invoice the same way
+    (so a single invoice never goes "over-paid") but ALSO report the excess
+    via `credit_applied`. The caller (`routes/sales.record_payment`) routes
+    excess to `customer.credit_balance` when a customer is set, or 400s
+    otherwise. The single-statement UPDATE keeps concurrent partial payments
+    race-safe on the invoice row.
+
+    2026-05-24: added `mode` parameter. Previously, paying a pending
+    invoice (created with `payment_mode=None`) left the mode column null
+    forever — the Sales > Invoices "Mode" cell would render as em-dash
+    even after the operator picked cash/upi/etc. via Record Payment.
     """
     if amount <= 0:
         return None
 
-    # MIN(total, paid_amount + :amt) prevents overpayment race.
-    await db.execute(
-        text(
-            "UPDATE sale_invoices "
-            "SET paid_amount = MIN(total, paid_amount + :amt), "
-            "    status = CASE WHEN MIN(total, paid_amount + :amt) >= total "
-            "                  THEN 'paid' ELSE 'partial' END "
-            "WHERE id = :id"
-        ),
-        {"amt": amount, "id": invoice_id},
+    # Read current state first — we need the pre-update paid+total to compute
+    # how much of `amount` actually landed on the invoice vs spilled into
+    # credit. Could be combined with the UPDATE via RETURNING in pg, but
+    # SQLite is the current target; two round-trips is acceptable.
+    pre = await db.execute(
+        select(SaleInvoice.paid_amount, SaleInvoice.total).where(SaleInvoice.id == invoice_id)
     )
+    pre_row = pre.first()
+    if not pre_row:
+        return None
+    pre_paid = float(pre_row.paid_amount or 0)
+    total = float(pre_row.total or 0)
+    pre_balance = max(0.0, total - pre_paid)
+    applied = min(amount, pre_balance)
+    credit_applied = round(max(0.0, amount - applied), 2)
+
+    # Clamp paid_amount atomically. SQLite accepts MIN(a,b) as a scalar;
+    # PostgreSQL needs LEAST(a,b) — MIN() there is aggregate-only.
+    clamp = scalar_min()
+    status_case = pg_invoice_status_case(clamp)
+    if mode is not None:
+        await db.execute(
+            text(
+                f"UPDATE sale_invoices "
+                f"SET paid_amount = {clamp}(total, paid_amount + :amt), "
+                f"    payment_mode = :mode, "
+                f"    status = {status_case} "
+                f"WHERE id = :id"
+            ),
+            {"amt": amount, "mode": mode, "id": invoice_id},
+        )
+    else:
+        await db.execute(
+            text(
+                f"UPDATE sale_invoices "
+                f"SET paid_amount = {clamp}(total, paid_amount + :amt), "
+                f"    status = {status_case} "
+                f"WHERE id = :id"
+            ),
+            {"amt": amount, "id": invoice_id},
+        )
     row = await db.execute(
         select(SaleInvoice.paid_amount, SaleInvoice.total).where(SaleInvoice.id == invoice_id)
     )
@@ -473,5 +653,4 @@ async def add_payment_atomic(
     if not r:
         return None
     paid = float(r.paid_amount or 0)
-    total = float(r.total or 0)
-    return paid, round(total - paid, 2)
+    return paid, round(total - paid, 2), credit_applied

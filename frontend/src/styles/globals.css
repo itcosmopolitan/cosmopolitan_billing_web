@@ -285,6 +285,24 @@ h4 { font-size: 14px; font-weight: 600; }
 
 select.form-input { cursor: pointer; }
 select.form-input:disabled { cursor: not-allowed; }
+
+/* 2026-05-24: hide the native number-input spinner buttons on every
+ * .form-input[type="number"]. Chrome's default spinner sits ~18px wide
+ * on the right of the field and chews into the visible text area —
+ * narrow columns (SO/Quote items table at 80px) ended up clipping 4-digit
+ * values like "1500" to "1C" because the C-shaped down-arrow was the
+ * only thing visible past the truncated digits. Operators don't use
+ * the spinner (faster to type the qty directly), and modern POS UIs
+ * universally hide it. Both vendor-prefixed (WebKit / Blink) and
+ * Firefox rules required. */
+.form-input[type="number"]::-webkit-outer-spin-button,
+.form-input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.form-input[type="number"] {
+  -moz-appearance: textfield;
+}
 textarea.form-input { resize: vertical; min-height: 80px; }
 
 .form-label {

@@ -210,3 +210,49 @@ async def allocate_number(
         counter.next_seq = seq + 1
         await db.flush()
         return number
+
+
+async def peek_next_number(
+    db: AsyncSession,
+    doc_type: str,
+    *,
+    branch_id: str | None = None,
+    when: datetime | None = None,
+) -> str:
+    """Render the next number without reserving it (for form previews)."""
+    cfg = await get_config(db, doc_type)
+    if not cfg:
+        year = (when or datetime.utcnow()).year
+        return f"{doc_type.upper()}-{year}-0001"
+
+    scope = cfg.scope or "per_branch"
+    seq = await get_counter_seq(db, doc_type, scope, branch_id)
+    return render_number(
+        prefix=cfg.prefix or "",
+        format_str=cfg.format or "{PREFIX}-{YYYY}-####",
+        seq=seq,
+        when=when,
+    )
+
+
+async def resolve_number(
+    db: AsyncSession,
+    *,
+    requested: str | None,
+    model,
+    allocate,
+) -> str:
+    """Use *requested* when provided (unique check), else call *allocate*()."""
+    from fastapi import HTTPException
+
+    if requested and str(requested).strip():
+        num = str(requested).strip()
+        cnt = (
+            await db.execute(
+                select(func.count()).select_from(model).where(model.number == num)
+            )
+        ).scalar() or 0
+        if cnt:
+            raise HTTPException(400, f"Document number '{num}' is already in use")
+        return num
+    return await allocate()

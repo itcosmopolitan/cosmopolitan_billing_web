@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
-import { itemsAPI, customersAPI, salesAPI } from '@/api'
+import { itemsAPI, customersAPI, salesAPI, settingsAPI } from '@/api'
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
@@ -15,6 +15,7 @@ import { Receipt } from '@/components/Receipt'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
+import POSRefundModal from './POSRefundModal'
 import PanelDragHandle from './PanelDragHandle'
 import {
   POS_STORAGE_SPLIT,
@@ -79,6 +80,8 @@ export default function POSPage() {
   // Active allocation editor target. `null` => modal closed. Shape:
   //   { item, batches, allocation }
   const [allocEditor, setAllocEditor] = useState(null)
+  const [allowOverselling, setAllowOverselling] = useState(true)
+  const [showRefund, setShowRefund] = useState(false)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -87,7 +90,12 @@ export default function POSPage() {
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const taxPricingMode = useAppStore((s) => s.taxPricingMode)
-  const { cart, customer, discountPct, discountAmt, heldBills, paymentMethod } = store
+  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod } = store
+  // Walk-in + unchecked-payment is the "operator forgot a customer on an
+  // unpaid invoice" case — there's no-one to follow up with for collection.
+  // We surface this exactly once per Complete-Sale attempt via this ref so
+  // the operator can either add a customer or confirm they really mean it.
+  const walkinUnpaidWarnedRef = useRef(false)
 
   // Guard route changes when the cart has unsaved lines. We stash the
   // resume-callback in state so a custom Modal (rather than window.confirm)
@@ -103,6 +111,15 @@ export default function POSPage() {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 250)
     return () => clearTimeout(t)
   }, [search])
+
+  useEffect(() => {
+    settingsAPI.getOrganisation()
+      .then((res) => {
+        const data = res?.data ?? res
+        setAllowOverselling(data?.allowOverselling !== false)
+      })
+      .catch(() => setAllowOverselling(true))
+  }, [])
 
   const updateCategories = (rows, reset = false) => {
     setCategories((prev) => {
@@ -287,6 +304,57 @@ export default function POSPage() {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
 
+    // Sales Phase 1 validation: when "Payment received?" is checked, a
+    // method MUST be picked. Backend would 422 on null mode + paid_amount
+    // anyway, but inline feedback is friendlier.
+    if (paymentReceived && !paymentMethod) {
+      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer / Credit)')
+      return
+    }
+
+    // 2026-05-25: credit-mode safety gates. The dropdown disables the
+    // option for walk-ins + when balance is insufficient, but a stale
+    // selection (e.g. operator picked credit then changed customers)
+    // could slip through. Re-check at submit.
+    if (paymentReceived && paymentMethod === 'credit') {
+      if (!customer?.id) {
+        toast.error('Credit mode requires a customer — pick one or change the method')
+        return
+      }
+      const avail = Number(customer.credit_balance || 0)
+      if (avail < total) {
+        toast.error(
+          `Insufficient credit — ₹${avail.toFixed(2)} available, ₹${total.toFixed(2)} needed`,
+        )
+        return
+      }
+    }
+
+    if (!allowOverselling) {
+      for (const line of cart) {
+        const stock = Number(line.availableStock ?? line.available_stock ?? 0)
+        if (line.qty > stock) {
+          toast.error(`Insufficient stock for ${line.name}: need ${line.qty}, available ${stock}`)
+          return
+        }
+      }
+    }
+
+    // Walk-in + unchecked = unpaid invoice with nobody to follow up with.
+    // Warn the operator exactly ONCE per attempt; the second click
+    // (within the same cart) lets the sale through. Reset the flag on
+    // cart clear so the next sale gets a fresh warning.
+    if (!paymentReceived && !customer?.id && !walkinUnpaidWarnedRef.current) {
+      walkinUnpaidWarnedRef.current = true
+      toast(
+        'Walk-in + unpaid: nobody to chase for collection. ' +
+        'Click again to confirm, or add a customer first.',
+        { icon: '⚠️', duration: 6000 },
+      )
+      return
+    }
+    walkinUnpaidWarnedRef.current = false
+
     setCompleting(true)
     try {
       const totals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
@@ -319,7 +387,10 @@ export default function POSPage() {
           }
         }),
         discount: disc,
-        payment_mode: paymentMethod,
+        // PR 1: null payment_mode → backend creates a pending (unpaid)
+        // invoice. Operator records payment later via Sales → Invoices.
+        payment_mode: paymentReceived ? paymentMethod : null,
+        origin: 'pos',
         notes: store.notes,
       })
 
@@ -331,7 +402,7 @@ export default function POSPage() {
         subtotal: sub,
         taxTotal: tax,
         discount: disc,
-        method: paymentMethod,
+        method: paymentReceived ? paymentMethod : null,
         items: cart.map(i => ({
           name: i.name,
           qty: i.qty,
@@ -349,6 +420,18 @@ export default function POSPage() {
       })
 
       setShowComplete(true)
+      // 2026-05-25: refresh local customer credit_balance after a
+      // credit-mode sale so the next cart sees the updated balance.
+      // Cheap optimistic update — backend already debited atomically.
+      if (paymentReceived && paymentMethod === 'credit' && customer?.id) {
+        const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
+        store.setCustomer({ ...customer, credit_balance: newBalance })
+        // Also refresh the master customers list so the dropdown reflects
+        // the new balance for subsequent cart selections.
+        setCustomers((prev) => prev.map((c) =>
+          c.id === customer.id ? { ...c, credit_balance: newBalance } : c
+        ))
+      }
       store.clearCart()
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
@@ -366,6 +449,70 @@ export default function POSPage() {
       setCompleting(false)
     }
   }
+
+  // Barcode / Enter-key handler: exact barcode or SKU match → add to cart + clear search.
+  // USB barcode scanners act as HID keyboards: they type the barcode then press Enter.
+  // Step 1: check already-loaded products (fast, no API call).
+  // Step 2: if not found, do a targeted API lookup for items not yet in the current page.
+  const handleBarcodeEnter = useCallback(async (term) => {
+    if (!term) return
+    const inMemory = products.find((p) => p.barcode === term || p.sku === term)
+    if (inMemory) {
+      const stock = inMemory.available_stock ?? 0
+      const inCart = cart.find((i) => i.id === inMemory.id)?.qty ?? 0
+      if (!allowOverselling && stock <= 0) {
+        toast.error(`${inMemory.name} is out of stock`)
+      } else if (!allowOverselling && inCart + 1 > stock) {
+        toast.error(`Only ${stock} available for ${inMemory.name}`)
+      } else {
+        store.addItem({
+          id: inMemory.id, name: inMemory.name, price: inMemory.selling_price,
+          taxRate: inMemory.tax_rate || 0, sku: inMemory.sku, emoji: inMemory.emoji,
+          costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
+          availableStock: stock, batchTracking: Boolean(inMemory.batch_tracking),
+          expiryTracking: Boolean(inMemory.expiry_tracking),
+        })
+        toast.success(inMemory.name, { duration: 800 })
+        setSearch('')
+      }
+      return
+    }
+    // Not in current page — query backend for an exact barcode/SKU match.
+    try {
+      const raw = await itemsAPI.list({
+        branch_id: activeBranch?.id || 'br-001',
+        search: term,
+        per_page: 10,
+        pos_mode: true,
+      })
+      const rows = unwrapPaged(raw).items || []
+      const exact = rows.find((p) => p.barcode === term || p.sku === term)
+      const hit = exact || (rows.length === 1 ? rows[0] : null)
+      if (hit) {
+        const stock = hit.available_stock ?? 0
+        const inCart = cart.find((i) => i.id === hit.id)?.qty ?? 0
+        if (!allowOverselling && stock <= 0) {
+          toast.error(`${hit.name} is out of stock`)
+        } else if (!allowOverselling && inCart + 1 > stock) {
+          toast.error(`Only ${stock} available for ${hit.name}`)
+        } else {
+          store.addItem({
+            id: hit.id, name: hit.name, price: hit.selling_price,
+            taxRate: hit.tax_rate || 0, sku: hit.sku, emoji: hit.emoji,
+            costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
+            availableStock: stock, batchTracking: Boolean(hit.batch_tracking),
+            expiryTracking: Boolean(hit.expiry_tracking),
+          })
+          toast.success(hit.name, { duration: 800 })
+          setSearch('')
+        }
+      } else {
+        toast.error(`No item found for "${term}"`)
+      }
+    } catch {
+      toast.error('Barcode lookup failed')
+    }
+  }, [products, activeBranch?.id, allowOverselling, cart, store])
 
   const cartTotals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
   const {
@@ -507,9 +654,25 @@ export default function POSPage() {
               <circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.4" />
               <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
             </svg>
-            <input ref={searchRef} className="form-input" style={{ paddingLeft: 32 }} placeholder="Search item, SKU, barcode… (F2)" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
+            <input
+              ref={searchRef}
+              className="form-input"
+              style={{ paddingLeft: 32 }}
+              placeholder="Search item, SKU, barcode… (F2)"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleBarcodeEnter(search.trim()) } }}
+              autoFocus
+            />
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={() => toast('Connect to USB barcode scanner')}>📷 Scan</button>
+          <button
+            className="btn btn-secondary btn-sm"
+            title="Focus input then scan barcode"
+            onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
+          >📷 Scan</button>
+          {can('invoices.create') && (
+            <button className="btn btn-secondary btn-sm" onClick={() => setShowRefund(true)}>↩ Refund</button>
+          )}
           <button className="btn btn-secondary btn-sm" style={{ position: 'relative' }} onClick={() => setShowHeld(true)}>
             ⏸ Hold
             {heldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{heldBills.length}</span>}
@@ -534,13 +697,19 @@ export default function POSPage() {
         {/* Products grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10 }}>
           {filtered.map((p) => {
-            const isOut = p.available_stock <= 0
-            const isLow = p.available_stock > 0 && p.available_stock <= (p.reorder_level || 10)
+            const stock = p.available_stock ?? 0
+            const inCart = cart.find((i) => i.id === p.id)?.qty ?? 0
+            const isOut = !allowOverselling && stock <= 0
+            const wouldExceed = !allowOverselling && inCart + 1 > stock
+            const isLow = stock > 0 && stock <= (p.reorder_level || 10)
             return (
               <div key={p.id}
                 onClick={() => {
-                  if (!isOut) {
-                    store.addItem({
+                  if (isOut || wouldExceed) {
+                    if (wouldExceed) toast.error(`Only ${stock} available for ${p.name}`)
+                    return
+                  }
+                  store.addItem({
                       id: p.id,
                       name: p.name,
                       price: p.selling_price,
@@ -549,14 +718,13 @@ export default function POSPage() {
                       emoji: p.emoji,
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
-                      availableStock: p.available_stock ?? 0,
+                      availableStock: stock,
                       // Carry batch-tracking flags forward so CartRow knows
                       // whether to render the source batch picker.
                       batchTracking: Boolean(p.batch_tracking),
                       expiryTracking: Boolean(p.expiry_tracking),
                     })
                     toast.success(p.name, { duration: 800 })
-                  }
                 }}
                 style={{
                   background: 'var(--bg-surface)', border: `1.5px solid ${isOut ? 'var(--border-subtle)' : 'var(--border-default)'}`,
@@ -569,7 +737,9 @@ export default function POSPage() {
                 <div style={{ fontSize: 28, lineHeight: 1.3 }}>{p.emoji || '📦'}</div>
                 <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginTop: 7, lineHeight: 1.3 }}>{p.name}</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}>{fmt(p.selling_price)}</div>
-                <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{isOut ? 'Out of stock' : `${p.available_stock} in stock`}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {isOut ? 'Out of stock' : `${stock} in stock${inCart > 0 ? ` (${inCart} in cart)` : ''}`}
+                </div>
               </div>
             )
           })}
@@ -658,6 +828,20 @@ export default function POSPage() {
             <option value="">Walk-in Customer</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          {/* 2026-05-25: surface available credit when a customer is
+              picked. Single source of truth — the credit option in the
+              method dropdown also shows the same number, but the chip is
+              always visible regardless of payment-received state. */}
+          {customer?.id && Number(customer.credit_balance || 0) > 0 && (
+            <span style={{
+              fontSize: 11, padding: '3px 8px',
+              borderRadius: 10, background: 'rgba(46,184,92,0.12)',
+              color: 'var(--green)', fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }} title="Available customer credit (overpayments + refunded returns)">
+              💰 ₹{Number(customer.credit_balance || 0).toFixed(2)} credit
+            </span>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={() => store.clearCart()} style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>✕</button>
         </div>
 
@@ -702,7 +886,16 @@ export default function POSPage() {
                       key={item.id}
                       item={item}
                       branchId={activeBranch?.id}
-                      onQtyChange={(qty) => store.updateQty(item.id, qty)}
+                      onQtyChange={(qty) => {
+                        if (!allowOverselling) {
+                          const stock = Number(item.availableStock ?? item.available_stock ?? 0)
+                          if (qty > stock) {
+                            toast.error(`Only ${stock} available for ${item.name}`)
+                            return
+                          }
+                        }
+                        store.updateQty(item.id, qty)
+                      }}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
@@ -770,14 +963,86 @@ export default function POSPage() {
             <span style={{ fontFamily: 'DM Mono', color: 'var(--accent)' }}>{fmt(total)}</span>
           </div>
 
-          {/* Payment methods */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
-            {[{ id: 'cash', icon: '💵', label: 'Cash' }, { id: 'card', icon: '💳', label: 'Card' }, { id: 'upi', icon: '📱', label: 'UPI' }, { id: 'credit', icon: '📋', label: 'Credit' }].map((m) => (
-              <button key={m.id} onClick={() => store.setPaymentMethod(m.id)}
-                style={{ padding: '8px', borderRadius: 7, border: `1.5px solid ${paymentMethod === m.id ? 'var(--accent)' : 'var(--border-default)'}`, background: paymentMethod === m.id ? 'var(--accent-bg)' : 'transparent', color: paymentMethod === m.id ? 'var(--accent)' : 'var(--text-muted)', fontSize: 12.5, cursor: 'pointer', fontFamily: 'DM Sans,sans-serif', fontWeight: 500, transition: 'all 0.12s' }}>
-                {m.icon} {m.label}
-              </button>
-            ))}
+          {/* Sales Phase 1 (2026-05-23): two-step payment UX. The checkbox
+              is the explicit "did money change hands?" gate; the method
+              dropdown only appears + matters when checked. Unchecked →
+              backend creates a pending invoice; operator records payment
+              later from Sales → Invoices. See
+              ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md. */}
+          <div style={{ marginBottom: 10 }}>
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 10px',
+              border: `1.5px solid ${paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
+              background: paymentReceived ? 'var(--accent-bg)' : 'transparent',
+              borderRadius: 7, cursor: 'pointer',
+              fontSize: 13, fontWeight: 500,
+              color: paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
+              transition: 'all 0.12s',
+            }}>
+              <input
+                type="checkbox"
+                checked={paymentReceived}
+                onChange={(e) => store.setPaymentReceived(e.target.checked)}
+                style={{ accentColor: 'var(--accent)' }}
+              />
+              <span>Payment received?</span>
+            </label>
+            {paymentReceived && (
+              <>
+                <select
+                  className="form-input"
+                  value={paymentMethod || ''}
+                  onChange={(e) => store.setPaymentMethod(e.target.value || null)}
+                  style={{ marginTop: 6, fontSize: 13 }}
+                >
+                  <option value="" disabled>Select method…</option>
+                  <option value="cash">💵 Cash</option>
+                  <option value="card">💳 Card</option>
+                  <option value="upi">📱 UPI</option>
+                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                  {/* 2026-05-25: credit mode. Hidden entirely for walk-ins
+                      (no customer → no credit account). When a customer is
+                      picked, disabled when their available credit < cart
+                      total. Backend rejects with 400 on the same condition
+                      as a safety net. */}
+                  {customer?.id && (
+                    <option
+                      value="credit"
+                      disabled={Number(customer.credit_balance || 0) < total}
+                    >
+                      🏦 Customer Credit (₹{Number(customer.credit_balance || 0).toFixed(2)} available)
+                      {Number(customer.credit_balance || 0) < total ? ' — insufficient' : ''}
+                    </option>
+                  )}
+                </select>
+                {/* Inline warning when operator picked credit but it's
+                    short of the cart total. We block the sale at submit
+                    time too — this is just early feedback. */}
+                {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
+                  <div style={{
+                    marginTop: 6, padding: '8px 10px',
+                    border: '1px solid var(--amber)', borderRadius: 6,
+                    background: 'rgba(245,166,35,0.08)',
+                    fontSize: 11.5, color: 'var(--amber)', lineHeight: 1.5,
+                  }}>
+                    ⚠ Available credit (₹{Number(customer.credit_balance || 0).toFixed(2)}) is
+                    less than the cart total (₹{Number(total).toFixed(2)}). Pick a different
+                    method or reduce the cart. Split-payment with credit isn&apos;t supported.
+                  </div>
+                )}
+              </>
+            )}
+            {!paymentReceived && (
+              <div style={{
+                marginTop: 6, padding: '6px 10px',
+                fontSize: 11, color: 'var(--text-muted)',
+                lineHeight: 1.5,
+              }}>
+                Sale will be recorded as <strong>pending</strong>. Record payment
+                from Sales → Invoices when the customer pays.
+              </div>
+            )}
           </div>
 
           <button className="btn btn-primary btn-xl" style={{ width: '100%', justifyContent: 'center', fontSize: 15, opacity: completing ? 0.6 : 1, cursor: completing ? 'not-allowed' : 'pointer' }} onClick={handleComplete} disabled={completing}>
@@ -886,6 +1151,13 @@ export default function POSPage() {
           />
         )}
       </Modal>
+
+      <POSRefundModal
+        open={showRefund}
+        onClose={() => setShowRefund(false)}
+        branchId={activeBranch?.id}
+        onSuccess={refreshProductStock}
+      />
 
     </div>
   )
