@@ -140,8 +140,12 @@ class Branch(Base):
     gstin      = Column(String)
     active     = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Cash Control settings
+    cash_opening_mode       = Column(String, default="carry_forward")  # carry_forward | fixed
+    cash_fixed_float        = Column(Float, default=0)
+    cash_variance_threshold = Column(Float, default=500)
 
-    stock      = relationship("ItemStock", back_populates="branch")
+    stock        = relationship("ItemStock", back_populates="branch")
     item_configs = relationship("ItemBranchConfig", back_populates="branch")
     cash_entries = relationship("CashEntry", back_populates="branch")
 
@@ -1184,19 +1188,71 @@ class TransferLineItem(Base):
 # ─── Cash Entry ───────────────────────────────────────────────────────────────
 class CashEntry(Base):
     __tablename__ = "cash_entries"
-    id          = Column(String, primary_key=True)
-    branch_id   = Column(String, ForeignKey("branches.id"), nullable=False)
-    type        = Column(String, nullable=False)  # in | out
-    category    = Column(String)
-    description = Column(String, nullable=False)
-    amount      = Column(Float, nullable=False)
-    ref         = Column(String)
-    date        = Column(String, nullable=False)
-    time        = Column(String)
-    by          = Column(String)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    id           = Column(String, primary_key=True)
+    branch_id    = Column(String, ForeignKey("branches.id"), nullable=False)
+    type         = Column(String, nullable=False)   # in | out
+    category     = Column(String)
+    description  = Column(String, nullable=False)
+    amount       = Column(Float, nullable=False)
+    ref          = Column(String)
+    date         = Column(String, nullable=False)   # YYYY-MM-DD
+    time         = Column(String)                   # HH:MM
+    by           = Column(String)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    # Cash Control Phase 2
+    entry_number = Column(String)                   # CE-YYMMDD-seq
+    source_type  = Column(String, default="manual") # manual | sale_invoice | customer_payment
+                                                    # | sale_return | purchase_payment | vendor_advance
+    source_id    = Column(String)                   # id of the originating document (nullable for manual)
+    is_system    = Column(Boolean, default=False)   # True = auto-generated; cannot be deleted
+    is_voided    = Column(Boolean, default=False)
+    voided_at    = Column(DateTime)
+    voided_by    = Column(String)
+    void_reason  = Column(Text)
 
     branch = relationship("Branch", back_populates="cash_entries")
+
+
+# ─── Cash Day Close ────────────────────────────────────────────────────────────
+class CashDayClose(Base):
+    __tablename__ = "cash_day_closes"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "date", name="uq_cash_day_close_branch_date"),
+    )
+    id               = Column(String, primary_key=True)
+    branch_id        = Column(String, ForeignKey("branches.id"), nullable=False)
+    date             = Column(String, nullable=False)           # YYYY-MM-DD
+    opening_balance  = Column(Float, nullable=False, default=0)
+    total_cash_in    = Column(Float, nullable=False, default=0)
+    total_cash_out   = Column(Float, nullable=False, default=0)
+    expected_balance = Column(Float, nullable=False, default=0) # opening + in - out
+    physical_count   = Column(Float, nullable=False)
+    variance         = Column(Float, nullable=False, default=0) # physical - expected
+    variance_reason  = Column(Text)
+    notes            = Column(Text)
+    closed_by        = Column(String, nullable=False)
+    closed_by_id     = Column(String, ForeignKey("users.id"), nullable=True)
+    closed_at        = Column(DateTime, nullable=False, default=datetime.utcnow)
+    unlocked_by      = Column(String)
+    unlocked_at      = Column(DateTime)
+    unlock_reason    = Column(Text)
+    is_locked        = Column(Boolean, default=True)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+    branch = relationship("Branch")
+
+
+# ─── Cash Category ────────────────────────────────────────────────────────────
+class CashCategory(Base):
+    __tablename__ = "cash_categories"
+    id         = Column(String, primary_key=True)
+    org_id     = Column(String, ForeignKey("organisations.id"), nullable=False)
+    name       = Column(String, nullable=False)
+    direction  = Column(String, nullable=False)  # in | out | both
+    is_system  = Column(Boolean, default=False)
+    active     = Column(Boolean, default=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AdjustmentRequest(Base):

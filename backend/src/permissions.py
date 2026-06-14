@@ -31,7 +31,7 @@ PERMISSIONS: dict[str, list[str]] = {
     "adjustments": ["view", "create", "approve", "delete"],
     "customers": ["view", "create", "edit", "delete"],
     "vendors":   ["view", "create", "edit", "delete"],
-    "cash":      ["view", "entry", "edit", "close", "export"],
+    "cash":      ["view", "entry", "edit", "close", "export", "unlock", "monitor"],
     "reports":   ["view", "export"],
     "users":     ["view", "create", "edit", "delete", "manage_roles"],
     "settings":  ["view", "edit"],

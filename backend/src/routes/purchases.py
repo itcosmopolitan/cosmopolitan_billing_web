@@ -47,6 +47,7 @@ from src.routes._lifecycle import (
     sync_vendor_outstanding,
 )
 from src.routes._payment_ledger import record_vendor_payment, void_payment_record
+from src.routes._cash_ledger import record_cash_out, void_cash_entry as void_cash_for_payment
 from src.routes._vendor_credit_ledger import adjust_vendor_credit
 from src.routes._atomic import (
     add_batch_atomic,
@@ -464,6 +465,19 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
             amount=round(paid_amount, 2),
         ))
         await record_vendor_payment(db, bpay)
+        if data.payment_mode == "cash":
+            await record_cash_out(
+                db,
+                branch_id=bill.branch_id or "",
+                amount=round(paid_amount, 2),
+                date=data.date or today,
+                description=f"Bill payment {bill_num}",
+                category="Purchase — Cash Payment",
+                source_type="purchase_payment",
+                source_id=bpay.id,
+                source_ref=bill_num,
+                recorded_by="Staff",
+            )
 
     if bill.vendor_id and bill_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
@@ -567,6 +581,19 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         )
 
     await record_vendor_payment(db, pay)
+    if data.mode == "cash":
+        await record_cash_out(
+            db,
+            branch_id=pay.branch_id or "",
+            amount=float(data.amount),
+            date=pay.date,
+            description=f"Payment on {b.number}",
+            category="Purchase — Cash Payment",
+            source_type="purchase_payment",
+            source_id=pay.id,
+            source_ref=pay.number,
+            recorded_by=pay.created_by or "Staff",
+        )
     await sync_vendor_outstanding(db, b.vendor_id)
 
     await db.commit()
@@ -850,6 +877,14 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
         source_document_id=pay.id,
         voided_at=pay.voided_at,
     )
+    if pay.payment_mode == "cash":
+        await void_cash_for_payment(
+            db,
+            source_type="purchase_payment",
+            source_id=pay.id,
+            voided_by="Staff",
+            reason=f"Vendor payment {pay.number} voided",
+        )
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action="void_vendor_payment",
@@ -999,6 +1034,19 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         )
 
     await record_vendor_payment(db, payment)
+    if data.payment_mode == "cash":
+        await record_cash_out(
+            db,
+            branch_id=data.branch_id or "",
+            amount=round(total_amount, 2),
+            date=data.date or today,
+            description=f"Vendor payment {pay_num}",
+            category="Purchase — Cash Payment",
+            source_type="purchase_payment",
+            source_id=payment.id,
+            source_ref=pay_num,
+            recorded_by=data.created_by or "Staff",
+        )
     await sync_vendor_outstanding(db, data.vendor_id)
 
     await db.commit()
