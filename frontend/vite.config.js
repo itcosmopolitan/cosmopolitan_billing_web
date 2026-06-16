@@ -14,7 +14,7 @@ export default defineConfig({
     // is started with `--host 0.0.0.0` (IPv4-only). Node 18's http client has
     // no IPv4 fallback (happy-eyeballs landed in Node 20), so every proxied
     // `/api/*` call dies with ECONNREFUSED and Vite returns 500 text/plain.
-    proxy: { '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true } },
+    proxy: { '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true, ws: true } },
   },
   build: {
     chunkSizeWarningLimit: 600,
