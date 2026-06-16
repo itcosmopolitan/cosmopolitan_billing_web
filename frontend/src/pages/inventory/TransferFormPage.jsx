@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { transfersAPI, itemsAPI } from '@/api'
@@ -85,9 +85,12 @@ export default function TransferFormPage({ mode = 'create' }) {
       setItemsLoading(false)
     }
   }, [])
-
+  const lastLoadedFromBranchRef = useRef(null)
   useEffect(() => {
-    loadItems(form.from_branch_id)
+    const branchId = form.from_branch_id
+    if (lastLoadedFromBranchRef.current === branchId) return
+    lastLoadedFromBranchRef.current = branchId
+    loadItems(branchId)
   }, [form.from_branch_id, loadItems])
 
   useEffect(() => {

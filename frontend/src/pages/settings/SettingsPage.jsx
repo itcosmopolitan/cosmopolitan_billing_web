@@ -107,10 +107,10 @@ export default function SettingsPage() {
 
   const loadAllBranches = async () => {
     try {
-      const data = await fetchAllList(branchesAPI.list).catch(() => [])
-      setBranches(data || [])
-      setStoreBranches(data || [])
-      return data || []
+      const storeBranches = useAppStore.getState().branches
+      setBranches(storeBranches)
+      setStoreBranches(storeBranches)
+      return storeBranches || []
     } catch (err) {
       console.error(err)
       toast.error('Failed to load branches')
@@ -127,12 +127,6 @@ export default function SettingsPage() {
     if (effective) setLimit((prev) => (prev === effective ? prev : effective))
   }
 
-  const loadPermCatalog = async () => {
-    if (Object.keys(permCatalog).length > 0) return
-    try {
-      setPermCatalog(await permissionsAPI.catalog().catch(() => ({})))
-    } catch (e) { console.error(e) }
-  }
 
   const openNewRole = () => { setEditingRole(null); setShowRoleEditor(true) }
   const openEditRole = (role) => { setEditingRole(role); setShowRoleEditor(true) }
@@ -217,7 +211,6 @@ export default function SettingsPage() {
     ;(async () => {
       try {
         setLoading(true)
-        await loadPermCatalog()
         const raw = await rolesAPI.list({ skip: roleSkip, limit: roleLimit })
         const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
         if (!cancelled) {

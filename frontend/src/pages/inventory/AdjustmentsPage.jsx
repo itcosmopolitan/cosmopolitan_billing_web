@@ -12,6 +12,10 @@ import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import RowActionsMenu from './RowActionsMenu'
 
+// In-flight request cache to avoid duplicate identical fetches across
+// remounts (helps reduce dev StrictMode double-calls showing in Network).
+const inFlightAdjustmentsRequests = new Map()
+
 const TAB_DEFS = [
   { id: 'all',      label: 'All' },
   { id: 'pending',  label: 'Pending Approval' },
@@ -91,51 +95,56 @@ export default function AdjustmentsPage() {
   const canDelete = can('adjustments.delete')
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
+  const storeBranches = useAppStore((s) => s.branches)
+  const lastLoadItemsBranchRef = useRef(null)
 
   useEffect(() => {
-    fetchAllList(branchesAPI.list)
-      .then((rows) => setBranches(rows || []))
-      .catch(() => setBranches([]))
-  }, [])
+    setBranches(storeBranches)
+  }, [storeBranches])
 
   useEffect(() => {
+    const key = `${tab}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
     let cancelled = false
-    ;(async () => {
+    const run = async () => {
       try {
         setListLoading(true)
-        const raw = await adjustmentsAPI.list({
-          skip,
-          limit,
-          sort_by: sortBy,
-          sort_order: sortOrder,
-          status: tab === 'all' ? undefined : tab,
-        })
+        let promise = inFlightAdjustmentsRequests.get(key)
+        if (!promise) {
+          promise = Promise.all([
+            adjustmentsAPI.list({
+              skip,
+              limit,
+              sort_by: sortBy,
+              sort_order: sortOrder,
+              status: tab === 'all' ? undefined : tab,
+            }),
+            summariesAPI.get('adjustments'),
+          ])
+          inFlightAdjustmentsRequests.set(key, promise)
+        }
+        const [raw, summaryData] = await promise
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setRequests(items || [])
           setListTotal(total)
+          setSummary(summaryData)
         }
       } catch (err) {
         console.error(err)
         if (!cancelled) {
           setRequests([])
           setListTotal(0)
+          setSummary(null)
           toast.error('Failed to load adjustment requests')
         }
       } finally {
         if (!cancelled) setListLoading(false)
+        inFlightAdjustmentsRequests.delete(key)
       }
-    })()
+    }
+    run()
     return () => { cancelled = true }
   }, [tab, skip, limit, sortBy, sortOrder, listVersion])
-
-  useEffect(() => {
-    let cancelled = false
-    summariesAPI.get('adjustments')
-      .then((data) => { if (!cancelled) setSummary(data) })
-      .catch(() => { if (!cancelled) setSummary(null) })
-    return () => { cancelled = true }
-  }, [listVersion])
 
   useEffect(() => {
     setSelectedIds(new Set())
@@ -256,7 +265,10 @@ export default function AdjustmentsPage() {
 
   useEffect(() => {
     if (!showNew) return
-    loadItems(newForm.branch_id)
+    const branchId = newForm.branch_id
+    if (lastLoadItemsBranchRef.current === branchId) return
+    lastLoadItemsBranchRef.current = branchId
+    loadItems(branchId)
   }, [showNew, newForm.branch_id, loadItems])
 
   const picked = items.find((x) => x.id === newForm.item_id)

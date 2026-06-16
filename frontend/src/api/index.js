@@ -8,6 +8,26 @@ export const api = axios.create({
   timeout: 15_000,
 })
 
+// Global in-flight cache for GET requests to avoid duplicate identical
+// GET requests (helps during React StrictMode double-mount in dev).
+const _originalGet = api.get.bind(api)
+const _inFlightGetRequests = new Map()
+api.get = (url, config) => {
+  // Create a stable key from url + sorted params
+  const params = (config && config.params) ? config.params : undefined
+  let key
+  try {
+    key = `${url}|${params ? JSON.stringify(params) : ''}`
+  } catch (e) {
+    key = url
+  }
+  const existing = _inFlightGetRequests.get(key)
+  if (existing) return existing
+  const promise = _originalGet(url, config).finally(() => _inFlightGetRequests.delete(key))
+  _inFlightGetRequests.set(key, promise)
+  return promise
+}
+
 // Request interceptor — attach token
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('retailos_token')

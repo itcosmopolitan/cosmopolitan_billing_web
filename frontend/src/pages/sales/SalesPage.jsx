@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel } from '@/components/ui'
@@ -318,24 +319,11 @@ export default function SalesPage() {
   }, [actionBusy])
   const [salesListVersion, setSalesListVersion] = useState(0)
   const [quoteListVersion, setQuoteListVersion] = useState(0)
-
-  const loadBranches = useCallback(async () => {
-    try {
-      const raw = await branchesAPI.list({ skip: 0, limit: 500 }).catch(() => ({}))
-      const { items } = unwrapPaged(raw)
-      setBranches(items || [])
-    } catch {
-      setBranches([])
-    }
-  }, [])
-
-  const fetchData = useCallback(async () => {
-    await loadBranches()
-  }, [loadBranches])
+  const storeBranches = useAppStore((s) => s.branches)
 
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    setBranches(storeBranches)
+  }, [storeBranches])
 
   useEffect(() => {
     setInvSkip(0)
