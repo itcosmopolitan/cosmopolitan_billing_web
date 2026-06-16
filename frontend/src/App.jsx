@@ -29,7 +29,8 @@ import BillFormPage from '@/pages/purchases/BillFormPage'
 import BillEditPage from '@/pages/purchases/BillEditPage'
 import CustomersPage from '@/pages/customers/CustomersPage'
 import VendorsPage   from '@/pages/vendors/VendorsPage'
-import CashPage      from '@/pages/cash/CashPage'
+import CashPage        from '@/pages/cash/CashPage'
+import CashMonitorPage from '@/pages/cash/CashMonitorPage'
 import ReportsPage   from '@/pages/reports/ReportsPage'
 import SettingsPage  from '@/pages/settings/SettingsPage'
 import AuditPage     from '@/pages/settings/AuditPage'
@@ -76,7 +77,8 @@ function AppShell() {
             <Route path="/purchases/grns/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="grn" /></RequirePerm>} />
             <Route path="/customers"  element={<RequirePerm perm="customers.view"><CustomersPage /></RequirePerm>} />
             <Route path="/vendors"    element={<RequirePerm perm="vendors.view"><VendorsPage /></RequirePerm>} />
-            <Route path="/cash"       element={<RequirePerm perm="cash.view"><CashPage /></RequirePerm>} />
+            <Route path="/cash"         element={<RequirePerm perm="cash.view"><CashPage /></RequirePerm>} />
+            <Route path="/cash/monitor" element={<RequirePerm perm="cash.monitor"><CashMonitorPage /></RequirePerm>} />
             <Route path="/reports"    element={<RequirePerm perm="reports.view"><ReportsPage /></RequirePerm>} />
             <Route path="/settings"   element={<RequirePerm perm="settings.view"><SettingsPage /></RequirePerm>} />
             <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditPage /></RequirePerm>} />

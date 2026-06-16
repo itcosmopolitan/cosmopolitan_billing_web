@@ -45,6 +45,7 @@ from src.routes._lifecycle import (
 from src.routes._credit_ledger import adjust_customer_credit
 from src.routes._numbering import next_sale_invoice_number
 from src.routes._payment_ledger import record_customer_payment, void_payment_record
+from src.routes._cash_ledger import record_cash_in, record_cash_out, void_cash_entry as void_cash_for_payment
 from src.routes._stock_ledger import (
     fulfil_reservations,
     get_allow_overselling,
@@ -916,6 +917,19 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
             amount=total,
         ))
         await record_customer_payment(db, pos_pay)
+        if data.payment_mode == "cash":
+            await record_cash_in(
+                db,
+                branch_id=data.branch_id,
+                amount=total,
+                date=today,
+                description=f"Sale {inv.number}",
+                category="Sale — Cash",
+                source_type="sale_invoice",
+                source_id=pos_pay.id,
+                source_ref=inv.number,
+                recorded_by=data.cashier or "POS",
+            )
 
     if data.customer_id and status in ("pending", "partial"):
         await sync_customer_outstanding(db, data.customer_id)
@@ -1107,6 +1121,19 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
         amount=round(float(data.amount), 2),
     ))
     await record_customer_payment(db, pay)
+    if data.mode == "cash":
+        await record_cash_in(
+            db,
+            branch_id=pay.branch_id or "",
+            amount=float(data.amount),
+            date=pay.date,
+            description=f"Payment on {pre_row.number}",
+            category="Sale — Cash",
+            source_type="customer_payment",
+            source_id=pay.id,
+            source_ref=pay.number,
+            recorded_by=pay.created_by or "Staff",
+        )
 
     # 2026-05-25: debit credit balance for credit-mode payments. Same
     # pattern as create_invoice — the validation above guaranteed
@@ -1309,6 +1336,14 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
         source_document_id=pay.id,
         voided_at=pay.voided_at,
     )
+    if pay.payment_mode == "cash":
+        await void_cash_for_payment(
+            db,
+            source_type="customer_payment",
+            source_id=pay.id,
+            voided_by="Staff",
+            reason=f"Payment {pay.number} voided",
+        )
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action="void_payment",
@@ -1483,6 +1518,19 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             amount=round(float(a.amount), 2),
         ))
     await record_customer_payment(db, payment)
+    if data.payment_mode == "cash":
+        await record_cash_in(
+            db,
+            branch_id=data.branch_id or "",
+            amount=round(total_amount, 2),
+            date=data.date or today,
+            description=f"Payment {pay_num}",
+            category="Sale — Cash",
+            source_type="customer_payment",
+            source_id=payment.id,
+            source_ref=pay_num,
+            recorded_by=data.created_by or "Staff",
+        )
 
     # 2026-05-30: credit-mode debit. The settle loop above marked the
     # invoices paid; now draw the total down from credit_balance + audit.
@@ -3551,6 +3599,20 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
                 risk="low",
                 ip_address=None,
             ))
+
+    if method == "cash" and credited > 0:
+        await record_cash_out(
+            db,
+            branch_id=inv.branch_id,
+            amount=credited,
+            date=ret.date,
+            description=f"Refund for return {ret.number} on {inv.number}",
+            category="Sale Return — Refund",
+            source_type="sale_return",
+            source_id=ret.id,
+            source_ref=ret.number,
+            recorded_by=data.created_by or "Staff",
+        )
 
     _recompute_invoice_status(inv)
 

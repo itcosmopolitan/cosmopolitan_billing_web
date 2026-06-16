@@ -343,6 +343,19 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("vendor_payments", "credit_applied", "FLOAT DEFAULT 0 NOT NULL"),
     ("vendor_returns", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("vendor_returns", "voided_at", "VARCHAR"),
+    # Cash Control (2026-06-14): per-branch petty cash settings.
+    ("branches", "cash_opening_mode",       "VARCHAR DEFAULT 'carry_forward'"),
+    ("branches", "cash_fixed_float",        "FLOAT DEFAULT 0"),
+    ("branches", "cash_variance_threshold", "FLOAT DEFAULT 500"),
+    # Cash Control (2026-06-14): extended CashEntry tracking columns.
+    ("cash_entries", "entry_number", "VARCHAR"),
+    ("cash_entries", "source_type",  "VARCHAR DEFAULT 'manual'"),
+    ("cash_entries", "source_id",    "VARCHAR"),
+    ("cash_entries", "is_system",    "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("cash_entries", "is_voided",    "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("cash_entries", "voided_at",    "VARCHAR"),
+    ("cash_entries", "voided_by",    "VARCHAR"),
+    ("cash_entries", "void_reason",  "TEXT"),
 ]
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.

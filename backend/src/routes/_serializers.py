@@ -118,6 +118,7 @@ def serialize_cash_entry(e) -> dict:
     return {
         "id": e.id,
         "branch_id": e.branch_id,
+        "entry_number": getattr(e, "entry_number", None),
         "type": e.type,
         "category": e.category,
         "description": e.description,
@@ -126,6 +127,38 @@ def serialize_cash_entry(e) -> dict:
         "date": e.date,
         "time": e.time,
         "by": e.by,
+        "source_type": getattr(e, "source_type", "manual"),
+        "source_id": getattr(e, "source_id", None),
+        "is_system": bool(getattr(e, "is_system", False)),
+        "is_voided": bool(getattr(e, "is_voided", False)),
+        "voided_by": getattr(e, "voided_by", None),
+        "void_reason": getattr(e, "void_reason", None),
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+def serialize_cash_day_close(c) -> dict:
+    if c is None:
+        return None
+    return {
+        "id": c.id,
+        "branch_id": c.branch_id,
+        "date": c.date,
+        "opening_balance": c.opening_balance,
+        "total_cash_in": c.total_cash_in,
+        "total_cash_out": c.total_cash_out,
+        "expected_balance": c.expected_balance,
+        "physical_count": c.physical_count,
+        "variance": c.variance,
+        "variance_reason": c.variance_reason,
+        "notes": c.notes,
+        "closed_by": c.closed_by,
+        "closed_by_id": c.closed_by_id,
+        "closed_at": c.closed_at.isoformat() if c.closed_at else None,
+        "is_locked": c.is_locked,
+        "unlocked_by": c.unlocked_by,
+        "unlocked_at": c.unlocked_at.isoformat() if c.unlocked_at else None,
+        "unlock_reason": c.unlock_reason,
     }
 
 
