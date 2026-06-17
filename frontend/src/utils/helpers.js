@@ -3,13 +3,13 @@ import { format, formatDistanceToNow, parseISO } from 'date-fns'
 // ─── Currency formatting ──────────────────────────────────────────────────────
 export const fmt = (amount, decimals = 0) => {
   if (amount === null || amount === undefined) return '—'
-  return '₹' + Number(amount).toLocaleString('en-IN', {
+  return 'Rf ' + Number(amount).toLocaleString('en-MV', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   })
 }
 
-export const fmtNum = (n) => Number(n).toLocaleString('en-IN')
+export const fmtNum = (n) => Number(n).toLocaleString('en-MV')
 
 // ─── Date formatting ──────────────────────────────────────────────────────────
 export const fmtDate = (d) => {

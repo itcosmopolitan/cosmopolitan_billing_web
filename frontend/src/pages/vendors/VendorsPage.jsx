@@ -195,10 +195,10 @@ export default function VendorsPage() {
             'Phone': v.phone || '—',
             'Email': v.email || '—',
             'Address': v.address || '—',
-            'GSTIN': v.gstin || '—',
+            'GST Reg No': v.gstin || '—',
             'Payment Terms': v.payment_terms || '—',
-            'Total Purchases (₹)': v.total_purchases || 0,
-            'Outstanding (₹)': v.outstanding || 0,
+            'Total Purchases (Rf)': v.total_purchases || 0,
+            'Outstanding (Rf)': v.outstanding || 0,
           }))
           exportToCSV(exportData, `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Vendors exported')
@@ -226,7 +226,7 @@ export default function VendorsPage() {
               <tr>
                 <SortableHeader label="Vendor" sortKey="name" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
                 <SortableHeader label="Contact" sortKey="contact_person" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
-                <th>GSTIN</th>
+                <th>GST Reg No</th>
                 <SortableHeader label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
                 <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
                 <th className="text-right" style={{ textAlign: 'right' }}>Credit</th>
@@ -285,7 +285,7 @@ export default function VendorsPage() {
         <FormRow><FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} /></FormGroup>
         <FormGroup label="Email"><input className="form-input" type="email" value={form.email} onChange={e=>pf('email',e.target.value)} /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
-        <FormRow><FormGroup label="GSTIN"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="15-digit GSTIN" /></FormGroup>
+        <FormRow><FormGroup label="GST Reg No"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="GST registration number" /></FormGroup>
         <FormGroup label="Payment Terms"><select className="form-input" value={form.payment_terms} onChange={e=>pf('payment_terms',e.target.value)}>{['Advance','COD','7 days','15 days','30 days','45 days','60 days','Weekly'].map(t=><option key={t}>{t}</option>)}</select></FormGroup></FormRow>
       </Modal>
 
@@ -296,7 +296,7 @@ export default function VendorsPage() {
         <FormRow><FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} /></FormGroup>
         <FormGroup label="Email"><input className="form-input" type="email" value={form.email} onChange={e=>pf('email',e.target.value)} /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
-        <FormRow><FormGroup label="GSTIN"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="15-digit GSTIN" /></FormGroup>
+        <FormRow><FormGroup label="GST Reg No"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="GST registration number" /></FormGroup>
         <FormGroup label="Payment Terms"><select className="form-input" value={form.payment_terms} onChange={e=>pf('payment_terms',e.target.value)}>{['Advance','COD','7 days','15 days','30 days','45 days','60 days','Weekly'].map(t=><option key={t}>{t}</option>)}</select></FormGroup></FormRow>
       </Modal>
 

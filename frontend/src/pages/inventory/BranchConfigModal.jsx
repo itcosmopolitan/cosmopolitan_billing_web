@@ -140,8 +140,8 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
               <tr>
                 <th style={{ width: 44 }}>Listed</th>
                 <th>Branch</th>
-                <th className="text-right">Branch Cost (₹)</th>
-                <th className="text-right">Branch Price (₹)</th>
+                <th className="text-right">Branch Cost (Rf)</th>
+                <th className="text-right">Branch Price (Rf)</th>
                 <th className="text-right">Reorder</th>
                 <th className="text-right">Stock</th>
               </tr>

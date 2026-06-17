@@ -570,14 +570,14 @@ export default function SettingsPage() {
         <div className="grid-2" style={{alignItems:'start'}}>
           <Card title="Organisation Profile">
             <FormRow><FormGroup label="Company Name" required><input className="form-input" value={orgForm.name} onChange={e=>pof('name',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
-            <FormGroup label="GSTIN"><input className="form-input" value={orgForm.gstin} onChange={e=>pof('gstin',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
-            <FormRow><FormGroup label="PAN"><input className="form-input" value={orgForm.pan} onChange={e=>pof('pan',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
-            <FormGroup label="State Code"><input className="form-input" value={orgForm.state_code} onChange={e=>pof('state_code',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
+            <FormGroup label="GST Reg No"><input className="form-input" value={orgForm.gstin} onChange={e=>pof('gstin',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
+            <FormRow><FormGroup label="Business Reg No"><input className="form-input" value={orgForm.pan} onChange={e=>pof('pan',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
+            <FormGroup label="Atoll/Region Code"><input className="form-input" value={orgForm.state_code} onChange={e=>pof('state_code',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
             <FormGroup label="Registered Address"><textarea className="form-input" value={orgForm.address} onChange={e=>pof('address',e.target.value)} style={{height:72}} disabled={!can('settings.edit')} /></FormGroup>
             <FormRow><FormGroup label="Phone"><input className="form-input" value={orgForm.phone} onChange={e=>pof('phone',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
             <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
-            <FormGroup label="Financial Year"><select className="form-input" value={orgForm.financial_year} onChange={e=>pof('financial_year',e.target.value)} disabled={!can('settings.edit')}><option value="Apr-Mar">Apr–Mar</option><option value="Jan-Dec">Jan–Dec</option></select></FormGroup></FormRow>
+            <FormGroup label="Financial Year"><select className="form-input" value={orgForm.financial_year} onChange={e=>pof('financial_year',e.target.value)} disabled={!can('settings.edit')}><option value="Jan-Dec">Jan–Dec</option><option value="Jul-Jun">Jul–Jun</option></select></FormGroup></FormRow>
             <FormGroup label="Inventory">
               <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
                 <input
@@ -610,10 +610,10 @@ export default function SettingsPage() {
             </Card>
             <Card title="System Preferences">
               {[
-                {label:'Currency', value:'INR (₹ — Indian Rupee)'},
+                {label:'Currency', value:'Rf (Maldivian Rufiyaa)'},
                 {label:'Date Format', value:'DD/MM/YYYY'},
                 {label:'Decimal Places', value:'2'},
-                {label:'Time Zone', value:'Asia/Kolkata (IST)'},
+                {label:'Time Zone', value:'Indian/Maldives (MVT)'},
                 {label:'Language', value:'English'},
               ].map(r=>(
                 <div key={r.label} style={{display:'flex',justifyContent:'space-between',padding:'9px 0',borderBottom:'1px solid var(--border-subtle)',fontSize:13}}>

@@ -274,15 +274,15 @@ export default function ItemsPage({ mode = 'branch' }) {
             'Category': item.categoryName || '—',
             'Brand': item.brand || '—',
             'Unit': item.unit,
-            'Cost Price (₹)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
-            'Selling Price (₹)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
+            'Cost Price (Rf)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+            'Selling Price (Rf)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
             'GST (%)': item.tax_rate,
             ...(isMaster
               ? { 'Active Branches': item.available_branch_count ?? 0 }
               : {
                 'Stock': item.available_stock,
                 'Reorder Level': item.reorder_level,
-                'Stock Value (₹)': (item.available_stock || 0) * (item.cost_price || 0),
+                'Stock Value (Rf)': (item.available_stock || 0) * (item.cost_price || 0),
               }),
           }))
           exportToCSV(exportData, `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)

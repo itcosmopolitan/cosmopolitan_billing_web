@@ -1,4 +1,5 @@
-import { FormGroup, FormRow, AlertBar, SearchSelect } from '@/components/ui'
+import { FormGroup, FormRow, AlertBar } from '@/components/ui'
+import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import {
   allocationSum,
   formatAllocationSummary,
@@ -10,7 +11,6 @@ export default function TransferFormFields({
   patchForm,
   branches = [],
   items = [],
-  itemOptions = [],
   itemsLoading = false,
   batchOptions = {},
   loadBatchesForRow,
@@ -21,72 +21,105 @@ export default function TransferFormFields({
   disabled = false,
   refNumber = null,
 }) {
+  const compactSelectStyle = {
+    width: '100%',
+    maxWidth: 320,
+  }
+
   return (
-    <>
+    <div className="transfer-form">
       {refNumber && (
-        <div style={{
-          marginBottom: 20,
-          padding: '12px 16px',
-          background: 'var(--bg-raised)',
-          border: '1px solid var(--border)',
-          borderRadius: 8,
-        }}>
-          <span style={{
-            fontSize: 11,
-            fontWeight: 700,
-            color: 'var(--text-muted)',
-            textTransform: 'uppercase',
-            letterSpacing: 0.4,
-          }}>
-            Transfer #
-          </span>
-          <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}>
-            {refNumber}
+        <div className="transfer-form__ref">
+          <span className="transfer-form__eyebrow">Transfer request</span>
+          <div className="transfer-form__ref-row">
+            <div>
+              <div className="transfer-form__ref-label">Reference</div>
+              <div className="transfer-form__ref-value mono">{refNumber}</div>
+            </div>
+            <div className="transfer-form__ref-pill">Pending approval</div>
           </div>
         </div>
       )}
 
-      <FormRow>
-        <FormGroup label="From Branch" required>
-          <select
-            className="form-input"
-            value={form.from_branch_id}
-            onChange={(e) => patchForm('from_branch_id', e.target.value)}
-            disabled={disabled}
-          >
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        </FormGroup>
-        <FormGroup label="To Branch" required>
-          <select
-            className="form-input"
-            value={form.to_branch_id}
-            onChange={(e) => patchForm('to_branch_id', e.target.value)}
-            disabled={disabled}
-          >
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        </FormGroup>
-      </FormRow>
+      <div className="transfer-form__route-grid-shell">
+        <div className="transfer-form__route-card-panel">
+          <div className="transfer-form__section-label">Route</div>
+          <div className="transfer-form__route-grid transfer-form__route-grid--inputs">
+            <FormGroup label="From Branch" required>
+              <select
+                className="form-input"
+                style={compactSelectStyle}
+                value={form.from_branch_id}
+                onChange={(e) => patchForm('from_branch_id', e.target.value)}
+                disabled={disabled}
+              >
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </FormGroup>
 
-      <div style={{ marginTop: 8 }}>
-        <div className="form-label" style={{ marginBottom: 8 }}>Items to transfer</div>
-        <AlertBar type="blue" icon="🧴" style={{ marginBottom: 12 }}>
-          Tracked items auto-split by <strong>FIFO/FEFO</strong>. Click <strong>Edit split</strong> to
-          override the batch allocation — the receiving branch inherits the exact lot metadata.
-        </AlertBar>
+            <div className="transfer-form__route-arrow transfer-form__route-arrow--inputs">→</div>
 
-        <div style={{
-          border: '1px solid var(--border)',
-          borderRadius: 8,
-          overflow: 'hidden',
-        }}>
-          <table className="data-table" style={{ marginBottom: 0 }}>
+            <FormGroup label="To Branch" required>
+              <select
+                className="form-input"
+                style={compactSelectStyle}
+                value={form.to_branch_id}
+                onChange={(e) => patchForm('to_branch_id', e.target.value)}
+                disabled={disabled}
+              >
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </FormGroup>
+          </div>
+        </div>
+
+        <div className="transfer-form__meta-card-panel">
+          <div className="transfer-form__section-label">Dispatch</div>
+          <div className="transfer-form__meta-grid">
+            <FormGroup label="Priority">
+              <select
+                className="form-input"
+                value={form.priority}
+                onChange={(e) => patchForm('priority', e.target.value)}
+                disabled={disabled}
+              >
+                {['Normal', 'Urgent', 'Planned'].map((p) => <option key={p}>{p}</option>)}
+              </select>
+            </FormGroup>
+            <FormGroup label="Expected dispatch date">
+              <input
+                className="form-input"
+                type="date"
+                value={form.expected_date}
+                onChange={(e) => patchForm('expected_date', e.target.value)}
+                disabled={disabled}
+              />
+            </FormGroup>
+          </div>
+        </div>
+      </div>
+
+      <div className="transfer-form__items">
+        <div className="transfer-form__items-head">
+          <div>
+            <div className="transfer-form__section-label">Items to transfer</div>
+            <div className="transfer-form__section-subtitle">
+              Tracked items auto-split by FIFO or FEFO. Edit the split only when lot control matters.
+            </div>
+          </div>
+          <AlertBar type="blue" icon="🧴" style={{ marginBottom: 0 }}>
+            Exact batch metadata moves with the transfer.
+          </AlertBar>
+        </div>
+
+        <div className="transfer-form__table-wrap">
+          <table className="data-table transfer-form__table" style={{ marginBottom: 0 }}>
             <thead>
               <tr>
-                <th style={{ minWidth: 280 }}>Item</th>
+                <th style={{ width: 48 }}>#</th>
+                <th style={{ width: '44%' }}>Item</th>
                 <th style={{ width: 110 }}>Qty</th>
-                <th>Batch allocation</th>
+                <th style={{ width: 330 }}>Batch allocation</th>
                 <th style={{ width: 44 }} />
               </tr>
             </thead>
@@ -104,20 +137,23 @@ export default function TransferFormFields({
                 return (
                   <tr key={i} style={{ verticalAlign: 'top' }}>
                     <td>
-                      <SearchSelect
-                        value={row.item_id}
-                        options={itemOptions}
-                        loading={itemsLoading}
-                        loadingLabel="Loading items…"
-                        placeholder="Select item…"
-                        searchPlaceholder="Search by name, SKU, or barcode…"
-                        emptyLabel="No items at source branch"
-                        onChange={(itemId) => {
-                          patchItem(i, 'item_id', itemId)
-                          if (itemId) loadBatchesForRow(itemId)
-                        }}
-                        disabled={disabled}
-                      />
+                      <div className="transfer-form__line-index">{String(i + 1).padStart(2, '0')}</div>
+                    </td>
+                    <td>
+                      <div style={{ maxWidth: 520 }}>
+                        <InventoryItemPicker
+                          branchId={form.from_branch_id}
+                          value={row.item_id
+                            ? { id: row.item_id, name: picked?.name || `Item ${row.item_id}` }
+                            : null}
+                          onPick={(inv) => {
+                            patchItem(i, 'item_id', inv.id)
+                            loadBatchesForRow(inv.id)
+                          }}
+                          onClear={() => patchItem(i, 'item_id', null)}
+                          disabled={disabled || itemsLoading}
+                        />
+                      </div>
                     </td>
                     <td>
                       <input
@@ -132,11 +168,18 @@ export default function TransferFormFields({
                     </td>
                     <td>
                       {!tracked || !row.item_id ? (
-                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {row.item_id ? 'Untracked item' : '—'}
-                        </span>
+                        <div className="transfer-form__allocation-empty">
+                          <span className="transfer-form__allocation-pill">
+                            {row.item_id ? 'Untracked item' : 'Choose item'}
+                          </span>
+                          <span className="transfer-form__allocation-hint">
+                            {row.item_id
+                              ? 'Batch split is not needed for this item'
+                              : 'Auto split appears here for tracked items'}
+                          </span>
+                        </div>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
+                        <div className="transfer-form__allocation-stack">
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <span style={{
                               fontSize: 10,
@@ -224,7 +267,7 @@ export default function TransferFormFields({
         <button
           type="button"
           className="btn btn-ghost btn-sm"
-          style={{ marginTop: 10 }}
+          style={{ marginTop: 12 }}
           onClick={addItemRow}
           disabled={disabled}
         >
@@ -232,38 +275,17 @@ export default function TransferFormFields({
         </button>
       </div>
 
-      <FormRow style={{ marginTop: 20 }}>
-        <FormGroup label="Priority">
-          <select
-            className="form-input"
-            value={form.priority}
-            onChange={(e) => patchForm('priority', e.target.value)}
-            disabled={disabled}
-          >
-            {['Normal', 'Urgent', 'Planned'].map((p) => <option key={p}>{p}</option>)}
-          </select>
-        </FormGroup>
-        <FormGroup label="Expected dispatch date">
-          <input
-            className="form-input"
-            type="date"
-            value={form.expected_date}
-            onChange={(e) => patchForm('expected_date', e.target.value)}
-            disabled={disabled}
-          />
-        </FormGroup>
-      </FormRow>
-
-      <FormGroup label="Notes">
+      <div className="transfer-form__notes-card">
+        <div className="transfer-form__section-label">Notes</div>
         <textarea
           className="form-input"
           placeholder="Reason for transfer, special instructions…"
           value={form.notes}
           onChange={(e) => patchForm('notes', e.target.value)}
-          style={{ height: 88, marginTop: 4 }}
+          style={{ height: 96, marginTop: 8 }}
           disabled={disabled}
         />
-      </FormGroup>
-    </>
+      </div>
+    </div>
   )
 }

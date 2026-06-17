@@ -588,7 +588,7 @@ export default function SalesPage() {
     } catch (err) {
       console.error('Failed to record payment:', err)
       // Toast already fired by the global axios interceptor with the
-      // server's detail (e.g. "Walk-in invoice — reduce amount to ₹X" or
+      // server's detail (e.g. "Walk-in invoice — reduce amount to RfX" or
       // "Invoice already settled"). Don't double-toast here.
     } finally {
       setPaySaving(false)
@@ -702,9 +702,9 @@ export default function SalesPage() {
             'Invoice Number': i.number || i.id,
             'Customer': i.customerName || 'Walk-in',
             'Date': i.date || '—',
-            'Amount (₹)': i.total || 0,
-            'Paid (₹)': i.paidAmount || 0,
-            'Outstanding (₹)': (i.total || 0) - (i.paidAmount || 0),
+            'Amount (Rf)': i.total || 0,
+            'Paid (Rf)': i.paidAmount || 0,
+            'Outstanding (Rf)': (i.total || 0) - (i.paidAmount || 0),
             'Status': statusLabel(i.status),
           }))
           exportToCSV(exportData, `Sales_${new Date().toISOString().split('T')[0]}.csv`)
@@ -1473,7 +1473,7 @@ export default function SalesPage() {
                   stay editable so excess routes to credit_balance.
                   Credit mode also locks to the full balance — drawing
                   partial credit / overpaying with credit is nonsensical. */}
-              <FormGroup label="Amount Received (₹)" required>
+              <FormGroup label="Amount Received (Rf)" required>
                 <input
                   className="form-input"
                   type="number"

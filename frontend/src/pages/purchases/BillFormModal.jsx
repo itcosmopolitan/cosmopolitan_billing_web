@@ -5,7 +5,7 @@
  * Layout mirrors PurchaseOrderFormModal / sales OrderFormModal:
  *   • Vendor (picker) + Bill Date in row 1.
  *   • Due Date + "Payment received?" checkbox in row 2.
- *   • Items: Item picker, Qty, Cost, Discount (% / ₹ toggle).
+ *   • Items: Item picker, Qty, Cost, Discount (% / Rf toggle).
  *   • For batch-tracked items, a compact second row under the line
  *     captures lot # / mfg date / expiry date (same shape as the old
  *     NewBillModal, just rendered inline below the line instead of
@@ -74,7 +74,7 @@ export default function BillFormModal({
     const it = next[i]
     const gross = Number(it.qty || 0) * Number(it.cost || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
-    const wasAmount = it.lineDiscountType === '₹'
+    const wasAmount = it.lineDiscountType === 'Rf'
     let newVal
     if (wasAmount) {
       newVal = gross > 0 ? (raw / gross) * 100 : 0
@@ -84,7 +84,7 @@ export default function BillFormModal({
     next[i] = {
       ...it,
       lineDiscount: Math.round(newVal * 100) / 100,
-      lineDiscountType: wasAmount ? '%' : '₹',
+      lineDiscountType: wasAmount ? '%' : 'Rf',
     }
     pbf('items', next)
   }
@@ -93,81 +93,84 @@ export default function BillFormModal({
   const disableLineDiscount = shouldDisableLineDiscount(billForm.discount)
 
   const formBody = (
-    <>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <DocumentNumberField
-          label={isGrn ? 'GRN #' : 'Bill #'}
-          docType={isGrn ? 'grn' : 'purchase_bill'}
-          branchId={billForm.branchId}
-          value={billForm.number}
-          onChange={(v) => pbf('number', v)}
-        />
-        <FormGroup label="Vendor" required>
-          <VendorPicker
-            value={billForm.vendorId
-              ? { id: billForm.vendorId, name: billForm.vendorName }
-              : null}
-            onPick={(v) => {
-              pbf('vendorId', v.id)
-              pbf('vendorName', v.name)
-            }}
-            onClear={() => {
-              pbf('vendorId', '')
-              pbf('vendorName', '')
-            }}
+    <div className="bill-form-shell">
+      <div className="bill-form-panel">
+        <div className="bill-form-panel__head">Bill basics</div>
+        <div className="bill-form-grid">
+          <DocumentNumberField
+            label={isGrn ? 'GRN #' : 'Bill #'}
+            docType={isGrn ? 'grn' : 'purchase_bill'}
+            branchId={billForm.branchId}
+            value={billForm.number}
+            onChange={(v) => pbf('number', v)}
           />
-        </FormGroup>
-        <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
-          <input className="form-input" type="date"
-            value={billForm.billDate || todayISO()}
-            onChange={(e) => pbf('billDate', e.target.value)} />
-        </FormGroup>
-      </div>
-
-      {!isGrn && !editMode && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-          <FormGroup label="Due Date">
-            <input className="form-input" type="date"
-              value={billForm.dueDate || ''}
-              onChange={(e) => pbf('dueDate', e.target.value)} />
+          <FormGroup label="Vendor" required>
+            <VendorPicker
+              value={billForm.vendorId
+                ? { id: billForm.vendorId, name: billForm.vendorName }
+                : null}
+              onPick={(v) => {
+                pbf('vendorId', v.id)
+                pbf('vendorName', v.name)
+              }}
+              onClear={() => {
+                pbf('vendorId', '')
+                pbf('vendorName', '')
+              }}
+            />
           </FormGroup>
-          <FormGroup label="Payment">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <label style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 10px',
-                border: `1.5px solid ${billForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
-                background: billForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
-                borderRadius: 6, cursor: 'pointer',
-                fontSize: 13, fontWeight: 500,
-                color: billForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
-              }}>
-                <input
-                  type="checkbox"
-                  checked={!!billForm.paymentReceived}
-                  onChange={(e) => pbf('paymentReceived', e.target.checked)}
-                  style={{ accentColor: 'var(--accent)' }}
-                />
-                <span>Payment paid?</span>
-              </label>
-              {billForm.paymentReceived && (
-                <select
-                  className="form-input"
-                  value={billForm.paymentMethod || ''}
-                  onChange={(e) => pbf('paymentMethod', e.target.value || null)}
-                  style={{ fontSize: 13 }}
-                >
-                  <option value="" disabled>Select method…</option>
-                  <option value="cash">💵 Cash</option>
-                  <option value="card">💳 Card</option>
-                  <option value="upi">📱 UPI</option>
-                  <option value="bank_transfer">🏦 Bank Transfer</option>
-                </select>
-              )}
-            </div>
+          <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
+            <input className="form-input" type="date"
+              value={billForm.billDate || todayISO()}
+              onChange={(e) => pbf('billDate', e.target.value)} />
           </FormGroup>
         </div>
-      )}
+
+        {!isGrn && !editMode && (
+          <div className="bill-form-meta-grid">
+            <FormGroup label="Due Date">
+              <input className="form-input" type="date"
+                value={billForm.dueDate || ''}
+                onChange={(e) => pbf('dueDate', e.target.value)} />
+            </FormGroup>
+            <FormGroup label="Payment">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '8px 10px',
+                  border: `1.5px solid ${billForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
+                  background: billForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
+                  borderRadius: 6, cursor: 'pointer',
+                  fontSize: 13, fontWeight: 500,
+                  color: billForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={!!billForm.paymentReceived}
+                    onChange={(e) => pbf('paymentReceived', e.target.checked)}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  <span>Payment paid?</span>
+                </label>
+                {billForm.paymentReceived && (
+                  <select
+                    className="form-input"
+                    value={billForm.paymentMethod || ''}
+                    onChange={(e) => pbf('paymentMethod', e.target.value || null)}
+                    style={{ fontSize: 13 }}
+                  >
+                    <option value="" disabled>Select method…</option>
+                    <option value="cash">💵 Cash</option>
+                    <option value="card">💳 Card</option>
+                    <option value="upi">📱 UPI</option>
+                    <option value="bank_transfer">🏦 Bank Transfer</option>
+                  </select>
+                )}
+              </div>
+            </FormGroup>
+          </div>
+        )}
+      </div>
 
       {editMode && (
         <div style={{ marginBottom: 16 }}>
@@ -187,7 +190,9 @@ export default function BillFormModal({
         </div>
       )}
 
-      <FormGroup label="Items" required>
+      <div className="bill-form-panel">
+        <div className="bill-form-panel__head">Line items</div>
+        <FormGroup label="Items" required>
         {hasTrackedItems && (
           <>
             <AlertBar type="blue" icon="🧴">
@@ -197,7 +202,8 @@ export default function BillFormModal({
             <div style={{ height: 10 }} />
           </>
         )}
-        <table className="data-table" style={{ marginBottom: 12 }}>
+        <div className="bill-form-table-wrap">
+        <table className="data-table bill-form-table" style={{ marginBottom: 12 }}>
           <thead>
             <tr>
               <th>Item</th>
@@ -213,7 +219,7 @@ export default function BillFormModal({
                 ? { id: it.item_id, name: it.name }
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
-              const type = it.lineDiscountType === '₹' ? '₹' : '%'
+              const type = it.lineDiscountType === 'Rf' ? 'Rf' : '%'
               return (
                 <Fragment key={i}>
                   <tr>
@@ -239,7 +245,7 @@ export default function BillFormModal({
                         onChange={(e) => { const n = [...billForm.items]; n[i].cost = e.target.value; pbf('items', n) }} />
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
+                      <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>
                         <input className="form-input" type="number" disabled={disableLineDiscount}
                           style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                           value={it.lineDiscount || 0}
@@ -248,7 +254,7 @@ export default function BillFormModal({
                           type="button"
                           disabled={disableLineDiscount}
                           onClick={() => toggleDiscountType(i)}
-                          title={type === '%' ? 'Switch to amount (₹)' : 'Switch to percent (%)'}
+                          title={type === '%' ? 'Switch to amount (Rf)' : 'Switch to percent (%)'}
                           style={discountToggleStyle}
                         >
                           {type}
@@ -302,27 +308,31 @@ export default function BillFormModal({
             })}
           </tbody>
         </table>
+        </div>
         <button className="btn btn-secondary btn-sm"
           onClick={() => pbf('items', [...billForm.items, { item_id: null, name: '', qty: 1, cost: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%', batchTracking: false, expiryTracking: false, batchNumber: '', mfgDate: '', expiryDate: '' }])}>
           + Add Item
         </button>
-      </FormGroup>
+        </FormGroup>
+      </div>
 
-      <DocumentTotalsStrip
-        items={billForm.items}
-        entityDiscount={billForm.discount}
-        entityDiscountType={billForm.discountType || '%'}
-        onEntityDiscountChange={(v) => pbf('discount', v)}
-        onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
-        lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
-      />
+      <div className="bill-form-panel bill-form-panel--muted">
+        <DocumentTotalsStrip
+          items={billForm.items}
+          entityDiscount={billForm.discount}
+          entityDiscountType={billForm.discountType || '%'}
+          onEntityDiscountChange={(v) => pbf('discount', v)}
+          onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
+          lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+        />
 
-      <FormGroup label="Notes">
-        <textarea className="form-input" style={{ height: 72 }}
-          value={billForm.notes || ''}
-          onChange={(e) => pbf('notes', e.target.value)} />
-      </FormGroup>
-    </>
+        <FormGroup label="Notes">
+          <textarea className="form-input" style={{ height: 72 }}
+            value={billForm.notes || ''}
+            onChange={(e) => pbf('notes', e.target.value)} />
+        </FormGroup>
+      </div>
+    </div>
   )
 
   if (embedded) return formBody

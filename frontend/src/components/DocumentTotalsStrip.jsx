@@ -66,7 +66,7 @@ export default function DocumentTotalsStrip({
               placeholder={
                 disableEntity
                   ? 'Clear line-item discounts to use document discount'
-                  : (entityDiscountType === '%' ? 'Document discount %' : 'Document discount ₹')
+                  : (entityDiscountType === '%' ? 'Document discount %' : 'Document discount Rf')
               }
               value={entityDiscount || ''}
               onChange={(e) => onEntityDiscountChange(e.target.value)}
@@ -85,13 +85,13 @@ export default function DocumentTotalsStrip({
                 <button
                   type="button"
                   disabled={disableEntity}
-                  onClick={() => onEntityDiscountTypeChange('₹')}
+                  onClick={() => onEntityDiscountTypeChange('Rf')}
                   style={{
-                    ...discountToggleBtnStyle(entityDiscountType === '₹', disableEntity),
+                    ...discountToggleBtnStyle(entityDiscountType === 'Rf', disableEntity),
                     borderRight: 'none',
                   }}
                 >
-                  ₹
+                  Rf
                 </button>
               </div>
             )}

@@ -37,6 +37,7 @@ export default function TransferFormPage({ mode = 'create' }) {
 
   const defaultFromId = activeBranch?.id || branches.find((b) => b.code !== 'WH')?.id || 'br-001'
   const defaultToId = branches.find((b) => b.id !== defaultFromId)?.id || 'br-002'
+  const branchById = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches])
 
   const [form, setForm] = useState(() => emptyTransfer(defaultFromId, defaultToId))
   const [refNumber, setRefNumber] = useState(null)
@@ -149,11 +150,20 @@ export default function TransferFormPage({ mode = 'create' }) {
     return () => { cancelled = true }
   }, [isEdit, transferId, navigate])
 
-  const itemOptions = useMemo(() => items.map((it) => ({
-    id: it.id,
-    label: `${it.name}${it.batch_tracking ? ` · ${it.expiry_tracking ? 'FEFO' : 'FIFO'}` : ''} — stock ${it.available_stock ?? 0}`,
-    searchText: `${it.name} ${it.sku || ''} ${it.barcode || ''}`.toLowerCase(),
-  })), [items])
+  const transferSummary = useMemo(() => {
+    const lines = form.items.filter((row) => row.item_id)
+    const qty = lines.reduce((sum, row) => sum + (Number(row.qty) || 0), 0)
+    const tracked = lines.filter((row) => items.find((item) => item.id === row.item_id)?.batch_tracking).length
+    const fromBranch = branchById.get(form.from_branch_id)
+    const toBranch = branchById.get(form.to_branch_id)
+    return {
+      lines: lines.length,
+      qty,
+      tracked,
+      fromBranch,
+      toBranch,
+    }
+  }, [form.items, form.from_branch_id, form.to_branch_id, items, branchById])
 
   const loadBatchesForRow = useCallback(async (itemId) => {
     if (!itemId) return null
@@ -250,32 +260,52 @@ export default function TransferFormPage({ mode = 'create' }) {
 
   return (
     <>
-      <div className="page-container page-container--with-footer">
-        <SectionHeader
-          title={isEdit ? 'Edit Transfer Request' : 'New Transfer Request'}
-          subtitle={isEdit
-            ? 'Update route, line items, and batch splits before approval'
-            : 'Move stock between branches — set source, destination, items, and quantities'}
-        />
+      <div className="page-container page-container--with-footer transfer-page-shell">
+        <div className="transfer-hero">
+          <div className="transfer-hero__copy">
+            <div className="transfer-hero__eyebrow">Inventory movement</div>
+            <h1>{isEdit ? 'Refine a transfer before approval' : 'Create a sharp transfer request'}</h1>
+            <p>
+              Move stock between branches with batch-aware allocation, clear routing, and a more focused workspace.
+            </p>
+          </div>
+          <div className="transfer-hero__stats">
+            <div className="transfer-stat">
+              <span>Lines</span>
+              <strong>{transferSummary.lines}</strong>
+            </div>
+            <div className="transfer-stat">
+              <span>Total qty</span>
+              <strong>{transferSummary.qty}</strong>
+            </div>
+            <div className="transfer-stat">
+              <span>Tracked</span>
+              <strong>{transferSummary.tracked}</strong>
+            </div>
+          </div>
+        </div>
 
-        <Card title="Transfer details">
-          <TransferFormFields
-            form={form}
-            patchForm={patchForm}
-            branches={branches}
-            items={items}
-            itemOptions={itemOptions}
-            itemsLoading={itemsLoading}
-            batchOptions={batchOptions}
-            loadBatchesForRow={loadBatchesForRow}
-            onOpenAllocEditor={setAllocEditor}
-            patchItem={patchItem}
-            addItemRow={addItemRow}
-            removeItemRow={removeItemRow}
-            disabled={saving}
-            refNumber={isEdit ? refNumber : null}
-          />
-        </Card>
+        <div className="transfer-page-grid">
+          <div className="transfer-page-main">
+            <Card title="Transfer details">
+              <TransferFormFields
+                form={form}
+                patchForm={patchForm}
+                branches={branches}
+                items={items}
+                itemsLoading={itemsLoading}
+                batchOptions={batchOptions}
+                loadBatchesForRow={loadBatchesForRow}
+                onOpenAllocEditor={setAllocEditor}
+                patchItem={patchItem}
+                addItemRow={addItemRow}
+                removeItemRow={removeItemRow}
+                disabled={saving}
+                refNumber={isEdit ? refNumber : null}
+              />
+            </Card>
+          </div>
+        </div>
       </div>
 
       <BatchAllocationModal

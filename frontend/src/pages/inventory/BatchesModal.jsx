@@ -256,13 +256,13 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
             </FormGroup>
           </FormRow>
           <FormRow>
-            <FormGroup label="Cost / Unit (₹)">
+            <FormGroup label="Cost / Unit (Rf)">
               <input
                 className="form-input"
                 type="number"
                 value={form.cost_price}
                 onChange={(e) => setForm((f) => ({ ...f, cost_price: e.target.value }))}
-                placeholder={isAdd ? `Defaults to ₹${fmt(item.cost_price)}` : ''}
+                placeholder={isAdd ? `Defaults to ${fmt(item.cost_price)}` : ''}
                 disabled={isEdit}
                 style={isEdit ? { background: 'var(--bg-subtle)', cursor: 'not-allowed' } : undefined}
               />

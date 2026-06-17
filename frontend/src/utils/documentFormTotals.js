@@ -5,7 +5,7 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100
 
 export function lineDiscountAmount(it, gross) {
   const raw = Math.max(0, Number(it.lineDiscount || 0))
-  if (it.lineDiscountType === '₹') return Math.min(gross, raw)
+  if (it.lineDiscountType === 'Rf') return Math.min(gross, raw)
   return Math.min(gross, gross * (Math.min(raw, 100) / 100))
 }
 
@@ -21,7 +21,7 @@ export function hasEntityLevelDiscount(discount) {
  * @param {Array} items
  * @param {object} opts
  * @param {number} opts.entityDiscount
- * @param {'%'|'₹'} opts.entityDiscountType
+ * @param {'%'|'Rf'} opts.entityDiscountType
  * @param {(it: object) => number} opts.lineGross
  * @param {'inclusive'|'exclusive'} opts.taxPricingMode
  * @param {boolean} opts.enforceExclusive — when true, line vs entity are mutually exclusive (POS default)
@@ -70,7 +70,7 @@ export function computeDocumentTotals(items, {
   let entityDiscFlat = 0
   if (useEntity) {
     const raw = Math.max(0, Number(entityDiscount) || 0)
-    if (entityDiscountType === '₹') {
+    if (entityDiscountType === 'Rf') {
       entityDiscFlat = raw
     } else {
       const base = mode === 'inclusive' ? lineNetTotal : netSubtotal
@@ -95,7 +95,7 @@ export function computeDocumentTotals(items, {
   }
 }
 
-/** Flat ₹ amount for backend `discount` field. */
+/** Flat Rf amount for backend `discount` field. */
 export function entityDiscountToPayload(items, discount, discountType, opts = {}) {
   const totals = computeDocumentTotals(items, {
     ...opts,

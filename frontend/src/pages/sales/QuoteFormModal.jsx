@@ -70,7 +70,7 @@ export default function QuoteFormModal({
     const it = next[i]
     const gross = Number(it.qty || 0) * Number(it.price || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
-    const wasAmount = it.lineDiscountType === '₹'
+    const wasAmount = it.lineDiscountType === 'Rf'
     let newVal
     if (wasAmount) {
       newVal = gross > 0 ? (raw / gross) * 100 : 0
@@ -80,7 +80,7 @@ export default function QuoteFormModal({
     next[i] = {
       ...it,
       lineDiscount: Math.round(newVal * 100) / 100,
-      lineDiscountType: wasAmount ? '%' : '₹',
+      lineDiscountType: wasAmount ? '%' : 'Rf',
     }
     pqf('items', next)
   }
@@ -141,7 +141,7 @@ export default function QuoteFormModal({
                 ? { id: it.item_id, name: it.name }
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
-              const type = it.lineDiscountType === '₹' ? '₹' : '%'
+              const type = it.lineDiscountType === 'Rf' ? 'Rf' : '%'
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -168,7 +168,7 @@ export default function QuoteFormModal({
                         type="button"
                         disabled={readOnly || disableLineDiscount}
                         onClick={() => toggleDiscountType(i)}
-                        title={type === '%' ? 'Switch to amount (₹)' : 'Switch to percent (%)'}
+                        title={type === '%' ? 'Switch to amount (Rf)' : 'Switch to percent (%)'}
                         style={discountToggleStyle}
                       >
                         {type}
@@ -239,7 +239,7 @@ const numInputStyle = {
   fontVariantNumeric: 'tabular-nums',
 }
 
-// See OrderFormModal#discountToggleStyle — same %/₹ toggle.
+// See OrderFormModal#discountToggleStyle — same %/Rf toggle.
 const discountToggleStyle = {
   width: 32,
   padding: 0,

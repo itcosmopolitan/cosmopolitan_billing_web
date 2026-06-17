@@ -25,7 +25,7 @@ import CustomerPicker from './CustomerPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
-// Per-row discount in % or ₹ via lineDiscountType. Backend stores percent only.
+// Per-row discount in % or Rf via lineDiscountType. Backend stores percent only.
 
 export default function OrderFormModal({
   open,
@@ -79,16 +79,16 @@ export default function OrderFormModal({
     pof('items', next)
   }
 
-  // Toggle the per-row discount unit (% ↔ ₹) and AUTO-CONVERT the value
+  // Toggle the per-row discount unit (% ↔ Rf) and AUTO-CONVERT the value
   // so the effective discount stays constant across the unit switch.
-  // Example: 10% on a ₹500 line → toggle to ₹ → input becomes 50.
+  // Example: 10% on a Rf500 line → toggle to Rf → input becomes 50.
   // Operator no longer has to do the math in their head when changing units.
   const toggleDiscountType = (i) => {
     const next = [...orderForm.items]
     const it = next[i]
     const gross = Number(it.qty || 0) * Number(it.price || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
-    const wasAmount = it.lineDiscountType === '₹'
+    const wasAmount = it.lineDiscountType === 'Rf'
     let newVal
     if (wasAmount) {
       newVal = gross > 0 ? (raw / gross) * 100 : 0
@@ -98,7 +98,7 @@ export default function OrderFormModal({
     next[i] = {
       ...it,
       lineDiscount: Math.round(newVal * 100) / 100,
-      lineDiscountType: wasAmount ? '%' : '₹',
+      lineDiscountType: wasAmount ? '%' : 'Rf',
     }
     pof('items', next)
   }
@@ -106,52 +106,60 @@ export default function OrderFormModal({
   const disableLineDiscount = readOnly || shouldDisableLineDiscount(orderForm.discount)
 
   const formBody = (
-    <>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <DocumentNumberField
-          label="Order #"
-          docType="sales_order"
-          branchId={orderForm.branchId}
-          value={orderForm.number}
-          onChange={(v) => pof('number', v)}
-          isEdit={isEdit}
-          editingNumber={editingNumber}
-          readOnly={readOnly}
-        />
-        <FormGroup label="Customer" required>
-          <CustomerPicker
-            disabled={readOnly}
-            value={orderForm.customerId
-              ? { id: orderForm.customerId, name: orderForm.customerName }
-              : null}
-            onPick={(c) => {
-              // Set both fields together — saveOrder forwards `customer_id`
-              // to the backend; `customer_name` is also persisted (denormalised)
-              // so detail panels stay readable even if the customer is later
-              // renamed or deleted.
-              pof('customerId', c.id)
-              pof('customerName', c.name)
-            }}
-            onClear={() => {
-              pof('customerId', '')
-              pof('customerName', '')
-            }}
+    <div className="order-form-shell">
+      <div className="order-form-panel">
+        <div className="order-form-panel__head">Order basics</div>
+        <div className="order-form-grid">
+          <DocumentNumberField
+            label="Order #"
+            docType="sales_order"
+            branchId={orderForm.branchId}
+            value={orderForm.number}
+            onChange={(v) => pof('number', v)}
+            isEdit={isEdit}
+            editingNumber={editingNumber}
+            readOnly={readOnly}
           />
-        </FormGroup>
-        <FormGroup label="Expected Date">
-          <input className="form-input" type="date" disabled={readOnly}
-            value={orderForm.expectedDate}
-            onChange={e => pof('expectedDate', e.target.value)} />
-        </FormGroup>
+          <FormGroup label="Customer" required>
+            <CustomerPicker
+              disabled={readOnly}
+              value={orderForm.customerId
+                ? { id: orderForm.customerId, name: orderForm.customerName }
+                : null}
+              onPick={(c) => {
+                pof('customerId', c.id)
+                pof('customerName', c.name)
+              }}
+              onClear={() => {
+                pof('customerId', '')
+                pof('customerName', '')
+              }}
+            />
+          </FormGroup>
+          <FormGroup label="Expected Date">
+            <input className="form-input" type="date" disabled={readOnly}
+              value={orderForm.expectedDate}
+              onChange={e => pof('expectedDate', e.target.value)} />
+          </FormGroup>
+        </div>
       </div>
-      <FormGroup label="Items" required>
+
+      <div className="order-form-panel">
+        <div className="order-form-items-head">
+          <div>
+            <div className="order-form-panel__head" style={{ marginBottom: 2 }}>Line items</div>
+            <div className="order-form-panel__sub">Pick SKUs, quantities, and line-level discount before review.</div>
+          </div>
+        </div>
+
         {/* 2026-05-24: Tax % column removed (defaults to 0 on save —
             backend reapplies if needed). Per-line Discount added.
             Numeric columns are 95px wide (~5 chars at 13.5px font);
             inputs are right-aligned so values read like accounting
             figures. Native number-input spinner buttons hidden globally
             in globals.css so the full 95px is text room. */}
-        <table className="data-table" style={{ marginBottom: 12 }}>
+        <div className="order-form-table-wrap">
+        <table className="data-table order-form-table" style={{ marginBottom: 12 }}>
           <thead>
             <tr>
               <th>Item</th>
@@ -172,7 +180,7 @@ export default function OrderFormModal({
               // the list so we don't filter ourselves out of the dropdown
               // during a re-pick.
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
-              const type = it.lineDiscountType === '₹' ? '₹' : '%'
+              const type = it.lineDiscountType === 'Rf' ? 'Rf' : '%'
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -200,7 +208,7 @@ export default function OrderFormModal({
                   <td>
                     {/* Discount = input + tiny toggle. Toggle auto-converts
                         the value across unit change so the EFFECTIVE
-                        discount stays the same when switching ₹ ↔ %.
+                        discount stays the same when switching Rf ↔ %.
                         Backend only stores percent — saveOrder converts
                         before POST. */}
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
@@ -212,7 +220,7 @@ export default function OrderFormModal({
                         type="button"
                         disabled={readOnly || disableLineDiscount}
                         onClick={() => toggleDiscountType(i)}
-                        title={type === '%' ? 'Switch to amount (₹)' : 'Switch to percent (%)'}
+                        title={type === '%' ? 'Switch to amount (Rf)' : 'Switch to percent (%)'}
                         style={discountToggleStyle}
                       >
                         {type}
@@ -230,29 +238,32 @@ export default function OrderFormModal({
             })}
           </tbody>
         </table>
+        </div>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
             onClick={() => pof('items', [...orderForm.items, { item_id: null, name: '', qty: 1, price: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>
             + Add Item
           </button>
         )}
-      </FormGroup>
+      </div>
 
-      <DocumentTotalsStrip
-        items={orderForm.items}
-        entityDiscount={orderForm.discount}
-        entityDiscountType={orderForm.discountType || '%'}
-        onEntityDiscountChange={readOnly ? undefined : (v) => pof('discount', v)}
-        onEntityDiscountTypeChange={readOnly ? undefined : (t) => pof('discountType', t)}
-        readOnly={readOnly}
-        lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
-      />
+      <div className="order-form-panel order-form-panel--muted">
+        <DocumentTotalsStrip
+          items={orderForm.items}
+          entityDiscount={orderForm.discount}
+          entityDiscountType={orderForm.discountType || '%'}
+          onEntityDiscountChange={readOnly ? undefined : (v) => pof('discount', v)}
+          onEntityDiscountTypeChange={readOnly ? undefined : (t) => pof('discountType', t)}
+          readOnly={readOnly}
+          lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+        />
 
-      <FormGroup label="Notes">
-        <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-          value={orderForm.notes} onChange={e => pof('notes', e.target.value)} />
-      </FormGroup>
-    </>
+        <FormGroup label="Notes">
+          <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
+            value={orderForm.notes} onChange={e => pof('notes', e.target.value)} />
+        </FormGroup>
+      </div>
+    </div>
   )
 
   if (embedded) return formBody
@@ -290,9 +301,9 @@ const numInputStyle = {
   fontVariantNumeric: 'tabular-nums',
 }
 
-// Compact %/₹ toggle button used inside the Discount cell. Sized to
+// Compact %/Rf toggle button used inside the Discount cell. Sized to
 // match form-input height so the input + toggle align on the same
-// baseline. Mono font so % and ₹ glyphs are the same width.
+// baseline. Mono font so % and Rf glyphs are the same width.
 const discountToggleStyle = {
   width: 32,
   padding: 0,
