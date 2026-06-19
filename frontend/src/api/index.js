@@ -301,23 +301,10 @@ export const adjustmentsAPI = {
 
 // ─── Cash ─────────────────────────────────────────────────────────────────────
 export const cashAPI = {
-  entries:     (branchId, params) => api.get(`/cash/${branchId}/entries`, { params }),
-  summary:     (branchId, date)   => api.get(`/cash/${branchId}/summary`, { params: { date } }),
-  add:         (branchId, data)   => api.post(`/cash/${branchId}/entries`, data),
-  update:      (branchId, entryId, data) => api.patch(`/cash/${branchId}/entries/${entryId}`, data),
-  delete:      (branchId, entryId) => api.delete(`/cash/${branchId}/entries/${entryId}`),
-  void:        (branchId, entryId, data) => api.post(`/cash/${branchId}/entries/${entryId}/void`, data),
-  close:       (branchId, data)   => api.post(`/cash/${branchId}/close`, data),
-  unlock:      (branchId, closeId, data) => api.post(`/cash/${branchId}/close/${closeId}/unlock`, data),
-  history:     (branchId, params) => api.get(`/cash/${branchId}/history`, { params }),
-  historyDay:  (branchId, date)   => api.get(`/cash/${branchId}/history/${date}`),
-  monitor:     (params)           => api.get('/cash/monitor', { params }),
-  categories: {
-    list:   ()           => api.get('/cash/categories'),
-    create: (data)       => api.post('/cash/categories', data),
-    update: (id, data)   => api.put(`/cash/categories/${id}`, data),
-    delete: (id)         => api.delete(`/cash/categories/${id}`),
-  },
+  entries: (branchId, date) => api.get(`/cash/${branchId}/entries`, { params: { date } }),
+  summary: (branchId, date) => api.get(`/cash/${branchId}/summary`, { params: { date } }),
+  add:     (branchId, data) => api.post(`/cash/${branchId}/entries`, data),
+  close:   (branchId, data) => api.post(`/cash/${branchId}/close`, data),
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

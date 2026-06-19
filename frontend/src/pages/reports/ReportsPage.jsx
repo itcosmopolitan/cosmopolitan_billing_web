@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { reportsAPI } from '@/api'
 import { useAppStore } from '@/store'
-import { fmt, fmtDate, fmtNum, exportToCSV } from '@/utils/helpers'
+import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
 import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader } from '@/components/ui'
 
@@ -21,7 +21,7 @@ const REPORT_CATEGORIES = [
         id: 'sales-register',
         label: 'Sales Register',
         api: 'salesRegister',
-        defaultSort: 'date',
+        ReportdefaultSort: 'date',
         columns: [
           { key: 'invoice_number', label: 'Invoice Number', sortable: true },
           { key: 'invoice_date', label: 'Invoice Date', sortable: true, formatter: formatDate },
@@ -229,59 +229,59 @@ const REPORT_CATEGORIES = [
       },
     ],
   },
-  {
-    id: 'tax',
-    label: 'Tax',
-    reports: [
-      {
-        id: 'daily-tax',
-        label: 'Daily Tax',
-        api: 'dailyTax',
-        defaultSort: 'date',
-        columns: [
-          { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
-          { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'monthly-tax',
-        label: 'Monthly Tax',
-        api: 'monthlyTax',
-        defaultSort: 'month',
-        columns: [
-          { key: 'month', label: 'Month', sortable: true },
-          { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'quarterly-tax',
-        label: 'Quarterly Tax',
-        api: 'quarterlyTax',
-        defaultSort: 'quarter',
-        columns: [
-          { key: 'quarter', label: 'Quarter', sortable: true },
-          { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'gst-summary',
-        label: 'GST Summary',
-        api: 'gstSummary',
-        defaultSort: 'tax_type',
-        columns: [
-          { key: 'tax_type', label: 'Tax Type', sortable: true },
-          { key: 'taxable_amount', label: 'Taxable Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_collected', label: 'Tax Collected', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-    ],
-  },
+  // {
+  //   id: 'tax',
+  //   label: 'Tax',
+  //   reports: [
+  //     {
+  //       id: 'daily-tax',
+  //       label: 'Daily Tax',
+  //       api: 'dailyTax',
+  //       defaultSort: 'date',
+  //       columns: [
+  //         { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
+  //         { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
+  //       ],
+  //     },
+  //     {
+  //       id: 'monthly-tax',
+  //       label: 'Monthly Tax',
+  //       api: 'monthlyTax',
+  //       defaultSort: 'month',
+  //       columns: [
+  //         { key: 'month', label: 'Month', sortable: true },
+  //         { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
+  //       ],
+  //     },
+  //     {
+  //       id: 'quarterly-tax',
+  //       label: 'Quarterly Tax',
+  //       api: 'quarterlyTax',
+  //       defaultSort: 'quarter',
+  //       columns: [
+  //         { key: 'quarter', label: 'Quarter', sortable: true },
+  //         { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
+  //       ],
+  //     },
+  //     {
+  //       id: 'gst-summary',
+  //       label: 'GST Summary',
+  //       api: 'gstSummary',
+  //       defaultSort: 'tax_type',
+  //       columns: [
+  //         { key: 'tax_type', label: 'Tax Type', sortable: true },
+  //         { key: 'taxable_amount', label: 'Taxable Amount', align: 'right', sortable: true, formatter: formatCurrency },
+  //         { key: 'tax_collected', label: 'Tax Collected', align: 'right', sortable: true, formatter: formatCurrency },
+  //       ],
+  //     },
+  //   ],
+  // },
   {
     id: 'financial',
     label: 'Financial',
@@ -573,7 +573,7 @@ export default function ReportsPage() {
     setSkip(0)
   }
 
-  const exportCsv = () => {
+  const exportExcel = () => {
     if (!rows || rows.length === 0) {
       toast.error('No data available to export.')
       return
@@ -588,7 +588,7 @@ export default function ReportsPage() {
       return entry
     })
 
-    exportToCSV(exportData, `${selectedReport.label.replace(/\s+/g, '_')}_${dateFrom}_to_${dateTo}.csv`)
+    exportToExcel(exportData, `${selectedReport.label.replace(/\s+/g, '_')}_${dateFrom}_to_${dateTo}.xlsx`)
     toast.success('Excel export ready')
   }
 
@@ -631,9 +631,9 @@ export default function ReportsPage() {
               ))}
             </select>
           </div>
-          <button className="btn btn-primary" style={{ height: 40, marginTop: 6 }} onClick={handleGenerate}>Generate</button>
-          <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportCsv}>Export Excel</button>
-          <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportPdf}>Export PDF</button>
+          {/* <button className="btn btn-primary" style={{ height: 40, marginTop: 6 }} onClick={handleGenerate}>Generate</button> */}
+          <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportExcel}>Export Excel</button>
+          {/* <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportPdf}>Export PDF</button> */}
         </div>
         <div>
           <SearchBar value={search} onChange={setSearch} placeholder="Search invoices, products, customers…" style={{ width: '100%' }} />
@@ -643,7 +643,7 @@ export default function ReportsPage() {
       <Tabs tabs={REPORT_CATEGORIES.map((item) => ({ id: item.id, label: item.label }))} active={category} onChange={setCategory} />
 
       <Card title={selectedReport ? selectedReport.label : 'Report'} titleRight={<div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn btn-secondary btn-sm" onClick={printReport}>Print</button>
+        {/* <button className="btn btn-secondary btn-sm" onClick={printReport}>Print</button> */}
       </div>} bodyPadding={false}>
         <div style={{ padding: 16, overflowX: 'auto' }}>
           <table className="data-table" style={{ minWidth: 920 }}>
