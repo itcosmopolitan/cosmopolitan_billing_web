@@ -29,7 +29,8 @@ export default function DocumentNumberField({
         if (cancelled) return
         const next = res?.number || res?.data?.number || ''
         setPreview(next)
-        if (!value && next && onChange) onChange(next)
+        // Hint only — do not bind preview into form state. Save with an empty
+        // number auto-allocates the next free sequence on the server.
       })
       .catch(() => {
         if (!cancelled) setPreview('')
@@ -56,7 +57,12 @@ export default function DocumentNumberField({
         placeholder={loading ? 'Loading…' : (preview || 'Auto-generated')}
         onChange={(e) => onChange?.(e.target.value)}
       />
-      {preview && value !== preview && (
+      {preview && !value && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+          Next auto: {preview} (assigned on save if left blank)
+        </div>
+      )}
+      {preview && value && value !== preview && (
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
           Next auto: {preview}
         </div>

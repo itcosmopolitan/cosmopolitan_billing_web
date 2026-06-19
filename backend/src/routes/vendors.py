@@ -10,6 +10,7 @@ from src.database import get_db
 from src.models import Vendor, VendorCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_vendor
+from src.permissions import VENDOR_PICKER_READ
 from src.security import require_perm
 
 router = APIRouter()
@@ -32,7 +33,7 @@ class VendorUpdate(BaseModel):
     gstin: Optional[str] = None
     payment_terms: Optional[str] = None
 
-@router.get("/", dependencies=[Depends(require_perm("vendors.view"))])
+@router.get("/", dependencies=[Depends(require_perm(*VENDOR_PICKER_READ))])
 async def list_vendors(
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
@@ -70,7 +71,7 @@ async def list_vendors(
     items = [serialize_vendor(v) for v in result.scalars().all()]
     return paged(items, total, sk, lim)
 
-@router.get("/{vendor_id}", dependencies=[Depends(require_perm("vendors.view"))])
+@router.get("/{vendor_id}", dependencies=[Depends(require_perm(*VENDOR_PICKER_READ))])
 async def get_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Vendor).where(Vendor.id == vendor_id))
     v = result.scalar_one_or_none()

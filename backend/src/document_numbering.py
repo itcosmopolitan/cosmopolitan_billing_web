@@ -21,6 +21,10 @@ from src.models import DocumentNumberCounter, DocumentNumbering, SaleInvoice
 
 _SEQ_TOKEN = re.compile(r"(#+)")
 
+# Both render into SaleInvoice.number — skip collisions for either doc type.
+_SALE_INVOICE_DOC_TYPES = frozenset({"sales_invoice", "pos_receipt"})
+_MAX_NUMBER_SCAN = 10_000
+
 DEFAULT_NUMBERING: list[dict[str, Any]] = [
     {
         "doc_type": "sales_invoice",
@@ -137,6 +141,17 @@ async def get_config(db: AsyncSession, doc_type: str) -> DocumentNumbering | Non
     ).scalar_one_or_none()
 
 
+async def _sale_number_taken(db: AsyncSession, number: str) -> bool:
+    cnt = (
+        await db.execute(
+            select(func.count())
+            .select_from(SaleInvoice)
+            .where(SaleInvoice.number == number)
+        )
+    ).scalar() or 0
+    return int(cnt) > 0
+
+
 async def get_counter_seq(
     db: AsyncSession, doc_type: str, scope: str, branch_id: str | None
 ) -> int:
@@ -188,7 +203,7 @@ async def allocate_number(
         db.add(counter)
         await db.flush()
 
-    while True:
+    for _ in range(_MAX_NUMBER_SCAN):
         seq = int(counter.next_seq or 1)
         number = render_number(
             prefix=cfg.prefix or "",
@@ -196,20 +211,14 @@ async def allocate_number(
             seq=seq,
             when=when,
         )
-        if doc_type == "sales_invoice":
-            existing = (
-                await db.execute(
-                    select(func.count())
-                    .select_from(SaleInvoice)
-                    .where(SaleInvoice.number == number)
-                )
-            ).scalar_one()
-            if existing:
-                counter.next_seq = seq + 1
-                continue
+        if doc_type in _SALE_INVOICE_DOC_TYPES and await _sale_number_taken(db, number):
+            counter.next_seq = seq + 1
+            continue
         counter.next_seq = seq + 1
         await db.flush()
         return number
+
+    raise ValueError(f"Could not allocate a free number for {doc_type}")
 
 
 async def peek_next_number(
@@ -219,7 +228,7 @@ async def peek_next_number(
     branch_id: str | None = None,
     when: datetime | None = None,
 ) -> str:
-    """Render the next number without reserving it (for form previews)."""
+    """Render the next free number without reserving it (for form previews)."""
     cfg = await get_config(db, doc_type)
     if not cfg:
         year = (when or datetime.utcnow()).year
@@ -227,12 +236,22 @@ async def peek_next_number(
 
     scope = cfg.scope or "per_branch"
     seq = await get_counter_seq(db, doc_type, scope, branch_id)
-    return render_number(
-        prefix=cfg.prefix or "",
-        format_str=cfg.format or "{PREFIX}-{YYYY}-####",
-        seq=seq,
-        when=when,
-    )
+    prefix = cfg.prefix or ""
+    format_str = cfg.format or "{PREFIX}-{YYYY}-####"
+
+    for _ in range(_MAX_NUMBER_SCAN):
+        number = render_number(
+            prefix=prefix,
+            format_str=format_str,
+            seq=seq,
+            when=when,
+        )
+        if doc_type in _SALE_INVOICE_DOC_TYPES and await _sale_number_taken(db, number):
+            seq += 1
+            continue
+        return number
+
+    return render_number(prefix=prefix, format_str=format_str, seq=seq, when=when)
 
 
 async def resolve_number(

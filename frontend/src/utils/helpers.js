@@ -50,6 +50,8 @@ export const statusChip = (status) => {
     low:      'chip-low',
     out:      'chip-out',
     cancelled:'chip-out',
+    pending_approval: 'chip-pending',
+    confirmed: 'chip-active',
   }
   return map[status] || 'chip-draft'
 }
@@ -59,6 +61,7 @@ export const statusLabel = (status) => {
     paid: 'Paid', active: 'Active', pending: 'Pending', overdue: 'Overdue',
     draft: 'Draft', partial: 'Partial', transit: 'In Transit', received: 'Received',
     low: 'Low Stock', out: 'Out of Stock', cancelled: 'Cancelled',
+    pending_approval: 'Pending Approval', confirmed: 'Confirmed',
   }
   return map[status] || status
 }
@@ -74,19 +77,15 @@ export const stockStatus = (qty, reorder) => {
 export const roleColors = {
   super_admin:       '#a78bfa',
   branch_manager:    '#4f8ef7',
+  branch_supervisor: '#f5a623',
   cashier:           '#2dd4bf',
-  inventory_manager: '#f5a623',
-  finance:           '#22c97a',
-  purchase_admin:    '#f5485c',
 }
 
 export const roleLabels = {
   super_admin:       'Super Admin',
   branch_manager:    'Branch Manager',
+  branch_supervisor: 'Branch Supervisor',
   cashier:           'Cashier',
-  inventory_manager: 'Inventory Mgr',
-  finance:           'Finance',
-  purchase_admin:    'Purchase Admin',
 }
 
 // ─── Generate new ID ──────────────────────────────────────────────────────────

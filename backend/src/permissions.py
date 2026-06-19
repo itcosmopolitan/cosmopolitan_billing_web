@@ -22,21 +22,114 @@ PERMISSIONS: dict[str, list[str]] = {
         "staff_performance.view",
         "export",
     ],
-    "items":     ["view", "create", "edit", "delete", "export", "adjust"],
-    "invoices":  ["view", "create", "edit", "delete", "cancel", "export"],
-    "pos":       ["use", "discount", "override_price", "refund",
+    "item_master": ["view", "create", "edit", "delete", "export", "approve"],
+    # Branch Items & Stock — view stock, batches; qty changes go via adjustments.*
+    "items":       ["view", "export", "adjust"],
+    "invoices":  ["view", "create", "edit", "delete", "cancel", "export", "approve"],
+    "pos":       ["use", "discount", "override_price", "refund", "approve_refund",
                   "hold_bill", "split_payment", "open_till", "close_till"],
-    "purchases": ["view", "create", "edit", "delete", "export"],
+    "purchases": ["view", "create", "edit", "delete", "export", "approve"],
     "transfers":   ["view", "create", "approve", "receive", "delete"],
     "adjustments": ["view", "create", "approve", "delete"],
     "customers": ["view", "create", "edit", "delete"],
     "vendors":   ["view", "create", "edit", "delete"],
-    "cash":      ["view", "entry", "edit", "close", "export", "unlock", "monitor"],
+    "cash":      ["view", "entry", "edit", "close", "export", "unlock", "monitor", "approve_close"],
     "reports":   ["view", "export"],
     "users":     ["view", "create", "edit", "delete", "manage_roles"],
     "settings":  ["view", "edit"],
     "audit":     ["view"],
 }
+
+# ─── Operational read bundles ────────────────────────────────────────────────
+# Read-only endpoints that transactional UIs depend on. Routes use
+# `Depends(require_perm(*BUNDLE))` — any one permission in the bundle grants access.
+
+# Item list / batch lookups for billing, purchases, and stock workflows.
+ITEM_CATALOG_READ: tuple[str, ...] = (
+    "items.view",
+    "item_master.view",
+    "pos.use",
+    "invoices.create",
+    "invoices.edit",
+    "invoices.view",
+    "purchases.create",
+    "purchases.edit",
+    "transfers.create",
+    "transfers.receive",
+    "adjustments.create",
+)
+
+# Customer picker and credit check during POS / invoice flows.
+CUSTOMER_PICKER_READ: tuple[str, ...] = (
+    "customers.view",
+    "pos.use",
+    "invoices.create",
+    "invoices.edit",
+)
+
+# Vendor picker in purchase order / bill forms.
+VENDOR_PICKER_READ: tuple[str, ...] = (
+    "vendors.view",
+    "purchases.create",
+    "purchases.edit",
+)
+
+# Organisation profile and invoice print template (POS, receipts, billing).
+BILLING_SETTINGS_READ: tuple[str, ...] = (
+    "settings.view",
+    "pos.use",
+    "invoices.create",
+    "invoices.view",
+)
+
+# Cash entry category list (configured under Settings, used on Cash page).
+CASH_CATEGORIES_READ: tuple[str, ...] = (
+    "settings.view",
+    "cash.view",
+    "cash.entry",
+    "cash.edit",
+    "cash.close",
+)
+
+# Status tab counts on list pages — allow creators/approvers without full view.
+MODULE_SUMMARY_READ: dict[str, tuple[str, ...]] = {
+    "transfers": (
+        "transfers.view",
+        "transfers.create",
+        "transfers.approve",
+        "transfers.receive",
+    ),
+    "adjustments": (
+        "adjustments.view",
+        "adjustments.create",
+        "adjustments.approve",
+    ),
+}
+
+# Read sales documents (lists, detail) needed by create/edit/convert/refund flows.
+SALES_DOCUMENT_READ: tuple[str, ...] = (
+    "invoices.view",
+    "invoices.create",
+    "invoices.edit",
+    "pos.use",
+    "pos.refund",
+    "pos.approve_refund",
+)
+
+# Read purchase documents for bill/GRN/PO create and conversion flows.
+PURCHASE_DOCUMENT_READ: tuple[str, ...] = (
+    "purchases.view",
+    "purchases.create",
+    "purchases.edit",
+)
+
+# Read transfer records for create/edit form preload.
+TRANSFER_DOCUMENT_READ: tuple[str, ...] = (
+    "transfers.view",
+    "transfers.create",
+    "transfers.approve",
+    "transfers.receive",
+)
 
 
 def all_perms() -> list[str]:

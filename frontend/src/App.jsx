@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
-import { authAPI, branchesAPI, permissionsAPI } from '@/api'
-import { fetchAllList } from '@/utils/pagination'
+import {
+  applyBootstrapToStore,
+  bootstrapAuthenticatedData,
+  bootstrapPublicData,
+} from '@/auth/bootstrap'
 import { RequireAuth, RequirePasswordSet, RequirePerm } from '@/auth/guards'
 import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
@@ -56,9 +59,9 @@ function AppShell() {
                 belt-and-braces. */}
             <Route path="/dashboard"  element={<RequirePerm perm="dashboard.view"><Dashboard /></RequirePerm>} />
             <Route path="/pos"        element={<RequirePerm perm="pos.use"><POSPage /></RequirePerm>} />
-            <Route path="/item-master" element={<RequirePerm perm="items.view"><ItemMasterPage /></RequirePerm>} />
-            <Route path="/item-master/new" element={<RequirePerm perm="items.create"><NewItemPage /></RequirePerm>} />
-            <Route path="/item-master/:itemId/edit" element={<RequirePerm perm="items.edit"><EditItemPage /></RequirePerm>} />
+            <Route path="/item-master" element={<RequirePerm perm="item_master.view"><ItemMasterPage /></RequirePerm>} />
+            <Route path="/item-master/new" element={<RequirePerm perm="item_master.create"><NewItemPage /></RequirePerm>} />
+            <Route path="/item-master/:itemId/edit" element={<RequirePerm perm="item_master.edit"><EditItemPage /></RequirePerm>} />
             <Route path="/items"      element={<RequirePerm perm="items.view"><ItemsPage /></RequirePerm>} />
             <Route path="/transfers"  element={<RequirePerm perm="transfers.view"><TransfersPage /></RequirePerm>} />
             <Route path="/transfers/new" element={<RequirePerm perm="transfers.create"><NewTransferPage /></RequirePerm>} />
@@ -116,28 +119,17 @@ export default function App() {
     document.documentElement.style.colorScheme = nextTheme
   }, [theme])
 
-  // Boot-time hydration. If a token is present we resolve the real user via
-  // /auth/me (Phase 1.5 — fixes ISS-002 / ISS-003). The catalog and branches
-  // list are open-access, so we always fetch them. Skipping /auth/me when no
-  // token is present avoids the 401-redirect loop the global axios
-  // interceptor would otherwise trigger.
+  // Boot-time hydration. Public catalog always; branches + /auth/me only with token.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const token = localStorage.getItem('retailos_token')
-        const tasks = [
-          permissionsAPI.catalog().catch(() => ({})),
-          fetchAllList(branchesAPI.list).catch(() => []),
-        ]
-        if (token) tasks.push(authAPI.me().catch(() => null))
-        const [catalog, branches, me] = await Promise.all(tasks)
+        const data = token
+          ? await bootstrapAuthenticatedData()
+          : { ...(await bootstrapPublicData()), branches: [], user: null, permissions: [] }
         if (cancelled) return
-        setPermCatalog(catalog || {})
-        setBranches(branches || [])
-        if (token && me) {
-          setSession({ user: me, permissions: me.permissions || [] })
-        }
+        applyBootstrapToStore(data, { setSession, setPermCatalog, setBranches })
       } finally {
         if (!cancelled) setBooting(false)
       }

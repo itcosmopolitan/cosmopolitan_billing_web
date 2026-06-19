@@ -601,6 +601,24 @@ export default function PurchasesPage() {
     })
   }
 
+  const approvePO = async (po) => {
+    if (!po?.id) return
+    await runRowAction(po.id, 'approve-po', async () => {
+      await purchasesAPI.orders.approve(po.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${po.number} approved`)
+    })
+  }
+
+  const rejectPO = async (po) => {
+    if (!po?.id) return
+    await runRowAction(po.id, 'reject-po', async () => {
+      await purchasesAPI.orders.reject(po.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${po.number} rejected`)
+    })
+  }
+
   const billFromGrn = (grn) => {
     if (!grn?.id) return
     navigate(`/purchases/bills/new?fromGrn=${grn.id}`)
@@ -780,7 +798,7 @@ export default function PurchasesPage() {
             <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
             <select className="form-input" style={{ width: 140 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
               <option value="">All Status</option>
-              {['draft','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
+              {['draft','pending_approval','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
             </select>
             <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
               <option value="">All Vendors</option>
@@ -817,7 +835,8 @@ export default function PurchasesPage() {
                     const isConverted = o.status === 'converted'
                     const isCancelled = o.status === 'cancelled'
                     const isPartiallyReceived = o.status === 'partially_received'
-                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived
+                    const isPendingApproval = o.status === 'pending_approval'
+                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived && !isPendingApproval
                     return (
                       <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -839,6 +858,19 @@ export default function PurchasesPage() {
                             <RowActionsMenu
                               ariaLabel={`Actions for ${o.number}`}
                               actions={[
+                                {
+                                  label: 'Approve',
+                                  hidden: !isPendingApproval || !can('purchases.approve'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => approvePO(o),
+                                },
+                                {
+                                  label: 'Reject',
+                                  danger: true,
+                                  hidden: !isPendingApproval || !can('purchases.approve'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => rejectPO(o),
+                                },
                                 {
                                   label: 'View',
                                   hidden: !(isConverted || isCancelled || isPartiallyReceived) || !can('purchases.edit'),

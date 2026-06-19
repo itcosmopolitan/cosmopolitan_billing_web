@@ -15,15 +15,10 @@ from src.models import (
     TransferStatus,
     User,
 )
-from src.permissions import expand
+from src.permissions import MODULE_SUMMARY_READ, expand
 from src.security import current_user
 
 router = APIRouter()
-
-_MODULE_VIEW_PERM: dict[str, str] = {
-    "transfers": "transfers.view",
-    "adjustments": "adjustments.view",
-}
 
 
 async def _user_grants(user: User, db: AsyncSession) -> set[str]:
@@ -100,13 +95,13 @@ async def get_module_summary(
     Supported modules: `transfers`, `adjustments`.
     """
     key = module.strip().lower()
-    view_perm = _MODULE_VIEW_PERM.get(key)
-    if not view_perm:
+    allowed = MODULE_SUMMARY_READ.get(key)
+    if not allowed:
         raise HTTPException(400, f"Unknown module: {module}")
 
     grants = await _user_grants(user, db)
-    if "*" not in grants and view_perm not in grants:
-        raise HTTPException(403, f"Missing permission: {view_perm}")
+    if "*" not in grants and not any(p in grants for p in allowed):
+        raise HTTPException(403, f"Missing permission: {' or '.join(allowed)}")
 
     if key == "transfers":
         return await _transfer_summary(db)

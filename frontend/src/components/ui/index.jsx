@@ -90,6 +90,8 @@ export function Chip({ status, label, custom }) {
     out:      { cls: 'chip-out',      lbl: 'Out of Stock' },
     cancelled:{ cls: 'chip-out',      lbl: 'Cancelled' },
     inactive: { cls: 'chip-out',      lbl: 'Inactive' },
+    pending_approval: { cls: 'chip-pending', lbl: 'Pending Approval' },
+    confirmed: { cls: 'chip-active', lbl: 'Confirmed' },
   }
   if (custom) {
     return <span className="chip" style={{ background: custom.bg, color: custom.color }}>{label}</span>

@@ -3,7 +3,12 @@ import '@/styles/login.css'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
-import { authAPI, permissionsAPI } from '@/api'
+import { authAPI } from '@/api'
+import { resetSessionExpiryGuard } from '@/api/index'
+import {
+  applyBootstrapToStore,
+  bootstrapAuthenticatedData,
+} from '@/auth/bootstrap'
 
 const DEMO_USERS = [
   { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'Super Admin',       avatar: 'SA' },
@@ -20,6 +25,8 @@ const FEATURES = [
 export default function LoginPage() {
   const navigate = useNavigate()
   const setSession = useAppStore((s) => s.setSession)
+  const setPermCatalog = useAppStore((s) => s.setPermCatalog)
+  const setBranches = useAppStore((s) => s.setBranches)
   const [selectedRole, setSelectedRole] = useState('Super Admin')
   const [email, setEmail] = useState('suresh@srimurugan.com')
   const [password, setPassword] = useState('admin123')
@@ -40,8 +47,11 @@ export default function LoginPage() {
       const { token, user } = await authAPI.login(email.trim().toLowerCase(), password)
       if (!token || !user) throw new Error('Malformed login response')
       localStorage.setItem('retailos_token', token)
-      const catalog = await permissionsAPI.catalog().catch(() => undefined)
-      setSession({ user, permissions: user.permissions || [], permCatalog: catalog })
+      resetSessionExpiryGuard()
+      // Set session immediately so route guards pass, then load branches + fresh /me.
+      setSession({ user, permissions: user.permissions || [] })
+      const boot = await bootstrapAuthenticatedData()
+      applyBootstrapToStore(boot, { setSession, setPermCatalog, setBranches })
       if (user.must_change_password) {
         toast('Please set a new password to continue', { icon: '🔐' })
         navigate('/change-password', { replace: true })

@@ -326,7 +326,11 @@ export default function AdjustmentsPage() {
         batch_id: newForm.batch_id || undefined,
         requested_by: user?.name || 'Staff',
       })
-      toast.success(`Adjustment ${res.ref_number} submitted for approval`)
+      toast.success(
+        res.status === 'approved'
+          ? `Adjustment ${res.ref_number} applied`
+          : `Adjustment ${res.ref_number} submitted for approval`,
+      )
       setShowNew(false)
       setNewForm({
         branch_id: activeBranch?.id || 'br-001',

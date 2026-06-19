@@ -89,13 +89,11 @@ async def list_roles(
     else:
         sk = normalize_skip(skip)
         lim = normalize_limit(limit)
-    total = int((await db.execute(select(func.count(Role.id)))).scalar() or 0)
+    base_q = select(Role).where(Role.active == True)  # noqa: E712
+    total = int((await db.execute(select(func.count(Role.id)).where(Role.active == True))).scalar() or 0)  # noqa: E712
     rows = (
         await db.execute(
-            select(Role)
-            .order_by(Role.is_system.desc(), Role.label)
-            .offset(sk)
-            .limit(lim)
+            base_q.order_by(Role.is_system.desc(), Role.label).offset(sk).limit(lim)
         )
     ).scalars().all()
     counts = await _user_counts(db, [r.id for r in rows])
@@ -114,6 +112,11 @@ async def get_role(role_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("users.manage_roles"))])
 async def create_role(data: RoleCreate, db: AsyncSession = Depends(get_db)):
+    if not data.permissions:
+        raise HTTPException(422, "A role must have at least one permission.")
+    perms = _normalize_perms(data.key, data.permissions)
+    if data.key != "super_admin" and not perms:
+        raise HTTPException(422, "A role must have at least one permission.")
     existing = (await db.execute(select(Role).where(Role.key == data.key))).scalar_one_or_none()
     if existing:
         raise HTTPException(409, f"Role key '{data.key}' already exists")
@@ -123,7 +126,7 @@ async def create_role(data: RoleCreate, db: AsyncSession = Depends(get_db)):
         label=data.label,
         description=data.description or "",
         color=data.color or "blue",
-        permissions=_normalize_perms(data.key, data.permissions),
+        permissions=perms,
         is_system=False,
         active=True,
     )
@@ -138,6 +141,8 @@ async def update_role(role_id: str, data: RoleUpdate, db: AsyncSession = Depends
     role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
     if not role:
         raise HTTPException(404, "Role not found")
+    if data.permissions is not None and len(data.permissions) == 0:
+        raise HTTPException(422, "A role must have at least one permission.")
     if data.label is not None:
         role.label = data.label
     if data.description is not None:
@@ -145,7 +150,12 @@ async def update_role(role_id: str, data: RoleUpdate, db: AsyncSession = Depends
     if data.color is not None:
         role.color = data.color
     if data.permissions is not None:
-        role.permissions = _normalize_perms(role.key, data.permissions)
+        if len(data.permissions) == 0:
+            raise HTTPException(422, "A role must have at least one permission.")
+        normalized = _normalize_perms(role.key, data.permissions)
+        if role.key != "super_admin" and not normalized:
+            raise HTTPException(422, "A role must have at least one permission.")
+        role.permissions = normalized
     if data.active is not None and not role.is_system:
         role.active = data.active
     await db.commit()

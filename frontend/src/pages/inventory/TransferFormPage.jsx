@@ -239,7 +239,11 @@ export default function TransferFormPage({ mode = 'create' }) {
       } else {
         const payload = buildTransferPayload(form, items, { requestedBy: user?.name || 'Staff' })
         const res = await transfersAPI.create(payload)
-        toast.success(`Transfer ${res.ref_number} submitted`)
+        toast.success(
+          res.status === 'transit'
+            ? `Transfer ${res.ref_number} approved and dispatched`
+            : `Transfer ${res.ref_number} submitted for approval`,
+        )
       }
       navigate('/transfers')
     } catch (err) {

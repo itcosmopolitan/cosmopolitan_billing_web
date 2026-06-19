@@ -33,6 +33,7 @@ from src.models import (
     SalesOrder,
 )
 from src.routes._numbering import parse_numbering_config, serialize_numbering_config
+from src.permissions import BILLING_SETTINGS_READ
 from src.security import current_user, require_perm
 
 router = APIRouter()
@@ -97,7 +98,7 @@ async def _get_organisation(db: AsyncSession) -> Optional[Organisation]:
     return (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
 
 
-@router.get("/organisation", dependencies=[Depends(require_perm("settings.view"))])
+@router.get("/organisation", dependencies=[Depends(require_perm(*BILLING_SETTINGS_READ))])
 async def get_organisation(db: AsyncSession = Depends(get_db)):
     org = await _get_organisation(db)
     if not org:
@@ -388,7 +389,7 @@ async def _get_invoice_template(db: AsyncSession) -> Optional[InvoiceTemplateSet
     return (await db.execute(select(InvoiceTemplateSettings).limit(1))).scalar_one_or_none()
 
 
-@router.get("/invoice-template", dependencies=[Depends(require_perm("settings.view"))])
+@router.get("/invoice-template", dependencies=[Depends(require_perm(*BILLING_SETTINGS_READ))])
 async def get_invoice_template(db: AsyncSession = Depends(get_db)):
     row = await _get_invoice_template(db)
     if not row:

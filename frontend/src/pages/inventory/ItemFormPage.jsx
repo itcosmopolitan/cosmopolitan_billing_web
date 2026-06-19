@@ -75,9 +75,9 @@ export default function ItemFormPage({ mode = 'create' }) {
   const patchForm = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
   useEffect(() => {
-    if (isEdit && !can('items.edit')) {
+    if (isEdit && !can('item_master.edit')) {
       navigate('/item-master', { replace: true })
-    } else if (!isEdit && !can('items.create')) {
+    } else if (!isEdit && !can('item_master.create')) {
       navigate('/item-master', { replace: true })
     }
   }, [can, navigate, isEdit])
@@ -222,8 +222,12 @@ export default function ItemFormPage({ mode = 'create' }) {
           toast.success('Item updated')
         }
       } else {
-        await itemsAPI.create(buildCreatePayload(form, branchConfigs, defaultBranchId))
-        toast.success('Item created — add stock per branch from Items & Stock')
+        const res = await itemsAPI.create(buildCreatePayload(form, branchConfigs, defaultBranchId))
+        toast.success(
+          res.approval_status === 'pending'
+            ? 'Item submitted for manager approval'
+            : 'Item created — add stock per branch from Items & Stock',
+        )
       }
       navigate('/item-master')
     } catch (err) {

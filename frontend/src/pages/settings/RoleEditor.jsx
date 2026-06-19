@@ -196,6 +196,10 @@ export default function RoleEditor({
       return
     }
     const permissions = isSuperAdmin ? ['*'] : flattenIndex(idx, catalog)
+    if (!isSuperAdmin && permissions.length === 0) {
+      toast.error('Select at least one permission before saving.')
+      return
+    }
     setSaving(true)
     try {
       const saved = isEdit
@@ -222,6 +226,8 @@ export default function RoleEditor({
             return s
           }, 0))
 
+  const canSave = isSuperAdmin || totalGranted > 0
+
   return (
     <Modal
       open={open}
@@ -232,7 +238,12 @@ export default function RoleEditor({
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button className="btn btn-primary" onClick={save} disabled={saving}>
+          <button
+            className="btn btn-primary"
+            onClick={save}
+            disabled={saving || !canSave}
+            title={!canSave ? 'Select at least one permission' : undefined}
+          >
             {saving ? 'Saving…' : (isEdit ? 'Update Role' : 'Create Role')}
           </button>
         </>

@@ -43,7 +43,6 @@ from src.routes._lifecycle import (
     _recompute_invoice_status,
 )
 from src.routes._credit_ledger import adjust_customer_credit
-from src.routes._numbering import next_sale_invoice_number
 from src.routes._payment_ledger import record_customer_payment, void_payment_record
 from src.routes._cash_ledger import record_cash_in, record_cash_out, void_cash_entry as void_cash_for_payment
 from src.routes._stock_ledger import (
@@ -65,6 +64,7 @@ from src.routes._atomic import (
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import get_user_branch_ids
+from src.permissions import SALES_DOCUMENT_READ
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
@@ -256,7 +256,7 @@ def _sale_invoice_filters(
 
 
 # ─── LIST ─────────────────────────────────────────────────────────────────────
-@router.get("/", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_invoices(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
@@ -318,7 +318,7 @@ async def list_invoices(
 # The real persisted version lives at "Sales Returns: LIST" below.
 
 # ─── QUOTATIONS ───────────────────────────────────────────────────────────────
-@router.get("/quotations/", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/quotations/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_quotations(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
@@ -381,7 +381,7 @@ async def list_quotations(
     items_out = [_quote_dict(qt, qt.line_items) for qt in quotations]
     return paged(items_out, total, sk, lim)
 
-@router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Get a specific quotation"""
     result = await db.execute(select(Quotation).options(selectinload(Quotation.line_items)).where(Quotation.id == quote_id))
@@ -574,7 +574,7 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
 # See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md for the rationale.
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
-@router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/{invoice_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
     inv = result.scalar_one_or_none()
@@ -657,11 +657,14 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         inv_origin = "quotation"
     elif data.sales_order_id:
         inv_origin = "sales_order"
+    inv_doc_type = "pos_receipt" if inv_origin == "pos" else "sales_invoice"
     inv_num = await resolve_number(
         db,
         requested=data.number,
         model=SaleInvoice,
-        allocate=lambda: next_sale_invoice_number(db, inv_origin),
+        allocate=lambda: allocate_number(
+            db, inv_doc_type, branch_id=data.branch_id,
+        ),
     )
 
     inv = SaleInvoice(
@@ -1241,7 +1244,7 @@ def _payment_dict(p, allocations=None):
 
 
 # ─── PAYMENTS: LIST ──────────────────────────────────────────────────────────
-@router.get("/payments/", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/payments/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_payments(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -1300,7 +1303,7 @@ async def list_payments(
 
 
 # ─── PAYMENTS: GET ───────────────────────────────────────────────────────────
-@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(
         select(CustomerPayment)
@@ -2153,7 +2156,7 @@ async def _link_sales_order_to_invoice(
 
 
 # ─── Sales Order: LIST ───────────────────────────────────────────────────────
-@router.get("/orders/", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/orders/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_orders(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -2202,7 +2205,7 @@ async def list_orders(
 
 
 # ─── Sales Order: GET ONE ────────────────────────────────────────────────────
-@router.get("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/orders/{order_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(
         select(SalesOrder)
@@ -2475,7 +2478,7 @@ async def convert_order_to_invoice(
     inv_total = round(max(0.0, inv_subtotal + inv_tax_total - inv_discount), 2)
 
     today = datetime.now().strftime("%Y-%m-%d")
-    inv_num = await next_sale_invoice_number(db, "sales_order")
+    inv_num = await allocate_number(db, "sales_invoice", branch_id=so.branch_id)
 
     paid = inv_total if data.payment_received else 0.0
     status = "paid" if paid >= inv_total and inv_total > 0 else "pending"
@@ -2800,7 +2803,7 @@ async def convert_quote_to_invoice(
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
 
     today = datetime.now().strftime("%Y-%m-%d")
-    inv_num = await next_sale_invoice_number(db, "quotation")
+    inv_num = await allocate_number(db, "sales_invoice", branch_id=quote.branch_id)
     paid = quote.total if data.payment_received else 0.0
     status = "paid" if paid >= quote.total else "pending"
     payment_mode = data.payment_mode if data.payment_received else None
@@ -3057,7 +3060,7 @@ async def _restored_per_batch_for_invoice_line(
 # found". The frontend's `salesAPI.returns.list` calls `/sales/returns/`
 # with a trailing slash; matching that to `/returns/` here skips the
 # /{invoice_id} fallback entirely. /orders/ already follows this pattern.
-@router.get("/returns/", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/returns/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_returns(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -3107,7 +3110,7 @@ async def list_returns(
 
 
 # ─── Sales Returns: GET ONE ──────────────────────────────────────────────────
-@router.get("/returns/{return_id}", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/returns/{return_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(
         select(SalesReturn)
@@ -3285,7 +3288,7 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db)):
 
 
 # ─── GET ONE INVOICE (after /orders/, /returns/, /payments/ static paths) ───
-@router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
+@router.get("/{invoice_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
     inv = result.scalar_one_or_none()
