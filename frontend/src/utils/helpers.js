@@ -101,6 +101,9 @@ export const matchSearch = (item, query, fields) => {
   const q = query.toLowerCase()
   return fields.some((f) => String(item[f] || '').toLowerCase().includes(q))
 }
+
+import * as XLSX from 'xlsx'
+
 // ─── Export to CSV ────────────────────────────────────────────────────────────
 export const exportToCSV = (data, filename = 'export.csv', columns = null) => {
   if (!data || data.length === 0) {
@@ -141,4 +144,25 @@ export const exportToCSV = (data, filename = 'export.csv', columns = null) => {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+}
+
+export const exportToExcel = (data, filename = 'export.xlsx', columns = null) => {
+  if (!data || data.length === 0) {
+    console.warn('No data to export')
+    return
+  }
+
+  const cols = columns || Object.keys(data[0])
+  const normalizedRows = data.map((row) => {
+    const normalized = {}
+    cols.forEach((col) => {
+      normalized[col] = row[col] ?? ''
+    })
+    return normalized
+  })
+
+  const worksheet = XLSX.utils.json_to_sheet(normalizedRows, { header: cols })
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Report')
+  XLSX.writeFile(workbook, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`)
 }

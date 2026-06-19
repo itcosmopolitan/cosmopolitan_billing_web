@@ -13,7 +13,7 @@ export default function DashboardHeader({
   onExport,
 }) {
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
+    <div className="card" style={{ marginBottom: 16, overflow: 'visible' }}>
       <div className="card-body" style={{ padding: 16 }}>
         <div
           style={{
@@ -65,12 +65,12 @@ export default function DashboardHeader({
                 Updating dashboard…
               </div>
             ) : null}
-            <ExportMenu onExport={onExport} disabled={isFetching} />
+            {/* <ExportMenu onExport={onExport} disabled={isFetching} /> */}
             <button type="button" className="btn btn-secondary" onClick={onRefresh} disabled={isFetching} title="Refresh dashboard data" style={{ height: 42 }}>
               <Icon.RefreshCw size={15} className={isFetching ? 'spinner' : undefined} />
               Refresh
             </button>
-            <button
+            {/* <button
               type="button"
               className={`btn ${autoRefresh ? 'btn-primary' : 'btn-secondary'}`}
               onClick={onToggleAutoRefresh}
@@ -79,7 +79,7 @@ export default function DashboardHeader({
             >
               <Icon.Clock size={15} />
               Auto
-            </button>
+            </button> */}
           </div>
         </div>
       </div>

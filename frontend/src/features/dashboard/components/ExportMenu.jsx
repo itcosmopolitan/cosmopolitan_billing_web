@@ -36,7 +36,7 @@ export default function ExportMenu({ onExport, disabled = false }) {
               borderRadius: 8,
               boxShadow: 'var(--shadow-md)',
               padding: 4,
-              zIndex: 20,
+              zIndex: 200,
             }}
           >
             {['excel', 'pdf', 'csv'].map((format) => (
