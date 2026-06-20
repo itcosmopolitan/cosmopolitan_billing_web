@@ -1336,7 +1336,7 @@ async def current_stock(
 ):
     conds = []
     if branch_id:
-        conds.append(InventorySnapshot.branch_id == branch_id)
+        conds.append(ItemStock.branch_id == branch_id)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
@@ -1344,10 +1344,10 @@ async def current_stock(
         "product_code": Item.sku,
         "product_name": Item.name,
         "category": Category.name,
-        "branch": InventorySnapshot.branch_id,
-        "available_stock": InventorySnapshot.quantity,
-        "reserved_stock": InventorySnapshot.reorder_level,
-        "stock_value": InventorySnapshot.inventory_value,
+        "branch": ItemStock.branch_id,
+        "available_stock": ItemStock.quantity,
+        "reserved_stock": Item.reorder_level,
+        "stock_value": ItemStock.quantity * func.coalesce(Item.cost_price, 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product_name", "asc")
@@ -1358,13 +1358,13 @@ async def current_stock(
             Item.sku.label("product_code"),
             Item.name.label("product_name"),
             Category.name.label("category"),
-            InventorySnapshot.branch_id.label("branch"),
-            InventorySnapshot.quantity.label("available_stock"),
-            InventorySnapshot.reorder_level.label("reserved_stock"),
-            InventorySnapshot.inventory_value.label("stock_value"),
+            ItemStock.branch_id.label("branch"),
+            ItemStock.quantity.label("available_stock"),
+            Item.reorder_level.label("reserved_stock"),
+            (ItemStock.quantity * func.coalesce(Item.cost_price, 0)).label("stock_value"),
         )
-        .join(Item, Item.id == InventorySnapshot.item_id)
-        .join(Category, Category.id == InventorySnapshot.category_id, isouter=True)
+        .join(Item, Item.id == ItemStock.item_id)
+        .join(Category, Category.id == Item.category_id, isouter=True)
         .where(and_(*conds) if conds else True)
     )
     total_q = select(func.count()).select_from(base.subquery())
@@ -1384,17 +1384,17 @@ async def low_stock(
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    conds = [InventorySnapshot.quantity <= InventorySnapshot.reorder_level]
+    conds = [ItemStock.quantity <= Item.reorder_level]
     if branch_id:
-        conds.append(InventorySnapshot.branch_id == branch_id)
+        conds.append(ItemStock.branch_id == branch_id)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
     sort_map = {
         "product": Item.name,
-        "available_quantity": InventorySnapshot.quantity,
-        "reorder_level": InventorySnapshot.reorder_level,
-        "branch": InventorySnapshot.branch_id,
+        "available_quantity": ItemStock.quantity,
+        "reorder_level": Item.reorder_level,
+        "branch": ItemStock.branch_id,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product", "asc")
@@ -1403,11 +1403,11 @@ async def low_stock(
     base = (
         select(
             Item.name.label("product"),
-            InventorySnapshot.quantity.label("available_quantity"),
-            InventorySnapshot.reorder_level.label("reorder_level"),
-            InventorySnapshot.branch_id.label("branch"),
+            ItemStock.quantity.label("available_quantity"),
+            Item.reorder_level.label("reorder_level"),
+            ItemStock.branch_id.label("branch"),
         )
-        .join(Item, Item.id == InventorySnapshot.item_id)
+        .join(Item, Item.id == ItemStock.item_id)
         .where(and_(*conds))
     )
     total_q = select(func.count()).select_from(base.subquery())
@@ -1427,16 +1427,16 @@ async def out_of_stock(
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    conds = [InventorySnapshot.quantity <= 0]
+    conds = [ItemStock.quantity <= 0]
     if branch_id:
-        conds.append(InventorySnapshot.branch_id == branch_id)
+        conds.append(ItemStock.branch_id == branch_id)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
     sort_map = {
         "product": Item.name,
         "category": Category.name,
-        "branch": InventorySnapshot.branch_id,
+        "branch": ItemStock.branch_id,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product", "asc")
@@ -1446,10 +1446,10 @@ async def out_of_stock(
         select(
             Item.name.label("product"),
             Category.name.label("category"),
-            InventorySnapshot.branch_id.label("branch"),
+            ItemStock.branch_id.label("branch"),
         )
-        .join(Item, Item.id == InventorySnapshot.item_id)
-        .join(Category, Category.id == InventorySnapshot.category_id, isouter=True)
+        .join(Item, Item.id == ItemStock.item_id)
+        .join(Category, Category.id == Item.category_id, isouter=True)
         .where(and_(*conds))
     )
     total_q = select(func.count()).select_from(base.subquery())
@@ -1693,8 +1693,11 @@ async def outstanding_receivables(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
+    start, end = _normalize_date_range(date_from, date_to)
     conds = [SaleInvoice.total > SaleInvoice.paid_amount]
     if branch_id:
         conds.append(SaleInvoice.branch_id == branch_id)
@@ -1703,6 +1706,8 @@ async def outstanding_receivables(
             SaleInvoice.number.ilike(f"%{search}%")
             | SaleInvoice.customer_name.ilike(f"%{search}%")
         )
+    conds.append(SaleInvoice.date >= start)
+    conds.append(SaleInvoice.date <= end)
     sort_map = {
         "customer": SaleInvoice.customer_name,
         "invoice_number": SaleInvoice.number,
@@ -1741,8 +1746,11 @@ async def outstanding_payables(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
+    start, end = _normalize_date_range(date_from, date_to)
     conds = [PurchaseBill.total > PurchaseBill.paid_amount]
     if branch_id:
         conds.append(PurchaseBill.branch_id == branch_id)
@@ -1751,6 +1759,8 @@ async def outstanding_payables(
             PurchaseBill.number.ilike(f"%{search}%")
             | PurchaseBill.vendor_name.ilike(f"%{search}%")
         )
+    conds.append(PurchaseBill.date >= start)
+    conds.append(PurchaseBill.date <= end)
     sort_map = {
         "vendor": PurchaseBill.vendor_name,
         "bill_number": PurchaseBill.number,

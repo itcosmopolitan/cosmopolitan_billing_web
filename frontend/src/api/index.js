@@ -324,6 +324,13 @@ export const cashAPI = {
   entries: (branchId, date) => api.get(`/cash/${branchId}/entries`, { params: { date } }),
   summary: (branchId, date) => api.get(`/cash/${branchId}/summary`, { params: { date } }),
   add:     (branchId, data) => api.post(`/cash/${branchId}/entries`, data),
+  delete:  (branchId, entryId) => api.delete(`/cash/${branchId}/entries/${entryId}`),
+  void:    (branchId, entryId, data) => api.post(`/cash/${branchId}/entries/${entryId}/void`, data),
+  history: (branchId, params) => api.get(`/cash/${branchId}/history`, { params }),
+  unlock:  (branchId, closeId, data) => api.post(`/cash/${branchId}/close/${closeId}/unlock`, data),
+  categories: {
+    list: (params) => api.get('/cash/categories', { params }),
+  },
   close:   (branchId, data) => api.post(`/cash/${branchId}/close`, data),
 }
 
