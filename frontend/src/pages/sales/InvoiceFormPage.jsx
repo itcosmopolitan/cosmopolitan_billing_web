@@ -49,11 +49,11 @@ export default function InvoiceFormPage() {
   const navigate = useNavigate()
   const can = useCan()
   const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
+  const branches = useAppStore((s) => s.branches)
 
   const [form, setForm] = useState(() => emptyInvoiceForm(activeBranchId))
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const [conversionLabel, setConversionLabel] = useState(null)
-  const [branches, setBranches] = useState([])
   const [loading, setLoading] = useState(!!fromQuoteId || !!fromOrderId)
   const [saving, setSaving] = useState(false)
 
@@ -64,13 +64,6 @@ export default function InvoiceFormPage() {
       navigate('/sales?tab=invoices', { replace: true })
     }
   }, [can, navigate])
-
-  useEffect(() => {
-    branchesAPI.list({ skip: 0, limit: 500 }).then((raw) => {
-      const { items } = unwrapPaged(raw)
-      setBranches(items || [])
-    }).catch(() => setBranches([]))
-  }, [])
 
   useEffect(() => {
     if (!fromQuoteId && !fromOrderId) return

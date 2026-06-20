@@ -22,11 +22,11 @@ export default function QuoteFormPage({ mode = 'create' }) {
   const navigate = useNavigate()
   const can = useCan()
   const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
+  const branches = useAppStore((s) => s.branches)
 
   const [form, setForm] = useState(() => emptyQuoteForm(activeBranchId))
   const pqf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const [editingNumber, setEditingNumber] = useState(null)
-  const [branches, setBranches] = useState([])
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
 
@@ -39,13 +39,6 @@ export default function QuoteFormPage({ mode = 'create' }) {
       navigate('/sales?tab=quotes', { replace: true })
     }
   }, [can, navigate, isEdit, readOnly])
-
-  useEffect(() => {
-    branchesAPI.list({ skip: 0, limit: 500 }).then((raw) => {
-      const { items } = unwrapPaged(raw)
-      setBranches(items || [])
-    }).catch(() => setBranches([]))
-  }, [])
 
   useEffect(() => {
     if (!isEdit || !quoteId) return

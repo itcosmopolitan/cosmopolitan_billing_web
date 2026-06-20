@@ -59,6 +59,7 @@ export default function InventoryItemPicker({
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef(null)
   const inputRef = useRef(null)
+  const lastQueryRef = useRef(null)
 
   // Close the dropdown when the operator clicks outside the picker. Without
   // this, opening one picker then clicking elsewhere in the modal would
@@ -81,6 +82,9 @@ export default function InventoryItemPicker({
     if (value) return
     if (!open) return
     let cancelled = false
+    const key = `${open ? 1 : 0}|${branchId || ''}|${search || ''}|${excludeIds.join('|')}`
+    if (lastQueryRef.current === key) return
+    lastQueryRef.current = key
     const timer = setTimeout(async () => {
       setLoading(true)
       try {

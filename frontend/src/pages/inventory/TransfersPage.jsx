@@ -10,6 +10,10 @@ import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate } from '@/utils/helpers'
 import RowActionsMenu from './RowActionsMenu'
 
+// In-flight request cache to avoid duplicate identical fetches across
+// remounts (helps reduce dev StrictMode double-calls showing in Network).
+const inFlightTransfersRequests = new Map()
+
 const TAB_DEFS = [
   { id: 'all',      label: 'All Transfers' },
   { id: 'pending',  label: 'Pending Approval' },
@@ -57,6 +61,7 @@ export default function TransfersPage() {
   const [deleteTargets, setDeleteTargets] = useState(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const selectAllRef = useRef(null)
+  const lastFetchKeyRef = useRef(null)
   const canDelete = can('transfers.delete')
   const canCreate = can('transfers.create')
 
@@ -71,43 +76,48 @@ export default function TransfersPage() {
   }, [searchParams, setSearchParams])
 
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        setListLoading(true)
-        const raw = await transfersAPI.list({
-          skip: trSkip,
-          limit: trLimit,
-          sort_by: trSortBy,
-          sort_order: trSortOrder,
-          status: tab === 'all' ? undefined : tab,
-        })
-        const { items, total } = unwrapPaged(raw)
-        if (!cancelled) {
-          setTransfers(items || [])
-          setListTotal(total)
+      const key = `${tab}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
+      let cancelled = false
+      const run = async () => {
+        try {
+          setListLoading(true)
+          let promise = inFlightTransfersRequests.get(key)
+          if (!promise) {
+            promise = Promise.all([
+              transfersAPI.list({
+                skip: trSkip,
+                limit: trLimit,
+                sort_by: trSortBy,
+                sort_order: trSortOrder,
+                status: tab === 'all' ? undefined : tab,
+              }),
+              summariesAPI.get('transfers'),
+            ])
+            inFlightTransfersRequests.set(key, promise)
+          }
+          const [raw, summaryData] = await promise
+          const { items, total } = unwrapPaged(raw)
+          if (!cancelled) {
+            setTransfers(items || [])
+            setListTotal(total)
+            setSummary(summaryData)
+          }
+        } catch (err) {
+          console.error('Failed to fetch transfers:', err)
+          if (!cancelled) {
+            setTransfers([])
+            setListTotal(0)
+            setSummary(null)
+            toast.error('Failed to load transfers')
+          }
+        } finally {
+          if (!cancelled) setListLoading(false)
+          inFlightTransfersRequests.delete(key)
         }
-      } catch (err) {
-        console.error('Failed to fetch transfers:', err)
-        if (!cancelled) {
-          setTransfers([])
-          setListTotal(0)
-          toast.error('Failed to load transfers')
-        }
-      } finally {
-        if (!cancelled) setListLoading(false)
       }
-    })()
-    return () => { cancelled = true }
+      run()
+      return () => { cancelled = true }
   }, [tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
-
-  useEffect(() => {
-    let cancelled = false
-    summariesAPI.get('transfers')
-      .then((data) => { if (!cancelled) setSummary(data) })
-      .catch(() => { if (!cancelled) setSummary(null) })
-    return () => { cancelled = true }
-  }, [listVersion])
 
   useEffect(() => {
     setSelectedIds(new Set())

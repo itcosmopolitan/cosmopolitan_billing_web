@@ -86,6 +86,8 @@ export default function POSPage() {
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
   const skipSearchEffectRef = useRef(true)
+  const lastProductsBranchRef = useRef(null)
+  const lastCustomersBranchRef = useRef(null)
 
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
@@ -256,6 +258,8 @@ export default function POSPage() {
 
   useEffect(() => {
     const branchId = activeBranch?.id || 'br-001'
+    if (lastProductsBranchRef.current === branchId) return
+    lastProductsBranchRef.current = branchId
     setCategories([{ id: 'all', name: 'All', icon: '⊞' }])
     resetProducts(branchId, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -273,6 +277,8 @@ export default function POSPage() {
 
   useEffect(() => {
     const branchId = activeBranch?.id || 'br-001'
+    if (lastCustomersBranchRef.current === branchId) return
+    lastCustomersBranchRef.current = branchId
     fetchCustomers().catch((err) => {
       console.error('Failed to fetch customers:', err)
       setCustomers(mapSeedCustomersForBranch(branchId))

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { customersAPI, branchesAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
@@ -23,21 +24,12 @@ export default function CustomersPage() {
   const [custSortBy, setCustSortBy] = useState('name')
   const [custSortOrder, setCustSortOrder] = useState('asc')
   const [custSummary, setCustSummary] = useState(null)
-  const [branches, setBranches] = useState([])
+  const branches = useAppStore((s) => s.branches)
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
   const [form, setForm]         = useState({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id:'', credit_limit:'10000', customer_type:'retail' })
 
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
-
-  const loadBranches = useCallback(async () => {
-    const raw = await fetchAllList(branchesAPI.list).catch(() => [])
-    setBranches(raw || [])
-  }, [])
-
-  useEffect(() => {
-    loadBranches()
-  }, [loadBranches])
 
   useEffect(() => {
     if (branches.length > 0 && !form.branch_id) {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { itemsAPI, taxRatesAPI } from '@/api'
+import { itemsAPI, taxRatesAPI, dashAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fetchAllList } from '@/utils/pagination'
@@ -51,14 +51,8 @@ export default function ItemFormPage({ mode = 'create' }) {
   }, [can, navigate, isEdit])
 
   useEffect(() => {
-    if (isEdit && loading) return
-    const params = { active_only: true }
-    const currentRate = form.tax_rate
-    if (currentRate !== '' && currentRate != null && currentRate !== undefined) {
-      params.include_inactive_rates = String(currentRate)
-    }
-    fetchAllList((p) => taxRatesAPI.list({ ...p, ...params }))
-      .then((data) => setTaxRates(data || []))
+    taxRatesAPI.list()
+      .then((data) => setTaxRates(Array.isArray(data) ? data : []))
       .catch((err) => console.error('Failed to load tax rates:', err))
   }, [form.tax_rate, isEdit, loading])
 

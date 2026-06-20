@@ -1,6 +1,7 @@
 
 import logging
 from datetime import date, datetime, time, timedelta
+from collections import defaultdict
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query

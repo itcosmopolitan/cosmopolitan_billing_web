@@ -26,6 +26,8 @@ import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+// In-flight cache to deduplicate identical purchases requests across remounts
+const inFlightPurchasesRequests = new Map()
 import VendorReturnFormModal from './VendorReturnFormModal'
 import VendorPaymentFormModal from './VendorPaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
@@ -289,7 +291,20 @@ export default function PurchasesPage() {
   }, [])
 
   useEffect(() => {
-    loadMasters()
+    let cancelled = false
+    if (!loadMasters) return
+    const key = 'vendors-masters'
+    // simple module-level in-flight guard
+    if (!window.__inFlightPurchasesMasters) window.__inFlightPurchasesMasters = {}
+    if (window.__inFlightPurchasesMasters[key]) return
+    window.__inFlightPurchasesMasters[key] = true
+    ;(async () => {
+      try {
+        await loadMasters()
+      } finally {
+        delete window.__inFlightPurchasesMasters[key]
+      }
+    })()
   }, [loadMasters])
 
   useEffect(() => {
@@ -303,21 +318,27 @@ export default function PurchasesPage() {
   // Bills list
   useEffect(() => {
     if (tab !== 'bills') return
+    const key = `bills|${billSkip}|${billLimit}|${billSortBy}|${billSortOrder}|${search}|${billStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
     let cancelled = false
-    ;(async () => {
+    const run = async () => {
       try {
         setBillLoading(true)
-        const raw = await purchasesAPI.list({
-          skip: billSkip,
-          limit: billLimit,
-          sort_by: billSortBy,
-          sort_order: billSortOrder,
-          search: search || undefined,
-          status: billStatusF || undefined,
-          vendor_id: vendorF || undefined,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-        })
+        let promise = inFlightPurchasesRequests.get(key)
+        if (!promise) {
+          promise = purchasesAPI.list({
+            skip: billSkip,
+            limit: billLimit,
+            sort_by: billSortBy,
+            sort_order: billSortOrder,
+            search: search || undefined,
+            status: billStatusF || undefined,
+            vendor_id: vendorF || undefined,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+          })
+          inFlightPurchasesRequests.set(key, promise)
+        }
+        const raw = await promise
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setBills(items || [])
@@ -332,29 +353,37 @@ export default function PurchasesPage() {
         toast.error('Failed to load purchases data')
       } finally {
         if (!cancelled) setBillLoading(false)
+        inFlightPurchasesRequests.delete(key)
       }
-    })()
+    }
+    run()
     return () => { cancelled = true }
   }, [tab, billSkip, billLimit, search, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
 
   // Orders list — same no-branch-filter policy as bills (see above).
   useEffect(() => {
     if (tab !== 'orders') return
+    const key = `orders|${orderSkip}|${orderLimit}|${orderSortBy}|${orderSortOrder}|${search}|${orderStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
     let cancelled = false
-    ;(async () => {
+    const run = async () => {
       try {
         setOrderLoading(true)
-        const raw = await purchasesAPI.orders.list({
-          skip: orderSkip,
-          limit: orderLimit,
-          sort_by: orderSortBy,
-          sort_order: orderSortOrder,
-          search: search || undefined,
-          status: orderStatusF || undefined,
-          vendor_id: vendorF || undefined,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-        })
+        let promise = inFlightPurchasesRequests.get(key)
+        if (!promise) {
+          promise = purchasesAPI.orders.list({
+            skip: orderSkip,
+            limit: orderLimit,
+            sort_by: orderSortBy,
+            sort_order: orderSortOrder,
+            search: search || undefined,
+            status: orderStatusF || undefined,
+            vendor_id: vendorF || undefined,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+          })
+          inFlightPurchasesRequests.set(key, promise)
+        }
+        const raw = await promise
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
           setOrders(items || [])
@@ -368,8 +397,10 @@ export default function PurchasesPage() {
         }
       } finally {
         if (!cancelled) setOrderLoading(false)
+        inFlightPurchasesRequests.delete(key)
       }
-    })()
+    }
+    run()
     return () => { cancelled = true }
   }, [tab, orderSkip, orderLimit, search, orderStatusF, vendorF, dateFrom, dateTo, listVersion, orderSortBy, orderSortOrder])
 
