@@ -440,25 +440,29 @@ export default function ReportsPage() {
   const selectedReport = REPORT_MAP[reportType]
   const reportOptions = REPORT_CATEGORIES.find((item) => item.id === category)?.reports || []
 
-  useEffect(() => {
-    if (!reportOptions.some((report) => report.id === reportType)) {
-      const firstReport = reportOptions[0]
-      if (firstReport) {
-        setReportType(firstReport.id)
-        setSortBy(firstReport.defaultSort || firstReport.columns[0]?.key)
-        setSortOrder('desc')
-        setSkip(0)
-      }
+  const handleCategoryChange = (nextCategory) => {
+    const nextReportOptions = REPORT_CATEGORIES.find((item) => item.id === nextCategory)?.reports || []
+    const firstReport = nextReportOptions[0]
+    setCategory(nextCategory)
+    if (firstReport) {
+      setReportType(firstReport.id)
+      setSortBy(firstReport.defaultSort || firstReport.columns[0]?.key)
+      setSortOrder('desc')
+      setSkip(0)
+      setRunKey(Date.now())
     }
-  }, [category])
+  }
 
-  useEffect(() => {
-    if (!selectedReport) return
-    setSortBy(selectedReport.defaultSort || selectedReport.columns[0]?.key)
-    setSortOrder('desc')
-    setSkip(0)
-    setRunKey(Date.now())
-  }, [reportType])
+  const handleReportTypeChange = (nextReportType) => {
+    const nextReport = REPORT_MAP[nextReportType]
+    setReportType(nextReportType)
+    if (nextReport) {
+      setSortBy(nextReport.defaultSort || nextReport.columns[0]?.key)
+      setSortOrder('desc')
+      setSkip(0)
+      setRunKey(Date.now())
+    }
+  }
   // Live API data per tab. KPIs render from these; detail tables still use
   // seed (Phase 4 backlog).
   const [salesSummary, setSalesSummary] = useState(null)
@@ -625,7 +629,7 @@ export default function ReportsPage() {
           </div>
           <div>
             <label className="form-label">Report</label>
-            <select className="form-input" value={reportType} onChange={(e) => setReportType(e.target.value)}>
+            <select className="form-input" value={reportType} onChange={(e) => handleReportTypeChange(e.target.value)}>
               {reportOptions.map((report) => (
                 <option key={report.id} value={report.id}>{report.label}</option>
               ))}
@@ -640,7 +644,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <Tabs tabs={REPORT_CATEGORIES.map((item) => ({ id: item.id, label: item.label }))} active={category} onChange={setCategory} />
+<Tabs tabs={REPORT_CATEGORIES.map((item) => ({ id: item.id, label: item.label }))} active={category} onChange={handleCategoryChange} />
 
       <Card title={selectedReport ? selectedReport.label : 'Report'} titleRight={<div style={{ display: 'flex', gap: 8 }}>
         {/* <button className="btn btn-secondary btn-sm" onClick={printReport}>Print</button> */}
