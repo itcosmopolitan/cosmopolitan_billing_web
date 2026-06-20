@@ -34,6 +34,7 @@ import CashMonitorPage from '@/pages/cash/CashMonitorPage'
 import ReportsPage   from '@/pages/reports/ReportsPage'
 import SettingsPage  from '@/pages/settings/SettingsPage'
 import AuditPage     from '@/pages/settings/AuditPage'
+import CustomerDisplayPage from '@/pages/display/CustomerDisplayPage'
 
 function AppShell() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
@@ -148,6 +149,9 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Public live display routes — no login; open on second device/monitor. */}
+      <Route path="/customer-view" element={<CustomerDisplayPage />} />
+      <Route path="/customer-view/:roomId" element={<CustomerDisplayPage />} />
       <Route path="/login" element={<LoginPage />} />
       {/* /change-password sits OUTSIDE the RequirePasswordSet wrap on purpose
           — that's the one route users with must_change_password=true need to

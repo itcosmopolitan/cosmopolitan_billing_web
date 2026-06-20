@@ -6,6 +6,8 @@ import { itemsAPI, customersAPI, salesAPI, settingsAPI } from '@/api'
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
+import { useDisplaySocket } from '@/hooks/useDisplaySocket'
+import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/displayShared'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
@@ -92,6 +94,7 @@ export default function POSPage() {
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const taxPricingMode = useAppStore((s) => s.taxPricingMode)
+  const cashierUser = useAppStore((s) => s.user)
   const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod } = store
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
   // unpaid invoice" case — there's no-one to follow up with for collection.
@@ -531,6 +534,44 @@ export default function POSPage() {
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
 
+  const { displayCode, regenerate: regenerateDisplayCode } = usePosDisplaySession()
+  const { sendCartUpdate, connected: displayConnected } = useDisplaySocket(displayCode, 'cashier')
+
+  const broadcastCustomerDisplay = useCallback(() => {
+    sendCartUpdate(
+      buildPosDisplayPayload(cart, customer, {
+        discountPct,
+        discountAmt,
+        taxPricingMode,
+        branchName: activeBranch?.name,
+        displayCode,
+        cashierName: cashierUser?.name || '',
+      }),
+    )
+  }, [cart, customer, discountPct, discountAmt, taxPricingMode, activeBranch?.name, displayCode, cashierUser?.name, sendCartUpdate])
+
+  const copyDisplayCode = async () => {
+    try {
+      await navigator.clipboard.writeText(displayCode)
+      toast.success('Display code copied')
+    } catch {
+      toast.error('Could not copy code')
+    }
+  }
+
+  const onRegenerateDisplayCode = () => {
+    regenerateDisplayCode()
+    toast('New display code — enter it on the customer screen', { icon: '🔑' })
+  }
+
+  useEffect(() => {
+    broadcastCustomerDisplay()
+  }, [broadcastCustomerDisplay])
+
+  useEffect(() => {
+    if (displayConnected) broadcastCustomerDisplay()
+  }, [displayConnected, broadcastCustomerDisplay])
+
   useEffect(() => {
     if (!isResizing) return undefined
 
@@ -830,6 +871,58 @@ export default function POSPage() {
             title="Drag onto the other column to swap sides"
           />
           <div style={{ flex: 1 }} />
+          <div
+            title="Unique code for this POS terminal — customer enters it at /customer-view"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '4px 8px',
+              borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-raised)',
+            }}
+          >
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>DISPLAY</span>
+            <span style={{
+              fontFamily: 'DM Mono, monospace',
+              fontSize: 13,
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              color: displayConnected ? 'var(--green)' : 'var(--text-primary)',
+            }}
+            >
+              {displayCode}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={copyDisplayCode}
+              title="Copy display code"
+              style={{ padding: '2px 6px', fontSize: 11 }}
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={onRegenerateDisplayCode}
+              title="Generate a new code for this terminal"
+              style={{ padding: '2px 6px', fontSize: 11 }}
+            >
+              ↻
+            </button>
+          </div>
+          <a
+            href={`/customer-view/${encodeURIComponent(displayCode)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn-ghost btn-sm"
+            title="Open customer screen with this terminal's code"
+            style={{ padding: '4px 10px', fontSize: 11.5 }}
+          >
+            Customer screen ↗
+          </a>
           <select className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }} value={customer?.id || ''} onChange={(e) => { const c = customers.find((x) => x.id === e.target.value); store.setCustomer(c || null) }}>
             <option value="">Walk-in Customer</option>
             {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

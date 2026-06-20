@@ -20,6 +20,7 @@ from src.routes import (
     auth,
     branches,
     cash,
+    customer_display,
     customers,
     dashboard,
     items,
@@ -127,6 +128,7 @@ app.include_router(roles.router,       prefix=f"{PREFIX}/roles",       tags=["Ro
 app.include_router(permissions.router, prefix=f"{PREFIX}/permissions", tags=["Permissions"])
 app.include_router(settings_routes.router, prefix=f"{PREFIX}/settings", tags=["Settings"])
 app.include_router(taxes.router,       prefix=f"{PREFIX}/taxes",       tags=["Taxes"])
+app.include_router(customer_display.router, prefix=f"{PREFIX}/ws", tags=["Customer Display WS"])
 
 @app.on_event("startup")
 async def startup():
