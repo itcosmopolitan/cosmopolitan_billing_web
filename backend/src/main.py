@@ -15,8 +15,9 @@ from pathlib import Path
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from src import config
-from src.database import init_schema
+from src.database import assert_activity_audit_schema, init_schema
 from src.routes import (
+    activity,
     auth,
     branches,
     cash,
@@ -111,6 +112,7 @@ async def sqlalchemy_timeout_exception_handler(request, exc):
 # ─── Routers ──────────────────────────────────────────────────────────────────
 PREFIX = "/api/v1"
 app.include_router(auth.router,       prefix=f"{PREFIX}/auth",      tags=["Auth"])
+app.include_router(activity.router,   prefix=f"{PREFIX}/activity",  tags=["Activity"])
 app.include_router(dashboard.router,  prefix=f"{PREFIX}/dashboard", tags=["Dashboard"])
 app.include_router(branches.router,   prefix=f"{PREFIX}/branches",  tags=["Branches"])
 app.include_router(items.router,      prefix=f"{PREFIX}/items",     tags=["Items"])
@@ -135,6 +137,7 @@ async def startup():
     logger.info("Starting FastAPI application startup")
     try:
         await init_schema()
+        await assert_activity_audit_schema()
         logger.info("FastAPI application startup completed")
     except Exception:
         logger.exception("Application startup failed during database initialization")

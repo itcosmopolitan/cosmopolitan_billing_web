@@ -144,6 +144,126 @@ def _coerce_payment_mode_value(v):
     return s
 
 
+def _log_sales_invoice_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    invoice_id: str,
+    invoice_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared sales_invoice activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="sales_invoice",
+        record_id=invoice_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="sales",
+        ref=invoice_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _log_sales_order_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    order_id: str,
+    order_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared sales_order activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="sales_order",
+        record_id=order_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="sales",
+        ref=order_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _log_quotation_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    quote_id: str,
+    quote_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared quotation activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="quotation",
+        record_id=quote_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="sales",
+        ref=quote_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _log_sales_return_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    return_id: str,
+    return_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared sales_return activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="sales_return",
+        record_id=return_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="sales",
+        ref=return_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
 class SaleCreate(BaseModel):
     customer_id: Optional[str] = None
     customer_name: str = "Walk-in"
@@ -392,7 +512,7 @@ async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user:
     return _quote_dict(quote, quote.line_items)
 
 @router.post("/quotations/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
-async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get_db)):
+async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Create a new quotation"""
     # Validate items
     if not data.items or len(data.items) == 0:
@@ -469,12 +589,24 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         db.add(li)
 
     db.add(quote)
+    _log_quotation_history(db, user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="created",
+        action="create_quotation",
+        detail=f"Created quotation {quote.number}",
+        metadata={
+            "status": "draft",
+            "total": round(float(total or 0), 2),
+            "line_count": len(data.items or []),
+        },
+    )
     await db.commit()
     await db.refresh(quote)
     return {"id": quote.id, "number": quote.number, "total": round(total, 2), "status": "draft"}
 
 @router.put("/quotations/{quote_id}", dependencies=[Depends(require_perm("invoices.edit"))])
-async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSession = Depends(get_db)):
+async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full replace of an editable quotation. Editable iff status ∈
     {draft, sent}. Converted / accepted / rejected quotes are locked —
     editing them would orphan downstream SOs / invoices that were
@@ -495,6 +627,8 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
         raise HTTPException(400, f"Cannot edit a {quote.status.value} quotation")
     if not data.items:
         raise HTTPException(400, "Quotation must have at least one line item")
+
+    item_changes = _summarize_quotation_item_changes(list(quote.line_items or []), data.items)
 
     # Same line math as create. LineItemIn's `line_discount` is a percent
     # (matches the invoice/sales convention); QuotationLineItem stores
@@ -539,12 +673,24 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
             discount=line.line_discount or 0,
             line_total=round(line_net + line_tax, 2),
         ))
+
+    preview = item_changes[0]["detail"] if item_changes else f"Revised quotation {quote.number}"
+    if len(item_changes) > 1:
+        preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
+    _log_quotation_history(db, user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="revised",
+        action="revise_quotation",
+        detail=preview,
+        metadata={"changes": item_changes[:20], "line_count": len(data.items or [])},
+    )
     await db.commit()
     return {"id": quote.id, "number": quote.number, "total": total, "status": quote.status.value}
 
 
 @router.patch("/quotations/{quote_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
-async def update_quotation_status(quote_id: str, status: str, db: AsyncSession = Depends(get_db)):
+async def update_quotation_status(quote_id: str, status: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Update quotation status — `status` must be a valid QuotationStatus value."""
     try:
         new_status = QuotationStatus(status)
@@ -563,7 +709,47 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
             400,
             f"Cannot change status of a {quote.status.value} quotation to {new_status.value}",
         )
+    prev_status = quote.status.value if hasattr(quote.status, "value") else str(quote.status)
     quote.status = new_status
+    next_status = new_status.value if hasattr(new_status, "value") else str(new_status)
+    if new_status == QuotationStatus.sent and prev_status != next_status:
+        _log_quotation_history(db, user=user,
+            quote_id=quote.id,
+            quote_number=quote.number,
+            event_type="sent",
+            action="send_quotation",
+            detail=f"Sent quotation {quote.number}",
+            metadata={"from": prev_status, "to": next_status},
+        )
+    elif new_status == QuotationStatus.accepted and prev_status != next_status:
+        _log_quotation_history(db, user=user,
+            quote_id=quote.id,
+            quote_number=quote.number,
+            event_type="accepted",
+            action="accept_quotation",
+            detail=f"Accepted quotation {quote.number}",
+            metadata={"from": prev_status, "to": next_status},
+        )
+    elif new_status == QuotationStatus.rejected and prev_status != next_status:
+        _log_quotation_history(db, user=user,
+            quote_id=quote.id,
+            quote_number=quote.number,
+            event_type="rejected",
+            action="reject_quotation",
+            detail=f"Rejected quotation {quote.number}",
+            metadata={"from": prev_status, "to": next_status},
+            risk="medium",
+        )
+    elif new_status == QuotationStatus.expired and prev_status != next_status:
+        _log_quotation_history(db, user=user,
+            quote_id=quote.id,
+            quote_number=quote.number,
+            event_type="expired",
+            action="expire_quotation",
+            detail=f"Expired quotation {quote.number}",
+            metadata={"from": prev_status, "to": next_status},
+            risk="medium",
+        )
     await db.commit()
     return {"status": quote.status.value}
 
@@ -670,7 +856,7 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         customer_name=data.customer_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
-        cashier=data.cashier,
+        cashier=(user.name if user is not None else data.cashier),
         date=data.date or today,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
@@ -845,8 +1031,8 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             action="customer_credit_debit",
-            user_id=None,
-            user_name=None,
+            user_id=user.id if user is not None else None,
+            user_name=user.name if user is not None else None,
             module="sales",
             ref=inv.number,
             detail=(
@@ -935,10 +1121,43 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         await sync_customer_outstanding(db, data.customer_id)
 
     if data.quotation_id:
-        await _link_quotation_to_invoice(db, data.quotation_id, inv)
+        await _link_quotation_to_invoice(db, data.quotation_id, inv, user=user)
     elif data.sales_order_id:
         await _link_sales_order_to_invoice(
-            db, data.sales_order_id, inv, data.source_order_lines,
+            db, data.sales_order_id, inv, data.source_order_lines, user=user,
+        )
+
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        event_type="created",
+        action="create_invoice",
+        detail=f"Created sales invoice {inv.number}",
+        metadata={
+            "source": inv_origin,
+            "total": round(float(total or 0), 2),
+            "status": status,
+        },
+    )
+    if is_paid_at_create and paid > 0:
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="payment_recorded",
+            action="record_invoice_payment",
+            detail=f"Recorded payment of {round(float(paid), 2)} for {inv.number}",
+            metadata={
+                "amount": round(float(paid), 2),
+                "payment_mode": data.payment_mode,
+            },
+        )
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="status_changed",
+            action="update_invoice_status",
+            detail="Status changed: pending -> paid",
+            metadata={"from": "pending", "to": "paid"},
         )
 
     await db.commit()
@@ -948,7 +1167,7 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/payment", dependencies=[Depends(require_perm("invoices.edit"))])
-async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db)):
+async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Record a payment against an invoice.
 
     Sales Phase 1 (2026-05-23) behavior:
@@ -980,6 +1199,7 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
     pre_total = float(pre_row.total or 0)
     pre_paid = float(pre_row.paid_amount or 0)
     pre_balance = max(0.0, pre_total - pre_paid)
+    pre_status = "paid" if pre_paid >= pre_total else ("partial" if pre_paid > 0 else "pending")
     if pre_balance <= 0:
         raise HTTPException(400, "Invoice already settled")
 
@@ -1062,8 +1282,8 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
             db.add(AuditLog(
                 id=str(uuid.uuid4()),
                 action="customer_credit",
-                user_id=None,
-                user_name=None,
+                user_id=user.id if user is not None else None,
+                user_name=user.name if user is not None else None,
                 module="sales",
                 ref=pre_row.number,
                 detail=(
@@ -1151,8 +1371,8 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             action="customer_credit_debit",
-            user_id=None,
-            user_name=None,
+            user_id=user.id if user is not None else None,
+            user_name=user.name if user is not None else None,
             module="sales",
             ref=pre_row.number,
             detail=(
@@ -1166,6 +1386,34 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
 
     if pre_row.customer_id:
         await sync_customer_outstanding(db, pre_row.customer_id)
+
+    next_status = "paid" if balance <= 0 else "partial"
+    applied_amount = round(max(0.0, float(data.amount) - float(credit_applied or 0)), 2)
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=invoice_id,
+        invoice_number=pre_row.number,
+        event_type="payment_recorded",
+        action="record_invoice_payment",
+        detail=f"Recorded payment of {round(float(data.amount), 2)} for {pre_row.number}",
+        metadata={
+            "payment_id": pay.id,
+            "payment_number": pay.number,
+            "amount": round(float(data.amount), 2),
+            "applied": applied_amount,
+            "credit_applied": round(float(credit_applied or 0), 2),
+            "payment_mode": data.mode,
+            "payment_ref": data.ref or "",
+        },
+    )
+    if pre_status != next_status:
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=invoice_id,
+            invoice_number=pre_row.number,
+            event_type="status_changed",
+            action="update_invoice_status",
+            detail=f"Status changed: {pre_status} -> {next_status}",
+            metadata={"from": pre_status, "to": next_status},
+        )
 
     await db.commit()
     return {
@@ -1252,7 +1500,7 @@ async def list_payments(
     search: Optional[str] = None,           # match payment number or customer name
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     conds = []
     conds.append(or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)))  # noqa: E712
@@ -1301,7 +1549,7 @@ async def list_payments(
 
 # ─── PAYMENTS: GET ───────────────────────────────────────────────────────────
 @router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("invoices.view"))])
-async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(CustomerPayment)
         .options(selectinload(CustomerPayment.allocations))
@@ -1314,7 +1562,7 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/payments/{payment_id}/void", dependencies=[Depends(require_perm("invoices.edit"))])
-async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Soft-void a payment — reverses invoice allocations + credit effects but
     keeps the row for audit. Idempotent."""
     res = await db.execute(
@@ -1327,6 +1575,18 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Payment not found")
     if getattr(pay, "voided", False):
         return {"status": "voided", "number": pay.number}
+
+    alloc_amount_by_invoice: dict[str, float] = {}
+    status_before: dict[str, str] = {}
+    for alloc in pay.allocations:
+        alloc_amount_by_invoice[alloc.invoice_id] = round(
+            alloc_amount_by_invoice.get(alloc.invoice_id, 0.0) + float(alloc.amount or 0),
+            2,
+        )
+        inv = (await db.execute(select(SaleInvoice).where(SaleInvoice.id == alloc.invoice_id))).scalar_one_or_none()
+        if inv is not None:
+            status_before[inv.id] = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+
     credit_refunded = await reverse_customer_payment(db, pay)
     pay.voided = True
     pay.voided_at = datetime.now().strftime("%Y-%m-%d")
@@ -1347,14 +1607,44 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action="void_payment",
-        user_id=None,
-        user_name=None,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
         module="sales",
         ref=pay.number,
         detail=f"Voided payment {pay.number} (₹{pay.total_amount})",
         risk="medium",
         ip_address=None,
     ))
+
+    for invoice_id, amount in alloc_amount_by_invoice.items():
+        inv = (await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))).scalar_one_or_none()
+        if inv is None:
+            continue
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="payment_voided",
+            action="void_customer_payment",
+            detail=f"Voided payment {pay.number} allocation on {inv.number}",
+            metadata={
+                "payment_id": pay.id,
+                "payment_number": pay.number,
+                "amount": round(float(amount), 2),
+            },
+            risk="medium",
+        )
+        prev_status = status_before.get(inv.id)
+        next_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+        if prev_status and prev_status != next_status:
+            _log_sales_invoice_history(db, user=user,
+                invoice_id=inv.id,
+                invoice_number=inv.number,
+                event_type="status_changed",
+                action="update_invoice_status",
+                detail=f"Status changed: {prev_status} -> {next_status}",
+                metadata={"from": prev_status, "to": next_status},
+            )
+
     await db.commit()
     return {
         "status": "voided",
@@ -1365,7 +1655,7 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── PAYMENTS: CREATE (multi-invoice) ────────────────────────────────────────
 @router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("invoices.edit"))])
-async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends(get_db)):
+async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Record a payment that may apply to MULTIPLE invoices in one go.
 
     Validation chain:
@@ -1448,8 +1738,10 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
     total_credit = 0.0
     total_amount = 0.0
     today = datetime.now().strftime("%Y-%m-%d")
+    status_before: dict[str, str] = {}
     for a in data.allocations:
         inv = inv_by_id[a.invoice_id]
+        status_before[inv.id] = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
         inv_total = float(inv.total or 0)
         inv_paid = float(inv.paid_amount or 0)
         balance = max(0.0, inv_total - inv_paid)
@@ -1478,8 +1770,8 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             action="customer_credit",
-            user_id=None,
-            user_name=None,
+            user_id=user.id if user is not None else None,
+            user_name=user.name if user is not None else None,
             module="sales",
             ref=None,  # multi-invoice; specific invoice ref doesn't fit
             detail=(
@@ -1549,8 +1841,8 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             action="customer_credit_debit",
-            user_id=None,
-            user_name=None,
+            user_id=user.id if user is not None else None,
+            user_name=user.name if user is not None else None,
             module="sales",
             ref=None,
             detail=(
@@ -1560,6 +1852,34 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             risk="low",
             ip_address=None,
         ))
+
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="payment_recorded",
+            action="record_customer_payment",
+            detail=f"Recorded payment of {round(float(a.amount), 2)} for {inv.number}",
+            metadata={
+                "payment_id": payment.id,
+                "payment_number": payment.number,
+                "amount": round(float(a.amount), 2),
+                "payment_mode": data.payment_mode,
+                "payment_ref": data.payment_ref or "",
+            },
+        )
+        prev_status = status_before.get(inv.id)
+        next_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+        if prev_status and prev_status != next_status:
+            _log_sales_invoice_history(db, user=user,
+                invoice_id=inv.id,
+                invoice_number=inv.number,
+                event_type="status_changed",
+                action="update_invoice_status",
+                detail=f"Status changed: {prev_status} -> {next_status}",
+                metadata={"from": prev_status, "to": next_status},
+            )
 
     await sync_customer_outstanding(db, data.customer_id)
 
@@ -1693,7 +2013,7 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/cancel", dependencies=[Depends(require_perm("invoices.cancel"))])
-async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
+async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SaleInvoice)
         .options(selectinload(SaleInvoice.line_items))
@@ -1731,9 +2051,28 @@ async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
             "Cannot cancel an invoice with active payment allocations. Void or delete payments first.",
         )
     stock_restored = await _restock_invoice_lines(db, inv, inv.line_items)
+    prev_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
     inv.status = "cancelled"
     if inv.customer_id:
         await sync_customer_outstanding(db, inv.customer_id)
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        event_type="status_changed",
+        action="update_invoice_status",
+        detail=f"Status changed: {prev_status} -> cancelled",
+        metadata={"from": prev_status, "to": "cancelled"},
+        risk="medium",
+    )
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        event_type="voided",
+        action="void_invoice",
+        detail=f"Voided sales invoice {inv.number}",
+        metadata={"reason": "cancel"},
+        risk="medium",
+    )
     await db.commit()
     return {"status": "cancelled", "stock_restored": stock_restored}
 
@@ -1990,6 +2329,238 @@ def _calc_lines(lines, tax_mode: str = "inclusive"):
     return rows, subtotal, tax_total
 
 
+def _summarize_sales_order_item_changes(old_lines, new_items) -> list[dict]:
+    """Compute item-level diffs for sales order edits."""
+    old_by_key: dict[tuple[str, str], list] = {}
+    for line in old_lines or []:
+        key = (str(line.item_id or ""), str(line.name or "").strip().lower())
+        old_by_key.setdefault(key, []).append(line)
+
+    new_counts: dict[tuple[str, str], int] = {}
+    consumed: dict[tuple[str, str], int] = {}
+    changes: list[dict] = []
+
+    for item in new_items or []:
+        key = (str(item.item_id or ""), str(item.name or "").strip().lower())
+        new_counts[key] = new_counts.get(key, 0) + 1
+        idx = consumed.get(key, 0)
+        consumed[key] = idx + 1
+        existing = old_by_key.get(key, [])
+        prev = existing[idx] if idx < len(existing) else None
+        item_name = str(item.name or "Item")
+
+        if prev is None:
+            structured = [
+                {"field": "qty", "old": None, "new": int(item.qty or 0)},
+                {"field": "price", "old": None, "new": round(float(item.price or 0), 2)},
+                {"field": "tax_rate", "old": None, "new": round(float(item.tax_rate or 0), 2)},
+                {"field": "discount", "old": None, "new": round(float(item.discount or 0), 2)},
+            ]
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["added"],
+                    "changes": structured,
+                    "detail": f"{item_name}: added (qty {item.qty}, price {round(float(item.price or 0), 2)})",
+                }
+            )
+            continue
+
+        field_changes: list[str] = []
+        fields: list[str] = []
+        structured: list[dict] = []
+        if int(prev.qty or 0) != int(item.qty or 0):
+            fields.append("qty")
+            field_changes.append(f"qty {int(prev.qty or 0)} -> {int(item.qty or 0)}")
+            structured.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+        if round(float(prev.price or 0), 2) != round(float(item.price or 0), 2):
+            fields.append("price")
+            field_changes.append(f"price {round(float(prev.price or 0), 2)} -> {round(float(item.price or 0), 2)}")
+            structured.append(
+                {
+                    "field": "price",
+                    "old": round(float(prev.price or 0), 2),
+                    "new": round(float(item.price or 0), 2),
+                }
+            )
+        if round(float(prev.tax_rate or 0), 2) != round(float(item.tax_rate or 0), 2):
+            fields.append("tax_rate")
+            field_changes.append(
+                f"tax {round(float(prev.tax_rate or 0), 2)} -> {round(float(item.tax_rate or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "tax_rate",
+                    "old": round(float(prev.tax_rate or 0), 2),
+                    "new": round(float(item.tax_rate or 0), 2),
+                }
+            )
+        if round(float(prev.discount or 0), 2) != round(float(item.discount or 0), 2):
+            fields.append("discount")
+            field_changes.append(
+                f"discount {round(float(prev.discount or 0), 2)} -> {round(float(item.discount or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "discount",
+                    "old": round(float(prev.discount or 0), 2),
+                    "new": round(float(item.discount or 0), 2),
+                }
+            )
+
+        if field_changes:
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": fields,
+                    "changes": structured,
+                    "detail": f"{item_name}: " + ", ".join(field_changes),
+                }
+            )
+
+    for key, rows in old_by_key.items():
+        new_count = new_counts.get(key, 0)
+        if len(rows) <= new_count:
+            continue
+        for row in rows[new_count:]:
+            item_name = str(row.name or "Item")
+            structured = [
+                {"field": "qty", "old": int(row.qty or 0), "new": None},
+                {"field": "price", "old": round(float(row.price or 0), 2), "new": None},
+                {"field": "tax_rate", "old": round(float(row.tax_rate or 0), 2), "new": None},
+                {"field": "discount", "old": round(float(row.discount or 0), 2), "new": None},
+            ]
+            changes.append(
+                {
+                    "item_id": str(row.item_id) if row.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["removed"],
+                    "changes": structured,
+                    "detail": f"{item_name}: removed (qty {int(row.qty or 0)}, price {round(float(row.price or 0), 2)})",
+                }
+            )
+
+    return changes
+
+
+def _summarize_quotation_item_changes(old_lines, new_items) -> list[dict]:
+    """Compute item-level diffs for quotation revisions."""
+    old_by_key: dict[tuple[str, str], list] = {}
+    for line in old_lines or []:
+        key = (str(line.item_id or ""), str(line.name or "").strip().lower())
+        old_by_key.setdefault(key, []).append(line)
+
+    new_counts: dict[tuple[str, str], int] = {}
+    consumed: dict[tuple[str, str], int] = {}
+    changes: list[dict] = []
+
+    for item in new_items or []:
+        key = (str(item.item_id or ""), str(item.name or "").strip().lower())
+        new_counts[key] = new_counts.get(key, 0) + 1
+        idx = consumed.get(key, 0)
+        consumed[key] = idx + 1
+        existing = old_by_key.get(key, [])
+        prev = existing[idx] if idx < len(existing) else None
+        item_name = str(item.name or "Item")
+
+        if prev is None:
+            structured = [
+                {"field": "qty", "old": None, "new": int(item.qty or 0)},
+                {"field": "price", "old": None, "new": round(float(item.price or 0), 2)},
+                {"field": "tax_rate", "old": None, "new": round(float(item.tax_rate or 0), 2)},
+                {"field": "discount", "old": None, "new": round(float(item.line_discount or 0), 2)},
+            ]
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["added"],
+                    "changes": structured,
+                    "detail": f"{item_name}: added (qty {item.qty}, price {round(float(item.price or 0), 2)})",
+                }
+            )
+            continue
+
+        field_changes: list[str] = []
+        fields: list[str] = []
+        structured: list[dict] = []
+        if int(prev.qty or 0) != int(item.qty or 0):
+            fields.append("qty")
+            field_changes.append(f"qty {int(prev.qty or 0)} -> {int(item.qty or 0)}")
+            structured.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+        if round(float(prev.price or 0), 2) != round(float(item.price or 0), 2):
+            fields.append("price")
+            field_changes.append(f"price {round(float(prev.price or 0), 2)} -> {round(float(item.price or 0), 2)}")
+            structured.append(
+                {
+                    "field": "price",
+                    "old": round(float(prev.price or 0), 2),
+                    "new": round(float(item.price or 0), 2),
+                }
+            )
+        if round(float(prev.tax_rate or 0), 2) != round(float(item.tax_rate or 0), 2):
+            fields.append("tax_rate")
+            field_changes.append(
+                f"tax {round(float(prev.tax_rate or 0), 2)} -> {round(float(item.tax_rate or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "tax_rate",
+                    "old": round(float(prev.tax_rate or 0), 2),
+                    "new": round(float(item.tax_rate or 0), 2),
+                }
+            )
+        if round(float(prev.discount or 0), 2) != round(float(item.line_discount or 0), 2):
+            fields.append("discount")
+            field_changes.append(
+                f"discount {round(float(prev.discount or 0), 2)} -> {round(float(item.line_discount or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "discount",
+                    "old": round(float(prev.discount or 0), 2),
+                    "new": round(float(item.line_discount or 0), 2),
+                }
+            )
+
+        if field_changes:
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": fields,
+                    "changes": structured,
+                    "detail": f"{item_name}: " + ", ".join(field_changes),
+                }
+            )
+
+    for key, rows in old_by_key.items():
+        new_count = new_counts.get(key, 0)
+        if len(rows) <= new_count:
+            continue
+        for row in rows[new_count:]:
+            item_name = str(row.name or "Item")
+            structured = [
+                {"field": "qty", "old": int(row.qty or 0), "new": None},
+                {"field": "price", "old": round(float(row.price or 0), 2), "new": None},
+                {"field": "tax_rate", "old": round(float(row.tax_rate or 0), 2), "new": None},
+                {"field": "discount", "old": round(float(row.discount or 0), 2), "new": None},
+            ]
+            changes.append(
+                {
+                    "item_id": str(row.item_id) if row.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["removed"],
+                    "changes": structured,
+                    "detail": f"{item_name}: removed (qty {int(row.qty or 0)}, price {round(float(row.price or 0), 2)})",
+                }
+            )
+
+    return changes
+
+
 def _line_amounts(qty: int, price: float, discount: float, tax_rate: float, tax_mode: str = "inclusive") -> tuple[float, float, float]:
     """Return (line_taxable, line_tax, line_total) for one SO/quote-style line."""
     gross = round(qty * price, 2)
@@ -2014,7 +2585,7 @@ def _recalc_so_header(so: SalesOrder, lines: list, tax_mode: str = "inclusive") 
     so.total = round(max(0.0, subtotal + tax_total - float(so.discount or 0)), 2)
 
 
-async def _link_quotation_to_order(db: AsyncSession, quote_id: str, so: SalesOrder) -> None:
+async def _link_quotation_to_order(db: AsyncSession, quote_id: str, so: SalesOrder, user: Optional[User] = None) -> None:
     res = await db.execute(
         select(Quotation).where(Quotation.id == quote_id)
     )
@@ -2023,11 +2594,25 @@ async def _link_quotation_to_order(db: AsyncSession, quote_id: str, so: SalesOrd
         raise HTTPException(404, "Quotation not found")
     if quote.status in (QuotationStatus.converted, QuotationStatus.rejected):
         raise HTTPException(400, f"Quotation is {quote.status.value}; cannot convert")
+    # Ensure the referenced sales order row exists before setting the FK pointer.
+    await db.flush()
     quote.status = QuotationStatus.converted
     quote.converted_order_id = so.id
+    _log_quotation_history(db, user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="converted",
+        action="convert_quotation",
+        detail=f"Converted quotation {quote.number} to sales order {so.number}",
+        metadata={
+            "target_record_type": "sales_order",
+            "target_record_id": so.id,
+            "target_record_number": so.number,
+        },
+    )
 
 
-async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleInvoice) -> None:
+async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleInvoice, user: Optional[User] = None) -> None:
     res = await db.execute(
         select(Quotation).where(Quotation.id == quote_id)
     )
@@ -2051,8 +2636,23 @@ async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleI
         )).scalar_one_or_none()
         if live_inv:
             raise HTTPException(400, "Quotation already spawned an invoice")
+    # Ensure the referenced invoice row exists before setting the FK pointer.
+    await db.flush()
     quote.status = QuotationStatus.converted
     quote.converted_invoice_id = inv.id
+    # Log the quotation -> invoice conversion event when applicable.
+    _log_quotation_history(db, user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="converted",
+        action="convert_quotation",
+        detail=f"Converted quotation {quote.number} to invoice {inv.number}",
+        metadata={
+            "target_record_type": "sales_invoice",
+            "target_record_id": inv.id,
+            "target_record_number": inv.number,
+        },
+    )
 
 
 async def _link_sales_order_to_invoice(
@@ -2060,6 +2660,7 @@ async def _link_sales_order_to_invoice(
     order_id: str,
     inv: SaleInvoice,
     source_order_lines: Optional[list],
+    user: Optional[User] = None,
 ) -> None:
     res = await db.execute(
         select(SalesOrder)
@@ -2148,6 +2749,20 @@ async def _link_sales_order_to_invoice(
         )
 
     so.converted_invoice_id = inv.id
+    # Log the sales-order converted event when an invoice spawns from an SO.
+    _log_sales_order_history(db, user=user,
+        order_id=so.id,
+        order_number=so.number,
+        event_type="converted",
+        action="convert_sales_order",
+        detail=f"Converted sales order {so.number} to invoice {inv.number}",
+        metadata={
+            "target_record_type": "sales_invoice",
+            "target_record_id": inv.id,
+            "target_record_number": inv.number,
+            "fully_converted": fully_converted,
+        },
+    )
     if so.customer_id:
         await sync_customer_outstanding(db, so.customer_id)
 
@@ -2163,7 +2778,7 @@ async def list_orders(
     status: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
@@ -2203,7 +2818,7 @@ async def list_orders(
 
 # ─── Sales Order: GET ONE ────────────────────────────────────────────────────
 @router.get("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.view"))])
-async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
+async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesOrder)
         .options(selectinload(SalesOrder.line_items))
@@ -2217,7 +2832,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── Sales Order: CREATE ─────────────────────────────────────────────────────
 @router.post("/orders/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
-async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db)):
+async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
 
@@ -2273,7 +2888,27 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         except ValueError as e:
             raise HTTPException(400, str(e))
     if data.quotation_id:
-        await _link_quotation_to_order(db, data.quotation_id, so)
+        await _link_quotation_to_order(db, data.quotation_id, so, user=user)
+    _log_sales_order_history(db, user=user,
+        order_id=so.id,
+        order_number=so.number,
+        event_type="created",
+        action="create_sales_order",
+        detail=f"Created sales order {so.number}",
+        metadata={
+            "status": so.status.value if hasattr(so.status, "value") else str(so.status),
+            "total": float(so.total or 0),
+            "line_count": len(data.items or []),
+        },
+    )
+    _log_sales_order_history(db, user=user,
+        order_id=so.id,
+        order_number=so.number,
+        event_type="confirmed",
+        action="confirm_sales_order",
+        detail=f"Sales order {so.number} confirmed",
+        metadata={"from": "draft", "to": "confirmed"},
+    )
     # NB: no stock side-effect at create. Stock moves only when the SO is
     # converted to an invoice (same code path as POS sales).
     await db.commit()
@@ -2282,7 +2917,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
 
 # ─── Sales Order: UPDATE (full replace of editable fields + items) ──────────
 @router.put("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.edit"))])
-async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession = Depends(get_db)):
+async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full replace of an SO's editable fields. Status is NOT changed here
     (the convert flow + the dedicated `/status` PATCH handle that). Items
     are replaced wholesale — simpler than diffing and the SO has no stock
@@ -2307,6 +2942,8 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
         raise HTTPException(400, f"Cannot edit a {so.status.value} sales order")
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
+
+    item_changes = _summarize_sales_order_item_changes(list(so.line_items or []), data.items)
 
     # Replace fields (status preserved). Recompute totals from new items.
     tax_mode = await _get_org_tax_mode(db)
@@ -2352,13 +2989,26 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
             )
         except ValueError as e:
             raise HTTPException(400, str(e))
+
+    preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {so.number}"
+    if len(item_changes) > 1:
+        preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
+    _log_sales_order_history(db, user=user,
+        order_id=so.id,
+        order_number=so.number,
+        event_type="item_changed",
+        action="update_sales_order_items",
+        detail=preview,
+        metadata={"changes": item_changes[:20], "line_count": len(data.items or [])},
+    )
+
     await db.commit()
     return {"id": so.id, "number": so.number, "total": total, "status": so.status.value}
 
 
 # ─── Sales Order: UPDATE STATUS ──────────────────────────────────────────────
 @router.patch("/orders/{order_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
-async def update_order_status(order_id: str, status: str, db: AsyncSession = Depends(get_db)):
+async def update_order_status(order_id: str, status: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesOrder)
         .options(selectinload(SalesOrder.line_items))
@@ -2382,6 +3032,7 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
             "Partially invoiced orders can only be cancelled — finish converting or cancel the order",
         )
     prev = so.status
+    prev_status = prev.value if hasattr(prev, "value") else str(prev)
     if target == SalesOrderStatus.cancelled:
         await release_reservations(db, source_type="sales_order", source_ref=so.id)
     elif target == SalesOrderStatus.confirmed and prev == SalesOrderStatus.draft:
@@ -2393,6 +3044,26 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
             except ValueError as e:
                 raise HTTPException(400, str(e))
     so.status = target
+    next_status = target.value if hasattr(target, "value") else str(target)
+    if target == SalesOrderStatus.confirmed and prev_status != next_status:
+        _log_sales_order_history(db, user=user,
+            order_id=so.id,
+            order_number=so.number,
+            event_type="confirmed",
+            action="confirm_sales_order",
+            detail=f"Sales order {so.number} confirmed",
+            metadata={"from": prev_status, "to": next_status},
+        )
+    elif target == SalesOrderStatus.cancelled and prev_status != next_status:
+        _log_sales_order_history(db, user=user,
+            order_id=so.id,
+            order_number=so.number,
+            event_type="cancelled",
+            action="cancel_sales_order",
+            detail=f"Sales order {so.number} cancelled",
+            metadata={"from": prev_status, "to": next_status},
+            risk="medium",
+        )
     await db.commit()
     return {"status": so.status.value}
 
@@ -2402,7 +3073,7 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
 async def convert_order_to_invoice(
     order_id: str,
     data: ConvertToInvoiceIn,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """Spawn a SaleInvoice from an SO (full or partial).
 
@@ -2487,7 +3158,7 @@ async def convert_order_to_invoice(
         customer_name=so.customer_name,
         branch_id=so.branch_id,
         branch_name=so.branch_name,
-        cashier=so.created_by or "Staff",
+        cashier=(user.name if user is not None else so.created_by) or "Staff",
         date=today,
         subtotal=inv_subtotal,
         tax_total=inv_tax_total,
@@ -2662,6 +3333,19 @@ async def convert_order_to_invoice(
         )
 
     so.converted_invoice_id = inv.id
+    _log_sales_order_history(db, user=user,
+        order_id=so.id,
+        order_number=so.number,
+        event_type="converted",
+        action="convert_sales_order",
+        detail=f"Converted sales order {so.number} to invoice {inv.number}",
+        metadata={
+            "target_record_type": "sales_invoice",
+            "target_record_id": inv.id,
+            "target_record_number": inv.number,
+            "fully_converted": fully_converted,
+        },
+    )
 
     if data.payment_received and paid > 0:
         pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
@@ -2706,7 +3390,7 @@ async def convert_order_to_invoice(
 
 # ─── Quotation → Sales Order convert ─────────────────────────────────────────
 @router.post("/quotations/{quote_id}/convert-to-order", dependencies=[Depends(require_perm("invoices.create"))])
-async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_db)):
+async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Create a SalesOrder from a Quotation. Prices, taxes, discount, and
     line items are copied verbatim (the quote's commercial terms are the
     point of quoting — don't re-fetch current prices). Quote status flips
@@ -2752,8 +3436,22 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
             line_total=ql.line_total,
         ))
 
+    # Flush inserts for SO + lines so quotation FK back-pointer passes immediately.
+    await db.flush()
     quote.status = QuotationStatus.converted
     quote.converted_order_id = so.id
+    _log_quotation_history(db, user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="converted",
+        action="convert_quotation",
+        detail=f"Converted quotation {quote.number} to sales order {so.number}",
+        metadata={
+            "target_record_type": "sales_order",
+            "target_record_id": so.id,
+            "target_record_number": so.number,
+        },
+    )
     await db.commit()
     return {
         "order_id": so.id,
@@ -2766,7 +3464,7 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
 async def convert_quote_to_invoice(
     quote_id: str,
     data: ConvertToInvoiceIn,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """Spawn a SaleInvoice directly from a Quotation (skip SO). Mirrors
     convert_order_to_invoice stock + payment semantics."""
@@ -2814,7 +3512,7 @@ async def convert_quote_to_invoice(
         customer_name=quote.customer_name,
         branch_id=quote.branch_id,
         branch_name=quote.branch_name,
-        cashier=quote.created_by or "Staff",
+        cashier=(user.name if user is not None else quote.created_by) or "Staff",
         date=today,
         subtotal=quote.subtotal,
         tax_total=quote.tax_total,
@@ -2944,8 +3642,22 @@ async def convert_quote_to_invoice(
         ))
         await record_customer_payment(db, conv_pay)
 
+    # Flush invoice/lines/payment inserts before quotation FK back-pointer update.
+    await db.flush()
     quote.status = QuotationStatus.converted
     quote.converted_invoice_id = inv.id
+    _log_quotation_history(db, user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="converted",
+        action="convert_quotation",
+        detail=f"Converted quotation {quote.number} to invoice {inv.number}",
+        metadata={
+            "target_record_type": "sales_invoice",
+            "target_record_id": inv.id,
+            "target_record_number": inv.number,
+        },
+    )
     if quote.customer_id:
         await sync_customer_outstanding(db, quote.customer_id)
     await db.commit()
@@ -3067,7 +3779,7 @@ async def list_returns(
     status: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """List sales returns."""
     sk = normalize_skip(skip)
@@ -3108,7 +3820,7 @@ async def list_returns(
 
 # ─── Sales Returns: GET ONE ──────────────────────────────────────────────────
 @router.get("/returns/{return_id}", dependencies=[Depends(require_perm("invoices.view"))])
-async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def get_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesReturn)
         .options(selectinload(SalesReturn.line_items))
@@ -3121,7 +3833,7 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/returns/{return_id}/void", dependencies=[Depends(require_perm("invoices.edit"))])
-async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def void_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Soft-void a credit note — reverses stock + invoice adjustments but keeps the row."""
     res = await db.execute(
         select(SalesReturn)
@@ -3134,6 +3846,7 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
     if ret.status == SalesReturnStatus.void:
         return {"status": "void", "number": ret.number}
 
+    prev_status = ret.status.value if hasattr(ret.status, "value") else str(ret.status)
     credit_revoked = await _reverse_sales_return_effects(db, ret)
     ret.status = SalesReturnStatus.void
     await db.flush()
@@ -3148,6 +3861,24 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
         customer_ids.add(inv)
     for cid in customer_ids:
         await sync_customer_outstanding(db, cid)
+
+    _log_sales_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="voided",
+        action="void_sales_return",
+        detail=f"Voided sales return {ret.number}",
+        metadata={
+            "from": prev_status,
+            "to": "void",
+            "credit_revoked": round(float(credit_revoked or 0), 2),
+            "target_record_type": "sales_invoice",
+            "target_record_id": ret.invoice_id,
+            "target_record_number": ret.invoice_number,
+        },
+        risk="medium",
+    )
+
     await db.commit()
     return {
         "status": "void",
@@ -3157,7 +3888,7 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/returns/{return_id}/undo-void", dependencies=[Depends(require_perm("invoices.edit"))])
-async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Restore a voided credit note to 'processed' — re-applies stock + invoice adjustments.
 
     Blocked if another active credit note has already consumed the same line
@@ -3280,13 +4011,30 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db)):
         customer_ids.add(inv_cid)
     for cid in customer_ids:
         await sync_customer_outstanding(db, cid)
+
+    _log_sales_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="unvoided",
+        action="undo_void_sales_return",
+        detail=f"Unvoided sales return {ret.number}",
+        metadata={
+            "from": "void",
+            "to": "processed",
+            "target_record_type": "sales_invoice",
+            "target_record_id": ret.invoice_id,
+            "target_record_number": ret.invoice_number,
+        },
+        risk="medium",
+    )
+
     await db.commit()
     return {"status": "processed", "number": ret.number}
 
 
 # ─── GET ONE INVOICE (after /orders/, /returns/, /payments/ static paths) ───
 @router.get("/{invoice_id}", dependencies=[Depends(require_perm("invoices.view"))])
-async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
+async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
     inv = result.scalar_one_or_none()
     if not inv:
@@ -3302,7 +4050,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db)):
 # keeping the slash uniform avoids future drift if anyone adds POST
 # `/{invoice_id}/*` routes later.
 @router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
-async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_db)):
+async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Process a customer return against an existing invoice.
 
     Flow:
@@ -3337,6 +4085,7 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
     # legacy cancel_invoice path) compare equal here.
     if inv.status == InvoiceStatus.cancelled or str(inv.status).endswith("cancelled"):
         raise HTTPException(400, "Cannot return against a cancelled invoice")
+    prev_invoice_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
 
     # Index invoice lines by id for fast lookup. Also keep a (item_id, name)
     # secondary index for legacy lines where invoice_line_id wasn't carried
@@ -3441,6 +4190,8 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
     )
     db.add(ret)
     await db.flush()  # need ret.id for the line FK
+
+    total_return_qty = int(sum(int(getattr(r, "return_qty", 0) or 0) for r in (data.items or [])))
 
     for r, inv_line, line_net, _line_tax in return_rows:
         # 2026-05-31: batch-aware restock. Restore stock to the SAME lots the
@@ -3587,8 +4338,8 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             db.add(AuditLog(
                 id=str(uuid.uuid4()),
                 action="customer_credit",
-                user_id=None,
-                user_name=data.created_by,
+                user_id=user.id if user is not None else None,
+                user_name=user.name if user is not None else data.created_by,
                 module="sales",
                 ref=ret.number,
                 detail=(
@@ -3620,6 +4371,80 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
 
     if inv.customer_id:
         await sync_customer_outstanding(db, inv.customer_id)
+
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        event_type="return_linked",
+        action="link_sales_return",
+        detail=f"Linked sales return {ret.number} to invoice {inv.number}",
+        metadata={
+            "target_record_type": "sales_return",
+            "target_record_id": ret.id,
+            "target_record_number": ret.number,
+            "credited_amount": round(float(credited or 0), 2),
+        },
+    )
+    next_invoice_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+    if prev_invoice_status != next_invoice_status:
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="status_changed",
+            action="update_invoice_status",
+            detail=f"Status changed: {prev_invoice_status} -> {next_invoice_status}",
+            metadata={"from": prev_invoice_status, "to": next_invoice_status},
+        )
+
+    _log_sales_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="created",
+        action="create_sales_return",
+        detail=f"Created sales return {ret.number}",
+        metadata={
+            "total": round(float(ret.total or 0), 2),
+            "credited_amount": round(float(ret.credited_amount or 0), 2),
+            "refund_method": ret.refund_method,
+            "target_record_type": "sales_invoice",
+            "target_record_id": ret.invoice_id,
+            "target_record_number": ret.invoice_number,
+        },
+    )
+    _log_sales_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="reason_set",
+        action="set_sales_return_reason",
+        detail=f"Set reason for sales return {ret.number}",
+        metadata={"reason": ret.reason or ""},
+    )
+    _log_sales_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="stock_returned",
+        action="restock_sales_return_items",
+        detail=f"Restocked {total_return_qty} unit(s) for sales return {ret.number}",
+        metadata={
+            "line_count": len(data.items or []),
+            "total_qty": total_return_qty,
+            "target_record_type": "sales_invoice",
+            "target_record_id": ret.invoice_id,
+            "target_record_number": ret.invoice_number,
+        },
+    )
+    if method in ("cash", "credit") and credited > 0:
+        _log_sales_return_history(db, user=user,
+            return_id=ret.id,
+            return_number=ret.number,
+            event_type="refund_issued",
+            action="issue_sales_return_refund",
+            detail=f"Issued {method} refund of {round(float(credited), 2)} for {ret.number}",
+            metadata={
+                "refund_method": method,
+                "credited_amount": round(float(credited), 2),
+            },
+        )
 
     await db.commit()
     return {
@@ -3673,7 +4498,7 @@ class BulkDeleteIn(BaseModel):
     ids: List[str] = Field(..., min_length=1)
 
 
-def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
+def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict, user: Optional[User] = None):
     """Write a delete audit-log row capturing the row's pre-delete state.
 
     `snapshot` is JSON-serializable; we json.dumps it inline so the
@@ -3683,8 +4508,8 @@ def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action=action,
-        user_id=None,
-        user_name=None,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
         module="sales",
         ref=ref,
         detail=_json.dumps(snapshot, default=str),
@@ -3695,7 +4520,7 @@ def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
 
 # ─── BULK DELETE: QUOTATIONS ─────────────────────────────────────────────────
 @router.post("/quotations/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
-async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(Quotation)
         .options(selectinload(Quotation.line_items))
@@ -3748,7 +4573,16 @@ async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(
             "status": str(q.status.value) if hasattr(q.status, "value") else str(q.status),
             "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in q.line_items],
         }
-        _audit_delete(db, action="delete_quotation", ref=q.number, snapshot=snapshot)
+        _audit_delete(db, action="delete_quotation", ref=q.number, snapshot=snapshot, user=user)
+        _log_quotation_history(db, user=user,
+            quote_id=q.id,
+            quote_number=q.number,
+            event_type="cancelled",
+            action="cancel_quotation",
+            detail=f"Cancelled quotation {q.number} via bulk delete",
+            metadata={"reason": "bulk_delete"},
+            risk="medium",
+        )
         await db.delete(q)
         deleted.append({"id": q.id, "number": q.number})
     await db.commit()
@@ -3757,7 +4591,7 @@ async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(
 
 # ─── BULK DELETE: SALES ORDERS ───────────────────────────────────────────────
 @router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
-async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesOrder)
         .options(selectinload(SalesOrder.line_items))
@@ -3794,7 +4628,16 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
             "status": str(o.status.value) if hasattr(o.status, "value") else str(o.status),
             "items": [{"id": li.id, "name": li.name, "qty": li.qty, "price": li.price} for li in o.line_items],
         }
-        _audit_delete(db, action="delete_sales_order", ref=o.number, snapshot=snapshot)
+        _log_sales_order_history(db, user=user,
+            order_id=o.id,
+            order_number=o.number,
+            event_type="cancelled",
+            action="delete_sales_order",
+            detail=f"Sales order {o.number} deleted",
+            metadata={"reason": "bulk_delete"},
+            risk="medium",
+        )
+        _audit_delete(db, action="delete_sales_order", ref=o.number, snapshot=snapshot, user=user)
         # Orphan the parent quote: clear its dangling back-pointer so it
         # becomes deletable + no "View SO" link 404s. Do NOT revert status
         # — a quote that was ever converted stays locked from editing /
@@ -3813,7 +4656,7 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
 
 # ─── BULK DELETE: INVOICES ───────────────────────────────────────────────────
 @router.post("/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
-async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SaleInvoice)
         .options(selectinload(SaleInvoice.line_items))
@@ -3886,7 +4729,16 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
         )).scalar_one_or_none()
         if parent_so is not None:
             parent_so.converted_invoice_id = None
-        _audit_delete(db, action="delete_invoice", ref=inv.number, snapshot=snapshot)
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="voided",
+            action="delete_invoice",
+            detail=f"Deleted sales invoice {inv.number}",
+            metadata={"reason": "bulk_delete"},
+            risk="medium",
+        )
+        _audit_delete(db, action="delete_invoice", ref=inv.number, snapshot=snapshot, user=user)
         await db.delete(inv)
         deleted.append({"id": inv.id, "number": inv.number})
         if inv.customer_id:
@@ -3902,7 +4754,7 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
 
 # ─── BULK DELETE: SALES RETURNS ──────────────────────────────────────────────
 @router.post("/returns/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
-async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesReturn)
         .options(selectinload(SalesReturn.line_items))
@@ -3926,7 +4778,16 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
             snapshot = {
                 "id": ret.id, "number": ret.number, "status": "void",
             }
-            _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot)
+            _log_sales_return_history(db, user=user,
+                return_id=ret.id,
+                return_number=ret.number,
+                event_type="cancelled",
+                action="delete_sales_return",
+                detail=f"Deleted sales return {ret.number}",
+                metadata={"reason": "bulk_delete"},
+                risk="medium",
+            )
+            _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot, user=user)
             await db.delete(ret)
             deleted.append({"id": ret.id, "number": ret.number})
             continue
@@ -3944,7 +4805,21 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
         )).scalar_one_or_none()
         if inv_cid:
             customer_ids.add(inv_cid)
-        _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot)
+        _log_sales_return_history(db, user=user,
+            return_id=ret.id,
+            return_number=ret.number,
+            event_type="cancelled",
+            action="delete_sales_return",
+            detail=f"Deleted sales return {ret.number}",
+            metadata={
+                "reason": "bulk_delete",
+                "target_record_type": "sales_invoice",
+                "target_record_id": ret.invoice_id,
+                "target_record_number": ret.invoice_number,
+            },
+            risk="medium",
+        )
+        _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot, user=user)
         invoice_ids_to_recalc.add(ret.invoice_id)
         await db.delete(ret)
         deleted.append({"id": ret.id, "number": ret.number})
@@ -3962,7 +4837,7 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
 
 # ─── BULK DELETE: CUSTOMER PAYMENTS ──────────────────────────────────────────
 @router.post("/payments/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
-async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(CustomerPayment)
         .options(selectinload(CustomerPayment.allocations))
@@ -3987,18 +4862,44 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
             "payment_mode": pay.payment_mode, "credit_applied": pay.credit_applied,
             "allocations": [{"invoice_id": a.invoice_id, "invoice_number": a.invoice_number, "amount": a.amount} for a in pay.allocations],
         }
+        status_before: dict[str, str] = {}
         # Reversal #1: per allocation, decrement invoice.paid_amount + reset status.
         for alloc in pay.allocations:
             inv = (await db.execute(
                 select(SaleInvoice).where(SaleInvoice.id == alloc.invoice_id)
             )).scalar_one_or_none()
             if inv is not None:
+                status_before[inv.id] = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
                 new_paid = round(max(0.0, float(inv.paid_amount or 0) - float(alloc.amount or 0)), 2)
                 inv.paid_amount = new_paid
                 if new_paid <= 0:
                     inv.status = "pending"
                 elif new_paid < float(inv.total or 0):
                     inv.status = "partial"
+                _log_sales_invoice_history(db, user=user,
+                    invoice_id=inv.id,
+                    invoice_number=inv.number,
+                    event_type="payment_deleted",
+                    action="delete_customer_payment",
+                    detail=f"Deleted payment {pay.number} allocation on {inv.number}",
+                    metadata={
+                        "payment_id": pay.id,
+                        "payment_number": pay.number,
+                        "amount": round(float(alloc.amount or 0), 2),
+                    },
+                    risk="medium",
+                )
+                next_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+                prev_status = status_before.get(inv.id)
+                if prev_status and prev_status != next_status:
+                    _log_sales_invoice_history(db, user=user,
+                        invoice_id=inv.id,
+                        invoice_number=inv.number,
+                        event_type="status_changed",
+                        action="update_invoice_status",
+                        detail=f"Status changed: {prev_status} -> {next_status}",
+                        metadata={"from": prev_status, "to": next_status},
+                    )
         # Reversal #2: credit-mode payment → refund the credit balance.
         if pay.payment_mode == "credit" and pay.customer_id and (pay.total_amount or 0) > 0:
             cust = (await db.execute(
@@ -4032,7 +4933,7 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                     source_ref=pay.id,
                     source_number=pay.number,
                 )
-        _audit_delete(db, action="delete_payment", ref=pay.number, snapshot=snapshot)
+        _audit_delete(db, action="delete_payment", ref=pay.number, snapshot=snapshot, user=user)
         await db.delete(pay)
         deleted.append({"id": pay.id, "number": pay.number})
         if pay.customer_id:

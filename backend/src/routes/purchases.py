@@ -88,6 +88,350 @@ def _coerce_payment_mode_value(v):
     return s
 
 
+def _log_purchase_bill_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    bill_id: str,
+    bill_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared purchase_bill activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="purchase_bill",
+        record_id=bill_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="purchases",
+        ref=bill_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _summarize_purchase_bill_item_changes(old_lines, new_items) -> list[dict]:
+    """Compute human-friendly item diffs for purchase bill edits."""
+    old_by_key: dict[tuple[str, str], list] = {}
+    for line in old_lines or []:
+        key = (str(line.item_id or ""), str(line.name or "").strip().lower())
+        old_by_key.setdefault(key, []).append(line)
+
+    new_counts: dict[tuple[str, str], int] = {}
+    consumed: dict[tuple[str, str], int] = {}
+    changes: list[dict] = []
+
+    for item in new_items or []:
+        key = (str(item.item_id or ""), str(item.name or "").strip().lower())
+        new_counts[key] = new_counts.get(key, 0) + 1
+        idx = consumed.get(key, 0)
+        consumed[key] = idx + 1
+        existing = old_by_key.get(key, [])
+        prev = existing[idx] if idx < len(existing) else None
+        item_name = str(item.name or "Item")
+
+        if prev is None:
+            structured = [
+                {"field": "qty", "old": None, "new": int(item.qty or 0)},
+                {"field": "rate", "old": None, "new": round(float(item.cost or 0), 2)},
+                {"field": "tax_rate", "old": None, "new": round(float(item.tax_rate or 0), 2)},
+                {"field": "discount", "old": None, "new": round(float(item.discount or 0), 2)},
+            ]
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["added"],
+                    "changes": structured,
+                    "detail": f"{item_name}: added (qty {item.qty}, rate {round(float(item.cost or 0), 2)})",
+                }
+            )
+            continue
+
+        field_changes: list[str] = []
+        fields: list[str] = []
+        structured: list[dict] = []
+        if int(prev.qty or 0) != int(item.qty or 0):
+            fields.append("qty")
+            field_changes.append(f"qty {int(prev.qty or 0)} -> {int(item.qty or 0)}")
+            structured.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+        if round(float(prev.cost or 0), 2) != round(float(item.cost or 0), 2):
+            fields.append("rate")
+            field_changes.append(f"rate {round(float(prev.cost or 0), 2)} -> {round(float(item.cost or 0), 2)}")
+            structured.append(
+                {"field": "rate", "old": round(float(prev.cost or 0), 2), "new": round(float(item.cost or 0), 2)}
+            )
+        if round(float(prev.tax_rate or 0), 2) != round(float(item.tax_rate or 0), 2):
+            fields.append("tax_rate")
+            field_changes.append(
+                f"tax {round(float(prev.tax_rate or 0), 2)} -> {round(float(item.tax_rate or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "tax_rate",
+                    "old": round(float(prev.tax_rate or 0), 2),
+                    "new": round(float(item.tax_rate or 0), 2),
+                }
+            )
+        if round(float(prev.discount or 0), 2) != round(float(item.discount or 0), 2):
+            fields.append("discount")
+            field_changes.append(
+                f"discount {round(float(prev.discount or 0), 2)} -> {round(float(item.discount or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "discount",
+                    "old": round(float(prev.discount or 0), 2),
+                    "new": round(float(item.discount or 0), 2),
+                }
+            )
+
+        if field_changes:
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": fields,
+                    "changes": structured,
+                    "detail": f"{item_name}: " + ", ".join(field_changes),
+                }
+            )
+
+    for key, rows in old_by_key.items():
+        new_count = new_counts.get(key, 0)
+        if len(rows) <= new_count:
+            continue
+        for row in rows[new_count:]:
+            item_name = str(row.name or "Item")
+            structured = [
+                {"field": "qty", "old": int(row.qty or 0), "new": None},
+                {"field": "rate", "old": round(float(row.cost or 0), 2), "new": None},
+                {"field": "tax_rate", "old": round(float(row.tax_rate or 0), 2), "new": None},
+                {"field": "discount", "old": round(float(row.discount or 0), 2), "new": None},
+            ]
+            changes.append(
+                {
+                    "item_id": str(row.item_id) if row.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["removed"],
+                    "changes": structured,
+                    "detail": f"{item_name}: removed (qty {int(row.qty or 0)}, rate {round(float(row.cost or 0), 2)})",
+                }
+            )
+
+    return changes
+
+
+def _log_purchase_order_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    order_id: str,
+    order_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared purchase_order activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="purchase_order",
+        record_id=order_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="purchases",
+        ref=order_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _summarize_purchase_order_item_changes(old_lines, new_items) -> list[dict]:
+    """Compute item-level diffs for purchase order edits."""
+    old_by_key: dict[tuple[str, str], list] = {}
+    for line in old_lines or []:
+        key = (str(line.item_id or ""), str(line.name or "").strip().lower())
+        old_by_key.setdefault(key, []).append(line)
+
+    new_counts: dict[tuple[str, str], int] = {}
+    consumed: dict[tuple[str, str], int] = {}
+    changes: list[dict] = []
+
+    for item in new_items or []:
+        key = (str(item.item_id or ""), str(item.name or "").strip().lower())
+        new_counts[key] = new_counts.get(key, 0) + 1
+        idx = consumed.get(key, 0)
+        consumed[key] = idx + 1
+        existing = old_by_key.get(key, [])
+        prev = existing[idx] if idx < len(existing) else None
+        item_name = str(item.name or "Item")
+
+        if prev is None:
+            structured = [
+                {"field": "qty", "old": None, "new": int(item.qty or 0)},
+                {"field": "rate", "old": None, "new": round(float(item.cost or 0), 2)},
+                {"field": "tax_rate", "old": None, "new": round(float(item.tax_rate or 0), 2)},
+                {"field": "discount", "old": None, "new": round(float(item.discount or 0), 2)},
+            ]
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["added"],
+                    "changes": structured,
+                    "detail": f"{item_name}: added (qty {item.qty}, rate {round(float(item.cost or 0), 2)})",
+                }
+            )
+            continue
+
+        field_changes: list[str] = []
+        fields: list[str] = []
+        structured: list[dict] = []
+        if int(prev.qty or 0) != int(item.qty or 0):
+            fields.append("qty")
+            field_changes.append(f"qty {int(prev.qty or 0)} -> {int(item.qty or 0)}")
+            structured.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+        if round(float(prev.cost or 0), 2) != round(float(item.cost or 0), 2):
+            fields.append("rate")
+            field_changes.append(f"rate {round(float(prev.cost or 0), 2)} -> {round(float(item.cost or 0), 2)}")
+            structured.append(
+                {"field": "rate", "old": round(float(prev.cost or 0), 2), "new": round(float(item.cost or 0), 2)}
+            )
+        if round(float(prev.tax_rate or 0), 2) != round(float(item.tax_rate or 0), 2):
+            fields.append("tax_rate")
+            field_changes.append(
+                f"tax {round(float(prev.tax_rate or 0), 2)} -> {round(float(item.tax_rate or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "tax_rate",
+                    "old": round(float(prev.tax_rate or 0), 2),
+                    "new": round(float(item.tax_rate or 0), 2),
+                }
+            )
+        if round(float(prev.discount or 0), 2) != round(float(item.discount or 0), 2):
+            fields.append("discount")
+            field_changes.append(
+                f"discount {round(float(prev.discount or 0), 2)} -> {round(float(item.discount or 0), 2)}"
+            )
+            structured.append(
+                {
+                    "field": "discount",
+                    "old": round(float(prev.discount or 0), 2),
+                    "new": round(float(item.discount or 0), 2),
+                }
+            )
+
+        if field_changes:
+            changes.append(
+                {
+                    "item_id": str(item.item_id) if item.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": fields,
+                    "changes": structured,
+                    "detail": f"{item_name}: " + ", ".join(field_changes),
+                }
+            )
+
+    for key, rows in old_by_key.items():
+        new_count = new_counts.get(key, 0)
+        if len(rows) <= new_count:
+            continue
+        for row in rows[new_count:]:
+            item_name = str(row.name or "Item")
+            structured = [
+                {"field": "qty", "old": int(row.qty or 0), "new": None},
+                {"field": "rate", "old": round(float(row.cost or 0), 2), "new": None},
+                {"field": "tax_rate", "old": round(float(row.tax_rate or 0), 2), "new": None},
+                {"field": "discount", "old": round(float(row.discount or 0), 2), "new": None},
+            ]
+            changes.append(
+                {
+                    "item_id": str(row.item_id) if row.item_id is not None else None,
+                    "item_name": item_name,
+                    "fields": ["removed"],
+                    "changes": structured,
+                    "detail": f"{item_name}: removed (qty {int(row.qty or 0)}, rate {round(float(row.cost or 0), 2)})",
+                }
+            )
+
+    return changes
+
+
+def _log_grn_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    grn_id: str,
+    grn_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared GRN activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="grn",
+        record_id=grn_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="purchases",
+        ref=grn_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _log_vendor_return_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User] = None,
+    return_id: str,
+    return_number: str,
+    event_type: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    action: Optional[str] = None,
+    risk: str = "low",
+) -> None:
+    """Shared vendor_return activity logger (Phase D incremental rollout)."""
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="vendor_return",
+        record_id=return_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action or event_type,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="purchases",
+        ref=return_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
 class PurchaseLine(BaseModel):
     item_id: Optional[str] = None
     name: str
@@ -366,6 +710,30 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
             notes=data.notes,
             paid_amount=paid_amount,
         )
+        _log_grn_history(db, user=user,
+            grn_id=grn.id,
+            grn_number=grn.number,
+            event_type="verified",
+            action="verify_grn_for_billing",
+            detail=f"Verified GRN {grn.number} and created bill {bill.number}",
+            metadata={
+                "target_record_type": "purchase_bill",
+                "target_record_id": bill.id,
+                "target_record_number": bill.number,
+            },
+        )
+        _log_grn_history(db, user=user,
+            grn_id=grn.id,
+            grn_number=grn.number,
+            event_type="linked_to_source",
+            action="link_grn_source",
+            detail=f"Linked GRN {grn.number} to purchase bill {bill.number}",
+            metadata={
+                "target_record_type": "purchase_bill",
+                "target_record_id": bill.id,
+                "target_record_number": bill.number,
+            },
+        )
         # Propagate any batch metadata corrections the user made on the bill
         # form (expiry_date, mfg_date) back to the ItemBatch and GRNLineItem
         # records so they stay in sync.
@@ -404,6 +772,18 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
             if po is not None:
                 po.status = PurchaseOrderStatus.converted
                 po.converted_bill_id = bill.id
+                _log_purchase_order_history(db, user=user,
+                    order_id=po.id,
+                    order_number=po.number,
+                    event_type="converted",
+                    action="convert_purchase_order",
+                    detail=f"Converted purchase order {po.number} to bill {bill.number}",
+                    metadata={
+                        "target_record_type": "purchase_bill",
+                        "target_record_id": bill.id,
+                        "target_record_number": bill.number,
+                    },
+                )
     else:
         # Phase 3: stock on GRN, bill is financial only (auto-GRN for direct bill).
         grn = await _create_grn_received(
@@ -433,6 +813,18 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
         if po is not None:
             po.status = PurchaseOrderStatus.converted
             po.converted_bill_id = bill.id
+            _log_purchase_order_history(db, user=user,
+                order_id=po.id,
+                order_number=po.number,
+                event_type="converted",
+                action="convert_purchase_order",
+                detail=f"Converted purchase order {po.number} to bill {bill.number}",
+                metadata={
+                    "target_record_type": "purchase_bill",
+                    "target_record_id": bill.id,
+                    "target_record_number": bill.number,
+                },
+            )
     bill_num = bill.number
     total = float(bill.total or 0)
 
@@ -482,12 +874,58 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
     if bill.vendor_id and bill_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
 
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="created",
+        action="create_purchase_bill",
+        detail=f"Created purchase bill {bill.number}",
+        metadata={
+            "source": "grn" if data.grn_id else ("purchase_order" if data.purchase_order_id else "direct"),
+            "status": str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status),
+            "total": float(bill.total or 0),
+        },
+    )
+    if getattr(bill, "grn_id", None):
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="grn_linked",
+            action="link_bill_grn",
+            detail=f"Linked bill {bill.number} to GRN",
+            metadata={
+                "target_record_type": "grn",
+                "target_record_id": bill.grn_id,
+            },
+        )
+    if paid_at_create and paid_amount > 0:
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_recorded",
+            action="record_purchase_payment",
+            detail=f"Recorded payment of {round(float(paid_amount), 2)} for {bill.number}",
+            metadata={
+                "amount": round(float(paid_amount), 2),
+                "payment_mode": data.payment_mode,
+                "payment_ref": data.payment_ref or "",
+            },
+        )
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="status_changed",
+            action="update_purchase_bill_status",
+            detail=f"Status changed: pending -> {bill_status}",
+            metadata={"from": "pending", "to": bill_status},
+        )
+
     await db.commit()
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
 @router.post("/{bill_id}/payment", dependencies=[Depends(require_perm("purchases.edit"))])
-async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db)):
+async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Record a payment against a purchase bill.
 
     Overpayment (amount > balance) routes excess to vendor.credit_balance.
@@ -502,6 +940,8 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     bill_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
     if bill_status == "cancelled":
         raise HTTPException(400, "Bill is cancelled — cannot record payments")
+    prev_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
+    prev_paid_amount = float(b.paid_amount or 0)
     balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
     if balance <= 0:
         raise HTTPException(400, "Bill already settled")
@@ -596,6 +1036,34 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         )
     await sync_vendor_outstanding(db, b.vendor_id)
 
+    _log_purchase_bill_history(db, user=user,
+        bill_id=b.id,
+        bill_number=b.number,
+        event_type="payment_recorded",
+        action="record_purchase_payment",
+        detail=f"Recorded payment of {round(float(data.amount), 2)} for {b.number}",
+        metadata={
+            "payment_id": pay.id,
+            "payment_number": pay.number,
+            "amount": round(float(data.amount), 2),
+            "applied": round(float(applied), 2),
+            "paid_before": round(prev_paid_amount, 2),
+            "paid_after": round(float(b.paid_amount or 0), 2),
+            "payment_mode": data.mode,
+            "payment_ref": data.ref or "",
+        },
+    )
+    next_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
+    if prev_status != next_status:
+        _log_purchase_bill_history(db, user=user,
+            bill_id=b.id,
+            bill_number=b.number,
+            event_type="status_changed",
+            action="update_purchase_bill_status",
+            detail=f"Status changed: {prev_status} -> {next_status}",
+            metadata={"from": prev_status, "to": next_status},
+        )
+
     await db.commit()
     return {
         "status": b.status,
@@ -607,7 +1075,7 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
 @router.post("/{bill_id}/cancel", dependencies=[Depends(require_perm("purchases.edit"))])
-async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
+async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Cancel a purchase bill. Idempotent — already-cancelled bills return
     the same 200 shape.
 
@@ -652,8 +1120,17 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
             400,
             "Cannot cancel a bill with active payment allocations. Void or delete payments first.",
         )
+    prev_status = bill_status
     b.status = "cancelled"
     await sync_vendor_outstanding(db, b.vendor_id)
+    _log_purchase_bill_history(db, user=user,
+        bill_id=b.id,
+        bill_number=b.number,
+        event_type="status_changed",
+        action="update_purchase_bill_status",
+        detail=f"Status changed: {prev_status} -> cancelled",
+        metadata={"from": prev_status, "to": "cancelled"},
+    )
     await db.commit()
     return {"status": "cancelled"}
 
@@ -679,6 +1156,10 @@ async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends
         raise HTTPException(400, f"Cannot edit a {bill_status} bill")
     if not data.items:
         raise HTTPException(400, "Bill must have at least one line item")
+
+    prev_total = float(bill.total or 0)
+    prev_due_date = bill.due_date
+    item_changes = _summarize_purchase_bill_item_changes(list(bill.line_items or []), data.items)
 
     tax_mode = await _get_org_tax_mode(db)
     subtotal = 0.0
@@ -720,6 +1201,36 @@ async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends
             discount=item.discount or 0,
             line_total=round(line_taxable + line_tax, 2),
         ))
+
+    preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {bill.number}"
+    if len(item_changes) > 1:
+        preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="item_changed",
+        action="update_purchase_bill_items",
+        detail=preview,
+        metadata={"line_count": len(data.items), "changes": item_changes[:20]},
+    )
+    if prev_due_date != bill.due_date:
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="due_date_changed",
+            action="update_purchase_bill_due_date",
+            detail=f"Due date changed for {bill.number}",
+            metadata={"from": prev_due_date, "to": bill.due_date},
+        )
+    if round(prev_total, 2) != round(float(bill.total or 0), 2):
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="amount_changed",
+            action="update_purchase_bill_amount",
+            detail=f"Amount changed for {bill.number}",
+            metadata={"from": round(prev_total, 2), "to": round(float(bill.total or 0), 2)},
+        )
 
     if bill.vendor_id:
         await sync_vendor_outstanding(db, bill.vendor_id)
@@ -795,7 +1306,7 @@ async def list_payments(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     conds = [or_(VendorPayment.voided == False, VendorPayment.voided.is_(None))]  # noqa: E712
     if vendor_id:
@@ -843,7 +1354,7 @@ async def list_payments(
 
 # ─── PAYMENTS: GET ──────────────────────────────────────────────────────────
 @router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("purchases.view"))])
-async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(VendorPayment)
         .options(selectinload(VendorPayment.allocations))
@@ -856,7 +1367,7 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/payments/{payment_id}/void", dependencies=[Depends(require_perm("purchases.edit"))])
-async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
+async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Soft-void a vendor payment — reverses bill allocations but keeps the row."""
     res = await db.execute(
         select(VendorPayment)
@@ -868,6 +1379,17 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Payment not found")
     if getattr(pay, "voided", False):
         return {"status": "voided", "number": pay.number}
+
+    alloc_by_bill: dict[str, float] = {}
+    status_before: dict[str, str] = {}
+    bill_number_by_id: dict[str, str] = {}
+    for alloc in pay.allocations:
+        alloc_by_bill[alloc.bill_id] = round(alloc_by_bill.get(alloc.bill_id, 0.0) + float(alloc.amount or 0), 2)
+        bill = (await db.execute(select(PurchaseBill).where(PurchaseBill.id == alloc.bill_id))).scalar_one_or_none()
+        if bill is not None:
+            status_before[bill.id] = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
+            bill_number_by_id[bill.id] = bill.number
+
     await reverse_vendor_payment(db, pay)
     pay.voided = True
     pay.voided_at = datetime.now().strftime("%Y-%m-%d")
@@ -885,11 +1407,41 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
             voided_by="Staff",
             reason=f"Vendor payment {pay.number} voided",
         )
+
+    for bill_id, amount in alloc_by_bill.items():
+        bill = (await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))).scalar_one_or_none()
+        if bill is None:
+            continue
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_voided",
+            action="void_purchase_payment",
+            detail=f"Voided payment {pay.number} allocation on {bill.number}",
+            metadata={
+                "payment_id": pay.id,
+                "payment_number": pay.number,
+                "amount": round(float(amount), 2),
+            },
+            risk="medium",
+        )
+        prev_status = status_before.get(bill.id)
+        next_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
+        if prev_status and prev_status != next_status:
+            _log_purchase_bill_history(db, user=user,
+                bill_id=bill.id,
+                bill_number=bill.number,
+                event_type="status_changed",
+                action="update_purchase_bill_status",
+                detail=f"Status changed: {prev_status} -> {next_status}",
+                metadata={"from": prev_status, "to": next_status},
+            )
+
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action="void_vendor_payment",
-        user_id=None,
-        user_name=None,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
         module="purchases",
         ref=pay.number,
         detail=f"Voided vendor payment {pay.number} (₹{pay.total_amount})",
@@ -902,7 +1454,7 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── PAYMENTS: CREATE (multi-bill) ──────────────────────────────────────────
 @router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("purchases.edit"))])
-async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(get_db)):
+async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Record a payment to a vendor across one or more bills.
 
     Allocation amount may exceed bill balance — excess accumulates in
@@ -958,8 +1510,10 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
     total_credit = 0.0
     total_amount = 0.0
     today = datetime.now().strftime("%Y-%m-%d")
+    bill_status_before: dict[str, str] = {}
     for a in data.allocations:
         b = bill_by_id[a.bill_id]
+        bill_status_before[b.id] = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
         balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
         applied = min(float(a.amount), balance)
         excess = max(0.0, float(a.amount) - balance)
@@ -984,8 +1538,8 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             action="vendor_credit",
-            user_id=None,
-            user_name=None,
+            user_id=user.id if user is not None else None,
+            user_name=user.name if user is not None else None,
             module="purchases",
             ref=None,
             detail=(
@@ -1048,6 +1602,34 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
             recorded_by=data.created_by or "Staff",
         )
     await sync_vendor_outstanding(db, data.vendor_id)
+
+    for a in data.allocations:
+        b = bill_by_id[a.bill_id]
+        _log_purchase_bill_history(db, user=user,
+            bill_id=b.id,
+            bill_number=b.number,
+            event_type="payment_recorded",
+            action="record_purchase_payment",
+            detail=f"Recorded payment of {round(float(a.amount), 2)} for {b.number}",
+            metadata={
+                "payment_id": payment.id,
+                "payment_number": payment.number,
+                "amount": round(float(a.amount), 2),
+                "payment_mode": data.payment_mode,
+                "payment_ref": data.payment_ref or "",
+            },
+        )
+        prev_status = bill_status_before.get(b.id)
+        next_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
+        if prev_status and prev_status != next_status:
+            _log_purchase_bill_history(db, user=user,
+                bill_id=b.id,
+                bill_number=b.number,
+                event_type="status_changed",
+                action="update_purchase_bill_status",
+                detail=f"Status changed: {prev_status} -> {next_status}",
+                metadata={"from": prev_status, "to": next_status},
+            )
 
     await db.commit()
     return {
@@ -1161,7 +1743,7 @@ async def list_returns(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
@@ -1212,7 +1794,7 @@ async def list_returns(
     return paged(out, total, sk, lim)
 
 @router.get("/returns/{return_id}", dependencies=[Depends(require_perm("purchases.view"))])
-async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def get_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(VendorReturn).where(VendorReturn.id == return_id))
     r = result.scalar_one_or_none()
     if not r:
@@ -1221,7 +1803,7 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
     return _return_dict(r, li_res.scalars().all())
 
 @router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
-async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get_db)):
+async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Process a vendor return against an existing bill.
 
     2026-05-25 changes:
@@ -1442,13 +2024,30 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
 
     await sync_vendor_outstanding(db, bill.vendor_id)
 
+    _log_vendor_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="created",
+        action="create_vendor_return",
+        detail=f"Created vendor return {ret.number}",
+        metadata={
+            "total": round(float(ret.total or 0), 2),
+            "credited_amount": round(float(ret.credited_amount or 0), 2),
+            "item_count": len(return_rows),
+            "reason": ret.reason,
+            "target_record_type": "purchase_bill",
+            "target_record_id": ret.bill_id,
+            "target_record_number": ret.bill_number,
+        },
+    )
+
     await db.commit()
     await db.refresh(ret)
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == ret.id))
     return _return_dict(ret, li_res.scalars().all())
 
 @router.post("/returns/{return_id}/approve", dependencies=[Depends(require_perm("purchases.edit"))])
-async def approve_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def approve_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(VendorReturn).where(VendorReturn.id == return_id))
     ret = result.scalar_one_or_none()
     if not ret:
@@ -1460,7 +2059,7 @@ async def approve_return(return_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/returns/{return_id}/void", dependencies=[Depends(require_perm("purchases.edit"))])
-async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def void_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Soft-void a vendor return — reverses stock + bill adjustments but keeps the row."""
     res = await db.execute(
         select(VendorReturn)
@@ -1480,12 +2079,27 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db)):
     await recalc_bill_after_vendor_credit(db, ret.bill_id)
     if ret.vendor_id:
         await sync_vendor_outstanding(db, ret.vendor_id)
+
+    _log_vendor_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="voided",
+        action="void_vendor_return",
+        detail=f"Voided vendor return {ret.number}",
+        metadata={
+            "target_record_type": "purchase_bill",
+            "target_record_id": ret.bill_id,
+            "target_record_number": ret.bill_number,
+        },
+        risk="medium",
+    )
+
     await db.commit()
     return {"status": "void", "number": ret.number}
 
 
 @router.post("/returns/{return_id}/undo-void", dependencies=[Depends(require_perm("purchases.edit"))])
-async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get_db)):
+async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Restore a voided vendor return — re-applies stock + bill adjustments.
 
     Blocked if another active return has already consumed the same line
@@ -1594,6 +2208,21 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
     await recalc_bill_after_vendor_credit(db, ret.bill_id)
     if ret.vendor_id:
         await sync_vendor_outstanding(db, ret.vendor_id)
+
+    _log_vendor_return_history(db, user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="unvoided",
+        action="undo_void_vendor_return",
+        detail=f"Unvoided vendor return {ret.number}",
+        metadata={
+            "target_record_type": "purchase_bill",
+            "target_record_id": ret.bill_id,
+            "target_record_number": ret.bill_number,
+        },
+        risk="medium",
+    )
+
     await db.commit()
     return {"status": "active", "number": ret.number}
 
@@ -1995,7 +2624,7 @@ async def list_orders(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     conds = []
     if vendor_id:
@@ -2048,7 +2677,7 @@ async def list_orders(
 
 # ─── PO: GET ──────────────────────────────────────────────────────────────────
 @router.get("/orders/{order_id}", dependencies=[Depends(require_perm("purchases.view"))])
-async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
+async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(PurchaseOrder)
         .options(selectinload(PurchaseOrder.line_items))
@@ -2062,7 +2691,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── PO: CREATE ───────────────────────────────────────────────────────────────
 @router.post("/orders/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
-async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get_db)):
+async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     if not data.items:
         raise HTTPException(400, "Purchase order must have at least one line item")
     today = datetime.now().strftime("%Y-%m-%d")
@@ -2108,13 +2737,26 @@ async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get
             discount=line.discount or 0,
             line_total=round(line_taxable_amount(line_net, line.tax_rate or 0, tax_mode) + line_tax, 2),
         ))
+
+    _log_purchase_order_history(db, user=user,
+        order_id=po.id,
+        order_number=po.number,
+        event_type="created",
+        action="create_purchase_order",
+        detail=f"Created purchase order {po.number}",
+        metadata={
+            "status": str(po.status.value) if hasattr(po.status, "value") else str(po.status),
+            "total": float(po.total or 0),
+            "line_count": len(data.items),
+        },
+    )
     await db.commit()
     return {"id": po.id, "number": po_num, "total": total, "status": po.status.value}
 
 
 # ─── PO: UPDATE ───────────────────────────────────────────────────────────────
 @router.put("/orders/{order_id}", dependencies=[Depends(require_perm("purchases.edit"))])
-async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSession = Depends(get_db)):
+async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full-replacement edit. Same shape as create; allowed only while
     the PO is not in a terminal status. UI hides Edit for converted /
     cancelled POs, this is the server-side defence-in-depth check.
@@ -2131,6 +2773,8 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
         raise HTTPException(400, "Cannot edit a terminal-status purchase order")
     if not data.items:
         raise HTTPException(400, "Purchase order must have at least one line item")
+
+    item_changes = _summarize_purchase_order_item_changes(list(po.line_items or []), data.items)
 
     from sqlalchemy import delete as sa_delete
     await db.execute(sa_delete(PurchaseOrderLineItem).where(PurchaseOrderLineItem.order_id == po.id))
@@ -2159,13 +2803,25 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
             discount=line.discount or 0,
             line_total=round(line_taxable_amount(line_net, line.tax_rate or 0, tax_mode) + line_tax, 2),
         ))
+
+    preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {po.number}"
+    if len(item_changes) > 1:
+        preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
+    _log_purchase_order_history(db, user=user,
+        order_id=po.id,
+        order_number=po.number,
+        event_type="item_changed",
+        action="update_purchase_order_items",
+        detail=preview,
+        metadata={"changes": item_changes[:20], "line_count": len(data.items)},
+    )
     await db.commit()
     return {"id": po.id, "number": po.number, "total": total, "status": po.status.value}
 
 
 # ─── PO: STATUS ───────────────────────────────────────────────────────────────
 @router.patch("/orders/{order_id}/status", dependencies=[Depends(require_perm("purchases.edit"))])
-async def update_order_status(order_id: str, body: PurchaseOrderStatusIn, db: AsyncSession = Depends(get_db)):
+async def update_order_status(order_id: str, body: PurchaseOrderStatusIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Confirm / cancel a PO. `converted` cannot be set manually — only
     the /convert endpoint sets it (atomically with bill creation)."""
     target = (body.status or "").strip().lower()
@@ -2182,7 +2838,28 @@ async def update_order_status(order_id: str, body: PurchaseOrderStatusIn, db: As
             400,
             "Cannot cancel a PO with a pending goods receipt — bill or cancel the GRN first",
         )
+    prev_status = str(po.status.value) if hasattr(po.status, "value") else str(po.status)
     po.status = target
+    next_status = str(po.status.value) if hasattr(po.status, "value") else str(po.status)
+    if target == "confirmed" and prev_status != "confirmed":
+        _log_purchase_order_history(db, user=user,
+            order_id=po.id,
+            order_number=po.number,
+            event_type="approved",
+            action="approve_purchase_order",
+            detail=f"Purchase order {po.number} approved",
+            metadata={"from": prev_status, "to": next_status},
+        )
+    elif target == "cancelled" and prev_status != "cancelled":
+        _log_purchase_order_history(db, user=user,
+            order_id=po.id,
+            order_number=po.number,
+            event_type="cancelled",
+            action="cancel_purchase_order",
+            detail=f"Purchase order {po.number} cancelled",
+            metadata={"from": prev_status, "to": next_status},
+            risk="medium",
+        )
     await db.commit()
     return {"status": po.status.value if hasattr(po.status, "value") else str(po.status)}
 
@@ -2192,7 +2869,7 @@ async def update_order_status(order_id: str, body: PurchaseOrderStatusIn, db: As
 async def convert_order_to_bill(
     order_id: str,
     data: ConvertPOToBillIn,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """Spawn GRN (stock) + PurchaseBill (financial) from a PO.
 
@@ -2302,8 +2979,67 @@ async def convert_order_to_bill(
         ))
         await record_vendor_payment(db, bpay)
 
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="created",
+        action="create_purchase_bill",
+        detail=f"Created purchase bill {bill.number} from purchase order {po.number}",
+        metadata={
+            "source": "purchase_order",
+            "source_record_id": po.id,
+            "source_record_number": po.number,
+            "total": float(bill.total or 0),
+        },
+    )
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="grn_linked",
+        action="link_bill_grn",
+        detail=f"Linked bill {bill.number} to GRN {grn.number}",
+        metadata={
+            "target_record_type": "grn",
+            "target_record_id": grn.id,
+            "target_record_number": grn.number,
+        },
+    )
+    if data.payment_received and paid > 0:
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_recorded",
+            action="record_purchase_payment",
+            detail=f"Recorded payment of {round(float(paid), 2)} for {bill.number}",
+            metadata={
+                "amount": round(float(paid), 2),
+                "payment_mode": payment_mode,
+                "payment_ref": data.payment_ref or "",
+            },
+        )
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="status_changed",
+            action="update_purchase_bill_status",
+            detail="Status changed: pending -> paid",
+            metadata={"from": "pending", "to": "paid"},
+        )
+
     po.status = PurchaseOrderStatus.converted
     po.converted_bill_id = bill.id
+    _log_purchase_order_history(db, user=user,
+        order_id=po.id,
+        order_number=po.number,
+        event_type="converted",
+        action="convert_purchase_order",
+        detail=f"Converted purchase order {po.number} to bill {bill.number}",
+        metadata={
+            "target_record_type": "purchase_bill",
+            "target_record_id": bill.id,
+            "target_record_number": bill.number,
+        },
+    )
     await db.commit()
     return {
         "grn_id": grn.id,
@@ -2375,7 +3111,7 @@ async def list_grns(
     branch_id: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     conds = []
     if vendor_id:
@@ -2418,7 +3154,7 @@ async def list_grns(
 
 
 @router.get("/grns/{grn_id}", dependencies=[Depends(require_perm("purchases.view"))])
-async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
+async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
     grn = res.scalar_one_or_none()
     if not grn:
@@ -2430,7 +3166,7 @@ async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/grns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
-async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
+async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Direct goods receipt (no PO). Stock moves immediately."""
     if not data.items:
         raise HTTPException(400, "GRN must have at least one line")
@@ -2476,6 +3212,45 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
     )
     if po is not None:
         po.status = PurchaseOrderStatus.partially_received
+
+    total_qty = int(sum(int(getattr(i, "qty", 0) or 0) for i in (data.items or [])))
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="created",
+        action="create_grn",
+        detail=f"Created GRN {grn.number}",
+        metadata={
+            "source": "purchase_order" if po is not None else "direct",
+            "line_count": len(data.items or []),
+            "total_qty": total_qty,
+            "total": float(grn.total or 0),
+        },
+    )
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="qty_received_recorded",
+        action="record_grn_quantity",
+        detail=f"Recorded received quantity for {grn.number}: {total_qty}",
+        metadata={
+            "line_count": len(data.items or []),
+            "total_qty": total_qty,
+        },
+    )
+    if po is not None:
+        _log_grn_history(db, user=user,
+            grn_id=grn.id,
+            grn_number=grn.number,
+            event_type="linked_to_source",
+            action="link_grn_source",
+            detail=f"Linked GRN {grn.number} to purchase order {po.number}",
+            metadata={
+                "target_record_type": "purchase_order",
+                "target_record_id": po.id,
+                "target_record_number": po.number,
+            },
+        )
     await db.commit()
     return {"id": grn.id, "number": grn.number, "total": grn.total, "status": grn.status.value}
 
@@ -2484,7 +3259,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
 async def receive_from_po(
     order_id: str,
     data: GRNFromPOIn,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """Receive goods against a PO without creating a bill yet."""
     res = await db.execute(
@@ -2549,6 +3324,44 @@ async def receive_from_po(
         tax_mode=tax_mode,
     )
     po.status = PurchaseOrderStatus.partially_received
+
+    total_qty = int(sum(int(getattr(li, "qty", 0) or 0) for li in (po.line_items or [])))
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="created",
+        action="create_grn_from_po",
+        detail=f"Created GRN {grn.number} from purchase order {po.number}",
+        metadata={
+            "source": "purchase_order",
+            "line_count": len(po.line_items or []),
+            "total_qty": total_qty,
+            "total": float(grn.total or 0),
+        },
+    )
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="qty_received_recorded",
+        action="record_grn_quantity",
+        detail=f"Recorded received quantity for {grn.number}: {total_qty}",
+        metadata={
+            "line_count": len(po.line_items or []),
+            "total_qty": total_qty,
+        },
+    )
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="linked_to_source",
+        action="link_grn_source",
+        detail=f"Linked GRN {grn.number} to purchase order {po.number}",
+        metadata={
+            "target_record_type": "purchase_order",
+            "target_record_id": po.id,
+            "target_record_number": po.number,
+        },
+    )
     await db.commit()
     return {"id": grn.id, "number": grn.number, "total": grn.total}
 
@@ -2557,7 +3370,7 @@ async def receive_from_po(
 async def create_bill_from_grn(
     grn_id: str,
     data: BillFromGRNIn,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """Create a financial bill from a received GRN (no stock movement)."""
     res = await db.execute(
@@ -2630,9 +3443,81 @@ async def create_bill_from_grn(
         ))
         await record_vendor_payment(db, bpay)
 
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="created",
+        action="create_purchase_bill",
+        detail=f"Created purchase bill {bill.number} from GRN {grn.number}",
+        metadata={
+            "source": "grn",
+            "source_record_id": grn.id,
+            "source_record_number": grn.number,
+            "total": float(bill.total or 0),
+        },
+    )
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="grn_linked",
+        action="link_bill_grn",
+        detail=f"Linked bill {bill.number} to GRN {grn.number}",
+        metadata={
+            "target_record_type": "grn",
+            "target_record_id": grn.id,
+            "target_record_number": grn.number,
+        },
+    )
+    if data.payment_received and paid > 0:
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_recorded",
+            action="record_purchase_payment",
+            detail=f"Recorded payment of {round(float(paid), 2)} for {bill.number}",
+            metadata={
+                "amount": round(float(paid), 2),
+                "payment_mode": payment_mode,
+                "payment_ref": data.payment_ref or "",
+            },
+        )
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="status_changed",
+            action="update_purchase_bill_status",
+            detail="Status changed: pending -> paid",
+            metadata={"from": "pending", "to": "paid"},
+        )
+
     bill_st = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
     if bill.vendor_id and bill_st in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
+
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="verified",
+        action="verify_grn_for_billing",
+        detail=f"Verified GRN {grn.number} and created bill {bill.number}",
+        metadata={
+            "target_record_type": "purchase_bill",
+            "target_record_id": bill.id,
+            "target_record_number": bill.number,
+        },
+    )
+    _log_grn_history(db, user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="linked_to_source",
+        action="link_grn_source",
+        detail=f"Linked GRN {grn.number} to purchase bill {bill.number}",
+        metadata={
+            "target_record_type": "purchase_bill",
+            "target_record_id": bill.id,
+            "target_record_number": bill.number,
+        },
+    )
 
     await db.commit()
     return {
@@ -2644,7 +3529,7 @@ async def create_bill_from_grn(
 
 
 @router.post("/grns/{grn_id}/cancel", dependencies=[Depends(require_perm("purchases.edit"))])
-async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
+async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Cancel a received GRN — reverses stock. Blocked if billed or consumed."""
     res = await db.execute(
         select(GoodsReceiptNote)
@@ -2674,7 +3559,7 @@ async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── GET ONE BILL (after /orders/, /returns/, /payments/ static paths) ───────
 @router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
-async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
+async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()
     if not b:
@@ -2713,15 +3598,15 @@ class BulkDeleteIn(BaseModel):
     ids: List[str] = Field(..., min_length=1)
 
 
-def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
+def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict, user: Optional[User] = None):
     """Audit-log snapshot for bulk-delete operations. Mirror of the sales-
     side helper. `snapshot` is JSON-serialised inline."""
     import json as _json
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action=action,
-        user_id=None,
-        user_name=None,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
         module="purchases",
         ref=ref,
         detail=_json.dumps(snapshot, default=str),
@@ -2732,7 +3617,7 @@ def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict):
 
 # ─── BULK DELETE: PURCHASE ORDERS ────────────────────────────────────────────
 @router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
-async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(PurchaseOrder)
         .options(selectinload(PurchaseOrder.line_items))
@@ -2771,7 +3656,16 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
             "status": str(o.status.value) if hasattr(o.status, "value") else str(o.status),
             "items": [{"id": li.id, "name": li.name, "qty": li.qty, "cost": li.cost} for li in o.line_items],
         }
-        _audit_delete(db, action="delete_purchase_order", ref=o.number, snapshot=snapshot)
+        _log_purchase_order_history(db, user=user,
+            order_id=o.id,
+            order_number=o.number,
+            event_type="cancelled",
+            action="delete_purchase_order",
+            detail=f"Purchase order {o.number} deleted",
+            metadata={"reason": "bulk_delete"},
+            risk="medium",
+        )
+        _audit_delete(db, action="delete_purchase_order", ref=o.number, snapshot=snapshot, user=user)
         await db.delete(o)
         deleted.append({"id": o.id, "number": o.number})
     await db.commit()
@@ -2780,7 +3674,7 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
 
 # ─── BULK DELETE: BILLS ──────────────────────────────────────────────────────
 @router.post("/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
-async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(PurchaseBill)
         .options(selectinload(PurchaseBill.line_items))
@@ -2912,7 +3806,16 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
             if linked_grn is not None:
                 linked_grn.converted_bill_id = None
                 linked_grn.status = GRNStatus.cancelled
-        _audit_delete(db, action="delete_purchase_bill", ref=bill.number, snapshot=snapshot)
+        _log_purchase_bill_history(db, user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="voided",
+            action="delete_purchase_bill",
+            detail=f"Deleted purchase bill {bill.number}",
+            metadata={"reason": "bulk_delete"},
+            risk="medium",
+        )
+        _audit_delete(db, action="delete_purchase_bill", ref=bill.number, snapshot=snapshot, user=user)
         await db.delete(bill)
         deleted.append({"id": bill.id, "number": bill.number})
         if bill.vendor_id:
@@ -2928,7 +3831,7 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
 
 # ─── BULK DELETE: VENDOR RETURNS ─────────────────────────────────────────────
 @router.post("/returns/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
-async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(VendorReturn)
         .options(selectinload(VendorReturn.line_items))
@@ -3006,7 +3909,21 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
             await recalc_bill_after_vendor_credit(db, bill.id)
             if bill.vendor_id:
                 vendor_ids.add(bill.vendor_id)
-        _audit_delete(db, action="delete_vendor_return", ref=ret.number, snapshot=snapshot)
+        _log_vendor_return_history(db, user=user,
+            return_id=ret.id,
+            return_number=ret.number,
+            event_type="cancelled",
+            action="delete_vendor_return",
+            detail=f"Deleted vendor return {ret.number}",
+            metadata={
+                "reason": "bulk_delete",
+                "target_record_type": "purchase_bill",
+                "target_record_id": ret.bill_id,
+                "target_record_number": ret.bill_number,
+            },
+            risk="medium",
+        )
+        _audit_delete(db, action="delete_vendor_return", ref=ret.number, snapshot=snapshot, user=user)
         await db.delete(ret)
         deleted.append({"id": ret.id, "number": ret.number})
         if ret.vendor_id:
@@ -3022,7 +3939,7 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
 
 # ─── BULK DELETE: VENDOR PAYMENTS ────────────────────────────────────────────
 @router.post("/payments/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
-async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db)):
+async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(VendorPayment)
         .options(selectinload(VendorPayment.allocations))
@@ -3052,15 +3969,39 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                 select(PurchaseBill).where(PurchaseBill.id == alloc.bill_id)
             )).scalar_one_or_none()
             if bill is not None:
+                prev_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
                 new_paid = round(max(0.0, float(bill.paid_amount or 0) - float(alloc.amount or 0)), 2)
                 bill.paid_amount = new_paid
                 if new_paid <= 0:
                     bill.status = "pending"
                 elif new_paid < float(bill.total or 0):
                     bill.status = "partial"
+                _log_purchase_bill_history(db, user=user,
+                    bill_id=bill.id,
+                    bill_number=bill.number,
+                    event_type="payment_voided",
+                    action="delete_vendor_payment",
+                    detail=f"Removed payment {pay.number} from {bill.number}",
+                    metadata={
+                        "payment_id": pay.id,
+                        "payment_number": pay.number,
+                        "amount": round(float(alloc.amount or 0), 2),
+                    },
+                    risk="medium",
+                )
+                next_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
+                if prev_status != next_status:
+                    _log_purchase_bill_history(db, user=user,
+                        bill_id=bill.id,
+                        bill_number=bill.number,
+                        event_type="status_changed",
+                        action="update_purchase_bill_status",
+                        detail=f"Status changed: {prev_status} -> {next_status}",
+                        metadata={"from": prev_status, "to": next_status},
+                    )
                 if bill.vendor_id:
                     vendor_ids.add(bill.vendor_id)
-        _audit_delete(db, action="delete_vendor_payment", ref=pay.number, snapshot=snapshot)
+        _audit_delete(db, action="delete_vendor_payment", ref=pay.number, snapshot=snapshot, user=user)
         await db.delete(pay)
         deleted.append({"id": pay.id, "number": pay.number})
         if pay.vendor_id:

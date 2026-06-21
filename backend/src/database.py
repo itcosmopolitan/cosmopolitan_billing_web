@@ -356,7 +356,20 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("cash_entries", "voided_at",    "VARCHAR"),
     ("cash_entries", "voided_by",    "VARCHAR"),
     ("cash_entries", "void_reason",  "TEXT"),
+    # Activity timeline (Phase A): polymorphic links + normalized event key
+    # on top of existing audit_logs rows. Nullable to preserve legacy writes.
+    ("audit_logs", "record_type",    "VARCHAR"),
+    ("audit_logs", "record_id",      "VARCHAR"),
+    ("audit_logs", "event_type",     "VARCHAR"),
+    ("audit_logs", "event_metadata", "TEXT"),
 ]
+
+_REQUIRED_AUDIT_ACTIVITY_COLUMNS = {
+    "record_type",
+    "record_id",
+    "event_type",
+    "event_metadata",
+}
 
 # Map legacy users.role enum values → seeded roles.id from seed.py SYSTEM_ROLES.
 LEGACY_ROLE_TO_ID: dict[str, str] = {
@@ -367,6 +380,26 @@ LEGACY_ROLE_TO_ID: dict[str, str] = {
     "finance":           "role-finance",
     "purchase_admin":    "role-purchase-admin",
 }
+
+
+_ACTIVITY_PERMS_ALL = [
+    "history.view",
+    "comments.view",
+    "comments.add",
+    "comments.edit_own",
+    "comments.delete_any",
+]
+
+_ACTIVITY_PERMS_STANDARD_ALLOW = [
+    "history.view",
+    "comments.view",
+    "comments.add",
+    "comments.edit_own",
+]
+
+_ACTIVITY_ADMIN_DEFAULT_ROLES = {"super_admin", "branch_manager"}
+_ACTIVITY_STANDARD_DEFAULT_ROLES = {"purchase_admin", "finance", "inventory_manager"}
+_ACTIVITY_NO_ACCESS_DEFAULT_ROLES = {"cashier"}
 
 
 async def init_schema() -> None:
@@ -385,9 +418,12 @@ async def init_schema() -> None:
         )
     async with engine.begin() as conn:
         await _ensure_columns(conn)
+        await _ensure_audit_log_indexes(conn)
         await _ensure_nullable_columns(conn)
         await _ensure_pg_enum_values(conn)
         await _bootstrap_system_roles(conn)
+        await _ensure_activity_seed_markers_table(conn)
+        await _bootstrap_activity_role_defaults(conn)
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
         await _bootstrap_invoice_template(conn)
@@ -396,6 +432,35 @@ async def init_schema() -> None:
         await _migrate_adjustment_requests_per_branch_ref(conn)
         await _repair_return_invoice_totals(conn)
     logger.info("Schema initialization completed in %.2f seconds", time.perf_counter() - start)
+
+
+async def assert_activity_audit_schema() -> None:
+    """Fail fast if activity timeline columns are missing from audit_logs.
+
+    This is a post-migration safety net for deployments that might start from
+    older database snapshots.
+    """
+    engine = get_engine()
+    async with engine.connect() as conn:
+        if conn.dialect.name == "postgresql":
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = 'audit_logs'"
+                    )
+                )
+            ).fetchall()
+            existing = {r[0] for r in rows}
+        else:
+            rows = (await conn.execute(text("PRAGMA table_info(audit_logs)"))).fetchall()
+            existing = {r[1] for r in rows}
+
+    missing = sorted(_REQUIRED_AUDIT_ACTIVITY_COLUMNS - existing)
+    if missing:
+        raise RuntimeError(
+            "audit_logs is missing required activity columns: " + ", ".join(missing)
+        )
 
 
 async def _bootstrap_system_roles(conn) -> None:
@@ -442,6 +507,101 @@ async def _bootstrap_system_roles(conn) -> None:
         )
 
 
+async def _bootstrap_activity_role_defaults(conn) -> None:
+    """Seed activity defaults ONCE per (role, permission) pair.
+
+    Mapping:
+    - admin tier (all true): super_admin, branch_manager
+    - standard tier (delete_any false): purchase_admin, finance, inventory_manager
+    - no-access tier (all false): cashier
+
+    One-time semantics:
+    - Defaults apply only when no marker exists in role_permission_seed_markers.
+    - Once marked, later bootstraps do not overwrite UI-administered changes.
+    """
+    import json
+
+    role_keys = sorted(
+        _ACTIVITY_ADMIN_DEFAULT_ROLES
+        | _ACTIVITY_STANDARD_DEFAULT_ROLES
+        | _ACTIVITY_NO_ACCESS_DEFAULT_ROLES
+    )
+    keys_sql = ", ".join(f"'{k}'" for k in role_keys)
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT id, key, permissions FROM roles "
+                f"WHERE key IN ({keys_sql})"
+            )
+        )
+    ).fetchall()
+
+    marker_rows = (
+        await conn.execute(
+            text(
+                "SELECT role_id, permission_key FROM role_permission_seed_markers "
+                "WHERE permission_key IN ('history.view','comments.view','comments.add','comments.edit_own','comments.delete_any')"
+            )
+        )
+    ).fetchall()
+    seeded_pairs = {(rid, pkey) for rid, pkey in marker_rows}
+
+    for rid, key, perms in rows:
+        current = perms or []
+        if isinstance(current, str):
+            try:
+                current = json.loads(current)
+            except json.JSONDecodeError:
+                current = []
+        current = list(current or [])
+        updated = list(current)
+
+        for perm in _ACTIVITY_PERMS_ALL:
+            if (rid, perm) in seeded_pairs:
+                continue
+
+            default_allow = None
+            if key in _ACTIVITY_ADMIN_DEFAULT_ROLES:
+                default_allow = True
+            elif key in _ACTIVITY_STANDARD_DEFAULT_ROLES:
+                default_allow = perm in _ACTIVITY_PERMS_STANDARD_ALLOW
+            elif key in _ACTIVITY_NO_ACCESS_DEFAULT_ROLES:
+                default_allow = False
+
+            if default_allow is True and perm not in updated:
+                updated.append(perm)
+
+            await conn.execute(
+                text(
+                    "INSERT INTO role_permission_seed_markers (role_id, permission_key, seeded_at) "
+                    "VALUES (:role_id, :permission_key, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(role_id, permission_key) DO NOTHING"
+                ),
+                {"role_id": rid, "permission_key": perm},
+            )
+
+        if updated != current:
+            await conn.execute(
+                text("UPDATE roles SET permissions = :perms WHERE id = :id"),
+                {"id": rid, "perms": json.dumps(updated)},
+            )
+
+
+async def _ensure_activity_seed_markers_table(conn) -> None:
+    """Create one-time seed marker table for role-permission defaults."""
+    await conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS role_permission_seed_markers ("
+            "role_id VARCHAR NOT NULL, "
+            "permission_key VARCHAR NOT NULL, "
+            "seeded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "PRIMARY KEY (role_id, permission_key), "
+            "FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE"
+            ")"
+        )
+    )
+
+
 async def _ensure_columns(conn) -> None:
     """Add any missing columns from `_ADDITIVE_COLUMNS`. Idempotent."""
     dialect = conn.dialect.name
@@ -480,6 +640,26 @@ async def _ensure_columns(conn) -> None:
         if column in existing:
             continue
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
+async def _ensure_audit_log_indexes(conn) -> None:
+    """Create timeline read indexes for audit logs (idempotent)."""
+    if conn.dialect.name == "postgresql":
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_audit_logs_record_created "
+                "ON audit_logs (record_type, record_id, created_at DESC)"
+            )
+        )
+        return
+
+    # SQLite path used in local dev. IF NOT EXISTS is supported.
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_audit_logs_record_created "
+            "ON audit_logs (record_type, record_id, created_at DESC)"
+        )
+    )
 
 
 # PostgreSQL enums are created at first table migration; new Python enum

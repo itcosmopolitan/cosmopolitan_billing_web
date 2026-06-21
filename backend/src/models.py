@@ -1351,6 +1351,13 @@ class InvoiceTemplateSettings(Base):
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id         = Column(String, primary_key=True)
+    # Optional polymorphic target for record-level timeline queries.
+    record_type = Column(String)
+    record_id   = Column(String)
+    # Canonical activity event key (e.g. status_changed, payment_recorded).
+    event_type  = Column(String)
+    # JSON-encoded supplemental payload for cross-links and before/after diffs.
+    event_metadata = Column(Text)
     action     = Column(String, nullable=False)
     user_id    = Column(String)
     user_name  = Column(String)
@@ -1360,3 +1367,33 @@ class AuditLog(Base):
     risk       = Column(String, default="low")  # low | medium | high
     ip_address = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─── Activity Comments / Views ───────────────────────────────────────────────
+class ActivityComment(Base):
+    __tablename__ = "activity_comments"
+    __table_args__ = (
+        Index("ix_activity_comments_record_created", "record_type", "record_id", "created_at"),
+    )
+    id          = Column(String, primary_key=True)
+    record_type = Column(String, nullable=False)
+    record_id   = Column(String, nullable=False)
+    author_id   = Column(String, ForeignKey("users.id"), nullable=False)
+    body        = Column(Text, nullable=False)
+    is_pinned   = Column(Boolean, default=False, nullable=False)
+    edited_at   = Column(DateTime)
+    deleted_at  = Column(DateTime)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+
+class ActivityView(Base):
+    __tablename__ = "activity_views"
+    __table_args__ = (
+        UniqueConstraint("user_id", "record_type", "record_id", name="uq_activity_views_user_record"),
+        Index("ix_activity_views_user_record", "user_id", "record_type", "record_id"),
+    )
+    id            = Column(String, primary_key=True)
+    user_id       = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    record_type   = Column(String, nullable=False)
+    record_id     = Column(String, nullable=False)
+    last_viewed_at = Column(DateTime, default=datetime.utcnow, nullable=False)

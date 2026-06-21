@@ -131,6 +131,13 @@ export const dashAPI = {
   activityLogs:     (params) => api.get('/dashboard/operations/activity-logs', { params }),
 }
 
+export const activityAPI = {
+  timeline: (recordType, recordId, params = {}) => api.get(`/activity/${recordType}/${recordId}`, { params }),
+  postComment: (data) => api.post('/activity/comments', data),
+  patchComment: (commentId, data) => api.patch(`/activity/comments/${commentId}`, data),
+  deleteComment: (commentId) => api.delete(`/activity/comments/${commentId}`),
+}
+
 // ─── Items ────────────────────────────────────────────────────────────────────
 export const itemsAPI = {
   list:    (params) => api.get('/items/',             { params }),
