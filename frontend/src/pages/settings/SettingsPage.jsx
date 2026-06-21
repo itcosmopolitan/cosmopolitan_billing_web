@@ -4,7 +4,7 @@ import { roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
@@ -36,6 +36,8 @@ const TABS = [
 export default function SettingsPage() {
   const can = useCan()
   const [tab, setTab]         = useState('org')
+  // Bumped on every main-tab switch so active-tab fetchers always refetch.
+  const [tabVisit, setTabVisit] = useState(0)
   // Sub-toggle inside the "Users & Roles" parent tab — picks between the
   // Users table view and the Roles cards view. Both render full-width
   // (replaces the previous 65/35 split). State is per-mount, so toggling
@@ -81,9 +83,20 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [branchForm, setBranchForm] = useState({ name:'', code:'', manager:'', phone:'', address:'' })
-  // Only the setter is consumed; loading state is used by tab fetchers.
-  // eslint-disable-next-line no-unused-vars
   const [loading, setLoading] = useState(true)
+
+  const handleTabChange = (newTab) => {
+    if (newTab === tab) return
+    setLoading(true)
+    setTab(newTab)
+    setTabVisit((v) => v + 1)
+  }
+
+  const handleUsersTabChange = (newSubTab) => {
+    if (newSubTab === usersTab) return
+    setLoading(true)
+    setUsersTab(newSubTab)
+  }
   const puf = (k,v) => setUserForm(f=>({...f,[k]:v}))
   const pbf = (k,v) => setBranchForm(f=>({...f,[k]:v}))
   const [showEditBranch, setShowEditBranch] = useState(false)
@@ -171,7 +184,7 @@ export default function SettingsPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, brSkip, brLimit, brListVersion, branchSortBy, branchSortOrder])
+  }, [tab, tabVisit, brSkip, brLimit, brListVersion, branchSortBy, branchSortOrder])
 
   // Users sub-tab — fetch list when active (mirrors roles sub-tab below).
   useEffect(() => {
@@ -179,6 +192,7 @@ export default function SettingsPage() {
     let cancelled = false
     ;(async () => {
       try {
+        setLoading(true)
         const raw = await usersAPI.list({
           skip: userSkip,
           limit: userLimit,
@@ -195,14 +209,17 @@ export default function SettingsPage() {
       } catch (err) {
         console.error(err)
         if (!cancelled) {
+          toast.error('Failed to load users')
           setUsers([])
           setUserTotal(0)
           setUserHasMorePage(false)
         }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     })()
     return () => { cancelled = true }
-  }, [tab, usersTab, userSkip, userLimit, userListVersion, userSortBy, userSortOrder])
+  }, [tab, tabVisit, usersTab, userSkip, userLimit, userListVersion, userSortBy, userSortOrder])
 
   // Roles sub-tab — server-paged list; full catalog stays in store for user labels.
   useEffect(() => {
@@ -231,8 +248,7 @@ export default function SettingsPage() {
       }
     })()
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, usersTab, roleSkip, roleLimit, roleListVersion])
+  }, [tab, tabVisit, usersTab, roleSkip, roleLimit, roleListVersion])
 
   // Add/Edit User modals need the roles dropdown without visiting the Roles sub-tab.
   useEffect(() => {
@@ -302,7 +318,7 @@ export default function SettingsPage() {
       }
     })()
     return () => controller.abort()
-  }, [tab])
+  }, [tab, tabVisit])
 
   const saveOrg = async () => {
     if (!orgForm.name?.trim()) {
@@ -545,10 +561,12 @@ export default function SettingsPage() {
     <div className="page-container">
       <SectionHeader title="Settings & Administration" subtitle="Manage organisation, branches, users, and system configuration" />
 
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <Tabs tabs={TABS} active={tab} onChange={handleTabChange} />
 
       {/* ── ORGANISATION ──────────────────────────────────────────── */}
-      {tab === 'org' && (
+      {tab === 'org' && (loading ? (
+        <TableLoadingPanel label="Loading organisation profile…" />
+      ) : (
         <div className="grid-2" style={{alignItems:'start'}}>
           <Card title="Organisation Profile">
             <FormRow><FormGroup label="Company Name" required><input className="form-input" value={orgForm.name} onChange={e=>pof('name',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
@@ -606,7 +624,7 @@ export default function SettingsPage() {
             </Card>
           </div>
         </div>
-      )}
+      ))}
 
       {/* ── BRANCHES ──────────────────────────────────────────────── */}
       {tab === 'branches' && (
@@ -617,50 +635,59 @@ export default function SettingsPage() {
             )}
           </div>
           <Card bodyPadding={false}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <SortableHeader label="Branch" sortKey="name" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
-                  <SortableHeader label="Code" sortKey="code" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
-                  <SortableHeader label="Manager" sortKey="manager" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
-                  <SortableHeader label="Phone" sortKey="phone" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
-                  <th>Address</th>
-                  <SortableHeader label="Status" sortKey="active" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {branches.map(b=>(
-                  <tr key={b.id}>
-                    <td><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{b.name}</div></td>
-                    <td><span className="mono" style={{fontSize:12,color:'var(--accent)'}}>{b.code}</span></td>
-                    <td style={{fontSize:12.5}}>{b.manager}</td>
-                    <td style={{fontSize:12,color:'var(--text-muted)'}}>{b.phone}</td>
-                    <td style={{fontSize:12,color:'var(--text-muted)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{b.address}</td>
-                    <td><Chip status={b.active?'active':'inactive'}/></td>
-                    <td>
-                      <div style={{display:'flex',gap:4}}>
-                        {can('settings.edit') && (
-                          <button className="btn btn-secondary btn-xs" onClick={() => {
-                              setEditBranchForm(b)
-                              setShowEditBranch(true)
-                              }}>Edit</button>
-                        )}
-                        <button className="btn btn-secondary btn-xs" onClick={()=>toast('Branch settings…')}>Settings</button>
-                      </div>
-                    </td>
+            <TablePanel
+              loading={loading}
+              isEmpty={!loading && branches.length === 0}
+              emptyIcon="🏪"
+              emptyTitle="No branches yet"
+              emptyDesc="Add your first branch to get started."
+            >
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableHeader label="Branch" sortKey="name" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                    <SortableHeader label="Code" sortKey="code" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                    <SortableHeader label="Manager" sortKey="manager" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                    <SortableHeader label="Phone" sortKey="phone" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                    <th>Address</th>
+                    <SortableHeader label="Status" sortKey="active" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            <PaginationBar
-              total={brTotal}
-              skip={brSkip}
-              limit={brLimit}
-              hasMorePage={brHasMorePage}
-              onSkipChange={setBrSkip}
-              onLimitChange={setBrLimit}
-            />
+                </thead>
+                <tbody>
+                  {branches.map(b=>(
+                    <tr key={b.id}>
+                      <td><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{b.name}</div></td>
+                      <td><span className="mono" style={{fontSize:12,color:'var(--accent)'}}>{b.code}</span></td>
+                      <td style={{fontSize:12.5}}>{b.manager}</td>
+                      <td style={{fontSize:12,color:'var(--text-muted)'}}>{b.phone}</td>
+                      <td style={{fontSize:12,color:'var(--text-muted)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{b.address}</td>
+                      <td><Chip status={b.active?'active':'inactive'}/></td>
+                      <td>
+                        <div style={{display:'flex',gap:4}}>
+                          {can('settings.edit') && (
+                            <button className="btn btn-secondary btn-xs" onClick={() => {
+                                setEditBranchForm(b)
+                                setShowEditBranch(true)
+                                }}>Edit</button>
+                          )}
+                          <button className="btn btn-secondary btn-xs" onClick={()=>toast('Branch settings…')}>Settings</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <PaginationBar
+                total={brTotal}
+                skip={brSkip}
+                limit={brLimit}
+                hasMorePage={brHasMorePage}
+                onSkipChange={setBrSkip}
+                onLimitChange={setBrLimit}
+                disabled={loading}
+              />
+            </TablePanel>
           </Card>
           <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
@@ -696,7 +723,7 @@ export default function SettingsPage() {
             title={
               <SegmentedToggle
                 value={usersTab}
-                onChange={setUsersTab}
+                onChange={handleUsersTabChange}
                 options={[
                   { id: 'users', label: 'Users' },
                   { id: 'roles', label: 'Roles' },
@@ -716,7 +743,13 @@ export default function SettingsPage() {
             bodyPadding={usersTab === 'roles'}
           >
             {usersTab === 'users' && (
-              <>
+              <TablePanel
+                loading={loading}
+                isEmpty={!loading && users.length === 0}
+                emptyIcon="👥"
+                emptyTitle="No users yet"
+                emptyDesc="Create a user to grant access to the system."
+              >
               <table className="data-table">
                 <thead>
                   <tr>
@@ -796,15 +829,19 @@ export default function SettingsPage() {
                 hasMorePage={userHasMorePage}
                 onSkipChange={setUserSkip}
                 onLimitChange={setUserLimit}
+                disabled={loading}
               />
-              </>
+              </TablePanel>
             )}
 
             {usersTab === 'roles' && (
-              <>
-              {roleRows.length === 0 && !loading && (
-                <div style={{padding:'12px 0',fontSize:12,color:'var(--text-muted)'}}>No roles yet. Restart backend after seeding.</div>
-              )}
+              <TablePanel
+                loading={loading}
+                isEmpty={!loading && roleRows.length === 0}
+                emptyIcon="🔐"
+                emptyTitle="No roles yet"
+                emptyDesc="Restart backend after seeding, or create a custom role."
+              >
               {roleRows.map((r) => {
                 const rColor = roleColors[r.key] || (r.color && `var(--${r.color})`) || 'var(--accent)'
                 const granted = (r.permissions || []).join(', ') || '(none)'
@@ -840,8 +877,9 @@ export default function SettingsPage() {
                 hasMorePage={roleHasMorePage}
                 onSkipChange={setRoleSkip}
                 onLimitChange={setRoleLimit}
+                disabled={loading}
               />
-              </>
+              </TablePanel>
             )}
           </Card>
 
@@ -966,9 +1004,9 @@ export default function SettingsPage() {
         </>
       )}
 
-      {tab === 'tax'       && <TaxConfigTab />}
-      {tab === 'numbering' && <NumberingTab />}
-      {tab === 'invoice'   && <InvoiceTemplateTab />}
+      {tab === 'tax'       && <TaxConfigTab refreshKey={tabVisit} />}
+      {tab === 'numbering' && <NumberingTab refreshKey={tabVisit} />}
+      {tab === 'invoice'   && <InvoiceTemplateTab refreshKey={tabVisit} />}
     </div>
   )
 }
