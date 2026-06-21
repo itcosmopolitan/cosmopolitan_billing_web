@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -10,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number
-from src.models import Branch, StockTransfer, TransferLineItem, TransferStatus, User
+from src.models import AuditLog, Branch, StockTransfer, TransferLineItem, TransferStatus, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._atomic import (
     add_batch_atomic,
@@ -235,6 +236,90 @@ def _add_transfer_lines(transfer_id: str, items: List[TransferLine]) -> None:
         yield line
 
 
+def _log_transfer_history(
+    db: AsyncSession,
+    *,
+    user: User,
+    transfer_id: str,
+    transfer_number: str,
+    event_type: str,
+    action: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    risk: str = "low",
+) -> None:
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="stock_transfer",
+        record_id=transfer_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="inventory",
+        ref=transfer_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
+
+
+def _summarize_transfer_item_changes(old_lines: list[TransferLineItem], new_items: list[TransferLine]) -> list[dict]:
+    old_by_key: dict[tuple[str, str], list[TransferLineItem]] = {}
+    for line in old_lines or []:
+        key = (str(line.item_id or ""), str(line.item_name or "").strip().lower())
+        old_by_key.setdefault(key, []).append(line)
+
+    consumed: dict[tuple[str, str], int] = {}
+    changes: list[dict] = []
+    for item in new_items or []:
+        key = (str(item.item_id or ""), str(item.item_name or "").strip().lower())
+        idx = consumed.get(key, 0)
+        consumed[key] = idx + 1
+        existing = old_by_key.get(key, [])
+        prev = existing[idx] if idx < len(existing) else None
+
+        if prev is None:
+            changes.append({
+                "item_id": str(item.item_id),
+                "item_name": item.item_name,
+                "fields": ["added"],
+                "changes": [{"field": "qty", "old": None, "new": int(item.qty or 0)}],
+                "detail": f"{item.item_name}: added (qty {item.qty})",
+            })
+            continue
+
+        line_changes: list[dict] = []
+        if int(prev.qty or 0) != int(item.qty or 0):
+            line_changes.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+        if (prev.item_name or "") != item.item_name:
+            line_changes.append({"field": "item_name", "old": str(prev.item_name or ""), "new": item.item_name})
+
+        if line_changes:
+            changes.append({
+                "item_id": str(item.item_id),
+                "item_name": item.item_name,
+                "fields": [c["field"] for c in line_changes],
+                "changes": line_changes,
+                "detail": f"{item.item_name}: updated {', '.join(c['field'] for c in line_changes)}",
+            })
+
+    for key, existing in old_by_key.items():
+        removed_count = len(existing) - consumed.get(key, 0)
+        if removed_count > 0:
+            for removed in existing[consumed.get(key, 0):]:
+                changes.append({
+                    "item_id": str(removed.item_id),
+                    "item_name": removed.item_name,
+                    "fields": ["removed"],
+                    "changes": [{"field": "qty", "old": int(removed.qty or 0), "new": None}],
+                    "detail": f"{removed.item_name}: removed (qty {removed.qty})",
+                })
+
+    return changes
+
+
 async def _serialize_transfer_detail(
     db: AsyncSession, t: StockTransfer
 ) -> dict:
@@ -296,6 +381,21 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
     db.add(t)
     for line in _add_transfer_lines(tid, data.items):
         db.add(line)
+
+    _log_transfer_history(
+        db,
+        user=user,
+        transfer_id=tid,
+        transfer_number=ref,
+        event_type="created",
+        action="Transfer created",
+        detail=f"Created transfer request {ref} from {data.from_branch_id} to {data.to_branch_id}",
+        metadata={
+            "from_branch_id": data.from_branch_id,
+            "to_branch_id": data.to_branch_id,
+            "priority": data.priority,
+        },
+    )
     await db.commit()
     return {"id": tid, "ref_number": ref, "status": "pending"}
 
@@ -305,6 +405,7 @@ async def update_transfer(
     transfer_id: str,
     data: TransferUpdate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Replace a pending transfer's route, lines, and notes.
 
@@ -337,12 +438,34 @@ async def update_transfer(
             select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id)
         )
     ).scalars().all()
+    item_changes = _summarize_transfer_item_changes(existing, data.items)
     for ln in existing:
         await db.delete(ln)
 
     for line in _add_transfer_lines(transfer_id, data.items):
         db.add(line)
 
+    if item_changes:
+        _log_transfer_history(
+            db,
+            user=user,
+            transfer_id=transfer_id,
+            transfer_number=t.ref_number,
+            event_type="item_changed",
+            action="Transfer items updated",
+            detail=f"Updated transfer line items for {t.ref_number}",
+            metadata={"line_count": len(data.items), "changes": item_changes[:20]},
+        )
+
+    _log_transfer_history(
+        db,
+        user=user,
+        transfer_id=transfer_id,
+        transfer_number=t.ref_number,
+        event_type="updated",
+        action="Transfer updated",
+        detail=f"Edited transfer route, items, or notes for {t.ref_number}",
+    )
     await db.commit()
     return {"id": transfer_id, "ref_number": t.ref_number, "status": "pending"}
 
@@ -351,6 +474,7 @@ async def approve_transfer(
     transfer_id: str,
     body: TransferApprove,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Approve & dispatch a transfer.
 
@@ -485,6 +609,15 @@ async def approve_transfer(
                     source_ref=transfer_id,
                     notes=f"Transfer {t.ref_number} source clamp",
                 )
+    _log_transfer_history(
+        db,
+        user=user,
+        transfer_id=transfer_id,
+        transfer_number=t.ref_number,
+        event_type="transit",
+        action="Transfer dispatched",
+        detail=f"Transfer approved and dispatched by {body.approved_by}",
+    )
     await db.commit()
     return {"status": "transit", "ref_number": t.ref_number, "approved_by": body.approved_by}
 
@@ -494,6 +627,7 @@ async def reject_transfer(
     transfer_id: str,
     body: TransferReject,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
 
@@ -511,6 +645,16 @@ async def reject_transfer(
     if body.rejection_notes:
         prefix = f"[Rejected by {body.rejected_by}] "
         t.notes = f"{prefix}{body.rejection_notes}" + (f"\n{t.notes}" if t.notes else "")
+
+    _log_transfer_history(
+        db,
+        user=user,
+        transfer_id=transfer_id,
+        transfer_number=t.ref_number,
+        event_type="rejected",
+        action="Transfer rejected",
+        detail=f"Transfer rejected by {body.rejected_by}",
+    )
     await db.commit()
     return {"status": "rejected", "ref_number": t.ref_number}
 
@@ -520,6 +664,7 @@ async def receive_transfer(
     transfer_id: str,
     body: TransferReceive,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Receive a dispatched transfer.
 
@@ -601,6 +746,15 @@ async def receive_transfer(
                 source_type="transfer",
                 source_ref=transfer_id,
             )
+    _log_transfer_history(
+        db,
+        user=user,
+        transfer_id=transfer_id,
+        transfer_number=t.ref_number,
+        event_type="received",
+        action="Transfer received",
+        detail=f"Transfer received by {body.received_by}",
+    )
     await db.commit()
     return {"status": "received", "ref_number": t.ref_number, "received_by": body.received_by}
 
@@ -610,6 +764,7 @@ async def delete_transfer(
     transfer_id: str,
     ref_number: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Remove a pending transfer request.
 
@@ -636,6 +791,17 @@ async def delete_transfer(
             f"Only pending transfers can be deleted; this transfer is {status}",
         )
 
+    _log_transfer_history(
+        db,
+        user=user,
+        transfer_id=transfer_id,
+        transfer_number=t.ref_number,
+        event_type="cancelled",
+        action="delete_transfer",
+        detail=f"Transfer {t.ref_number} deleted",
+        metadata={"reason": "deleted"},
+        risk="medium",
+    )
     await db.delete(t)
     await db.commit()
     return {"status": "deleted", "ref_number": ref_number}

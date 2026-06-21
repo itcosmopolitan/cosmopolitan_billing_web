@@ -26,6 +26,8 @@ _CANONICAL_RECORD_TYPES = {
     "sales_order",
     "quotation",
     "sales_return",
+    "stock_transfer",
+    "stock_adjustment",
 }
 
 _RECORD_TYPE_ALIASES = {
@@ -35,6 +37,8 @@ _RECORD_TYPE_ALIASES = {
     "purchase": "purchase_bill",
     "purchase_return": "vendor_return",
     "credit_note": "sales_return",
+    "transfer": "stock_transfer",
+    "adjustment": "stock_adjustment",
 }
 
 _ALLOWED_RECORD_TYPES = _CANONICAL_RECORD_TYPES | set(_RECORD_TYPE_ALIASES.keys())
@@ -74,6 +78,9 @@ def _validate_record_type(record_type: str) -> str:
             status_code=400,
             detail=f"record_type '{rt}' is excluded for activity timeline",
         )
+    # Enforce a strict allowlist: accept only canonical types or known
+    # legacy aliases. This preserves the original security/correctness
+    # posture where unknown record_type values return 400.
     if rt not in _ALLOWED_RECORD_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported record_type '{rt}'")
     return _RECORD_TYPE_ALIASES.get(rt, rt)
