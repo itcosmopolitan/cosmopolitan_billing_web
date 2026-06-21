@@ -47,7 +47,7 @@ function previewFormat(prefix, formatStr, seq) {
   return out.slice(0, m.index) + String(seq).padStart(pad, '0') + out.slice(m.index + pad)
 }
 
-export function TaxConfigTab() {
+export function TaxConfigTab({ refreshKey = 0 }) {
   const can = useCan()
   const [rates, setRates] = useState([])
   const [taxTotal, setTaxTotal] = useState(0)
@@ -113,7 +113,7 @@ export function TaxConfigTab() {
       cancelled = true
       controller.abort()
     }
-  }, [taxSkip, taxLimit, taxListVersion, taxSortBy, taxSortOrder])
+  }, [refreshKey, taxSkip, taxLimit, taxListVersion, taxSortBy, taxSortOrder])
 
   const openCreate = () => {
     setEditing(null)
@@ -309,7 +309,7 @@ export function TaxConfigTab() {
   )
 }
 
-export function NumberingTab() {
+export function NumberingTab({ refreshKey = 0 }) {
   const can = useCan()
   const canEdit = can('settings.edit')
   const [rows, setRows] = useState([])
@@ -336,7 +336,7 @@ export function NumberingTab() {
     const controller = new AbortController()
     load(controller.signal)
     return () => controller.abort()
-  }, [load])
+  }, [load, refreshKey])
 
   const liveSample = useMemo(() => {
     if (!editing) return ''
@@ -473,7 +473,7 @@ export function NumberingTab() {
   )
 }
 
-export function InvoiceTemplateTab() {
+export function InvoiceTemplateTab({ refreshKey = 0 }) {
   const can = useCan()
   const canEdit = can('settings.edit')
   const [loading, setLoading] = useState(true)
@@ -540,7 +540,7 @@ export function InvoiceTemplateTab() {
     const controller = new AbortController()
     load(controller.signal)
     return () => controller.abort()
-  }, [load])
+  }, [load, refreshKey])
 
   const sampleItems = [
     { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'MVR270.00', total: 'MVR270.00' },
