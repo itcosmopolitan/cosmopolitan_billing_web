@@ -28,6 +28,7 @@ _CANONICAL_RECORD_TYPES = {
     "sales_return",
     "stock_transfer",
     "stock_adjustment",
+    "item",
 }
 
 _RECORD_TYPE_ALIASES = {

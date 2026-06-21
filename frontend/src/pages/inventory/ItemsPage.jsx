@@ -14,6 +14,7 @@ import {
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import BatchesModal from './BatchesModal'
 import RowActionsMenu from './RowActionsMenu'
+import ActivityDrawer from '@/components/activity/ActivityDrawer'
 
 const BRANCH_TABS = [
   { id: 'all',      label: 'All Items' },
@@ -55,6 +56,8 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [adjBatches, setAdjBatches] = useState([])      // batch list when adjusting a tracked item
   const [adjBatchId, setAdjBatchId] = useState('')      // selected single-batch id (or '' = aggregate)
   const [adjLoading, setAdjLoading] = useState(false)
+  // activity drawer used only in master mode
+  const [activityTarget, setActivityTarget] = useState(null)
   const [batchesModal, setBatchesModal] = useState(null) // item whose batches we're viewing
   const [nearExpiry, setNearExpiry]     = useState([])   // batches expiring within horizon
   const [nearExpiryDays, setNearExpiryDays] = useState(30)
@@ -495,6 +498,11 @@ export default function ItemsPage({ mode = 'branch' }) {
                           ariaLabel={`Actions for ${p.name}`}
                           actions={isMaster ? [
                             {
+                              label: 'Activity',
+                              hidden: !(can('history.view') || can('comments.view')),
+                              onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name}` }),
+                            },
+                            {
                               label: 'Edit item',
                               hidden: !can('items.edit'),
                               onClick: () => openEdit(p),
@@ -687,7 +695,16 @@ export default function ItemsPage({ mode = 'branch' }) {
         }}
         canAdd={can('items.adjust')}
       />
-        </>
+      </>
+      )}
+      {isMaster && (
+        <ActivityDrawer
+          open={!!activityTarget}
+          onClose={() => setActivityTarget(null)}
+          recordType={activityTarget?.recordType}
+          recordId={activityTarget?.recordId}
+          title={activityTarget?.title}
+        />
       )}
     </div>
   )

@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -11,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.item_branch import effective_cost_price, effective_reorder_level, effective_selling_price
-from src.models import Branch, Item, ItemBatch, ItemBranchConfig, ItemStock
+from src.models import AuditLog, Branch, Item, ItemBatch, ItemBranchConfig, ItemStock, User
 from src.pagination import (
     normalize_limit,
     normalize_skip,
@@ -26,9 +27,37 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
     set_stock_atomic,
 )
-from src.security import require_perm
+from src.security import current_user, require_perm
 
 router = APIRouter()
+
+
+def _log_item_history(
+    db: AsyncSession,
+    *,
+    user: Optional[User],
+    item: Item,
+    event_type: str,
+    action: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    risk: str = "low",
+) -> None:
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="item",
+        record_id=item.id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="inventory",
+        ref=item.sku or item.name,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
 
 
 async def _get_config_map(
@@ -498,7 +527,11 @@ async def list_items(
     return paged(out, total, sk, lim)
 
 @router.post("/", dependencies=[Depends(require_perm("items.create"))])
-async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
+async def create_item(
+    data: ItemCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     item = Item(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -585,11 +618,25 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
                 expiry_date=data.opening_expiry_date,
             )
 
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_created",
+        action="Item Created",
+        detail=f"Created item {item.name} ({item.sku})",
+        metadata={"sku": item.sku, "name": item.name},
+    )
     await db.commit()
     return {"id": item.id, "message": "Item created"}
 
 @router.put("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
-async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends(get_db)):
+async def update_item(
+    item_id: str,
+    data: ItemCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     result = await db.execute(select(Item).where(Item.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
@@ -615,6 +662,16 @@ async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends
         item,
         previously_tracked=was_tracked,
         enable=bool(data.batch_tracking),
+    )
+
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_updated",
+        action="Item Updated",
+        detail=f"Updated item {item.name} ({item.sku})",
+        metadata={"sku": item.sku, "name": item.name},
     )
 
     await db.commit()
@@ -689,6 +746,7 @@ async def update_item_branches(
     item_id: str,
     data: BranchConfigBulk,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     item_res = await db.execute(select(Item).where(Item.id == item_id))
     item = item_res.scalar_one_or_none()
@@ -723,12 +781,31 @@ async def update_item_branches(
                 expiry_date=bc.opening_expiry_date,
             )
 
+    item_ref = item.name if item else item_id
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_branch_config_updated",
+        action="Item Branch Config Updated",
+        detail=f"Updated branch configuration for item {item.name} ({item.sku})",
+        metadata={
+            "branch_count": len(data.branches),
+            "sku": item.sku,
+            "name": item.name,
+        },
+    )
     await db.commit()
     return {"message": "Branch configuration updated"}
 
 
 @router.patch("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
-async def patch_item(item_id: str, data: ItemPatch, db: AsyncSession = Depends(get_db)):
+async def patch_item(
+    item_id: str,
+    data: ItemPatch,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     result = await db.execute(select(Item).where(Item.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
@@ -748,6 +825,16 @@ async def patch_item(item_id: str, data: ItemPatch, db: AsyncSession = Depends(g
             updates["expiry_tracking"] = False
     for k, v in updates.items():
         setattr(item, k, v)
+
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_updated",
+        action="Item Updated",
+        detail=f"Updated item {item.name} ({item.sku})",
+        metadata={"updated_fields": list(updates.keys()), "sku": item.sku, "name": item.name},
+    )
     await db.commit()
     out: dict = {"message": "Updated"}
     if toggle_meta:

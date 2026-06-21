@@ -6,7 +6,22 @@ import { useAppStore } from '@/store'
 
 function formatEventTimestamp(value) {
   if (!value) return 'Unknown'
-  const date = new Date(value)
+  let date
+  try {
+    if (typeof value === 'string') {
+      // Treat naive ISO datetimes (no timezone) as UTC by appending 'Z'.
+      // Example: "2026-06-22T12:34:56" -> "2026-06-22T12:34:56Z"
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)) {
+        date = new Date(value + 'Z')
+      } else {
+        date = new Date(value)
+      }
+    } else {
+      date = new Date(value)
+    }
+  } catch (e) {
+    return String(value)
+  }
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
 }
