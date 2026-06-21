@@ -9,6 +9,7 @@ import {
   applyBootstrapToStore,
   bootstrapAuthenticatedData,
 } from '@/auth/bootstrap'
+import BrandLogo from '@/components/BrandLogo'
 
 const DEMO_USERS = [
   { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'Super Admin',       avatar: 'SA' },
@@ -72,8 +73,7 @@ export default function LoginPage() {
           <section className="login-panel login-panel--form">
           <div className="login-panel-inner">
             <div className="login-logo">
-              <span className="login-logo-mark">C</span>
-              <span className="login-logo-text">Cosmopolitan</span>
+              <BrandLogo className="login-logo-img" height={36} maxWidth={280} />
             </div>
 
             <div className="login-heading">

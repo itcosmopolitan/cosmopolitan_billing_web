@@ -5,6 +5,7 @@ import { useAppStore } from '@/store'
 import { authAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { Avatar } from '@/components/ui'
+import BrandLogo from '@/components/BrandLogo'
 import * as Icon from '@/components/ui/Icons'
 import { roleLabels } from '@/utils/helpers'
 
@@ -97,30 +98,15 @@ export default function Sidebar() {
         borderBottom: '1px solid var(--border-subtle)',
         flexShrink: 0,
       }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: 9,
-          background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%)',
-          color: '#fff',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 700, fontSize: 15, letterSpacing: '-0.5px',
-          boxShadow: '0 2px 8px rgba(99,102,241,0.35)',
-          flexShrink: 0,
-        }}>C</div>
-        {!sidebarCollapsed && (
-          <div style={{ overflow: 'hidden' }}>
-            <div style={{
-              fontSize: 14.5, fontWeight: 600, letterSpacing: '-0.25px',
-              color: 'var(--text-primary)',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>
-              Cosmopolitan
-            </div>
-            <div style={{
-              fontSize: 10.5, color: 'var(--text-muted)', fontWeight: 500,
-              letterSpacing: '0.04em', marginTop: 1,
-            }}>
-              Billing Suite · v2.4
-            </div>
+        {sidebarCollapsed ? (
+          <span className="brand-logo-wrap">
+            <BrandLogo collapsed height={28} />
+          </span>
+        ) : (
+          <div style={{ overflow: 'hidden', minWidth: 0, flex: 1 }}>
+            <span className="brand-logo-wrap">
+              <BrandLogo height={35} maxWidth={168} />
+            </span>
           </div>
         )}
       </div>
