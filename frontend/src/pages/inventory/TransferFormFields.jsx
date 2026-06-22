@@ -65,9 +65,12 @@ export default function TransferFormFields({
                 style={compactSelectStyle}
                 value={form.to_branch_id}
                 onChange={(e) => patchForm('to_branch_id', e.target.value)}
-                disabled={disabled}
+                disabled={disabled || !form.from_branch_id}
               >
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                <option value="">Select destination</option>
+                {branches
+                  .filter((b) => b.id !== form.from_branch_id)
+                  .map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </FormGroup>
           </div>
@@ -107,9 +110,6 @@ export default function TransferFormFields({
               Tracked items auto-split by FIFO or FEFO. Edit the split only when lot control matters.
             </div>
           </div>
-          <AlertBar type="blue" icon="🧴" style={{ marginBottom: 0 }}>
-            Exact batch metadata moves with the transfer.
-          </AlertBar>
         </div>
 
         <div className="transfer-form__table-wrap">
