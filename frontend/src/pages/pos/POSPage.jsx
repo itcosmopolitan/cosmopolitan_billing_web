@@ -333,7 +333,7 @@ export default function POSPage() {
       const avail = Number(customer.credit_balance || 0)
       if (avail < total) {
         toast.error(
-          `Insufficient credit — Rf${avail.toFixed(2)} available, Rf${total.toFixed(2)} needed`,
+          `Insufficient credit — MVR${avail.toFixed(2)} available, MVR${total.toFixed(2)} needed`,
         )
         return
       }
@@ -938,7 +938,7 @@ export default function POSPage() {
               color: 'var(--green)', fontWeight: 600,
               whiteSpace: 'nowrap',
             }} title="Available customer credit (overpayments + refunded returns)">
-              💰 Rf {Number(customer.credit_balance || 0).toFixed(2)} credit
+              💰 MVR {Number(customer.credit_balance || 0).toFixed(2)} credit
             </span>
           )}
           <button className="btn btn-ghost btn-sm" onClick={() => store.clearCart()} style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>✕</button>
@@ -1110,7 +1110,7 @@ export default function POSPage() {
                       value="credit"
                       disabled={Number(customer.credit_balance || 0) < total}
                     >
-                      🏦 Customer Credit (Rf {Number(customer.credit_balance || 0).toFixed(2)} available)
+                      🏦 Customer Credit (MVR {Number(customer.credit_balance || 0).toFixed(2)} available)
                       {Number(customer.credit_balance || 0) < total ? ' — insufficient' : ''}
                     </option>
                   )}
@@ -1125,8 +1125,8 @@ export default function POSPage() {
                     background: 'rgba(245,166,35,0.08)',
                     fontSize: 11.5, color: 'var(--amber)', lineHeight: 1.5,
                   }}>
-                    ⚠ Available credit (Rf {Number(customer.credit_balance || 0).toFixed(2)}) is
-                    less than the cart total (Rf {Number(total).toFixed(2)}). Pick a different
+                    ⚠ Available credit (MVR {Number(customer.credit_balance || 0).toFixed(2)}) is
+                    less than the cart total (MVR {Number(total).toFixed(2)}). Pick a different
                     method or reduce the cart. Split-payment with credit isn&apos;t supported.
                   </div>
                 )}

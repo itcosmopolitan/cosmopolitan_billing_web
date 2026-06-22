@@ -197,8 +197,8 @@ export default function VendorsPage() {
             'Address': v.address || '—',
             'GST Reg No': v.gstin || '—',
             'Payment Terms': v.payment_terms || '—',
-            'Total Purchases (Rf)': v.total_purchases || 0,
-            'Outstanding (Rf)': v.outstanding || 0,
+            'Total Purchases (MVR)': v.total_purchases || 0,
+            'Outstanding (MVR)': v.outstanding || 0,
           }))
           exportToCSV(exportData, `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Vendors exported')

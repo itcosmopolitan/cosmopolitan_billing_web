@@ -3,7 +3,7 @@ import { format, formatDistanceToNow, parseISO } from 'date-fns'
 // ─── Currency formatting ──────────────────────────────────────────────────────
 export const fmt = (amount, decimals = 0) => {
   if (amount === null || amount === undefined) return '—'
-  return 'Rf ' + Number(amount).toLocaleString('en-MV', {
+  return 'MVR ' + Number(amount).toLocaleString('en-MV', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   })

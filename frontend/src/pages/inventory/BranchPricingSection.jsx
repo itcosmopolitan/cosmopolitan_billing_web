@@ -94,8 +94,8 @@ export default function BranchPricingSection({
             <thead>
               <tr>
                 <th>Branch</th>
-                <th className="text-right">Cost Price (Rf)</th>
-                <th className="text-right">Selling Price (Rf)</th>
+                <th className="text-right">Cost Price (MVR)</th>
+                <th className="text-right">Selling Price (MVR)</th>
                 {(showCreateOpeningStock || showEditOpeningStock) && <th className="text-right">Opening Qty</th>}
                 <th className="text-right">Reorder</th>
                 {isEdit && <th className="text-right">Stock</th>}

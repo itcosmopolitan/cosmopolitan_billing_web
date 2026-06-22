@@ -174,9 +174,9 @@ export default function CustomersPage() {
             'Address': c.address || '—',
             'GST Reg No': c.gstIn || '—',
             'Type': (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
-            'Credit Limit (Rf)': c.creditLimit || 0,
-            'Outstanding (Rf)': c.outstanding || 0,
-            'Total Purchases (Rf)': c.totalPurchases || 0,
+            'Credit Limit (MVR)': c.creditLimit || 0,
+            'Outstanding (MVR)': c.outstanding || 0,
+            'Total Purchases (MVR)': c.totalPurchases || 0,
           }))
           exportToCSV(exportData, `Customers_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Customers exported')
@@ -286,7 +286,7 @@ export default function CustomersPage() {
           <FormGroup label="Primary Branch" required><select className="form-input" value={form.branch_id} onChange={e=>pf('branch_id',e.target.value)}><option value="">Select branch…</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></FormGroup>
           <FormGroup label="Type"><select className="form-input" value={form.customer_type} onChange={e=>pf('customer_type',e.target.value)}><option value="retail">Retail</option><option value="wholesale">Wholesale / B2B</option></select></FormGroup>
         </FormRow>
-        <FormGroup label="Credit Limit (Rf)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
+        <FormGroup label="Credit Limit (MVR)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
       </Modal>
 
       {/* Detail Modal */}

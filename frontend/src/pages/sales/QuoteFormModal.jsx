@@ -64,13 +64,13 @@ export default function QuoteFormModal({
     pqf('items', next)
   }
 
-  // See OrderFormModal#toggleDiscountType — same auto-conversion logic.
+  // See OrderFormModal#toggleDiscountType — same auto-conversion logic (%/MVR).
   const toggleDiscountType = (i) => {
     const next = [...quoteForm.items]
     const it = next[i]
     const gross = Number(it.qty || 0) * Number(it.price || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
-    const wasAmount = it.lineDiscountType === 'Rf'
+    const wasAmount = it.lineDiscountType === 'MVR'
     let newVal
     if (wasAmount) {
       newVal = gross > 0 ? (raw / gross) * 100 : 0
@@ -80,7 +80,7 @@ export default function QuoteFormModal({
     next[i] = {
       ...it,
       lineDiscount: Math.round(newVal * 100) / 100,
-      lineDiscountType: wasAmount ? '%' : 'Rf',
+      lineDiscountType: wasAmount ? '%' : 'MVR',
     }
     pqf('items', next)
   }
@@ -141,7 +141,7 @@ export default function QuoteFormModal({
                 ? { id: it.item_id, name: it.name }
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
-              const type = it.lineDiscountType === 'Rf' ? 'Rf' : '%'
+              const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -168,7 +168,7 @@ export default function QuoteFormModal({
                         type="button"
                         disabled={readOnly || disableLineDiscount}
                         onClick={() => toggleDiscountType(i)}
-                        title={type === '%' ? 'Switch to amount (Rf)' : 'Switch to percent (%)'}
+                        title={type === '%' ? 'Switch to amount (MVR)' : 'Switch to percent (%)'}
                         style={discountToggleStyle}
                       >
                         {type}
@@ -239,7 +239,7 @@ const numInputStyle = {
   fontVariantNumeric: 'tabular-nums',
 }
 
-// See OrderFormModal#discountToggleStyle — same %/Rf toggle.
+// See OrderFormModal#discountToggleStyle — same %/MVR toggle.
 const discountToggleStyle = {
   width: 32,
   padding: 0,

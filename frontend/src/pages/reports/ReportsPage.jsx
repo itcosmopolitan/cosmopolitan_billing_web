@@ -178,10 +178,10 @@ export default function ReportsPage() {
         'Customer': i.customerName,
         'Branch': i.branchName,
         'Cashier': i.cashier,
-        'Taxable (Rf)': i.subtotal,
-        'GST (Rf)': i.taxTotal,
-        'Discount (Rf)': i.discount,
-        'Total (Rf)': i.total,
+          'Taxable (MVR)': i.subtotal,
+          'GST (MVR)': i.taxTotal,
+          'Discount (MVR)': i.discount,
+          'Total (MVR)': i.total,
         'Mode': i.paymentMode.toUpperCase(),
         'Status': i.status.toUpperCase(),
       }))
@@ -192,10 +192,10 @@ export default function ReportsPage() {
         'Date': b.date,
         'Vendor': b.vendorName,
         'Branch': b.branchName,
-        'Subtotal (Rf)': b.subtotal,
-        'GST Paid (Rf)': b.taxTotal,
-        'Total (Rf)': b.total,
-        'Paid (Rf)': b.paidAmount,
+        'Subtotal (MVR)': b.subtotal,
+        'GST Paid (MVR)': b.taxTotal,
+        'Total (MVR)': b.total,
+        'Paid (MVR)': b.paidAmount,
         'Status': b.status.toUpperCase(),
       }))
       filename = `Purchase_Register_${dateFrom}_to_${dateTo}.csv`
@@ -300,7 +300,7 @@ export default function ReportsPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)"/>
                   <XAxis dataKey="date" tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false}/>
-                  <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`Rf${(v/1000).toFixed(0)}K`}/>
+                  <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`MVR${(v/1000).toFixed(0)}K`}/>
                   <Tooltip content={<TT/>}/>
                   <Area type="monotone" dataKey="sales" name="Sales" stroke="#6366f1" strokeWidth={2.5} fill="url(#sg)" dot={false}/>
                 </AreaChart>
@@ -330,10 +330,10 @@ export default function ReportsPage() {
               'Customer': i.customerName,
               'Branch': i.branchName,
               'Cashier': i.cashier,
-              'Taxable (Rf)': i.subtotal,
-              'GST (Rf)': i.taxTotal,
-              'Discount (Rf)': i.discount,
-              'Total (Rf)': i.total,
+              'Taxable (MVR)': i.subtotal,
+              'GST (MVR)': i.taxTotal,
+              'Discount (MVR)': i.discount,
+              'Total (MVR)': i.total,
               'Mode': i.paymentMode.toUpperCase(),
               'Status': i.status.toUpperCase(),
             }))
@@ -395,10 +395,10 @@ export default function ReportsPage() {
               'Date': b.date,
               'Vendor': b.vendorName,
               'Branch': b.branchName,
-              'Subtotal (Rf)': b.subtotal,
-              'GST Paid (Rf)': b.taxTotal,
-              'Total (Rf)': b.total,
-              'Paid (Rf)': b.paidAmount,
+              'Subtotal (MVR)': b.subtotal,
+              'GST Paid (MVR)': b.taxTotal,
+              'Total (MVR)': b.total,
+              'Paid (MVR)': b.paidAmount,
               'Status': b.status.toUpperCase(),
             }))
             exportToCSV(exportData, `Purchase_Register_${dateFrom}_to_${dateTo}.csv`)
@@ -655,7 +655,7 @@ export default function ReportsPage() {
               <BarChart data={SALES_TREND.slice(-7).map(d=>({...d,tnagar:Math.round(d.sales*0.76),vadapalani:Math.round(d.sales*0.55),velachery:Math.round(d.sales*0.35)}))} margin={{top:5,right:10,left:-10,bottom:0}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)"/>
                 <XAxis dataKey="date" tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false}/>
-                <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`Rf${(v/1000).toFixed(0)}K`}/>
+                <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`MVR${(v/1000).toFixed(0)}K`}/>
                 <Tooltip content={<TT/>}/>
                 <Legend wrapperStyle={{fontSize:11,color:'var(--text-muted)'}}/>
                 <Bar dataKey="sales"     name="Male"      fill="#6366f1" radius={[3,3,0,0]}/>

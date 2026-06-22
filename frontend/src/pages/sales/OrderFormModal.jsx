@@ -25,7 +25,7 @@ import CustomerPicker from './CustomerPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
-// Per-row discount in % or Rf via lineDiscountType. Backend stores percent only.
+// Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
 
 export default function OrderFormModal({
   open,
@@ -79,16 +79,16 @@ export default function OrderFormModal({
     pof('items', next)
   }
 
-  // Toggle the per-row discount unit (% ↔ Rf) and AUTO-CONVERT the value
+  // Toggle the per-row discount unit (% ↔ MVR) and AUTO-CONVERT the value
   // so the effective discount stays constant across the unit switch.
-  // Example: 10% on a Rf500 line → toggle to Rf → input becomes 50.
+  // Example: 10% on a MVR500 line → toggle to MVR → input becomes 50.
   // Operator no longer has to do the math in their head when changing units.
   const toggleDiscountType = (i) => {
     const next = [...orderForm.items]
     const it = next[i]
     const gross = Number(it.qty || 0) * Number(it.price || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
-    const wasAmount = it.lineDiscountType === 'Rf'
+    const wasAmount = it.lineDiscountType === 'MVR'
     let newVal
     if (wasAmount) {
       newVal = gross > 0 ? (raw / gross) * 100 : 0
@@ -98,7 +98,7 @@ export default function OrderFormModal({
     next[i] = {
       ...it,
       lineDiscount: Math.round(newVal * 100) / 100,
-      lineDiscountType: wasAmount ? '%' : 'Rf',
+      lineDiscountType: wasAmount ? '%' : 'MVR',
     }
     pof('items', next)
   }
@@ -180,7 +180,7 @@ export default function OrderFormModal({
               // the list so we don't filter ourselves out of the dropdown
               // during a re-pick.
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
-              const type = it.lineDiscountType === 'Rf' ? 'Rf' : '%'
+              const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -208,7 +208,7 @@ export default function OrderFormModal({
                   <td>
                     {/* Discount = input + tiny toggle. Toggle auto-converts
                         the value across unit change so the EFFECTIVE
-                        discount stays the same when switching Rf ↔ %.
+                        discount stays the same when switching MVR ↔ %.
                         Backend only stores percent — saveOrder converts
                         before POST. */}
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
@@ -220,7 +220,7 @@ export default function OrderFormModal({
                         type="button"
                         disabled={readOnly || disableLineDiscount}
                         onClick={() => toggleDiscountType(i)}
-                        title={type === '%' ? 'Switch to amount (Rf)' : 'Switch to percent (%)'}
+                        title={type === '%' ? 'Switch to amount (MVR)' : 'Switch to percent (%)'}
                         style={discountToggleStyle}
                       >
                         {type}
@@ -301,9 +301,9 @@ const numInputStyle = {
   fontVariantNumeric: 'tabular-nums',
 }
 
-// Compact %/Rf toggle button used inside the Discount cell. Sized to
+// Compact %/MVR toggle button used inside the Discount cell. Sized to
 // match form-input height so the input + toggle align on the same
-// baseline. Mono font so % and Rf glyphs are the same width.
+// baseline. Mono font so % and MVR glyphs are the same width.
 const discountToggleStyle = {
   width: 32,
   padding: 0,

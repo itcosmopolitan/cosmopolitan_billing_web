@@ -78,10 +78,10 @@ export default function Dashboard() {
   const trendPeak  = salesTrend.reduce((m, d) => Math.max(m, d.sales || 0), 0)
   const fmtCompact = (n) => {
     const abs = Math.abs(Number(n) || 0)
-    if (abs >= 1000000000) return `Rf ${(abs / 1000000000).toFixed(2)}B`
-    if (abs >= 1000000) return `Rf ${(abs / 1000000).toFixed(2)}M`
-    if (abs >= 1000) return `Rf ${(abs / 1000).toFixed(2)}K`
-    return fmt(Math.round(abs))
+      if (abs >= 1000000000) return `MVR ${(abs / 1000000000).toFixed(2)}B`
+      if (abs >= 1000000) return `MVR ${(abs / 1000000).toFixed(2)}M`
+      if (abs >= 1000) return `MVR ${(abs / 1000).toFixed(2)}K`
+      return fmt(Math.round(abs))
   }
 
   return (
@@ -139,7 +139,7 @@ export default function Dashboard() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `Rf ${(v/1000).toFixed(0)}K`} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `MVR ${(v/1000).toFixed(0)}K`} />
               <Tooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-muted)' }} />
               <Area type="monotone" dataKey="sales" name="Sales" stroke="#6366f1" strokeWidth={2.5} fill="url(#gSales)" dot={false} />

@@ -8,7 +8,7 @@
  *     No inline branch picker on either form.
  *   • Bills + POs use VendorPicker + InventoryItemPicker (mirror of
  *     CustomerPicker + items picker from Sales).
- *   • Per-line discount with % / Rf toggle (mirror of SO/Quote modals).
+ *   • Per-line discount with % / MVR toggle (mirror of SO/Quote modals).
  *   • Bills are immutable — only Record Payment + Cancel.
  *   • PO → Bill convert uses ConvertPOToBillModal with batch capture
  *     for tracked items (operator types the actual lot # / mfg / expiry
@@ -635,9 +635,9 @@ export default function PurchasesPage() {
             'Vendor': b.vendorName || '—',
             'Bill Date': b.date || '—',
             'Due Date': b.dueDate || '—',
-            'Amount (Rf)': b.total || 0,
-            'Paid (Rf)': b.paidAmount || 0,
-            'Outstanding (Rf)': (b.total || 0) - (b.paidAmount || 0),
+            'Amount (MVR)': b.total || 0,
+            'Paid (MVR)': b.paidAmount || 0,
+            'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
             'Status': (b.status || '—').toUpperCase(),
           }))
           exportToCSV(exportData, `Purchases_${new Date().toISOString().split('T')[0]}.csv`)
@@ -1267,7 +1267,7 @@ export default function PurchasesPage() {
                 Balance: <strong>{fmt(balance)}</strong> for {showPay.vendorName || 'vendor'}
               </AlertBar>
               <div style={{ height: 14 }} />
-              <FormGroup label="Amount Paid (Rf)" required>
+              <FormGroup label="Amount Paid (MVR)" required>
                 <input className="form-input" type="number"
                   value={payAmt}
                   onChange={(e) => setPayAmt(e.target.value)}

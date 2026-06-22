@@ -96,8 +96,8 @@ export default function ItemFormFields({
           <div className="item-form-panel">
             <div className="item-form-panel__head">Pricing</div>
             <div className="item-form-grid item-form-grid--single">
-              <FormGroup label="Default Cost Price (Rf)" required><input className="form-input" type="number" value={form.cost_price} onChange={(e) => patchForm('cost_price', e.target.value)} placeholder="0.00" /></FormGroup>
-              <FormGroup label="Default Selling Price (Rf)" required><input className="form-input" type="number" value={form.selling_price} onChange={(e) => patchForm('selling_price', e.target.value)} placeholder="0.00" /></FormGroup>
+              <FormGroup label="Default Cost Price (MVR)" required><input className="form-input" type="number" value={form.cost_price} onChange={(e) => patchForm('cost_price', e.target.value)} placeholder="0.00" /></FormGroup>
+              <FormGroup label="Default Selling Price (MVR)" required><input className="form-input" type="number" value={form.selling_price} onChange={(e) => patchForm('selling_price', e.target.value)} placeholder="0.00" /></FormGroup>
               <FormGroup label="Default Reorder Level"><input className="form-input" type="number" value={form.reorder_level} onChange={(e) => patchForm('reorder_level', e.target.value)} placeholder="Min stock trigger" /></FormGroup>
             </div>
           </div>

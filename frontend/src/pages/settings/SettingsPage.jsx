@@ -610,7 +610,7 @@ export default function SettingsPage() {
             </Card>
             <Card title="System Preferences">
               {[
-                {label:'Currency', value:'Rf (Maldivian Rufiyaa)'},
+                {label:'Currency', value:'MVR (Maldivian Rufiyaa)'},
                 {label:'Date Format', value:'DD/MM/YYYY'},
                 {label:'Decimal Places', value:'2'},
                 {label:'Time Zone', value:'Indian/Maldives (MVT)'},

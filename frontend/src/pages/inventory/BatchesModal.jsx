@@ -256,7 +256,7 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
             </FormGroup>
           </FormRow>
           <FormRow>
-            <FormGroup label="Cost / Unit (Rf)">
+            <FormGroup label="Cost / Unit (MVR)">
               <input
                 className="form-input"
                 type="number"
