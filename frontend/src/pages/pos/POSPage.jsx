@@ -19,6 +19,7 @@ import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
 import POSRefundModal from './POSRefundModal'
 import PanelDragHandle from './PanelDragHandle'
+import PosPaymentMethodSelect from './PosPaymentMethodSelect'
 import {
   POS_STORAGE_SPLIT,
   POS_STORAGE_LEADING,
@@ -533,6 +534,17 @@ export default function POSPage() {
   } = cartTotals
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
+  const paymentMethodOptions = [
+    { id: 'cash', label: '💵 Cash' },
+    { id: 'card', label: '💳 Card' },
+    { id: 'upi', label: '📱 UPI' },
+    { id: 'bank_transfer', label: '🏦 Bank Transfer' },
+    ...(customer?.id ? [{
+      id: 'credit',
+      label: `🏦 Credit (₹${Number(customer.credit_balance || 0).toFixed(2)})`,
+      disabled: Number(customer.credit_balance || 0) < total,
+    }] : []),
+  ]
 
   const { displayCode, regenerate: regenerateDisplayCode } = usePosDisplaySession()
   const { sendCartUpdate, connected: displayConnected } = useDisplaySocket(displayCode, 'cashier')
@@ -860,47 +872,84 @@ export default function POSPage() {
       >
 
         {/* Cart header */}
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>🧾 Cart</div>
-            <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>Line-wise rate, HSN, margin & discounts</div>
+        <div style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <PanelDragHandle
+              panel="cart"
+              onDragEnd={onPanelDragEnd}
+              title="Drag onto the other column to swap sides"
+            />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.2 }}>🧾 Cart</div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
+                {cart.length === 0 ? 'Add items from the catalog' : `${cart.length} line${cart.length === 1 ? '' : 's'}`}
+              </div>
+            </div>
+            <div style={{ flex: 1 }} />
+            <select
+              className="form-input"
+              style={{ padding: '6px 8px', fontSize: 12, width: 148, maxWidth: '36vw' }}
+              value={customer?.id || ''}
+              onChange={(e) => { const c = customers.find((x) => x.id === e.target.value); store.setCustomer(c || null) }}
+            >
+              <option value="">Walk-in Customer</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {customer?.id && Number(customer.credit_balance || 0) > 0 && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  padding: '3px 8px',
+                  borderRadius: 10,
+                  background: 'rgba(46,184,92,0.12)',
+                  color: 'var(--green)',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+                title="Available customer credit"
+              >
+                ₹{Number(customer.credit_balance || 0).toFixed(2)}
+              </span>
+            )}
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => store.clearCart()}
+              style={{ padding: '4px 8px', color: 'var(--text-muted)' }}
+              title="Clear cart"
+            >
+              ✕
+            </button>
           </div>
-          <PanelDragHandle
-            panel="cart"
-            onDragEnd={onPanelDragEnd}
-            title="Drag onto the other column to swap sides"
-          />
-          <div style={{ flex: 1 }} />
           <div
-            title="Unique code for this POS terminal — customer enters it at /customer-view"
             style={{
+              padding: '6px 14px 8px',
               display: 'flex',
               alignItems: 'center',
-              gap: 4,
-              padding: '4px 8px',
-              borderRadius: 8,
-              border: '1px solid var(--border-subtle)',
+              gap: 6,
+              flexWrap: 'wrap',
               background: 'var(--bg-raised)',
+              borderTop: '1px solid var(--border-subtle)',
             }}
           >
-            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>DISPLAY</span>
-            <span style={{
-              fontFamily: 'DM Mono, monospace',
-              fontSize: 13,
-              fontWeight: 700,
-              letterSpacing: '0.12em',
-              color: displayConnected ? 'var(--green)' : 'var(--text-primary)',
-            }}
+            <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
+              CUSTOMER SCREEN
+            </span>
+            <span
+              style={{
+                fontFamily: 'DM Mono, monospace',
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: '0.1em',
+                color: displayConnected ? 'var(--green)' : 'var(--text-primary)',
+                padding: '2px 8px',
+                borderRadius: 6,
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+              }}
             >
               {displayCode}
             </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={copyDisplayCode}
-              title="Copy display code"
-              style={{ padding: '2px 6px', fontSize: 11 }}
-            >
+            <button type="button" className="btn btn-ghost btn-sm" onClick={copyDisplayCode} style={{ padding: '2px 8px', fontSize: 11 }}>
               Copy
             </button>
             <button
@@ -908,40 +957,21 @@ export default function POSPage() {
               className="btn btn-ghost btn-sm"
               onClick={onRegenerateDisplayCode}
               title="Generate a new code for this terminal"
-              style={{ padding: '2px 6px', fontSize: 11 }}
+              style={{ padding: '2px 8px', fontSize: 11 }}
             >
-              ↻
+              ↻ New code
             </button>
+            <a
+              href={`/customer-view/${encodeURIComponent(displayCode)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-ghost btn-sm"
+              title="Open customer screen with this terminal's code"
+              style={{ padding: '2px 8px', fontSize: 11, marginLeft: 'auto' }}
+            >
+              Open screen ↗
+            </a>
           </div>
-          <a
-            href={`/customer-view/${encodeURIComponent(displayCode)}`}
-            target="_blank"
-            rel="noreferrer"
-            className="btn btn-ghost btn-sm"
-            title="Open customer screen with this terminal's code"
-            style={{ padding: '4px 10px', fontSize: 11.5 }}
-          >
-            Customer screen ↗
-          </a>
-          <select className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }} value={customer?.id || ''} onChange={(e) => { const c = customers.find((x) => x.id === e.target.value); store.setCustomer(c || null) }}>
-            <option value="">Walk-in Customer</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          {/* 2026-05-25: surface available credit when a customer is
-              picked. Single source of truth — the credit option in the
-              method dropdown also shows the same number, but the chip is
-              always visible regardless of payment-received state. */}
-          {customer?.id && Number(customer.credit_balance || 0) > 0 && (
-            <span style={{
-              fontSize: 11, padding: '3px 8px',
-              borderRadius: 10, background: 'rgba(46,184,92,0.12)',
-              color: 'var(--green)', fontWeight: 600,
-              whiteSpace: 'nowrap',
-            }} title="Available customer credit (overpayments + refunded returns)">
-              💰 ₹{Number(customer.credit_balance || 0).toFixed(2)} credit
-            </span>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={() => store.clearCart()} style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>✕</button>
         </div>
 
         {/* Cart items */}
@@ -1035,117 +1065,172 @@ export default function POSPage() {
           </div>
         )}
 
-        {/* Totals — item prices include tax; show taxable base and tax extracted */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-raised)' }}>
+        {/* Totals + payment — compact footer: payment left, totals right */}
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-raised)' }}>
           {taxMode === 'inclusive' && cart.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-              Item amounts include tax
+              Prices include tax
             </div>
           )}
-          {cart.length > 0 && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 5 }}>
-                <span>Taxable amount</span><span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 10 }}>
-                <span>Tax amount</span><span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
-              </div>
-            </>
-          )}
-          {discount > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--green)' }}>
-              <span>Bill discount</span><span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
-            </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 700, paddingTop: 10, borderTop: '1px solid var(--border-default)', marginBottom: 12 }}>
-            <span>Total</span>
-            <span style={{ fontFamily: 'DM Mono', color: 'var(--accent)' }}>{fmt(total)}</span>
-          </div>
 
-          {/* Sales Phase 1 (2026-05-23): two-step payment UX. The checkbox
-              is the explicit "did money change hands?" gate; the method
-              dropdown only appears + matters when checked. Unchecked →
-              backend creates a pending invoice; operator records payment
-              later from Sales → Invoices. See
-              ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md. */}
-          <div style={{ marginBottom: 10 }}>
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '8px 10px',
-              border: `1.5px solid ${paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
-              background: paymentReceived ? 'var(--accent-bg)' : 'transparent',
-              borderRadius: 7, cursor: 'pointer',
-              fontSize: 13, fontWeight: 500,
-              color: paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
-              transition: 'all 0.12s',
-            }}>
-              <input
-                type="checkbox"
-                checked={paymentReceived}
-                onChange={(e) => store.setPaymentReceived(e.target.checked)}
-                style={{ accentColor: 'var(--accent)' }}
-              />
-              <span>Payment received?</span>
-            </label>
-            {paymentReceived && (
-              <>
-                <select
-                  className="form-input"
-                  value={paymentMethod || ''}
-                  onChange={(e) => store.setPaymentMethod(e.target.value || null)}
-                  style={{ marginTop: 6, fontSize: 13 }}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-end',
+              gap: 14,
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 10px',
+                    height: 34,
+                    boxSizing: 'border-box',
+                    border: `1.5px solid ${paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
+                    background: paymentReceived ? 'var(--accent-bg)' : 'var(--bg-surface)',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
+                    transition: 'all 0.12s',
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
+                  }}
                 >
-                  <option value="" disabled>Select method…</option>
-                  <option value="cash">💵 Cash</option>
-                  <option value="card">💳 Card</option>
-                  <option value="upi">📱 UPI</option>
-                  <option value="bank_transfer">🏦 Bank Transfer</option>
-                  {/* 2026-05-25: credit mode. Hidden entirely for walk-ins
-                      (no customer → no credit account). When a customer is
-                      picked, disabled when their available credit < cart
-                      total. Backend rejects with 400 on the same condition
-                      as a safety net. */}
-                  {customer?.id && (
-                    <option
-                      value="credit"
-                      disabled={Number(customer.credit_balance || 0) < total}
-                    >
-                      🏦 Customer Credit (₹{Number(customer.credit_balance || 0).toFixed(2)} available)
-                      {Number(customer.credit_balance || 0) < total ? ' — insufficient' : ''}
-                    </option>
-                  )}
-                </select>
-                {/* Inline warning when operator picked credit but it's
-                    short of the cart total. We block the sale at submit
-                    time too — this is just early feedback. */}
-                {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
-                  <div style={{
-                    marginTop: 6, padding: '8px 10px',
-                    border: '1px solid var(--amber)', borderRadius: 6,
-                    background: 'rgba(245,166,35,0.08)',
-                    fontSize: 11.5, color: 'var(--amber)', lineHeight: 1.5,
-                  }}>
-                    ⚠ Available credit (₹{Number(customer.credit_balance || 0).toFixed(2)}) is
-                    less than the cart total (₹{Number(total).toFixed(2)}). Pick a different
-                    method or reduce the cart. Split-payment with credit isn&apos;t supported.
-                  </div>
+                  <input
+                    type="checkbox"
+                    checked={paymentReceived}
+                    onChange={(e) => store.setPaymentReceived(e.target.checked)}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  <span>Payment received?</span>
+                </label>
+                {paymentReceived && (
+                  <PosPaymentMethodSelect
+                    value={paymentMethod || ''}
+                    onChange={(id) => store.setPaymentMethod(id || null)}
+                    options={paymentMethodOptions}
+                    placeholder="Method…"
+                  />
                 )}
-              </>
-            )}
-            {!paymentReceived && (
-              <div style={{
-                marginTop: 6, padding: '6px 10px',
-                fontSize: 11, color: 'var(--text-muted)',
-                lineHeight: 1.5,
-              }}>
-                Sale will be recorded as <strong>pending</strong>. Record payment
-                from Sales → Invoices when the customer pays.
               </div>
-            )}
+              {paymentReceived ? (
+                <>
+                  {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        padding: '6px 8px',
+                        border: '1px solid var(--amber)',
+                        borderRadius: 6,
+                        background: 'rgba(245,166,35,0.08)',
+                        fontSize: 11,
+                        color: 'var(--amber)',
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      Credit short by ₹{(total - Number(customer.credit_balance || 0)).toFixed(2)} — pick another method.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  Saved as <strong>pending</strong> — collect payment later in Sales → Invoices.
+                </div>
+              )}
+            </div>
+
+            <div style={{ textAlign: 'right', flexShrink: 0, paddingLeft: 8, minWidth: 120 }}>
+              {cart.length > 0 && (
+                <div style={{ marginBottom: 6 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      fontSize: 11.5,
+                      color: 'var(--text-muted)',
+                      marginBottom: 3,
+                    }}
+                  >
+                    <span>Taxable</span>
+                    <span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      fontSize: 11.5,
+                      color: 'var(--text-muted)',
+                      marginBottom: discount > 0 ? 3 : 0,
+                    }}
+                  >
+                    <span>Tax</span>
+                    <span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
+                  </div>
+                  {discount > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--green)',
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span>Disc</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                  gap: 16,
+                  paddingTop: cart.length > 0 ? 6 : 0,
+                  borderTop: cart.length > 0 ? '1px solid var(--border-default)' : 'none',
+                }}
+              >
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Total</span>
+                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 24, fontWeight: 700, color: 'var(--accent)', lineHeight: 1.1 }}>
+                  {fmt(total)}
+                </span>
+              </div>
+            </div>
           </div>
 
-          <button className="btn btn-primary btn-xl" style={{ width: '100%', justifyContent: 'center', fontSize: 15, opacity: completing ? 0.6 : 1, cursor: completing ? 'not-allowed' : 'pointer' }} onClick={handleComplete} disabled={completing}>
-            {completing ? '⏳ Saving...' : `✓ Complete Sale — ${fmt(total)}`} <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>F8</span>
+          <button
+            className="btn btn-primary btn-xl"
+            style={{
+              width: '100%',
+              justifyContent: 'center',
+              fontSize: 15,
+              opacity: completing ? 0.6 : 1,
+              cursor: completing ? 'not-allowed' : 'pointer',
+            }}
+            onClick={handleComplete}
+            disabled={completing}
+          >
+            {completing ? '⏳ Saving...' : `✓ Complete Sale — ${fmt(total)}`}
+            <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>F8</span>
           </button>
         </div>
       </div>
