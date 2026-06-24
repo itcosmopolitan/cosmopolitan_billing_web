@@ -172,6 +172,7 @@ export const salesAPI = {
   list:    (params) => api.get('/sales/',             { params }),
   get:     (id)     => api.get(`/sales/${id}`),
   create:  (data)   => api.post('/sales/', data),
+  update:  (id, data) => api.put(`/sales/${id}`, data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
   // creditPurchases endpoint removed 2026-05-23 (Sales Phase 1) — see
@@ -249,8 +250,6 @@ export const purchasesAPI = {
   create:  (data)   => api.post('/purchases/', data),
   update:  (id, data) => api.put(`/purchases/${id}`, data),
   payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
-  // 2026-05-24: cancel endpoint added. Sales has the equivalent.
-  // Bills are immutable — only Record Payment + Cancel are allowed.
   cancel:  (id)     => api.post(`/purchases/${id}/cancel`),
   // Purchase Orders — mirror of salesAPI.orders. PO is the intent doc;
   // convert spawns a bill (which is what moves stock + creates batches).

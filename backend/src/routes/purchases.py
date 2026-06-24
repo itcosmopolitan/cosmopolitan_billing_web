@@ -663,9 +663,9 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
 @router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit"))])
 async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    """Edit a pending or partial bill. Replaces line items and recalculates
-    totals. Paid and cancelled bills are locked — use vendor returns or
-    Record Payment to adjust settled bills."""
+    """Edit a pending bill with no payments or vendor returns. Replaces line
+    items and recalculates totals. Paid / partial / cancelled bills are
+    locked — use vendor returns or Record Payment to adjust settled bills."""
     from sqlalchemy import delete as sa_delete
     result = await db.execute(
         select(PurchaseBill)
@@ -679,6 +679,32 @@ async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends
     bill_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
     if bill_status in ("paid", "cancelled"):
         raise HTTPException(400, f"Cannot edit a {bill_status} bill")
+    if (bill.paid_amount or 0) > 0:
+        raise HTTPException(
+            400,
+            "Cannot edit a bill with payments recorded. Void payments first.",
+        )
+    return_count = int((await db.execute(
+        select(func.count(VendorReturn.id)).where(VendorReturn.bill_id == bill_id)
+    )).scalar() or 0)
+    if return_count > 0:
+        raise HTTPException(
+            400,
+            f"Cannot edit bill with {return_count} vendor return(s). Void returns first.",
+        )
+    pay_count = int((await db.execute(
+        select(func.count(VendorPaymentAllocation.id))
+        .join(VendorPayment, VendorPaymentAllocation.payment_id == VendorPayment.id)
+        .where(
+            VendorPaymentAllocation.bill_id == bill_id,
+            or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)),  # noqa: E712
+        )
+    )).scalar() or 0)
+    if pay_count > 0:
+        raise HTTPException(
+            400,
+            "Cannot edit a bill with active payment allocations. Void payments first.",
+        )
     if not data.items:
         raise HTTPException(400, "Bill must have at least one line item")
 

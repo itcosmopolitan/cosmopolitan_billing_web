@@ -791,6 +791,18 @@ export default function SalesPage() {
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
                             {
+                              label: 'Edit',
+                              hidden: !(
+                                can('invoices.edit')
+                                && inv.status !== 'cancelled'
+                                && inv.status !== 'paid'
+                                && !(inv.paidAmount > 0)
+                                && (inv.origin || 'invoice').toLowerCase() !== 'pos'
+                              ),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => navigate(`/sales/invoices/${inv.id}/edit`),
+                            },
+                            {
                               label: 'Record payment',
                               hidden: !(['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit')),
                               disabled: isRowBusy(inv.id),

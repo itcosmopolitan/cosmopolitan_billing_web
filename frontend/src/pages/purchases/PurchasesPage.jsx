@@ -715,7 +715,7 @@ export default function PurchasesPage() {
                   {bills.map((b) => {
                     const balance = (b.total || 0) - (b.paidAmount || 0)
                     const canPay = b.status !== 'paid' && b.status !== 'cancelled'
-                    const canEdit = b.status !== 'paid' && b.status !== 'cancelled'
+                    const canEdit = b.status !== 'paid' && b.status !== 'cancelled' && !(b.paidAmount > 0)
                     const canCancel = b.status !== 'cancelled' && !(b.paidAmount > 0)
                     return (
                       <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>

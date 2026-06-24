@@ -1,7 +1,6 @@
 /**
- * Purchase Bill modal — Create only (bills are immutable per the user
- * decision; only Record Payment + Cancel are allowed once a bill exists).
- *
+ * Purchase Bill modal — create a new bill or edit an existing unpaid one
+ * (payment is recorded separately via Record Payment).
  * Layout mirrors PurchaseOrderFormModal / sales OrderFormModal:
  *   • Vendor (picker) + Bill Date in row 1.
  *   • Due Date + "Payment received?" checkbox in row 2.
@@ -97,13 +96,20 @@ export default function BillFormModal({
       <div className="bill-form-panel">
         <div className="bill-form-panel__head">Bill basics</div>
         <div className="bill-form-grid">
-          <DocumentNumberField
-            label={isGrn ? 'GRN #' : 'Bill #'}
-            docType={isGrn ? 'grn' : 'purchase_bill'}
-            branchId={billForm.branchId}
-            value={billForm.number}
-            onChange={(v) => pbf('number', v)}
-          />
+          {editMode ? (
+            <FormGroup label={isGrn ? 'GRN #' : 'Bill #'}>
+              <input className="form-input" value={billForm.number || ''} readOnly
+                style={{ background: 'var(--bg-subtle)', cursor: 'default' }} />
+            </FormGroup>
+          ) : (
+            <DocumentNumberField
+              label={isGrn ? 'GRN #' : 'Bill #'}
+              docType={isGrn ? 'grn' : 'purchase_bill'}
+              branchId={billForm.branchId}
+              value={billForm.number}
+              onChange={(v) => pbf('number', v)}
+            />
+          )}
           <FormGroup label="Vendor" required>
             <VendorPicker
               value={billForm.vendorId
