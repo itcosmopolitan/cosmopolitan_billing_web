@@ -422,6 +422,7 @@ export default function TransfersPage() {
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || 'N/A'}</td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!actionBusy || deleteBusy}
                           ariaLabel={`Actions for ${t.ref_number}`}
                           actions={[
                             {

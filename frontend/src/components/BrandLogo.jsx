@@ -1,4 +1,5 @@
 const LOGO_SRC = '/assets/cosmopolitan-logo.png'
+const FAVICON_SRC = '/assets/cosmo-favicon.ico'
 
 export default function BrandLogo({
   height = 28,
@@ -7,17 +8,19 @@ export default function BrandLogo({
   className = '',
   style,
 }) {
+  const src = collapsed ? FAVICON_SRC : LOGO_SRC
+
   return (
     <img
-      src={LOGO_SRC}
+      src={src}
       alt="Cosmopolitan"
-      className={['brand-logo', className].filter(Boolean).join(' ')}
+      className={['brand-logo', collapsed ? 'brand-logo--icon' : '', className].filter(Boolean).join(' ')}
       style={{
         height,
-        width: collapsed ? 40 : 'auto',
-        maxWidth: maxWidth ?? (collapsed ? 40 : '100%'),
-        objectFit: collapsed ? 'cover' : 'contain',
-        objectPosition: collapsed ? '52% center' : 'left center',
+        width: collapsed ? height : 'auto',
+        maxWidth: maxWidth ?? (collapsed ? height : '100%'),
+        objectFit: 'contain',
+        objectPosition: 'center',
         display: 'block',
         flexShrink: 0,
         ...style,

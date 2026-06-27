@@ -541,6 +541,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                       {!isMaster && <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>}
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!itemActionBusy}
                           ariaLabel={`Actions for ${p.name}`}
                           actions={isMaster ? [
                             {
@@ -595,7 +596,7 @@ export default function ItemsPage({ mode = 'branch' }) {
       {!isMaster && (
         <>
       {/* Stock Adjustment Modal — batch-aware */}
-      <Modal open={!!showAdj} onClose={() => !adjSubmitting && setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
+      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'} busy={adjSubmitting}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdj(null)} disabled={adjSubmitting}>Cancel</button>
           <button className="btn btn-primary" onClick={saveAdj} disabled={adjSubmitting}>

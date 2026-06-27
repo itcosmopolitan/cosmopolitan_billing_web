@@ -271,7 +271,8 @@ export default function OrderFormModal({
   return (
     <Modal
       open={open}
-      onClose={saving ? () => {} : onClose}
+      onClose={onClose}
+      busy={saving}
       title={title}
       icon="📦"
       size="lg"

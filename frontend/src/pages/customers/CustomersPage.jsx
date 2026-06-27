@@ -27,6 +27,7 @@ export default function CustomersPage() {
   const branches = useAppStore((s) => s.branches)
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
+  const [saving, setSaving] = useState(false)
   const [form, setForm]         = useState({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id:'', credit_limit:'10000', customer_type:'retail' })
 
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
@@ -106,9 +107,11 @@ export default function CustomersPage() {
   }), [custTotal, custSummary, customers])
 
   const save = async () => {
+    if (saving) return
     if (!form.name) { toast.error('Customer name required'); return }
     if (!form.branch_id) { toast.error('Select a branch'); return }
 
+    setSaving(true)
     try {
       const payload = {
         name: form.name,
@@ -123,13 +126,14 @@ export default function CustomersPage() {
 
       await customersAPI.create(payload)
       setListVersion((v) => v + 1)
-      await loadBranches()
       toast.success('Customer added successfully')
       setShowAdd(false)
       setForm({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id: branches[0]?.id || '', credit_limit:'10000', customer_type:'retail' })
     } catch (err) {
       console.error('Failed to save customer:', err)
       toast.error('Failed to add customer')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -275,8 +279,8 @@ export default function CustomersPage() {
       </Card>
 
       {/* Add Customer */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" icon="👤" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save Customer</button></>}>
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" icon="👤" size="md" busy={saving}
+        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Customer'}</button></>}>
         <FormRow><FormGroup label="Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} placeholder="Full name or company" /></FormGroup>
         <FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} placeholder="10-digit mobile" /></FormGroup></FormRow>
         <FormRow><FormGroup label="Email"><input className="form-input" value={form.email} onChange={e=>pf('email',e.target.value)} type="email" /></FormGroup>

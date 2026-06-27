@@ -45,7 +45,7 @@ function AppShell() {
   // Must stay in sync with the SIDEBAR_W / SIDEBAR_W_COLLAPSED constants in
   // components/layout/Sidebar.jsx — single source of truth there, mirrored
   // here for the main-content margin.
-  const sidebarW = sidebarCollapsed ? 68 : 244
+  const sidebarW = sidebarCollapsed ? 68 : 220
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
       <Sidebar />

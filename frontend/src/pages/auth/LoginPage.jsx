@@ -10,6 +10,7 @@ import {
   bootstrapAuthenticatedData,
 } from '@/auth/bootstrap'
 import BrandLogo from '@/components/BrandLogo'
+import { Eye, EyeOff } from '@/components/ui/Icons'
 
 const DEMO_USERS = [
   { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'Super Admin',       avatar: 'SA' },
@@ -32,6 +33,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('suresh@srimurugan.com')
   const [password, setPassword] = useState('admin123')
   const [rememberMe, setRememberMe] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const selectRole = (user) => {
@@ -97,14 +99,26 @@ export default function LoginPage() {
 
               <div className="form-group">
                 <label className="form-label">Password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  required
-                />
+                <div className="login-password-field">
+                  <input
+                    className="form-input"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    required
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    className="login-password-toggle"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
               </div>
 
               <div className="login-form-footer">

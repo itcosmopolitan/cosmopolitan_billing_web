@@ -31,7 +31,7 @@ const navItems = [
   { section: null,        path: '/audit',      Icon: Icon.Search,      label: 'Audit Trail',     perm: 'audit.view' },
 ]
 
-const SIDEBAR_W          = 244
+const SIDEBAR_W          = 220
 const SIDEBAR_W_COLLAPSED = 68
 
 export default function Sidebar() {

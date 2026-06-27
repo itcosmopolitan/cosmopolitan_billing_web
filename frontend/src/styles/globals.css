@@ -108,12 +108,18 @@ body {
 /* Selection */
 ::selection { background: rgba(31,122,77,0.28); }
 
-[data-theme='dark'] .brand-logo-wrap {
+[data-theme='dark'] .brand-logo-wrap:not(:has(.brand-logo--icon)) {
   background: rgba(255,255,255,0.94);
   border-radius: 8px;
   padding: 3px 8px;
   display: inline-flex;
   align-items: center;
+}
+
+[data-theme='dark'] .brand-logo-wrap:has(.brand-logo--icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Typography */

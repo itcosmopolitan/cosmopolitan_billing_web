@@ -35,6 +35,8 @@ export default function CashPage() {
   const [showUnlock, setShowUnlock] = useState(false)
   const [voidTarget, setVoidTarget] = useState(null)
   const [voidReason, setVoidReason] = useState('')
+  const [entryBusy, setEntryBusy] = useState(false)
+  const [voidSaving, setVoidSaving] = useState(false)
 
   useEffect(() => {
     if (!branchId && activeBranch?.id) setBranchId(activeBranch.id)
@@ -78,16 +80,23 @@ export default function CashPage() {
   const closeRecord = summary.close_details || null
 
   const handleDelete = async (entry) => {
+    if (entryBusy || voidSaving) return
     if (!window.confirm('Delete this entry?')) return
+    setEntryBusy(true)
     try {
       await cashAPI.delete(branchId, entry.id)
       toast.success('Entry deleted')
       refresh()
     } catch { /* interceptor */ }
+    finally {
+      setEntryBusy(false)
+    }
   }
 
   const handleVoid = async () => {
+    if (voidSaving || entryBusy) return
     if (!voidReason.trim()) { toast.error('Enter void reason'); return }
+    setVoidSaving(true)
     try {
       await cashAPI.void(branchId, voidTarget.id, { reason: voidReason })
       toast.success('Entry voided')
@@ -95,6 +104,9 @@ export default function CashPage() {
       setVoidReason('')
       refresh()
     } catch { /* interceptor */ }
+    finally {
+      setVoidSaving(false)
+    }
   }
 
   const selectedBranch = useMemo(() => branches.find((b) => b.id === branchId), [branches, branchId])
@@ -246,6 +258,7 @@ export default function CashPage() {
                     </td>
                     <td>
                       <RowActionsMenu
+                        busy={entryBusy || voidSaving}
                         ariaLabel={`Actions for ${e.entry_number || e.id}`}
                         actions={[
                           {
@@ -404,10 +417,13 @@ export default function CashPage() {
         title="Void Entry"
         icon="🚫"
         size="sm"
+        busy={voidSaving}
         footer={
           <>
-            <button className="btn btn-secondary" onClick={() => { setVoidTarget(null); setVoidReason('') }}>Cancel</button>
-            <button className="btn btn-danger" onClick={handleVoid}>Void Entry</button>
+            <button className="btn btn-secondary" onClick={() => { setVoidTarget(null); setVoidReason('') }} disabled={voidSaving}>Cancel</button>
+            <button className="btn btn-danger" onClick={handleVoid} disabled={voidSaving}>
+              {voidSaving ? 'Voiding…' : 'Void Entry'}
+            </button>
           </>
         }
       >

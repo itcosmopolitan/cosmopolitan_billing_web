@@ -212,7 +212,8 @@ export default function QuoteFormModal({
   return (
     <Modal
       open={open}
-      onClose={saving ? () => {} : onClose}
+      onClose={onClose}
+      busy={saving}
       title={title}
       size="lg"
       footer={

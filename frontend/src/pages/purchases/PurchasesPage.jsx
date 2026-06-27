@@ -741,6 +741,7 @@ export default function PurchasesPage() {
                         <td><ReturnStatusChip status={b.returnStatus} /></td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for ${b.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(b.id), onClick: () => setShowDetail(b) },
@@ -856,6 +857,7 @@ export default function PurchasesPage() {
                         <td>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <RowActionsMenu
+                              busy={!!actionBusy}
                               ariaLabel={`Actions for ${o.number}`}
                               actions={[
                                 {
@@ -995,6 +997,7 @@ export default function PurchasesPage() {
                         <td style={{ fontSize: 12 }}>{hasBill ? 'Linked' : '—'}</td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for ${g.number}`}
                             actions={[
                               {
@@ -1091,6 +1094,7 @@ export default function PurchasesPage() {
                       <td><Chip status={r.status} /></td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
                             { label: 'View', disabled: isRowBusy(r.id), onClick: () => setReturnDetail(r) },
@@ -1194,6 +1198,7 @@ export default function PurchasesPage() {
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || '—'}</td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for payment ${p.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
@@ -1284,7 +1289,7 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Payment Modal ─────────────────────────────────────────── */}
-      <Modal open={!!showPay} onClose={() => !paySaving && setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm"
+      <Modal open={!!showPay} onClose={() => setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm" busy={paySaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowPay(null)} disabled={paySaving}>Cancel</button>
           <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
@@ -1326,7 +1331,7 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Cancel Bill Confirm ───────────────────────────────────── */}
-      <Modal open={!!showCancel} onClose={() => !cancelSaving && setShowCancel(null)} title="Cancel Bill" icon="⚠️" size="sm"
+      <Modal open={!!showCancel} onClose={() => setShowCancel(null)} title="Cancel Bill" icon="⚠️" size="sm" busy={cancelSaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowCancel(null)} disabled={cancelSaving}>Keep Bill</button>
           <button className="btn btn-danger" onClick={cancelBill} disabled={cancelSaving}>

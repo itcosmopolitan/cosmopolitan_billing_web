@@ -346,10 +346,11 @@ export default function BillFormModal({
   return (
     <Modal
       open={open}
-      onClose={saving ? () => {} : onClose}
+      onClose={onClose}
       title={title}
       icon={isGrn ? '📦' : '📋'}
       size="lg"
+      busy={saving}
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
