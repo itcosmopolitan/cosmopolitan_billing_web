@@ -334,7 +334,7 @@ export default function POSPage() {
       const avail = Number(customer.credit_balance || 0)
       if (avail < total) {
         toast.error(
-          `Insufficient credit — ₹${avail.toFixed(2)} available, ₹${total.toFixed(2)} needed`,
+          `Insufficient credit — MVR${avail.toFixed(2)} available, MVR${total.toFixed(2)} needed`,
         )
         return
       }

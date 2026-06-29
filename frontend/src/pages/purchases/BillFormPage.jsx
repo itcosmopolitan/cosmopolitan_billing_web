@@ -200,16 +200,24 @@ export default function BillFormPage({ mode = 'bill' }) {
     ? (isGrn ? `Receive Stock — from ${conversionLabel}` : `Create Bill — from ${conversionLabel}`)
     : (isGrn ? 'New Goods Receipt (GRN)' : 'New Purchase Bill')
 
+  const summaryCards = [
+    { label: 'Lines', value: form.items.filter((i) => i.item_id).length },
+    { label: 'Qty', value: form.items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0) },
+    { label: 'Tracked', value: form.items.filter((i) => i.batchTracking).length },
+  ]
+
   return (
     <DocumentFormShell
       title={title}
       subtitle={isGrn ? 'Goods Receipts' : 'Bills'}
       icon={isGrn ? '📦' : '📋'}
+      hideHeader
       onBack={goBack}
       backLabel="← Back"
       onSave={save}
       saveLabel={isGrn ? 'Receive Stock' : 'Save Bill'}
       saving={saving}
+      summaryCards={summaryCards}
     >
       <BillFormModal
         embedded

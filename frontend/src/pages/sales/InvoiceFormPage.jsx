@@ -178,16 +178,27 @@ export default function InvoiceFormPage() {
     ? `Create Invoice — from ${conversionLabel}`
     : 'Create Invoice'
 
+  const summaryCards = [
+    { label: 'Lines', value: form.items.filter((i) => i.item_id).length },
+    { label: 'Qty', value: form.items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0) },
+      {
+      label: 'Gross',
+      value: `MVR${form.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.price) || 0), 0).toFixed(0)}`,
+    },
+  ]
+
   return (
     <DocumentFormShell
       title={title}
       subtitle="Invoices"
       icon="🧾"
+      hideHeader
       onBack={goBack}
       backLabel="← Back"
       onSave={save}
       saveLabel="Create Invoice"
       saving={saving}
+      summaryCards={summaryCards}
     >
       <InvoiceFormModal
         embedded

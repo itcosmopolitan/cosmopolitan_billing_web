@@ -154,16 +154,16 @@ export function Receipt({ sale, branch }) {
   }
 
   const shareWhatsApp = () => {
-    const items = (sale.items || []).map(i => `• ${i.name} x${i.qty} = ₹${i.lineTotal || i.qty * i.price}`).join('\n')
+    const items = (sale.items || []).map(i => `• ${i.name} x${i.qty} = MVR${i.lineTotal || i.qty * i.price}`).join('\n')
     const msg = `*Sri Murugan Traders — ${branch?.name}*\n` +
       `Invoice: *${sale.number}*\n` +
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
       `─────────────────\n` +
-      `Taxable amount: ₹${(sale.subtotal || 0).toLocaleString('en-IN')}\n` +
-      (sale.discount ? `Discount: -₹${sale.discount.toLocaleString('en-IN')}\n` : '') +
-      `Tax amount: ₹${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-IN')}\n` +
-      `*TOTAL: ₹${(sale.total || 0).toLocaleString('en-IN')}*\n` +
+      `Taxable amount: MVR${(sale.subtotal || 0).toLocaleString('en-MV')}\n` +
+      (sale.discount ? `Discount: -MVR${sale.discount.toLocaleString('en-MV')}\n` : '') +
+      `Tax amount: MVR${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-MV')}\n` +
+      `*TOTAL: MVR${(sale.total || 0).toLocaleString('en-MV')}*\n` +
       `Payment: ${(sale.paymentMode || sale.payment_mode || '').toUpperCase()}\n\n` +
       `Thank you for your purchase! 🙏`
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')

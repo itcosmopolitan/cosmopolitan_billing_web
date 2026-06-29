@@ -157,6 +157,15 @@ export default function OrderFormPage({ mode = 'create' }) {
         ? `Edit Sales Order — ${editingNumber || ''}`
         : 'Create Sales Order'
 
+  const summaryCards = [
+    { label: 'Lines', value: form.items.filter((i) => i.item_id || i.name).length },
+    { label: 'Qty', value: form.items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0) },
+    {
+      label: 'Gross',
+      value: `MVR${form.items.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.price) || 0), 0).toFixed(0)}`,
+    },
+  ]
+
   return (
     <DocumentFormShell
       title={title}
@@ -168,6 +177,7 @@ export default function OrderFormPage({ mode = 'create' }) {
       saveLabel={isEdit ? 'Save Changes' : 'Create Sales Order'}
       saving={saving}
       readOnly={readOnly}
+      summaryCards={summaryCards}
     >
       <OrderFormModal
         embedded

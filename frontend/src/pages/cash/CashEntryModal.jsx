@@ -120,7 +120,7 @@ export default function CashEntryModal({ open, onClose, branchId, onSaved, editE
         </select>
       </FormGroup>
 
-      <FormGroup label="Amount (₹)" required>
+      <FormGroup label="Amount (MVR)" required>
         <input
           className="form-input"
           type="number"

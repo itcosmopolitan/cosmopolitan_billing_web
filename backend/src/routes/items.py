@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.item_branch import effective_cost_price, effective_reorder_level, effective_selling_price
-from src.models import Branch, Item, ItemBatch, ItemBranchConfig, ItemStock
+from src.models import Branch, Category, Item, ItemBatch, ItemBranchConfig, ItemStock
 from src.pagination import (
     normalize_limit,
     normalize_skip,
@@ -330,6 +330,42 @@ class ItemPatch(BaseModel):
     batch_tracking: Optional[bool] = None
     expiry_tracking: Optional[bool] = None
 
+
+class InventoryCategoryCreate(BaseModel):
+    name: str
+    icon: Optional[str] = "📦"
+
+
+@router.get("/categories", dependencies=[Depends(require_perm("items.view", "items.create", "items.edit"))])
+async def list_categories(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Category).order_by(asc(Category.name)))).scalars().all()
+    return [
+        {"id": row.id, "name": row.name, "icon": row.icon or "📦"}
+        for row in rows
+    ]
+
+
+@router.post("/categories", dependencies=[Depends(require_perm("items.create", "items.edit"))], status_code=201)
+async def create_category(data: InventoryCategoryCreate, db: AsyncSession = Depends(get_db)):
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Category name is required")
+
+    existing = (
+        await db.execute(select(Category).where(func.lower(Category.name) == name.lower()))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, "Category already exists")
+
+    category = Category(
+        id=f"cat-{uuid.uuid4().hex[:8]}",
+        name=name,
+        icon=data.icon or "📦",
+    )
+    db.add(category)
+    await db.commit()
+    return {"id": category.id, "name": category.name, "icon": category.icon, "message": "Category created"}
+
 @router.get("/", dependencies=[Depends(require_perm("items.view", "pos.use"))])
 async def list_items(
     search: Optional[str] = None,
@@ -587,6 +623,41 @@ async def create_item(data: ItemCreate, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
     return {"id": item.id, "message": "Item created"}
+
+
+@router.get("/{item_id}", dependencies=[Depends(require_perm("items.view", "pos.use"))])
+async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Item)
+        .where(Item.id == item_id)
+        .options(selectinload(Item.category))
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    return {
+        "id": item.id,
+        "name": item.name,
+        "sku": item.sku,
+        "barcode": item.barcode,
+        "categoryId": item.category_id,
+        "categoryName": item.category.name if item.category else "Uncategorized",
+        "brand": item.brand,
+        "unit": item.unit,
+        "default_cost_price": item.cost_price,
+        "cost_price": item.cost_price,
+        "default_selling_price": item.selling_price,
+        "selling_price": item.selling_price,
+        "tax_rate": item.tax_rate,
+        "hsn_code": item.hsn_code,
+        "default_reorder_level": item.reorder_level,
+        "reorder_level": item.reorder_level,
+        "emoji": item.emoji,
+        "batch_tracking": item.batch_tracking,
+        "expiry_tracking": item.expiry_tracking,
+        "active": item.active,
+    }
 
 @router.put("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
 async def update_item(item_id: str, data: ItemCreate, db: AsyncSession = Depends(get_db)):

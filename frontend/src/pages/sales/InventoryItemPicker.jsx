@@ -74,12 +74,10 @@ export default function InventoryItemPicker({
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
-  // Debounced search. Only fetches when the dropdown is open AND no item
-  // is currently selected — saves an API call per render in the picked
-  // state. The empty search hits the endpoint too (returns the first N
-  // alphabetical items) so first focus immediately shows something.
+  // Debounced search. Fetches when the dropdown is open, whether a value
+  // is already selected or not. This lets the picker reopen as a dropdown
+  // for re-selection without forcing the user to clear first.
   useEffect(() => {
-    if (value) return
     if (!open) return
     let cancelled = false
     const key = `${open ? 1 : 0}|${branchId || ''}|${search || ''}|${excludeIds.join('|')}`
@@ -117,32 +115,125 @@ export default function InventoryItemPicker({
     // serialized form so we don't refetch needlessly when the parent
     // re-renders with the same set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, open, branchId, value, excludeIds.join('|')])
+  }, [search, open, branchId, excludeIds.join('|')])
 
   // ── Selected state ──────────────────────────────────────────────────
   if (value) {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          minHeight: 32,
-        }}
-      >
-        <span
-          style={{
-            fontWeight: 500,
-            color: 'var(--text-primary)',
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+      <div ref={wrapperRef} style={{ position: 'relative' }}>
+        <input
+          ref={inputRef}
+          className="form-input"
+          placeholder="Search inventory…"
+          value={open ? search : value.name}
+          onChange={(e) => {
+            setSearch(e.target.value)
+            setOpen(true)
           }}
-          title={value.name}
-        >
-          {value.name}
-        </span>
+          onFocus={() => setOpen(true)}
+          disabled={disabled}
+          autoComplete="off"
+          aria-label={`Selected item ${value.name}. Type to replace.`}
+        />
+        {open && !disabled && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              right: 0,
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 6,
+              marginTop: 4,
+              maxHeight: 240,
+              overflowY: 'auto',
+              zIndex: 100,
+              boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+            }}
+          >
+            {loading && (
+              <div
+                style={{
+                  padding: 10,
+                  color: 'var(--text-muted)',
+                  fontSize: 12,
+                }}
+              >
+                Searching…
+              </div>
+            )}
+            {!loading && results.length === 0 && (
+              <div
+                style={{
+                  padding: 10,
+                  color: 'var(--text-muted)',
+                  fontSize: 12,
+                }}
+              >
+                {open && search
+                  ? `No items match "${search}"`
+                  : 'No items found in this branch'}
+              </div>
+            )}
+            {!loading &&
+              results.map((r) => {
+                const stock = r.available_stock ?? 0
+                const oos = stock <= 0
+                return (
+                  <div
+                    key={r.id}
+                    role="option"
+                    tabIndex={0}
+                    onClick={() => {
+                      onPick(r)
+                      setSearch('')
+                      setOpen(false)
+                    }}
+                    style={{
+                      padding: '8px 10px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 12,
+                      borderBottom: '1px solid var(--border-subtle)',
+                      fontSize: 13,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--accent-bg)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: 'var(--text-primary)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        flex: 1,
+                      }}
+                    >
+                      {r.name}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: oos ? 'var(--red)' : 'var(--text-muted)',
+                        whiteSpace: 'nowrap',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
+                      {fmt(r.selling_price)} ·{' '}
+                      {oos ? 'Out of stock' : `${stock} in stock`}
+                    </span>
+                  </div>
+                )
+              })}
+          </div>
+        )}
         {!disabled && (
           <button
             type="button"
@@ -150,6 +241,10 @@ export default function InventoryItemPicker({
             title="Clear item"
             aria-label="Clear picked item"
             style={{
+              position: 'absolute',
+              right: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
               background: 'transparent',
               border: 'none',
               color: 'var(--text-muted)',

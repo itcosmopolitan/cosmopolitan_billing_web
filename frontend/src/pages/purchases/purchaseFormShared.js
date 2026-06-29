@@ -5,7 +5,7 @@ export function lineDiscountToPercent(line) {
   const cost = Number(line.cost || 0)
   const gross = qty * cost
   const raw = Math.max(0, Number(line.lineDiscount || 0))
-  if (line.lineDiscountType === '₹') {
+  if (line.lineDiscountType === 'MVR') {
     if (gross <= 0) return 0
     return Math.min(100, (raw / gross) * 100)
   }
@@ -63,7 +63,7 @@ export function poFromRow(po, branchId) {
     branchId: po.branchId || branchId,
     items: mapPurchaseLines(po.items),
     discount: po.discount || 0,
-    discountType: '₹',
+    discountType: 'MVR',
     expectedDate: po.expectedDate || '',
     notes: po.notes || '',
   }
@@ -78,7 +78,7 @@ export function billFromRow(doc, branchId) {
     dueDate: doc.dueDate || '',
     items: mapPurchaseLines(doc.items),
     discount: doc.discount || 0,
-    discountType: '₹',
+    discountType: 'MVR',
     notes: doc.notes || '',
   }
 }

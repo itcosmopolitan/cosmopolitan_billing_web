@@ -420,7 +420,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     #   3. line_total stored gross+tax−discount instead of net+tax,
     #      which interpreted the discount as a post-tax deduction.
     # Now: line_discount is always a percent (0-100). Frontend is the
-    # source of conversion (it offers a %/₹ toggle and converts ₹ → %
+    # source of conversion (it offers a %/Rf toggle and converts Rf → %
     # before POST). See OrderFormModal / QuoteFormModal.
     tax_mode = await _get_org_tax_mode(db)
     line_rows = []  # list[(item, line_net, line_tax)]
@@ -647,7 +647,7 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
         if available < total:
             raise HTTPException(
                 400,
-                f"Insufficient credit — customer has ₹{round(available, 2)} available, sale total is ₹{total}",
+                f"Insufficient credit — customer has Rf{round(available, 2)} available, sale total is Rf{total}",
             )
 
     await enforce_branch_access(data.branch_id, user=user, db=db)
@@ -850,9 +850,9 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
             module="sales",
             ref=inv.number,
             detail=(
-                f"Credit-mode sale {inv.number}: −₹{total} from "
-                f"{credit_customer.name}'s credit (was ₹{prev_balance:.2f}, "
-                f"now ₹{new_balance:.2f})"
+                f"Credit-mode sale {inv.number}: −Rf{total} from "
+                f"{credit_customer.name}'s credit (was Rf{prev_balance:.2f}, "
+                f"now Rf{new_balance:.2f})"
             ),
             risk="low",
             ip_address=None,
@@ -1001,7 +1001,7 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
         if available < data.amount:
             raise HTTPException(
                 400,
-                f"Insufficient credit — customer has ₹{round(available, 2)} available, payment is ₹{data.amount}",
+                f"Insufficient credit — customer has Rf{round(available, 2)} available, payment is Rf{data.amount}",
             )
 
     # Pass `mode` down so the atomic UPDATE also sets sale_invoices.payment_mode
@@ -1032,8 +1032,8 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
             await db.rollback()
             raise HTTPException(
                 400,
-                f"Walk-in invoice — reduce amount to ₹{round(pre_balance, 2)} "
-                f"or assign a customer first to capture the ₹{credit_applied} excess as credit",
+                f"Walk-in invoice — reduce amount to Rf{round(pre_balance, 2)} "
+                f"or assign a customer first to capture the Rf{credit_applied} excess as credit",
             )
         # Customer set — bump credit_balance + audit log.
         # 2026-05-25: NEVER re-import Customer / AuditLog here. Both are
@@ -1067,9 +1067,9 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
                 module="sales",
                 ref=pre_row.number,
                 detail=(
-                    f"Overpayment on {pre_row.number}: +₹{credit_applied} "
-                    f"credited to {cust.name} (was ₹{cur_credit:.2f}, "
-                    f"now ₹{new_credit:.2f})"
+                    f"Overpayment on {pre_row.number}: +Rf{credit_applied} "
+                    f"credited to {cust.name} (was Rf{cur_credit:.2f}, "
+                    f"now Rf{new_credit:.2f})"
                 ),
                 risk="low",
                 ip_address=None,
@@ -1156,9 +1156,9 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
             module="sales",
             ref=pre_row.number,
             detail=(
-                f"Credit-mode payment on {pre_row.number}: −₹{data.amount} "
-                f"from {credit_customer.name}'s credit (was ₹{prev_balance:.2f}, "
-                f"now ₹{new_balance:.2f})"
+                f"Credit-mode payment on {pre_row.number}: −Rf{data.amount} "
+                f"from {credit_customer.name}'s credit (was Rf{prev_balance:.2f}, "
+                f"now Rf{new_balance:.2f})"
             ),
             risk="low",
             ip_address=None,
@@ -1351,7 +1351,7 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
         user_name=None,
         module="sales",
         ref=pay.number,
-        detail=f"Voided payment {pay.number} (₹{pay.total_amount})",
+        detail=f"Voided payment {pay.number} (Rf{pay.total_amount})",
         risk="medium",
         ip_address=None,
     ))
@@ -1379,7 +1379,7 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
     Allocation semantics:
       • allocation.amount > invoice.balance — the excess routes to
         customer.credit_balance + accumulates in the Payment's
-        credit_applied. Inline UI warning preview ("Excess ₹X credited")
+        credit_applied. Inline UI warning preview ("Excess RfX credited")
         keeps the operator informed before submit.
       • Per-invoice update: paid_amount += min(amount, balance);
         status = paid|partial; payment_mode = data.payment_mode.
@@ -1432,14 +1432,14 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             if float(a.amount) > bal + 0.001:
                 raise HTTPException(
                     400,
-                    f"Credit mode can't overpay — {inv.number} balance is ₹{round(bal, 2)}",
+                    f"Credit mode can't overpay — {inv.number} balance is Rf{round(bal, 2)}",
                 )
         avail = float(cust.credit_balance or 0)
         if avail + 0.001 < requested_total:
             raise HTTPException(
                 400,
-                f"Insufficient credit — {cust.name} has ₹{round(avail, 2)} available, "
-                f"payment totals ₹{round(requested_total, 2)}",
+                f"Insufficient credit — {cust.name} has Rf{round(avail, 2)} available, "
+                f"payment totals Rf{round(requested_total, 2)}",
             )
 
     # 5. Apply allocations + accumulate credit. We update each invoice's
@@ -1483,9 +1483,9 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             module="sales",
             ref=None,  # multi-invoice; specific invoice ref doesn't fit
             detail=(
-                f"Multi-invoice payment overpayment: +₹{round(total_credit, 2)} "
-                f"credited to {cust.name} (was ₹{cur_credit:.2f}, "
-                f"now ₹{new_credit:.2f})"
+                f"Multi-invoice payment overpayment: +Rf{round(total_credit, 2)} "
+                f"credited to {cust.name} (was Rf{cur_credit:.2f}, "
+                f"now Rf{new_credit:.2f})"
             ),
             risk="low",
             ip_address=None,
@@ -1554,8 +1554,8 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             module="sales",
             ref=None,
             detail=(
-                f"Multi-invoice credit settlement {pay_num}: −₹{round(total_amount, 2)} "
-                f"from {cust.name} (was ₹{cur_credit:.2f}, now ₹{new_credit:.2f})"
+                f"Multi-invoice credit settlement {pay_num}: −Rf{round(total_amount, 2)} "
+                f"from {cust.name} (was Rf{cur_credit:.2f}, now Rf{new_credit:.2f})"
             ),
             risk="low",
             ip_address=None,
@@ -1626,7 +1626,7 @@ async def _restock_invoice_lines(db, inv, line_items) -> int:
 # ─── Sales Returns: reverse effects (void / delete) ───────────────────────────
 async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> float:
     """Undo stock + invoice + customer-credit side-effects of a processed return.
-    Returns credit_balance revoked (₹). Caller sets status=void or deletes row."""
+    Returns credit_balance revoked (Rf). Caller sets status=void or deletes row."""
     credit_revoked = 0.0
     for rl in ret.line_items:
         if rl.batch_allocation:
@@ -3189,9 +3189,9 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db)):
     if new_credited > float(inv.total or 0) + 0.01:
         raise HTTPException(
             400,
-            f"Cannot undo void: re-activating {ret.number} (₹{round(float(ret.total or 0), 2)}) "
-            f"would push total credits (₹{new_credited}) above the invoice total "
-            f"(₹{round(float(inv.total or 0), 2)}). Another active credit note has already "
+            f"Cannot undo void: re-activating {ret.number} (Rf{round(float(ret.total or 0), 2)}) "
+            f"would push total credits (Rf{new_credited}) above the invoice total "
+            f"(Rf{round(float(inv.total or 0), 2)}). Another active credit note has already "
             f"consumed the same amount. Void that credit note first, then undo this one."
         )
 
@@ -3593,8 +3593,8 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
                 ref=ret.number,
                 detail=(
                     f"Return {ret.number} against {inv.number}: "
-                    f"+₹{credited} credited to {cust.name} "
-                    f"(was ₹{cur_credit:.2f}, now ₹{new_credit:.2f})"
+                    f"+Rf{credited} credited to {cust.name} "
+                    f"(was Rf{cur_credit:.2f}, now Rf{new_credit:.2f})"
                 ),
                 risk="low",
                 ip_address=None,

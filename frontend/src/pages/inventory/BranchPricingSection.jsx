@@ -9,12 +9,17 @@ export default function BranchPricingSection({
   mode = 'create',
   branches,
   branchConfigs,
+  initialListedIds = [],
   defaultCost,
   defaultPrice,
   defaultReorder,
+  batchTracking = false,
   onChange,
 }) {
   const isEdit = mode === 'edit'
+  const showCreateOpeningStock = !isEdit && !batchTracking
+  const showEditOpeningStock = isEdit && !batchTracking
+  const initiallyListed = new Set(initialListedIds)
   const options = retailBranches(branches)
 
   const usedBranchIds = new Set(
@@ -45,6 +50,7 @@ export default function BranchPricingSection({
   const canAddMore = branchConfigs.length < options.length
   const costPlaceholder = (v) => (v === '' || v == null ? `Default ${defaultCost || 0}` : undefined)
   const pricePlaceholder = (v) => (v === '' || v == null ? `Default ${defaultPrice || 0}` : undefined)
+  const openingStockPlaceholder = '0'
   const reorderPlaceholder = String(defaultReorder || 10)
 
   if (!options.length) return null
@@ -88,15 +94,18 @@ export default function BranchPricingSection({
             <thead>
               <tr>
                 <th>Branch</th>
-                <th className="text-right">Branch Cost (₹)</th>
-                <th className="text-right">Branch Price (₹)</th>
-                {isEdit && <th className="text-right">Reorder</th>}
+                <th className="text-right">Cost Price (MVR)</th>
+                <th className="text-right">Selling Price (MVR)</th>
+                {(showCreateOpeningStock || showEditOpeningStock) && <th className="text-right">Opening Qty</th>}
+                <th className="text-right">Reorder</th>
                 {isEdit && <th className="text-right">Stock</th>}
                 <th style={{ width: 44 }} />
               </tr>
             </thead>
             <tbody>
-              {branchConfigs.map((r) => (
+              {branchConfigs.map((r) => {
+                const canEditOpeningInEdit = isEdit && r.branch_id && !initiallyListed.has(r.branch_id)
+                return (
                 <tr key={r._rowId}>
                   <td>
                     <select
@@ -139,22 +148,46 @@ export default function BranchPricingSection({
                       onChange={(e) => patchRow(r._rowId, 'selling_price', e.target.value)}
                     />
                   </td>
-                  {isEdit && (
+                  {(showCreateOpeningStock || showEditOpeningStock) && (
                     <td className="text-right">
-                      <input
-                        className="form-input"
-                        type="number"
-                        style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
-                        disabled={!r.branch_id}
-                        placeholder={reorderPlaceholder}
-                        value={r.reorder_level ?? ''}
-                        onChange={(e) => patchRow(r._rowId, 'reorder_level', e.target.value)}
-                      />
+                      {isEdit && !canEditOpeningInEdit ? (
+                        <input
+                          className="form-input"
+                          type="number"
+                          style={{ width: 80, marginLeft: 'auto', textAlign: 'right', opacity: 0.6, cursor: 'not-allowed' }}
+                          disabled
+                          value={r.available_stock ?? 0}
+                          title="Opening Qty can be set only for newly added branches"
+                        />
+                      ) : (
+                        <input
+                          className="form-input"
+                          type="number"
+                          style={{ width: 80, marginLeft: 'auto', textAlign: 'right' }}
+                          disabled={!r.branch_id}
+                          placeholder={openingStockPlaceholder}
+                          value={r.opening_stock ?? ''}
+                          onChange={(e) => patchRow(r._rowId, 'opening_stock', e.target.value)}
+                        />
+                      )}
                     </td>
                   )}
+                  <td className="text-right">
+                    <input
+                      className="form-input"
+                      type="number"
+                      style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
+                      disabled={!r.branch_id}
+                      placeholder={reorderPlaceholder}
+                      value={r.reorder_level ?? ''}
+                      onChange={(e) => patchRow(r._rowId, 'reorder_level', e.target.value)}
+                    />
+                  </td>
                   {isEdit && (
-                    <td className="text-right mono" style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                      {r.available_stock ?? 0}
+                    <td className="text-right">
+                      <span className="mono" style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                        {r.available_stock ?? 0}
+                      </span>
                     </td>
                   )}
                   <td>
@@ -169,7 +202,8 @@ export default function BranchPricingSection({
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -177,7 +211,7 @@ export default function BranchPricingSection({
 
       {!isEdit && (
         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
-          Default reorder level: {defaultReorder || 10} (override per branch on the edit page)
+          Default reorder level: {defaultReorder || 10}. Leave branch reorder blank to use the default.
         </div>
       )}
     </div>

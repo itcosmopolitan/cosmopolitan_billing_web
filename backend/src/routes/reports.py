@@ -24,6 +24,7 @@ from src.models import (
     PurchaseLineItem,
     SaleInvoice,
     SaleLineItem,
+    StockMovement,
     StockTransfer,
     TransferLineItem,
     Vendor,
@@ -38,7 +39,8 @@ logger = logging.getLogger("cosmopolitan.reports")
 def _normalize_date_range(
     date_from: Optional[str],
     date_to: Optional[str],
-) -> tuple[str, str]:
+) -> tuple[date, date]:
+    """Return start and end as date objects for safe DB comparisons."""
     start, end = parse_date_range(
         date_from,
         date_to,
@@ -46,22 +48,22 @@ def _normalize_date_range(
         date.today(),
         MAX_REPORT_DATE_RANGE_DAYS,
     )
-    return start.isoformat(), end.isoformat()
+    return start, end
 
 
 def _sale_filters(
     branch_id: Optional[str],
     search: Optional[str],
-    date_from: Optional[str],
-    date_to: Optional[str],
+    date_from: Optional,
+    date_to: Optional,
 ):
     conds = []
     if branch_id:
         conds.append(SaleInvoice.branch_id == branch_id)
     if date_from:
-        conds.append(SaleInvoice.date >= date_from)
+        conds.append(SaleInvoice.date >= (date_from.isoformat() if hasattr(date_from, 'isoformat') else date_from))
     if date_to:
-        conds.append(SaleInvoice.date <= date_to)
+        conds.append(SaleInvoice.date <= (date_to.isoformat() if hasattr(date_to, 'isoformat') else date_to))
     if search:
         conds.append(
             SaleInvoice.number.ilike(f"%{search}%")
@@ -83,9 +85,9 @@ def _purchase_filters(
     if vendor_id:
         conds.append(PurchaseBill.vendor_id == vendor_id)
     if date_from:
-        conds.append(PurchaseBill.date >= date_from)
+        conds.append(PurchaseBill.date >= (date_from.isoformat() if hasattr(date_from, 'isoformat') else date_from))
     if date_to:
-        conds.append(PurchaseBill.date <= date_to)
+        conds.append(PurchaseBill.date <= (date_to.isoformat() if hasattr(date_to, 'isoformat') else date_to))
     if search:
         conds.append(
             PurchaseBill.number.ilike(f"%{search}%")
@@ -217,9 +219,7 @@ async def sales_summary(
         func.sum(SaleInvoice.discount).label("discount"),
         func.sum(SaleInvoice.paid_amount).label("collected"),
     )
-    q = q.where(SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat())
-    if branch_id:
-        q = q.where(SaleInvoice.branch_id == branch_id)
+    q = q.where(base)
     result = await db.execute(q)
     row = result.one()
 
@@ -291,9 +291,7 @@ async def purchase_summary(
         func.count(PurchaseBill.id).label("count"),
         func.sum(PurchaseBill.paid_amount).label("paid"),
     )
-    q = q.where(PurchaseBill.date >= start.isoformat(), PurchaseBill.date <= end.isoformat())
-    if branch_id:
-        q = q.where(PurchaseBill.branch_id == branch_id)
+    q = q.where(base)
     result = await db.execute(q)
     row = result.one()
     return {
@@ -462,21 +460,68 @@ async def daily_sales(
     lim = normalize_limit(limit)
     total_q = select(func.count()).select_from(DailySalesSummary).where(and_(*conds))
     total = int((await db.execute(total_q)).scalar() or 0)
+    # If the materialized read-model is empty (e.g. not populated on the DB),
+    # fall back to aggregating directly from `sale_invoices` so the reports
+    # still work on fresh / demo databases.
+    if total == 0:
+        date_expr = func.to_date(SaleInvoice.date, "YYYY-MM-DD")
+        si_conds = []
+        if branch_id:
+            si_conds.append(SaleInvoice.branch_id == branch_id)
+        si_conds.append(date_expr >= start)
+        si_conds.append(date_expr <= end)
+        if search:
+            si_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
 
-    result = await db.execute(
-        select(
-            DailySalesSummary.sale_date.label("date"),
-            DailySalesSummary.bill_count.label("invoice_count"),
-            DailySalesSummary.revenue.label("gross_sales"),
-            DailySalesSummary.discount.label("discounts"),
-            DailySalesSummary.collected.label("net_sales"),
+        fallback_sort_map = {
+            "date": date_expr,
+            "invoice_count": func.count(SaleInvoice.id),
+            "gross_sales": func.coalesce(func.sum(SaleInvoice.total), 0),
+            "discounts": func.coalesce(func.sum(SaleInvoice.discount), 0),
+            "tax": func.coalesce(func.sum(SaleInvoice.total), 0),
+            "net_sales": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
+        }
+        order_by_expr = resolve_sort(sort_by, sort_order, fallback_sort_map, "date", "desc")
+
+        base_q = (
+            select(
+                date_expr.label("date"),
+                func.count(SaleInvoice.id).label("invoice_count"),
+                func.coalesce(func.sum(SaleInvoice.total), 0).label("gross_sales"),
+                func.coalesce(func.sum(SaleInvoice.discount), 0).label("discounts"),
+                func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("net_sales"),
+            )
+            .where(and_(*si_conds))
+            .group_by(date_expr)
         )
-        .where(and_(*conds))
-        .order_by(order_by_expr)
-        .offset(sk)
-        .limit(lim)
-    )
-    rows = [{**dict(r._mapping), "date": r.date.isoformat() if r.date else None} for r in result.fetchall()]
+        total = int(
+            (
+                await db.execute(
+                    select(func.count(func.distinct(date_expr))).where(and_(*si_conds))
+                )
+            ).scalar()
+            or 0
+        )
+        result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
+        rows = [
+            {**dict(r._mapping), "date": r.date.isoformat() if r.date else None}
+            for r in result.fetchall()
+        ]
+    else:
+        result = await db.execute(
+            select(
+                DailySalesSummary.sale_date.label("date"),
+                DailySalesSummary.bill_count.label("invoice_count"),
+                DailySalesSummary.revenue.label("gross_sales"),
+                DailySalesSummary.discount.label("discounts"),
+                DailySalesSummary.collected.label("net_sales"),
+            )
+            .where(and_(*conds))
+            .order_by(order_by_expr)
+            .offset(sk)
+            .limit(lim)
+        )
+        rows = [{**dict(r._mapping), "date": r.date.isoformat() if r.date else None} for r in result.fetchall()]
     return paged(rows, total, sk, lim)
 
 
@@ -508,102 +553,29 @@ async def product_sales(
         "cost_value": ProductSalesSummary.revenue,
         "profit": ProductSalesSummary.profit,
     }
-    """Per-item stock roll-up from the stock_movements ledger + current item_stock."""
+
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_value", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    period_start, period_end = _parse_period(date_from, date_to)
 
-    total = int(
-        (await db.execute(select(func.count(Item.id)).where(Item.active == True))).scalar() or 0  # noqa: E712
-    )
+    total_q = select(func.count()).select_from(ProductSalesSummary).where(and_(*conds))
+    total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(
-        select(Item).where(Item.active == True).order_by(Item.name).offset(sk).limit(lim)  # noqa: E712
+        select(
+            ProductSalesSummary.item_id.label("product_code"),
+            ProductSalesSummary.product_name.label("product_name"),
+            ProductSalesSummary.category_id.label("category"),
+            ProductSalesSummary.quantity_sold.label("quantity_sold"),
+            ProductSalesSummary.revenue.label("sales_value"),
+            ProductSalesSummary.profit.label("profit"),
+        )
+        .where(and_(*conds))
+        .order_by(order_by_expr)
+        .offset(sk)
+        .limit(lim)
     )
-    items = result.scalars().all()
-    if not items:
-        return {
-            "branch_id": branch_id,
-            "period": {"from": date_from, "to": date_to},
-            **paged([], total, sk, lim),
-        }
-
-    item_ids = [i.id for i in items]
-
-    mov_q = select(StockMovement).where(StockMovement.item_id.in_(item_ids))
-    if branch_id:
-        mov_q = mov_q.where(StockMovement.branch_id == branch_id)
-    if period_start:
-        mov_q = mov_q.where(StockMovement.created_at >= period_start)
-    if period_end:
-        mov_q = mov_q.where(StockMovement.created_at <= period_end)
-    movements = (await db.execute(mov_q)).scalars().all()
-
-    agg: dict[str, dict[str, int]] = defaultdict(
-        lambda: {
-            "purchases_in": 0,
-            "sales_out": 0,
-            "transfers_in": 0,
-            "transfers_out": 0,
-            "adjustments": 0,
-            "period_delta": 0,
-        }
-    )
-    for m in movements:
-        pi, so, ti, to, adj = _bucket_movement(m.movement_type, m.source_type, int(m.delta or 0))
-        bucket = agg[m.item_id]
-        bucket["purchases_in"] += pi
-        bucket["sales_out"] += so
-        bucket["transfers_in"] += ti
-        bucket["transfers_out"] += to
-        bucket["adjustments"] += adj
-        bucket["period_delta"] += int(m.delta or 0)
-
-    stock_q = (
-        select(ItemStock.item_id, func.coalesce(func.sum(ItemStock.quantity), 0))
-        .where(ItemStock.item_id.in_(item_ids))
-        .group_by(ItemStock.item_id)
-    )
-    if branch_id:
-        stock_q = stock_q.where(ItemStock.branch_id == branch_id)
-    stock_rows = (await db.execute(stock_q)).all()
-    closing_by_item = {row[0]: int(row[1] or 0) for row in stock_rows}
-
-    rows = []
-    for item in items:
-        b = agg[item.id]
-        closing = closing_by_item.get(item.id, 0)
-        opening = closing - b["period_delta"]
-        transfers_net = b["transfers_in"] - b["transfers_out"]
-        expected = opening + b["purchases_in"] - b["sales_out"] + transfers_net
-        rows.append({
-            "item_id": item.id,
-            "item_name": item.name,
-            "sku": item.sku,
-            "opening": opening,
-            "purchases_in": b["purchases_in"],
-            "sales_out": b["sales_out"],
-            "transfers_in": b["transfers_in"],
-            "transfers_out": b["transfers_out"],
-            "transfers_net": transfers_net,
-            "adjustments": b["adjustments"],
-            "closing": closing,
-            "variance": closing - expected,
-        })
-
-    sortable = {
-        "item_name", "sku", "opening", "purchases_in", "sales_out",
-        "transfers_in", "transfers_out", "transfers_net", "adjustments",
-        "closing", "variance",
-    }
-    key = sort_by if sort_by in sortable else "item_name"
-    reverse = (sort_order or "asc").strip().lower() == "desc"
-    rows.sort(key=lambda r: r.get(key), reverse=reverse)
-
-    return {
-        "branch_id": branch_id,
-        "period": {"from": date_from, "to": date_to},
-        **paged(rows, total, sk, lim),
-    }
+    rows = [dict(r._mapping) for r in result.fetchall()]
+    return paged(rows, total, sk, lim)
 
 
 @router.get("/document-trail", dependencies=[Depends(require_perm("reports.view"))])
@@ -1109,7 +1081,7 @@ async def branch_sales(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
     sort_map = {
         "branch": SaleInvoice.branch_name,
         "invoice_count": func.count(SaleInvoice.id),
@@ -1151,7 +1123,7 @@ async def cashier_sales(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
     sort_map = {
         "cashier": SaleInvoice.cashier,
         "invoice_count": func.count(SaleInvoice.id),
@@ -1243,7 +1215,7 @@ async def vendor_purchases(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [PurchaseBill.date >= start, PurchaseBill.date <= end]
+    conds = [PurchaseBill.date >= start.isoformat(), PurchaseBill.date <= end.isoformat()]
     if branch_id:
         conds.append(PurchaseBill.branch_id == branch_id)
     if search:
@@ -1291,7 +1263,7 @@ async def product_purchases(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [PurchaseBill.date >= start, PurchaseBill.date <= end]
+    conds = [PurchaseBill.date >= start.isoformat(), PurchaseBill.date <= end.isoformat()]
     if branch_id:
         conds.append(PurchaseBill.branch_id == branch_id)
     if search:
@@ -1481,9 +1453,9 @@ async def stock_transfers(
     if search:
         conds.append(TransferLineItem.item_name.ilike(f"%{search}%"))
     if start:
-        conds.append(StockTransfer.request_date >= start)
+        conds.append(StockTransfer.request_date >= start.isoformat())
     if end:
-        conds.append(StockTransfer.request_date <= end)
+        conds.append(StockTransfer.request_date <= end.isoformat())
 
     sort_map = {
         "transfer_number": StockTransfer.ref_number,
@@ -1529,7 +1501,7 @@ async def daily_tax(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
     if branch_id:
         conds.append(SaleInvoice.branch_id == branch_id)
     if search:
@@ -1575,7 +1547,7 @@ async def monthly_tax(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     month_expr = func.substr(SaleInvoice.date, 1, 7)
-    conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
     if branch_id:
         conds.append(SaleInvoice.branch_id == branch_id)
     if search:
@@ -1621,7 +1593,7 @@ async def quarterly_tax(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     period_expr = func.substr(SaleInvoice.date, 1, 7)
-    conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
     if branch_id:
         conds.append(SaleInvoice.branch_id == branch_id)
     if search:
@@ -1666,7 +1638,7 @@ async def gst_summary(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
     if branch_id:
         conds.append(SaleInvoice.branch_id == branch_id)
 
@@ -1706,8 +1678,8 @@ async def outstanding_receivables(
             SaleInvoice.number.ilike(f"%{search}%")
             | SaleInvoice.customer_name.ilike(f"%{search}%")
         )
-    conds.append(SaleInvoice.date >= start)
-    conds.append(SaleInvoice.date <= end)
+    conds.append(SaleInvoice.date >= start.isoformat())
+    conds.append(SaleInvoice.date <= end.isoformat())
     sort_map = {
         "customer": SaleInvoice.customer_name,
         "invoice_number": SaleInvoice.number,
@@ -1759,8 +1731,8 @@ async def outstanding_payables(
             PurchaseBill.number.ilike(f"%{search}%")
             | PurchaseBill.vendor_name.ilike(f"%{search}%")
         )
-    conds.append(PurchaseBill.date >= start)
-    conds.append(PurchaseBill.date <= end)
+    conds.append(PurchaseBill.date >= start.isoformat())
+    conds.append(PurchaseBill.date <= end.isoformat())
     sort_map = {
         "vendor": PurchaseBill.vendor_name,
         "bill_number": PurchaseBill.number,
@@ -1804,7 +1776,7 @@ async def petty_cash(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [CashEntry.date >= start, CashEntry.date <= end]
+    conds = [CashEntry.date >= start.isoformat(), CashEntry.date <= end.isoformat()]
     if branch_id:
         conds.append(CashEntry.branch_id == branch_id)
     if search:
@@ -2045,7 +2017,7 @@ async def branch_comparison(
             func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax"),
             func.coalesce(func.sum(SaleInvoice.discount), 0).label("discount"),
         )
-        .where(SaleInvoice.date >= start, SaleInvoice.date <= end)
+        .where(SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat())
         .group_by(SaleInvoice.branch_name)
         .order_by(SaleInvoice.branch_name)
     )
@@ -2060,7 +2032,7 @@ async def margin_analysis(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    sale_conds = [SaleInvoice.date >= start, SaleInvoice.date <= end]
+    sale_conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
 
     sales_q = (
         select(

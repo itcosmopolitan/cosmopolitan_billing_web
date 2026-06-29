@@ -5,7 +5,7 @@ import { itemsAPI, taxRatesAPI, dashAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fetchAllList } from '@/utils/pagination'
-import { SectionHeader, Card } from '@/components/ui'
+import { Card, FormGroup, Modal } from '@/components/ui'
 import ItemFormFields from './ItemFormFields'
 import {
   EMPTY_ITEM,
@@ -19,6 +19,32 @@ import {
 
 const SIDEBAR_W = 244
 const SIDEBAR_W_COLLAPSED = 68
+const DEFAULT_UNIT_OPTIONS = ['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Pack', 'Box', 'Dozen']
+
+function uniqueUnits(rows = [], current = '') {
+  const seen = new Set()
+  const out = []
+  for (const unit of [...DEFAULT_UNIT_OPTIONS, ...rows.map((row) => row.unit), current]) {
+    const value = typeof unit === 'string' ? unit.trim() : ''
+    const key = value.toLowerCase()
+    if (!value || seen.has(key)) continue
+    seen.add(key)
+    out.push(value)
+  }
+  return out
+}
+
+function uniqueCategories(rows = [], extras = []) {
+  const seen = new Set()
+  const out = []
+  for (const row of [...rows, ...extras]) {
+    if (!row?.id) continue
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    out.push(row)
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name))
+}
 
 export default function ItemFormPage({ mode = 'create' }) {
   const { itemId } = useParams()
@@ -36,9 +62,15 @@ export default function ItemFormPage({ mode = 'create' }) {
   const [initialListedIds, setInitialListedIds] = useState([])
   const [editWasTracked, setEditWasTracked] = useState(false)
   const [categories, setCategories] = useState([])
+  const [unitOptions, setUnitOptions] = useState(DEFAULT_UNIT_OPTIONS)
   const [taxRates, setTaxRates] = useState([])
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
+  const [showAddCategory, setShowAddCategory] = useState(false)
+  const [showAddUnit, setShowAddUnit] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [newUnitName, setNewUnitName] = useState('')
+  const [addingCategory, setAddingCategory] = useState(false)
 
   const patchForm = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -62,18 +94,12 @@ export default function ItemFormPage({ mode = 'create' }) {
     ;(async () => {
       try {
         setLoading(true)
-        const [items, branchData] = await Promise.all([
-          fetchAllList(itemsAPI.list, { master_mode: true, branch_id: defaultBranchId }),
+        const [item, branchData, apiCategories] = await Promise.all([
+          itemsAPI.get(itemId),
           itemsAPI.getBranches(itemId),
+          itemsAPI.categories.list(),
         ])
         if (cancelled) return
-
-        const item = items.find((i) => i.id === itemId)
-        if (!item) {
-          toast.error('Item not found')
-          navigate('/item-master', { replace: true })
-          return
-        }
 
         setForm(formFromItem(item))
         setEditWasTracked(Boolean(item.batch_tracking))
@@ -83,12 +109,10 @@ export default function ItemFormPage({ mode = 'create' }) {
         const ids = listed.map((b) => b.branch_id)
         setBranchConfigs(rows)
         setInitialListedIds(ids)
-
-        const uniqueCats = [...new Set(items.map((i) => i.categoryId).filter(Boolean))]
-        setCategories(uniqueCats.map((catId) => ({
-          id: catId,
-          name: items.find((i) => i.categoryId === catId)?.categoryName || catId,
-        })))
+        setUnitOptions(uniqueUnits([item], item.unit || 'Pcs'))
+        setCategories(uniqueCategories(apiCategories || [], item.categoryId
+          ? [{ id: item.categoryId, name: item.categoryName || item.categoryId }]
+          : []))
       } catch (err) {
         console.error('Failed to load item:', err)
         toast.error('Failed to load item')
@@ -102,22 +126,76 @@ export default function ItemFormPage({ mode = 'create' }) {
 
   useEffect(() => {
     if (isEdit) return
-    fetchAllList(itemsAPI.list, { master_mode: true, branch_id: defaultBranchId })
-      .then((data) => {
-        if (!data?.length) {
-          setCategories([])
-          return
-        }
-        const uniqueCats = [...new Set(data.map((item) => item.categoryId))]
-        setCategories(uniqueCats.map((catId) => ({
-          id: catId,
-          name: data.find((item) => item.categoryId === catId)?.categoryName || catId,
-        })))
+    Promise.all([
+      fetchAllList(itemsAPI.list, { master_mode: true, branch_id: defaultBranchId }),
+      itemsAPI.categories.list(),
+    ])
+      .then(([data, apiCategories]) => {
+        setUnitOptions(uniqueUnits(data || [], form.unit || 'Pcs'))
+        setCategories(uniqueCategories(apiCategories || []))
       })
-      .catch((err) => console.error('Failed to load categories:', err))
+      .catch((err) => console.error('Failed to load item metadata:', err))
   }, [defaultBranchId, isEdit])
 
+  const openAddCategory = () => {
+    setNewCategoryName('')
+    setShowAddCategory(true)
+  }
+
+  const openAddUnit = () => {
+    setNewUnitName('')
+    setShowAddUnit(true)
+  }
+
+  const submitNewCategory = async () => {
+    const name = newCategoryName.trim()
+    if (!name) {
+      toast.error('Category name is required')
+      return
+    }
+    const existing = categories.find((row) => row.name.trim().toLowerCase() === name.toLowerCase())
+    if (existing) {
+      patchForm('categoryId', existing.id)
+      setShowAddCategory(false)
+      return
+    }
+
+    try {
+      setAddingCategory(true)
+      const created = await itemsAPI.categories.create({ name })
+      const next = { id: created.id, name: created.name || name }
+      setCategories((prev) => uniqueCategories(prev, [next]))
+      patchForm('categoryId', next.id)
+      setShowAddCategory(false)
+      toast.success('Category added')
+    } catch (err) {
+      console.error('Failed to create category:', err)
+      toast.error(err?.response?.data?.detail || 'Failed to create category')
+    } finally {
+      setAddingCategory(false)
+    }
+  }
+
+  const submitNewUnit = () => {
+    const name = newUnitName.trim()
+    if (!name) {
+      toast.error('Unit name is required')
+      return
+    }
+    const existing = unitOptions.find((row) => row.trim().toLowerCase() === name.toLowerCase())
+    const next = existing || name
+    setUnitOptions((prev) => uniqueUnits(prev.map((unit) => ({ unit })), next))
+    patchForm('unit', next)
+    setShowAddUnit(false)
+  }
+
   const goBack = () => navigate('/item-master')
+
+  const summaryCards = [
+    { label: 'Branches', value: branchConfigs.filter((bc) => bc.branch_id).length },
+    { label: 'Tracked', value: form.batch_tracking ? 'Yes' : 'No' },
+    { label: 'Reorder', value: form.reorder_level || 0 },
+  ]
 
   const saveItem = async () => {
     const validation = validateItemForm(form, branchConfigs)
@@ -166,29 +244,95 @@ export default function ItemFormPage({ mode = 'create' }) {
 
   return (
     <>
-      <div className="page-container page-container--with-footer">
-        <SectionHeader
-          title={isEdit ? 'Edit Item' : 'New Item'}
-          subtitle={isEdit
-            ? 'Update catalog defaults and branch listing, pricing, and reorder levels'
-            : 'Add a product to the central catalog — set defaults and which branches sell it'}
-        />
+      <div className="page-container page-container--with-footer transfer-page-shell">
+        <div className="transfer-hero">
+          <div className="transfer-hero__copy">
+            <div className="transfer-hero__eyebrow">Inventory master</div>
+            <h1>{isEdit ? 'Edit Item' : 'New Item'}</h1>
+            <p>
+              {isEdit
+                ? 'Update catalog defaults, branch pricing, and reorder logic in one place.'
+                : 'Add a product to the central catalog with branch listing and inventory settings.'}
+            </p>
+          </div>
+          <div className="transfer-hero__stats">
+            {summaryCards.map((card) => (
+              <div className="transfer-stat" key={card.label}>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <Card title="Product details">
           <ItemFormFields
             form={form}
             patchForm={patchForm}
             categories={categories}
+            unitOptions={unitOptions}
             taxRates={taxRates}
             editing={isEdit}
             editWasTracked={editWasTracked}
             branches={branches}
             branchConfigs={branchConfigs}
+            initialListedIds={initialListedIds}
             onBranchConfigsChange={setBranchConfigs}
             branchSectionMode={isEdit ? 'edit' : 'create'}
+            onAddCategory={openAddCategory}
+            onAddUnit={openAddUnit}
+            categoryActionBusy={addingCategory}
           />
         </Card>
       </div>
+
+      <Modal
+        open={showAddCategory}
+        onClose={() => !addingCategory && setShowAddCategory(false)}
+        title="Add Category"
+        icon="🏷️"
+        size="sm"
+        footer={(
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowAddCategory(false)} disabled={addingCategory}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitNewCategory} disabled={addingCategory}>
+              {addingCategory ? 'Adding…' : 'Add Category'}
+            </button>
+          </>
+        )}
+      >
+        <FormGroup label="Category name" required>
+          <input
+            className="form-input"
+            value={newCategoryName}
+            onChange={(e) => setNewCategoryName(e.target.value)}
+            placeholder="e.g. Spices"
+          />
+        </FormGroup>
+      </Modal>
+
+      <Modal
+        open={showAddUnit}
+        onClose={() => setShowAddUnit(false)}
+        title="Add Unit"
+        icon="📏"
+        size="sm"
+        footer={(
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowAddUnit(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitNewUnit}>Add Unit</button>
+          </>
+        )}
+      >
+        <FormGroup label="Unit name" required>
+          <input
+            className="form-input"
+            value={newUnitName}
+            onChange={(e) => setNewUnitName(e.target.value)}
+            placeholder="e.g. Tray"
+          />
+        </FormGroup>
+      </Modal>
 
       <div className="page-footer-bar" style={{ left: footerLeft }}>
         <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>

@@ -76,8 +76,13 @@ export default function Dashboard() {
   const trendTotal = salesTrend.reduce((s, d) => s + (d.sales || 0), 0)
   const trendAvg   = salesTrend.length ? trendTotal / salesTrend.length : 0
   const trendPeak  = salesTrend.reduce((m, d) => Math.max(m, d.sales || 0), 0)
-  // Display fmt helpers for the trend footer (in lakhs / thousands).
-  const fmtLakh = (n) => n >= 100000 ? `₹${(n / 100000).toFixed(2)}L` : fmt(Math.round(n))
+  const fmtCompact = (n) => {
+    const abs = Math.abs(Number(n) || 0)
+      if (abs >= 1000000000) return `MVR ${(abs / 1000000000).toFixed(2)}B`
+      if (abs >= 1000000) return `MVR ${(abs / 1000000).toFixed(2)}M`
+      if (abs >= 1000) return `MVR ${(abs / 1000).toFixed(2)}K`
+      return fmt(Math.round(abs))
+  }
 
   return (
     <div className="page-container">
@@ -134,7 +139,7 @@ export default function Dashboard() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${(v/1000).toFixed(0)}K`} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `MVR ${(v/1000).toFixed(0)}K`} />
               <Tooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-muted)' }} />
               <Area type="monotone" dataKey="sales" name="Sales" stroke="#6366f1" strokeWidth={2.5} fill="url(#gSales)" dot={false} />
@@ -142,9 +147,9 @@ export default function Dashboard() {
             </AreaChart>
           </ResponsiveContainer>
           <div style={{ display: 'flex', gap: 20, marginTop: 8, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total ({trendPeriod})</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtLakh(trendTotal)}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg/Day</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtLakh(trendAvg)}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Peak</div><div style={{ fontSize: 17, fontWeight: 600, color: 'var(--green)' }}>{fmtLakh(trendPeak)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total ({trendPeriod})</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendTotal)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg/Day</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendAvg)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Peak</div><div style={{ fontSize: 17, fontWeight: 600, color: 'var(--green)' }}>{fmtCompact(trendPeak)}</div></div>
           </div>
         </Card>
 
