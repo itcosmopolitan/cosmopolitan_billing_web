@@ -972,35 +972,6 @@ export default function POSPage() {
               Open screen ↗
             </a>
           </div>
-          <a
-            href={`/customer-view/${encodeURIComponent(displayCode)}`}
-            target="_blank"
-            rel="noreferrer"
-            className="btn btn-ghost btn-sm"
-            title="Open customer screen with this terminal's code"
-            style={{ padding: '4px 10px', fontSize: 11.5 }}
-          >
-            Customer screen ↗
-          </a>
-          <select className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }} value={customer?.id || ''} onChange={(e) => { const c = customers.find((x) => x.id === e.target.value); store.setCustomer(c || null) }}>
-            <option value="">Walk-in Customer</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          {/* 2026-05-25: surface available credit when a customer is
-              picked. Single source of truth — the credit option in the
-              method dropdown also shows the same number, but the chip is
-              always visible regardless of payment-received state. */}
-          {customer?.id && Number(customer.credit_balance || 0) > 0 && (
-            <span style={{
-              fontSize: 11, padding: '3px 8px',
-              borderRadius: 10, background: 'rgba(46,184,92,0.12)',
-              color: 'var(--green)', fontWeight: 600,
-              whiteSpace: 'nowrap',
-            }} title="Available customer credit (overpayments + refunded returns)">
-              💰 MVR {Number(customer.credit_balance || 0).toFixed(2)} credit
-            </span>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={() => store.clearCart()} style={{ padding: '4px 8px', color: 'var(--text-muted)' }}>✕</button>
         </div>
 
         {/* Cart items */}
@@ -1171,24 +1142,6 @@ export default function POSPage() {
                         lineHeight: 1.45,
                       }}
                     >
-                      🏦 Customer Credit (MVR {Number(customer.credit_balance || 0).toFixed(2)} available)
-                      {Number(customer.credit_balance || 0) < total ? ' — insufficient' : ''}
-                    </option>
-                  )}
-                </select>
-                {/* Inline warning when operator picked credit but it's
-                    short of the cart total. We block the sale at submit
-                    time too — this is just early feedback. */}
-                {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
-                  <div style={{
-                    marginTop: 6, padding: '8px 10px',
-                    border: '1px solid var(--amber)', borderRadius: 6,
-                    background: 'rgba(245,166,35,0.08)',
-                    fontSize: 11.5, color: 'var(--amber)', lineHeight: 1.5,
-                  }}>
-                    ⚠ Available credit (MVR {Number(customer.credit_balance || 0).toFixed(2)}) is
-                    less than the cart total (MVR {Number(total).toFixed(2)}). Pick a different
-                    method or reduce the cart. Split-payment with credit isn&apos;t supported.
                       Credit short by ₹{(total - Number(customer.credit_balance || 0)).toFixed(2)} — pick another method.
                     </div>
                   )}
