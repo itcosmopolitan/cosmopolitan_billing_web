@@ -1379,10 +1379,14 @@ class AuditLog(Base):
     user_name  = Column(String)
     user_role  = Column(String, nullable=False, default="unknown")
     module     = Column(String)
+    reference_id = Column(String)
     ref        = Column(String)
     detail     = Column(Text)
-    risk       = Column(String, default="low")  # low | medium | high
+    risk       = Column(String, default="LOW")  # LOW | MEDIUM | HIGH
     ip_address = Column(String)
+    device_info = Column(String)
+    branch_id  = Column(String)
+    metadata_  = Column("metadata", JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

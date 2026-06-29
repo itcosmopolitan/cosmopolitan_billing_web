@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import and_, asc, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -62,8 +62,40 @@ from src.routes._atomic import (
 from src.permissions import ITEM_CATALOG_READ
 from src.routes._approval import can_direct_commit
 from src.security import current_user, require_perm
+from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+
+
+async def _write_post_commit_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    reference_id: str,
+    detail: str,
+    user: Optional[User],
+    request: Request,
+    branch_id: Optional[str],
+    metadata: Optional[dict] = None,
+) -> None:
+    role = "unknown"
+    if user is not None:
+        role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action=action,
+        module="Inventory",
+        reference_id=reference_id,
+        detail=detail,
+        user_id=user.id if user is not None else "system",
+        user_name=user.name if user is not None else "System",
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
 
 
 def _log_item_history(
@@ -77,6 +109,10 @@ def _log_item_history(
     metadata: Optional[dict] = None,
     risk: str = "low",
 ) -> None:
+    role = "unknown"
+    if user is not None:
+        role = user.role.value if hasattr(user.role, "value") else str(user.role)
+
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         record_type="item",
@@ -86,7 +122,9 @@ def _log_item_history(
         action=action,
         user_id=user.id if user is not None else None,
         user_name=user.name if user is not None else None,
+        user_role=role,
         module="inventory",
+        reference_id=item.sku or item.name,
         ref=item.sku or item.name,
         detail=detail,
         risk=risk,
@@ -842,6 +880,7 @@ async def _validate_category_id(category_id: Optional[str], db: AsyncSession) ->
 @router.post("/", dependencies=[Depends(require_perm("item_master.create"))])
 async def create_item(
     data: ItemCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -939,17 +978,18 @@ async def create_item(
                 expiry_date=data.opening_expiry_date,
             )
 
-    _log_item_history(
-        db,
-        user=user,
-        item=item,
-        event_type="item_created",
-        action="Item Created",
-        detail=f"Created item {item.name} ({item.sku})",
-        metadata={"sku": item.sku, "name": item.name},
-    )
     await db.commit()
     status = item.approval_status.value if hasattr(item.approval_status, "value") else "approved"
+    await _write_post_commit_audit(
+        db,
+        action="New Item Added",
+        reference_id=item.sku or item.id,
+        detail=f"Created item {item.name} ({item.sku})",
+        user=user,
+        request=request,
+        branch_id=data.branch_id,
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
+    )
     return {
         "id": item.id,
         "message": "Item created" if direct else "Item submitted for approval",
@@ -1056,6 +1096,17 @@ async def update_item(
     await _validate_category_id(data.category_id, db)
 
     was_tracked = bool(item.batch_tracking)
+    before = {
+        "name": item.name,
+        "sku": item.sku,
+        "barcode": item.barcode,
+        "cost_price": item.cost_price,
+        "selling_price": item.selling_price,
+        "tax_rate": item.tax_rate,
+        "reorder_level": item.reorder_level,
+        "batch_tracking": item.batch_tracking,
+        "expiry_tracking": item.expiry_tracking,
+    }
     item.name = data.name
     item.sku = data.sku or item.sku
     item.barcode = data.barcode
@@ -1084,7 +1135,18 @@ async def update_item(
         event_type="item_updated",
         action="Item Updated",
         detail=f"Updated item {item.name} ({item.sku})",
-        metadata={"sku": item.sku, "name": item.name},
+        metadata={
+            "sku": item.sku,
+            "name": item.name,
+            "updated_fields": [
+                key for key in before.keys() if before.get(key) != getattr(item, key)
+            ],
+            "changes": {
+                key: {"before": before.get(key), "after": getattr(item, key)}
+                for key in before.keys()
+                if before.get(key) != getattr(item, key)
+            },
+        },
     )
 
     await db.commit()
@@ -1188,14 +1250,36 @@ async def update_item_branches(
         raise HTTPException(404, "Item not found")
 
     branch_ids = set((await db.execute(select(Branch.id))).scalars().all())
-    
+    any_branch_change = False
     total_batches_deleted = 0
     total_stock_deleted = 0
     removed_branches_info = []
-
     for bc in data.branches:
         if bc.branch_id not in branch_ids:
             raise HTTPException(400, f"Unknown branch: {bc.branch_id}")
+
+        existing_cfg = (
+            await db.execute(
+                select(ItemBranchConfig).where(
+                    ItemBranchConfig.item_id == item_id,
+                    ItemBranchConfig.branch_id == bc.branch_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        prev_is_available = bool(existing_cfg.is_available) if existing_cfg else False
+        prev_cost = existing_cfg.cost_price if existing_cfg else None
+        prev_sell = existing_cfg.selling_price if existing_cfg else None
+        prev_reorder = existing_cfg.reorder_level if existing_cfg else None
+
+        branch_changed = (
+            existing_cfg is None
+            or prev_is_available != bool(bc.is_available)
+            or prev_cost != bc.cost_price
+            or prev_sell != bc.selling_price
+            or prev_reorder != bc.reorder_level
+        )
+
         await _upsert_branch_config(
             db,
             item_id=item_id,
@@ -1208,6 +1292,7 @@ async def update_item_branches(
         if bc.is_available:
             await _ensure_stock_row(db, item_id=item_id, branch_id=bc.branch_id)
         if bc.is_available and int(bc.opening_stock or 0) > 0:
+            branch_changed = True
             branch_cost = effective_cost_price(item.cost_price, bc.cost_price)
             await _seed_opening_stock(
                 db,
@@ -1244,6 +1329,7 @@ async def update_item_branches(
             total_stock_deleted += stock_deleted
             
             if batches_deleted > 0 or stock_deleted > 0:
+                branch_changed = True
                 # Get branch name for logging
                 branch_res = await db.execute(select(Branch.name).where(Branch.id == bc.branch_id))
                 branch_name = branch_res.scalar_one_or_none() or bc.branch_id
@@ -1273,20 +1359,23 @@ async def update_item_branches(
                     risk="medium",
                 )
 
-    item_ref = item.name if item else item_id
-    _log_item_history(
-        db,
-        user=user,
-        item=item,
-        event_type="item_branch_config_updated",
-        action="Item Branch Config Updated",
-        detail=f"Updated branch configuration for item {item.name} ({item.sku})",
-        metadata={
-            "branch_count": len(data.branches),
-            "sku": item.sku,
-            "name": item.name,
-        },
-    )
+        if branch_changed:
+            any_branch_change = True
+
+    if any_branch_change:
+        _log_item_history(
+            db,
+            user=user,
+            item=item,
+            event_type="item_branch_config_updated",
+            action="Item Branch Config Updated",
+            detail=f"Updated branch configuration for item {item.name} ({item.sku})",
+            metadata={
+                "branch_count": len(data.branches),
+                "sku": item.sku,
+                "name": item.name,
+            },
+        )
     await db.commit()
     response = {"message": "Branch configuration updated"}
     if total_batches_deleted > 0 or total_stock_deleted > 0:
@@ -1312,6 +1401,26 @@ async def patch_item(
     was_tracked = bool(item.batch_tracking)
     updates = data.model_dump(exclude_unset=True)
     branch_id = updates.pop("branch_id", None)
+    before = {
+        key: getattr(item, key)
+        for key in [
+            "name",
+            "sku",
+            "barcode",
+            "cost_price",
+            "selling_price",
+            "tax_rate",
+            "reorder_level",
+            "batch_tracking",
+            "expiry_tracking",
+            "active",
+            "category_id",
+            "brand",
+            "unit",
+            "hsn_code",
+        ]
+        if hasattr(item, key)
+    }
     toggle_meta = None
     if "active" in updates and updates["active"] is False:
         blockers = await _item_inventory_blockers(db, item_id, branch_id=branch_id)
@@ -1333,6 +1442,12 @@ async def patch_item(
     for k, v in updates.items():
         setattr(item, k, v)
 
+    changes = {
+        key: {"before": before.get(key), "after": getattr(item, key)}
+        for key in updates.keys()
+        if before.get(key) != getattr(item, key)
+    }
+
     _log_item_history(
         db,
         user=user,
@@ -1340,7 +1455,12 @@ async def patch_item(
         event_type="item_updated",
         action="Item Updated",
         detail=f"Updated item {item.name} ({item.sku})",
-        metadata={"updated_fields": list(updates.keys()), "sku": item.sku, "name": item.name},
+        metadata={
+            "updated_fields": list(updates.keys()),
+            "changes": changes,
+            "sku": item.sku,
+            "name": item.name,
+        },
     )
     await db.commit()
     out: dict = {"message": "Updated"}

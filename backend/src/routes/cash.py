@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +17,38 @@ from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
 from src.permissions import CASH_CATEGORIES_READ
 from src.security import enforce_branch_access, current_user, require_perm
+from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+
+
+async def _write_post_commit_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    reference_id: str,
+    detail: str,
+    user: User,
+    request: Request,
+    branch_id: Optional[str],
+    metadata: Optional[dict] = None,
+) -> None:
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action=action,
+        module="Cash",
+        reference_id=reference_id,
+        detail=detail,
+        user_id=user.id,
+        user_name=user.name,
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
 
 # ─── Pydantic schemas ─────────────────────────────────────────────────────────
 
@@ -321,6 +351,7 @@ async def get_entries(
 @router.post("/{branch_id}/entries", status_code=201, dependencies=[Depends(require_perm("cash.entry"))])
 async def add_entry(
     data: CashEntryCreate,
+    request: Request,
     branch_id: str = Depends(enforce_branch_access),
     current_user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
@@ -351,6 +382,22 @@ async def add_entry(
     )
     db.add(entry)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Cash Entry",
+        reference_id=entry.entry_number or entry.id,
+        detail=f"Recorded {entry.type} cash entry for ₹{round(float(entry.amount), 2)} ({entry.category})",
+        user=current_user,
+        request=request,
+        branch_id=branch_id,
+        metadata={
+            "entry_id": entry.id,
+            "entry_type": entry.type,
+            "category": entry.category,
+            "amount": round(float(entry.amount), 2),
+            "date": entry.date,
+        },
+    )
     return serialize_cash_entry(entry)
 
 

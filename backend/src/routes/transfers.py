@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from src.routes._serializers import get_user_branch_ids, serialize_transfer
 from src.routes._approval import can_direct_commit
 from src.permissions import TRANSFER_DOCUMENT_READ
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
 
@@ -268,6 +269,35 @@ def _log_transfer_history(
     ))
 
 
+async def _write_post_commit_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    reference_id: str,
+    detail: str,
+    user: User,
+    request: Request,
+    branch_id: Optional[str],
+    metadata: Optional[dict] = None,
+) -> None:
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action=action,
+        module="Inventory",
+        reference_id=reference_id,
+        detail=detail,
+        user_id=user.id,
+        user_name=user.name,
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
+
+
 def _summarize_transfer_item_changes(old_lines: list[TransferLineItem], new_items: list[TransferLine]) -> list[dict]:
     old_by_key: dict[tuple[str, str], list[TransferLineItem]] = {}
     for line in old_lines or []:
@@ -484,6 +514,7 @@ async def update_transfer(
 async def approve_transfer(
     transfer_id: str,
     body: TransferApprove,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -498,7 +529,12 @@ async def approve_transfer(
         raise HTTPException(403, "You cannot approve your own transfer request")
 
     result = await _dispatch_transfer(
-        db, t, transfer_id, user=user, approved_by=body.approved_by or user.name,
+        db,
+        t,
+        transfer_id,
+        user=user,
+        approved_by=body.approved_by or user.name,
+        request=request,
     )
     await db.commit()
     return result
@@ -511,6 +547,7 @@ async def _dispatch_transfer(
     *,
     user: User,
     approved_by: str,
+    request: Request,
 ) -> dict:
     """Approve & dispatch a transfer — consume source stock and mark in transit."""
     import json
@@ -622,7 +659,26 @@ async def _dispatch_transfer(
         action="Transfer dispatched",
         detail=f"Transfer approved and dispatched by {approved_by}",
     )
+    qty_total = int((await db.execute(select(func.coalesce(func.sum(TransferLineItem.qty), 0)).where(TransferLineItem.transfer_id == transfer_id))).scalar() or 0)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Stock Transfer Approved",
+        reference_id=t.ref_number,
+        detail=f"Transfer approved and dispatched by {approved_by}",
+        user=user,
+        request=request,
+        branch_id=t.from_branch_id,
+        metadata={
+            "transfer_id": transfer_id,
+            "from_branch_id": t.from_branch_id,
+            "to_branch_id": t.to_branch_id,
+            "qty_total": qty_total,
+            "stock_value": 0,
+            "approver_id": user.id,
+            "requester_id": None,
+        },
+    )
     return {"status": "transit", "ref_number": t.ref_number, "approved_by": approved_by}
 
 

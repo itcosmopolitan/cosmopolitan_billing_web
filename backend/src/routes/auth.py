@@ -12,14 +12,17 @@ import logging
 import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src import config
 from src.database import get_db
 from src.email_utils import send_temp_password_email
-from src.models import User
+from src.models import AuditLog, User
 from src.security import (
     create_access_token,
     hash_password_async,
@@ -27,6 +30,7 @@ from src.security import (
     user_with_permissions,
     verify_password_async,
 )
+from src.services.audit_service import build_audit_entry
 
 try:
     import resend
@@ -67,15 +71,8 @@ def _get_settings():
         return config.load()
 
 
-def _get_settings():
-    try:
-        return config.get()
-    except RuntimeError:
-        return config.load()
-
-
 @router.post("/login")
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Verify credentials against `users.hashed_password` (bcrypt) and return
     a real JWT plus the serialized user with their expanded permissions."""
     user = (
@@ -93,6 +90,23 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     user.last_login = datetime.utcnow()
     await db.commit()
     await db.refresh(user)
+
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action="User Login",
+        module="Auth",
+        reference_id=user.id,
+        detail=f"Successful login for {user.email}",
+        user_id=user.id,
+        user_name=user.name,
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=user.branch_id,
+        metadata={"email": user.email, "login_anomaly": False},
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
 
     return {
         "token": create_access_token(user.id),
