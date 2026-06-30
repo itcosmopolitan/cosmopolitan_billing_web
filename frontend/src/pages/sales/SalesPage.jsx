@@ -588,7 +588,7 @@ export default function SalesPage() {
     } catch (err) {
       console.error('Failed to record payment:', err)
       // Toast already fired by the global axios interceptor with the
-      // server's detail (e.g. "Walk-in invoice — reduce amount to RfX" or
+      // server's detail (e.g. "Walk-in invoice — reduce amount to MVRX" or
       // "Invoice already settled"). Don't double-toast here.
     } finally {
       setPaySaving(false)

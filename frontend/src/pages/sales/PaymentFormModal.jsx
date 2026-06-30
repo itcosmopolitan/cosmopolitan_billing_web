@@ -9,7 +9,7 @@
  *   3. Operator checks 1+ invoices. Each checked row exposes an
  *      "Apply Amount" input pre-filled to that invoice's balance.
  *   4. If any Apply Amount exceeds the row's balance, an amber inline
- *      warning shows ("Excess RfX will be credited to customer"); the
+ *      warning shows ("Excess MVRX will be credited to customer"); the
  *      excess accumulates into Payment.credit_applied on submit.
  *   5. Pick payment method + reference + notes → submit.
  *      - Method "credit" (2026-05-30) settles the selected invoices FROM

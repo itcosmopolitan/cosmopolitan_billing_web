@@ -503,7 +503,7 @@ async def close_day(
     if abs(variance) > threshold and not (data.variance_reason or "").strip():
         raise HTTPException(
             400,
-            f"Variance of Rf{abs(variance):.2f} exceeds threshold Rf{threshold:.2f}. Please provide a variance_reason."
+            f"Variance of MVR{abs(variance):.2f} exceeds threshold MVR{threshold:.2f}. Please provide a variance_reason."
         )
     if existing:
         # Re-closing an unlocked day — update in place
@@ -551,7 +551,7 @@ async def close_day(
     await db.commit()
     return {
         **serialize_cash_day_close(close),
-        "message": f"Day closed. Opening balance for next day: Rf{data.physical_count:,.2f}",
+        "message": f"Day closed. Opening balance for next day: MVR{data.physical_count:,.2f}",
     }
 
 

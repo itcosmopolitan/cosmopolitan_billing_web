@@ -543,8 +543,8 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
   }, [load, refreshKey])
 
   const sampleItems = [
-    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'Rf270.00', total: 'Rf270.00' },
-    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', disc: '5', qty: '2', price: 'Rf17.80', total: 'Rf35.60' },
+    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'MVR270.00', total: 'MVR270.00' },
+    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', disc: '5', qty: '2', price: 'MVR17.80', total: 'MVR35.60' },
   ]
 
   const currentConfig = useMemo(() => ({
@@ -724,17 +724,17 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
             <div>Subtotal</div>
-            <div>Rf305.60</div>
+            <div>MVR305.60</div>
           </div>
           {taxMode === 'itemized' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
               <div>Tax (18%)</div>
-              <div>Rf27.50</div>
+              <div>MVR27.50</div>
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontWeight: 700, fontSize: 11, marginBottom: 2 }}>
             <div>TOTAL</div>
-            <div>Rf333.10</div>
+            <div>MVR333.10</div>
           </div>
 
           {showPayment && (
