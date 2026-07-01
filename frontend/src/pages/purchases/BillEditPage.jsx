@@ -35,8 +35,8 @@ export default function BillEditPage() {
         const bill = await purchasesAPI.get(billId)
         if (cancelled) return
         const status = bill.status
-        if (status === 'paid' || status === 'cancelled') {
-          toast.error(`Cannot edit a ${status} bill`)
+        if (status === 'paid' || status === 'cancelled' || (bill.paidAmount || 0) > 0) {
+          toast.error(`Cannot edit this bill`)
           navigate('/purchases?tab=bills', { replace: true })
           return
         }
@@ -99,7 +99,7 @@ export default function BillEditPage() {
 
   return (
     <DocumentFormShell
-      title="Edit Bill"
+      title={`Edit Bill — ${form.number || billId}`}
       subtitle="Bills"
       icon="📋"
       onBack={() => navigate('/purchases?tab=bills')}

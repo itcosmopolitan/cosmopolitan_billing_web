@@ -572,7 +572,7 @@ export default function SalesPage() {
     try {
       const res = await salesAPI.payment(showPayment.id, { amount, mode: payMode, ref: payRef })
       setSalesListVersion((v) => v + 1)
-      await loadBranches()
+      setPayListVersion((v) => v + 1)
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
@@ -787,9 +787,22 @@ export default function SalesPage() {
                       <td><ReturnStatusChip status={inv.returnStatus} /></td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!actionBusy}
                           ariaLabel={`Actions for ${inv.number}`}
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
+                            {
+                              label: 'Edit',
+                              hidden: !(
+                                can('invoices.edit')
+                                && inv.status !== 'cancelled'
+                                && inv.status !== 'paid'
+                                && !(inv.paidAmount > 0)
+                                && (inv.origin || 'invoice').toLowerCase() !== 'pos'
+                              ),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => navigate(`/sales/invoices/${inv.id}/edit`),
+                            },
                             {
                               label: 'Record payment',
                               hidden: !(['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit')),
@@ -884,6 +897,7 @@ export default function SalesPage() {
                       <td>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for ${q.number}`}
                             actions={[
                               {
@@ -1125,6 +1139,7 @@ export default function SalesPage() {
                       <td><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
                       <td>
                         <RowActionsMenu
+                          busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
                             {
@@ -1226,6 +1241,7 @@ export default function SalesPage() {
                         </td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for payment ${p.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
@@ -1322,6 +1338,7 @@ export default function SalesPage() {
                         <td>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <RowActionsMenu
+                              busy={!!actionBusy}
                               ariaLabel={`Actions for ${o.number}`}
                               actions={[
                                 {
@@ -1443,7 +1460,7 @@ export default function SalesPage() {
       </Modal>
 
       {/* Payment Modal */}
-      <Modal open={!!showPayment} onClose={() => !paySaving && setShowPayment(null)} title="Record Payment" icon="💳" size="sm"
+      <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm" busy={paySaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowPayment(null)} disabled={paySaving}>Cancel</button>
           <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
@@ -1530,7 +1547,7 @@ export default function SalesPage() {
       </Modal>
 
       {/* Cancel Invoice Confirm */}
-      <Modal open={!!showCancelInvoice} onClose={() => !cancelSaving && setShowCancelInvoice(null)} title="Cancel Invoice" icon="⚠️" size="sm"
+      <Modal open={!!showCancelInvoice} onClose={() => setShowCancelInvoice(null)} title="Cancel Invoice" icon="⚠️" size="sm" busy={cancelSaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowCancelInvoice(null)} disabled={cancelSaving}>Keep Invoice</button>
           <button className="btn btn-danger" onClick={cancelInvoice} disabled={cancelSaving}>

@@ -111,6 +111,7 @@ def serialize_vendor(v) -> dict:
         "outstanding": v.outstanding,
         "credit_balance": getattr(v, "credit_balance", 0) or 0,
         "total_purchases": v.total_purchases,
+        "active": bool(getattr(v, "active", True)),
     }
 
 

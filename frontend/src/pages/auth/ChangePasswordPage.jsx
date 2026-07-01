@@ -15,11 +15,41 @@
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import '@/styles/login.css'
 
 import { authAPI } from '@/api'
 import { useAppStore } from '@/store'
+import { Eye, EyeOff } from '@/components/ui/Icons'
 
 const MIN_LENGTH = 8
+
+function PasswordInput({ label, value, onChange, autoComplete, autoFocus }) {
+  const [show, setShow] = useState(false)
+  return (
+    <div>
+      <label className="form-label">{label}</label>
+      <div className="login-password-field">
+        <input
+          className="form-input"
+          type={show ? 'text' : 'password'}
+          autoComplete={autoComplete}
+          autoFocus={autoFocus}
+          value={value}
+          onChange={onChange}
+        />
+        <button
+          type="button"
+          className="login-password-toggle"
+          onClick={() => setShow((v) => !v)}
+          aria-label={show ? 'Hide password' : 'Show password'}
+          aria-pressed={show}
+        >
+          {show ? <EyeOff size={20} /> : <Eye size={20} />}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function ChangePasswordPage() {
   const navigate = useNavigate()
@@ -103,39 +133,25 @@ export default function ChangePasswordPage() {
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label className="form-label">
-              {forced ? 'Temporary password' : 'Current password'}
-            </label>
-            <input
-              className="form-input"
-              type="password"
-              autoComplete="current-password"
-              autoFocus
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="form-label">New password</label>
-            <input
-              className="form-input"
-              type="password"
-              autoComplete="new-password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="form-label">Confirm new password</label>
-            <input
-              className="form-input"
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-            />
-          </div>
+          <PasswordInput
+            label={forced ? 'Temporary password' : 'Current password'}
+            autoComplete="current-password"
+            autoFocus
+            value={oldPassword}
+            onChange={(e) => setOldPassword(e.target.value)}
+          />
+          <PasswordInput
+            label="New password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+          />
+          <PasswordInput
+            label="Confirm new password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+          />
 
           <button
             type="submit"

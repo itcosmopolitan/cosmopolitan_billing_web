@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { vendorsAPI, purchasesAPI } from '@/api'
+import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 
 export default function VendorsPage() {
@@ -11,23 +11,22 @@ export default function VendorsPage() {
   const [search, setSearch]   = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
-  const [showHistory, setShowHistory] = useState(false)
+  const [showDetail, setShowDetail] = useState(null)
   const [vendors, setVendors] = useState([])
   const [vendorTotal, setVendorTotal] = useState(0)
   const [venSkip, setVenSkip] = useState(0)
   const [venLimit, setVenLimit] = useState(DEFAULT_PAGE_SIZE)
   const [venSortBy, setVenSortBy] = useState('name')
   const [venSortOrder, setVenSortOrder] = useState('asc')
+  const [venSummary, setVenSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [listVersion, setListVersion] = useState(0)
   const [editingVendor, setEditingVendor] = useState(null)
-  const [historyVendor, setHistoryVendor] = useState(null)
-  const [historyData, setHistoryData] = useState([])
-  const [historyLoading, setHistoryLoading] = useState(false)
   const [ledgerVendor, setLedgerVendor] = useState(null)
   const [ledgerEntries, setLedgerEntries] = useState([])
   const [ledgerTotal, setLedgerTotal] = useState(0)
   const [ledgerLoading, setLedgerLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [form, setForm]       = useState({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
 
@@ -41,18 +40,26 @@ export default function VendorsPage() {
         sort_order: venSortOrder,
         search: search || undefined,
       })
-      const { items, total } = unwrapPaged(raw)
-      setVendors(items || [])
+      const { items, total, summary } = unwrapPaged(raw)
+      const mapped = (items || []).map((v) => ({
+        ...v,
+        creditBalance: v.credit_balance || 0,
+        totalPurchases: v.total_purchases || 0,
+      }))
+      setVendors(mapped)
       setVendorTotal(total)
+      setVenSummary(summary)
     } catch (err) {
       console.error('Failed to fetch vendors:', err)
       setVendors([])
       setVendorTotal(0)
+      setVenSummary(null)
+      toast.error('Failed to load vendors')
     } finally {
       setLoading(false)
     }
     // listVersion is the manual cache-bust knob — bumping it triggers a
-    // re-fetch (used by save/edit/delete handlers below). Keep it.
+    // re-fetch (used by save/edit handlers below). Keep it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venSkip, venLimit, search, listVersion, venSortBy, venSortOrder])
 
@@ -74,8 +81,19 @@ export default function VendorsPage() {
     setVenSkip(0)
   }, [search])
 
+  const totals = useMemo(() => ({
+    total: vendorTotal,
+    outstanding: venSummary?.outstandingTotal ?? 0,
+    overdue: venSummary?.withBalanceCount ?? 0,
+    topVendor: vendors.length > 0
+      ? vendors.reduce((a, v) => (v.totalPurchases || 0) > (a.totalPurchases || 0) ? v : a, vendors[0])
+      : null,
+  }), [vendorTotal, venSummary, vendors])
+
   const save = async () => {
+    if (saving) return
     if (!form.name) { toast.error('Vendor name required'); return }
+    setSaving(true)
     try {
       await vendorsAPI.create({
         name: form.name,
@@ -93,6 +111,8 @@ export default function VendorsPage() {
     } catch (err) {
       console.error('Failed to save vendor:', err)
       toast.error('Failed to save vendor')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -111,7 +131,9 @@ export default function VendorsPage() {
   }
 
   const saveEdit = async () => {
+    if (saving) return
     if (!form.name) { toast.error('Vendor name required'); return }
+    setSaving(true)
     try {
       await vendorsAPI.update(editingVendor.id, {
         name: form.name,
@@ -130,31 +152,13 @@ export default function VendorsPage() {
     } catch (err) {
       console.error('Failed to update vendor:', err)
       toast.error('Failed to update vendor')
-    }
-  }
-
-  const openHistory = async (vendor) => {
-    setHistoryVendor(vendor)
-    setShowHistory(true)
-    setHistoryLoading(true)
-    try {
-      const raw = await purchasesAPI.list({ vendor_id: vendor.id, skip: 0, limit: 500 })
-      const { items } = unwrapPaged(raw)
-      setHistoryData(items || [])
-    } catch (err) {
-      console.error('Failed to fetch purchase history:', err)
-      setHistoryData([])
-      toast.error('Failed to load purchase history')
     } finally {
-      setHistoryLoading(false)
+      setSaving(false)
     }
   }
 
   const openCreditLedger = async (vendor) => {
-    setLedgerVendor({
-      ...vendor,
-      creditBalance: vendor.credit_balance || 0,
-    })
+    setLedgerVendor(vendor)
     setLedgerLoading(true)
     setLedgerEntries([])
     try {
@@ -177,12 +181,6 @@ export default function VendorsPage() {
     return 'var(--text-primary)'
   }
 
-  const totals = {
-    total: vendorTotal,
-    outstanding: vendors.reduce((s,v)=>s+v.outstanding,0),
-    topVendor: vendors.length > 0 ? vendors.reduce((a,v)=>v.total_purchases>a.total_purchases?v:a, vendors[0]) : null,
-  }
-
   if (loading) return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading vendors...</div></div>
 
   return (
@@ -197,7 +195,7 @@ export default function VendorsPage() {
             'Address': v.address || '—',
             'GST Reg No': v.gstin || '—',
             'Payment Terms': v.payment_terms || '—',
-            'Total Purchases (MVR)': v.total_purchases || 0,
+            'Total Purchases (MVR)': v.totalPurchases || 0,
             'Outstanding (MVR)': v.outstanding || 0,
           }))
           exportToCSV(exportData, `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
@@ -211,12 +209,12 @@ export default function VendorsPage() {
       <div className="grid-kpi" style={{marginBottom:20}}>
         <KPICard label="Total Vendors"   value={totals.total}              color="var(--accent)"  icon="🏭" />
         <KPICard label="Total Payables"  value={fmt(totals.outstanding)}   color="var(--red)"     icon="💳" />
-        <KPICard label="Top Vendor"      value={totals.topVendor?.name.split(' ')[0]} color="var(--green)" sub={fmt(totals.topVendor?.total_purchases)} icon="🏆" />
-        <KPICard label="With Balance"    value={vendors.filter(v=>v.outstanding>0).length} color="var(--amber)" icon="⚠️" sub="this page" />
+        <KPICard label="With Balance Due" value={totals.overdue}           color="var(--amber)"   icon="⚠️" />
+        <KPICard label="Top Vendor"      value={totals.topVendor?.name?.split(' ')[0] || '—'} color="var(--green)" sub={totals.topVendor ? fmt(totals.topVendor.totalPurchases || 0) : '—'} icon="🏆" />
       </div>
 
       <div className="filter-bar">
-        <SearchBar value={search} onChange={setSearch} placeholder="Search vendor name, contact, phone…" />
+        <SearchBar value={search} onChange={setSearch} placeholder="Search name, contact, phone, email…" />
       </div>
 
       <Card bodyPadding={false}>
@@ -231,6 +229,7 @@ export default function VendorsPage() {
                 <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
                 <th className="text-right" style={{ textAlign: 'right' }}>Credit</th>
                 <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                <th>Status</th>
                 <th></th>
               </tr>
             </thead>
@@ -239,28 +238,26 @@ export default function VendorsPage() {
                 <tr key={v.id}>
                   <td>
                     <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
-                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address}</div>
+                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || '—'}</div>
                   </td>
                   <td>
-                    <div style={{fontSize:12.5}}>{v.contact_person}</div>
-                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.phone}</div>
+                    <div style={{fontSize:12.5}}>{v.contact_person || '—'}</div>
+                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.phone || '—'}</div>
                   </td>
                   <td style={{fontSize:12,fontFamily:'DM Mono,monospace'}}>{v.gstin||'—'}</td>
                   <td><Tag>{v.payment_terms}</Tag></td>
                   <td className="text-right mono" style={{color:v.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(v.outstanding)}</td>
-                  <td className="text-right mono" style={{ color: (v.credit_balance || 0) > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                    {fmt(v.credit_balance || 0)}
+                  <td className="text-right mono" style={{ color: v.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                    {v.creditBalance > 0 ? fmt(v.creditBalance) : '—'}
                   </td>
-                  <td className="text-right mono">{fmt(v.total_purchases)}</td>
+                  <td className="text-right mono">{fmt(v.totalPurchases)}</td>
+                  <td><Chip status={v.active ? 'active' : 'inactive'} /></td>
                   <td>
                     <div style={{display:'flex',gap:4}}>
+                      <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(v)}>View</button>
                       {can('vendors.edit') && (
                         <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
                       )}
-                      {(v.credit_balance || 0) > 0 && (
-                        <button className="btn btn-ghost btn-xs" onClick={() => openCreditLedger(v)}>Credit</button>
-                      )}
-                      <button className="btn btn-primary btn-xs" onClick={() => openHistory(v)}>History</button>
                     </div>
                   </td>
                 </tr>
@@ -278,8 +275,8 @@ export default function VendorsPage() {
         />
       </Card>
 
-      <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Add Vendor" icon="🏭" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save Vendor</button></>}>
+      <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Add Vendor" icon="🏭" size="md" busy={saving}
+        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Vendor'}</button></>}>
         <FormRow><FormGroup label="Company / Vendor Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} /></FormGroup>
         <FormGroup label="Contact Person"><input className="form-input" value={form.contact_person} onChange={e=>pf('contact_person',e.target.value)} /></FormGroup></FormRow>
         <FormRow><FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} /></FormGroup>
@@ -289,8 +286,8 @@ export default function VendorsPage() {
         <FormGroup label="Payment Terms"><select className="form-input" value={form.payment_terms} onChange={e=>pf('payment_terms',e.target.value)}>{['Advance','COD','7 days','15 days','30 days','45 days','60 days','Weekly'].map(t=><option key={t}>{t}</option>)}</select></FormGroup></FormRow>
       </Modal>
 
-      <Modal open={showEdit} onClose={()=>setShowEdit(false)} title="Edit Vendor" icon="✏️" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowEdit(false)}>Cancel</button><button className="btn btn-primary" onClick={saveEdit}>Save Changes</button></>}>
+      <Modal open={showEdit} onClose={()=>setShowEdit(false)} title="Edit Vendor" icon="✏️" size="md" busy={saving}
+        footer={<><button className="btn btn-secondary" onClick={()=>setShowEdit(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button></>}>
         <FormRow><FormGroup label="Company / Vendor Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} /></FormGroup>
         <FormGroup label="Contact Person"><input className="form-input" value={form.contact_person} onChange={e=>pf('contact_person',e.target.value)} /></FormGroup></FormRow>
         <FormRow><FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} /></FormGroup>
@@ -300,45 +297,47 @@ export default function VendorsPage() {
         <FormGroup label="Payment Terms"><select className="form-input" value={form.payment_terms} onChange={e=>pf('payment_terms',e.target.value)}>{['Advance','COD','7 days','15 days','30 days','45 days','60 days','Weekly'].map(t=><option key={t}>{t}</option>)}</select></FormGroup></FormRow>
       </Modal>
 
-      <Modal open={showHistory} onClose={()=>setShowHistory(false)} title={`Purchase History - ${historyVendor?.name}`} icon="📋" size="lg">
-        {historyLoading ? (
-          <div style={{padding: 20, textAlign: 'center'}}>Loading purchase history...</div>
-        ) : historyData.length === 0 ? (
-          <EmptyState icon="📋" title="No purchase history found" />
-        ) : (
-          <div style={{overflowX: 'auto'}}>
-            <table className="data-table" style={{minWidth: '100%'}}>
-              <thead>
-                <tr>
-                  <th>Bill #</th>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  <th>Status</th>
-                  <th className="text-right">Paid</th>
-                  <th className="text-right">Pending</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historyData.map(bill => (
-                  <tr key={bill.id}>
-                    <td style={{fontFamily:'DM Mono,monospace'}}>{bill.bill_number || bill.number || bill.id?.slice(0, 8)}</td>
-                    <td>{new Date(bill.created_at).toLocaleDateString()}</td>
-                    <td>{fmt(bill.total_amount || bill.amount || 0)}</td>
-                    <td><Tag>{bill.status || 'pending'}</Tag></td>
-                    <td className="text-right mono">{fmt(bill.paid_amount || 0)}</td>
-                    <td className="text-right mono">{fmt((bill.total_amount || bill.amount || 0) - (bill.paid_amount || 0))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <Modal open={!!showDetail} onClose={()=>setShowDetail(null)} title={showDetail?.name} icon="🏭" size="md"
+        footer={<><button className="btn btn-secondary" onClick={()=>setShowDetail(null)}>Close</button><button className="btn btn-primary" onClick={()=>{ openCreditLedger(showDetail); setShowDetail(null) }}>View Credit Ledger</button></>}>
+        {showDetail && (
+          <>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+              {[
+                { label:'Contact Person', value: showDetail.contact_person || '—' },
+                { label:'Phone', value: showDetail.phone || '—' },
+                { label:'Email', value: showDetail.email || '—' },
+                { label:'GSTIN', value: showDetail.gstin || '—' },
+                { label:'Payment Terms', value: showDetail.payment_terms || '—' },
+                { label:'Outstanding', value: <span style={{ color: showDetail.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(showDetail.outstanding)}</span> },
+                { label:'Vendor Credit', value: <span style={{ color: showDetail.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{showDetail.creditBalance > 0 ? fmt(showDetail.creditBalance) : '—'}</span> },
+                { label:'Total Purchases', value: fmt(showDetail.totalPurchases) },
+                { label:'Status', value: <Chip status={showDetail.active ? 'active' : 'inactive'} /> },
+              ].map(r => (
+                <div key={r.label} style={{ padding:'10px 12px', background:'var(--bg-raised)', borderRadius:8 }}>
+                  <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:3 }}>{r.label}</div>
+                  <div style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)' }}>{r.value}</div>
+                </div>
+              ))}
+            </div>
+            {showDetail.address && (
+              <div style={{ padding:'10px 12px', background:'var(--bg-raised)', borderRadius:8, marginBottom:16 }}>
+                <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:3 }}>Address</div>
+                <div style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)' }}>{showDetail.address}</div>
+              </div>
+            )}
+            {showDetail.outstanding > 0 && (
+              <AlertBar type="amber" icon="⚠️">
+                Outstanding payable of <strong>{fmt(showDetail.outstanding)}</strong>.
+              </AlertBar>
+            )}
+          </>
         )}
       </Modal>
 
       <Modal
         open={!!ledgerVendor}
         onClose={() => setLedgerVendor(null)}
-        title={`Vendor Credit — ${ledgerVendor?.name || ''}`}
+        title={`Credit Ledger — ${ledgerVendor?.name || ''}`}
         icon="💳"
         size="lg"
         footer={<button className="btn btn-secondary" onClick={() => setLedgerVendor(null)}>Close</button>}
@@ -347,7 +346,7 @@ export default function VendorsPage() {
           <>
             <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
               <div style={{ padding: '10px 14px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Current advance</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Current balance</div>
                 <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--accent)' }}>{fmt(ledgerVendor.creditBalance)}</div>
               </div>
               <div style={{ padding: '10px 14px', background: 'var(--bg-raised)', borderRadius: 8 }}>

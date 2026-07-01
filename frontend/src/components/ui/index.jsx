@@ -2,24 +2,24 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-export function Modal({ open, onClose, title, children, footer, size = 'md', icon }) {
+export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false }) {
   useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose() }
+    const handler = (e) => { if (e.key === 'Escape' && !busy) onClose() }
     if (open) document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [open, onClose])
+  }, [open, onClose, busy])
 
   if (!open) return null
 
   const widths = { sm: '400px', md: '560px', lg: '720px', xl: '900px' }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="modal" style={{ maxWidth: widths[size] }}>
         <div className="modal-header">
           {icon && <span style={{ fontSize: 20 }}>{icon}</span>}
           <h3 style={{ flex: 1 }}>{title}</h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose} style={{ padding: '4px 8px' }}>✕</button>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={busy} style={{ padding: '4px 8px' }}>✕</button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
@@ -90,6 +90,8 @@ export function Chip({ status, label, custom }) {
     out:      { cls: 'chip-out',      lbl: 'Out of Stock' },
     cancelled:{ cls: 'chip-out',      lbl: 'Cancelled' },
     inactive: { cls: 'chip-out',      lbl: 'Inactive' },
+    pending_approval: { cls: 'chip-pending', lbl: 'Pending Approval' },
+    confirmed: { cls: 'chip-active', lbl: 'Confirmed' },
   }
   if (custom) {
     return <span className="chip" style={{ background: custom.bg, color: custom.color }}>{label}</span>
@@ -213,7 +215,34 @@ export function SearchBar({ value, onChange, placeholder = 'Search...', style })
 }
 
 // ─── Confirm Dialog ───────────────────────────────────────────────────────────
-export function ConfirmDialog({ open, onClose, onConfirm, title, message, confirmLabel = 'Confirm', danger = false }) {
+export function ConfirmDialog({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  danger = false,
+}) {
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!open) setSubmitting(false)
+  }, [open])
+
+  const handleConfirm = async () => {
+    if (submitting) return
+    setSubmitting(true)
+    try {
+      await onConfirm?.()
+      onClose()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -221,11 +250,16 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, message, confir
       title={title}
       size="sm"
       icon={danger ? '⚠️' : '❓'}
+      busy={submitting}
       footer={
         <>
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={() => { onConfirm(); onClose() }}>
-            {confirmLabel}
+          <button className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button
+            className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`}
+            onClick={handleConfirm}
+            disabled={submitting}
+          >
+            {submitting ? `${confirmLabel}…` : confirmLabel}
           </button>
         </>
       }

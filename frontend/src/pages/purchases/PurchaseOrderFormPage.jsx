@@ -93,8 +93,12 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
         await purchasesAPI.orders.update(orderId, payload)
         toast.success('Purchase order updated')
       } else {
-        await purchasesAPI.orders.create(payload)
-        toast.success('Purchase order created')
+        const res = await purchasesAPI.orders.create(payload)
+        toast.success(
+          res.status === 'pending_approval'
+            ? 'Purchase order submitted for approval'
+            : 'Purchase order created',
+        )
       }
       navigate('/purchases?tab=orders')
     } catch (err) {

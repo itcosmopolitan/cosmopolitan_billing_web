@@ -36,6 +36,8 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
     lineDiscountType: '%',
+    batchAllocation: it.batchAllocation || [],
+    batchAllocationCustom: Boolean(it.batchAllocation?.length),
     ...(withOrderLineId && it.id ? { orderLineId: it.id } : {}),
   }))
 }
@@ -73,6 +75,7 @@ export const emptyInvoiceForm = (branchId) => ({
   discount: 0,
   discountType: '%',
   invoiceDate: new Date().toISOString().split('T')[0],
+  dueDate: '',
   paymentReceived: false,
   paymentMethod: null,
   notes: '',
@@ -107,12 +110,15 @@ export function orderFromRow(so, branchId) {
 export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) {
   return {
     ...emptyInvoiceForm(doc.branchId || branchId),
+    number: doc.number || '',
     customerName: doc.customerName || '',
     customerId: doc.customerId || '',
     branchId: doc.branchId || branchId,
     items: mapSaleLines(doc.items, { withOrderLineId }),
     discount: doc.discount || 0,
     discountType: 'MVR',
+    invoiceDate: doc.date || doc.invoiceDate || new Date().toISOString().split('T')[0],
+    dueDate: doc.dueDate || '',
     notes: doc.notes || '',
   }
 }

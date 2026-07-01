@@ -15,7 +15,7 @@ const QUICK_ACTIONS = [
   { icon: '🔄', label: 'Transfer Stock', path: '/transfers' },
 ]
 
-const BRANCH_COLORS = ['#6366f1', '#a78bfa', '#2dd4bf', '#f5a623', '#22c97a', '#f5485c']
+const BRANCH_COLORS = ['#1f7a4d', '#e87722', '#2dd4bf', '#f5a623', '#22a86b', '#f5485c']
 const ALERT_BORDER = { red: 'var(--red)', amber: 'var(--amber)', blue: 'var(--blue)' }
 const ALERT_ICON = { danger: '🔴', warning: '🟡', info: '🔵' }
 // API returns `{type: "danger"|"warning"|"info"}`; map to colour + icon.
@@ -129,12 +129,12 @@ export default function Dashboard() {
             <AreaChart data={salesTrend} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#1f7a4d" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#1f7a4d" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="gPurch" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#a78bfa" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#e87722" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#e87722" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
@@ -142,8 +142,8 @@ export default function Dashboard() {
               <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `MVR ${(v/1000).toFixed(0)}K`} />
               <Tooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-muted)' }} />
-              <Area type="monotone" dataKey="sales" name="Sales" stroke="#6366f1" strokeWidth={2.5} fill="url(#gSales)" dot={false} />
-              <Area type="monotone" dataKey="purchases" name="Purchases" stroke="#a78bfa" strokeWidth={2} fill="url(#gPurch)" dot={false} />
+              <Area type="monotone" dataKey="sales" name="Sales" stroke="#1f7a4d" strokeWidth={2.5} fill="url(#gSales)" dot={false} />
+              <Area type="monotone" dataKey="purchases" name="Purchases" stroke="#e87722" strokeWidth={2} fill="url(#gPurch)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
           <div style={{ display: 'flex', gap: 20, marginTop: 8, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>

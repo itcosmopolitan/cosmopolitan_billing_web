@@ -43,10 +43,11 @@ export default function BulkDeleteConfirmModal({
   return (
     <Modal
       open={open}
-      onClose={submitting ? () => {} : onClose}
+      onClose={onClose}
       title={title}
       icon="⚠️"
       size="md"
+      busy={submitting}
       footer={
         <>
           <button

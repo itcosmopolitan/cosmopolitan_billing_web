@@ -3,7 +3,14 @@ import '@/styles/login.css'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
-import { authAPI, permissionsAPI } from '@/api'
+import { authAPI } from '@/api'
+import { resetSessionExpiryGuard } from '@/api/index'
+import {
+  applyBootstrapToStore,
+  bootstrapAuthenticatedData,
+} from '@/auth/bootstrap'
+import BrandLogo from '@/components/BrandLogo'
+import { Eye, EyeOff } from '@/components/ui/Icons'
 
 const DEMO_USERS = [
   { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'Super Admin',       avatar: 'SA' },
@@ -20,10 +27,13 @@ const FEATURES = [
 export default function LoginPage() {
   const navigate = useNavigate()
   const setSession = useAppStore((s) => s.setSession)
+  const setPermCatalog = useAppStore((s) => s.setPermCatalog)
+  const setBranches = useAppStore((s) => s.setBranches)
   const [selectedRole, setSelectedRole] = useState('Super Admin')
   const [email, setEmail] = useState('suresh@srimurugan.com')
   const [password, setPassword] = useState('admin123')
   const [rememberMe, setRememberMe] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const selectRole = (user) => {
@@ -40,8 +50,11 @@ export default function LoginPage() {
       const { token, user } = await authAPI.login(email.trim().toLowerCase(), password)
       if (!token || !user) throw new Error('Malformed login response')
       localStorage.setItem('retailos_token', token)
-      const catalog = await permissionsAPI.catalog().catch(() => undefined)
-      setSession({ user, permissions: user.permissions || [], permCatalog: catalog })
+      resetSessionExpiryGuard()
+      // Set session immediately so route guards pass, then load branches + fresh /me.
+      setSession({ user, permissions: user.permissions || [] })
+      const boot = await bootstrapAuthenticatedData()
+      applyBootstrapToStore(boot, { setSession, setPermCatalog, setBranches })
       if (user.must_change_password) {
         toast('Please set a new password to continue', { icon: '🔐' })
         navigate('/change-password', { replace: true })
@@ -62,8 +75,7 @@ export default function LoginPage() {
           <section className="login-panel login-panel--form">
           <div className="login-panel-inner">
             <div className="login-logo">
-              <span className="login-logo-mark">C</span>
-              <span className="login-logo-text">Cosmopolitan</span>
+              <BrandLogo className="login-logo-img" height={36} maxWidth={280} />
             </div>
 
             <div className="login-heading">
@@ -87,14 +99,26 @@ export default function LoginPage() {
 
               <div className="form-group">
                 <label className="form-label">Password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  required
-                />
+                <div className="login-password-field">
+                  <input
+                    className="form-input"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    required
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    className="login-password-toggle"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
               </div>
 
               <div className="login-form-footer">

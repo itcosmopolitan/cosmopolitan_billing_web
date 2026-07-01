@@ -220,7 +220,8 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
   return (
     <Modal
       open={open}
-      onClose={submitting ? () => {} : onClose}
+      onClose={onClose}
+      busy={submitting}
       title="Record Payment"
       icon="💰"
       size="lg"

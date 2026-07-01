@@ -15,6 +15,7 @@ from src.database import get_db
 from src.models import AuditLog, Branch, CashCategory, CashDayClose, CashEntry, Organisation, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
+from src.permissions import CASH_CATEGORIES_READ
 from src.security import enforce_branch_access, current_user, require_perm
 
 router = APIRouter()
@@ -197,7 +198,7 @@ async def _ensure_categories(db: AsyncSession, org_id: str) -> None:
             ))
 
 
-@router.get("/categories", dependencies=[Depends(require_perm("settings.view"))])
+@router.get("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_READ))])
 async def list_categories(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),

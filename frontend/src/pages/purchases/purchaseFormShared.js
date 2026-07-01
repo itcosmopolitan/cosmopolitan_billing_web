@@ -74,6 +74,7 @@ export function billFromRow(doc, branchId) {
     ...emptyBillForm(doc.branchId || branchId),
     vendorId: doc.vendorId || '',
     vendorName: doc.vendorName || '',
+    number: doc.number || '',
     billDate: doc.date || new Date().toISOString().split('T')[0],
     dueDate: doc.dueDate || '',
     items: mapPurchaseLines(doc.items),

@@ -20,12 +20,15 @@ export default function InvoiceFormModal({
   pif,
   saving = false,
   conversionLabel = null,
+  editMode = false,
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
-  const title = conversionLabel
-    ? `Create Invoice — from ${conversionLabel}`
-    : 'Create Invoice'
+  const title = editMode
+    ? `Edit Invoice — ${invoiceForm.number || ''}`
+    : conversionLabel
+      ? `Create Invoice — from ${conversionLabel}`
+      : 'Create Invoice'
   const pickedIds = invoiceForm.items.map((it) => it.item_id).filter(Boolean)
   const [allocEditor, setAllocEditor] = useState(null)
 
@@ -86,13 +89,20 @@ export default function InvoiceFormModal({
       <div className="invoice-form-panel">
         <div className="invoice-form-panel__head">Invoice basics</div>
         <div className="invoice-form-grid">
-          <DocumentNumberField
-            label="Invoice #"
-            docType="sales_invoice"
-            branchId={invoiceForm.branchId}
-            value={invoiceForm.number}
-            onChange={(v) => pif('number', v)}
-          />
+          {editMode ? (
+            <FormGroup label="Invoice #">
+              <input className="form-input" value={invoiceForm.number || ''} readOnly
+                style={{ background: 'var(--bg-subtle)', cursor: 'default' }} />
+            </FormGroup>
+          ) : (
+            <DocumentNumberField
+              label="Invoice #"
+              docType="sales_invoice"
+              branchId={invoiceForm.branchId}
+              value={invoiceForm.number}
+              onChange={(v) => pif('number', v)}
+            />
+          )}
           <FormGroup label="Customer" required>
             <CustomerPicker
               value={invoiceForm.customerId
@@ -153,6 +163,16 @@ export default function InvoiceFormModal({
           </FormGroup>
         </div>
       </div>
+
+      {editMode && (
+        <div style={{ marginBottom: 16 }}>
+          <FormGroup label="Due Date">
+            <input className="form-input" type="date"
+              value={invoiceForm.dueDate || ''}
+              onChange={(e) => pif('dueDate', e.target.value)} />
+          </FormGroup>
+        </div>
+      )}
 
       <div className="invoice-form-panel">
         <div className="invoice-form-panel__head">Line items</div>
@@ -302,10 +322,11 @@ export default function InvoiceFormModal({
   return (
     <Modal
       open={open}
-      onClose={saving ? () => {} : onClose}
+      onClose={onClose}
       title={title}
       icon="🧾"
       size="lg"
+      busy={saving}
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>

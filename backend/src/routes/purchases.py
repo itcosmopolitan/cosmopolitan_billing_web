@@ -57,6 +57,8 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
 )
 from src.routes._serializers import get_user_branch_ids
+from src.routes._approval import can_direct_commit
+from src.permissions import PURCHASE_DOCUMENT_READ
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
@@ -196,7 +198,7 @@ def _purchase_bill_filters(
 
 
 # ─── LIST ─────────────────────────────────────────────────────────────────────
-@router.get("/", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_bills(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     vendor_id: Optional[str] = None,
@@ -255,7 +257,7 @@ async def list_bills(
     return paged(out, total, sk, lim)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
-@router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/{bill_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()
@@ -661,9 +663,9 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
 @router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit"))])
 async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    """Edit a pending or partial bill. Replaces line items and recalculates
-    totals. Paid and cancelled bills are locked — use vendor returns or
-    Record Payment to adjust settled bills."""
+    """Edit a pending bill with no payments or vendor returns. Replaces line
+    items and recalculates totals. Paid / partial / cancelled bills are
+    locked — use vendor returns or Record Payment to adjust settled bills."""
     from sqlalchemy import delete as sa_delete
     result = await db.execute(
         select(PurchaseBill)
@@ -677,6 +679,32 @@ async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends
     bill_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
     if bill_status in ("paid", "cancelled"):
         raise HTTPException(400, f"Cannot edit a {bill_status} bill")
+    if (bill.paid_amount or 0) > 0:
+        raise HTTPException(
+            400,
+            "Cannot edit a bill with payments recorded. Void payments first.",
+        )
+    return_count = int((await db.execute(
+        select(func.count(VendorReturn.id)).where(VendorReturn.bill_id == bill_id)
+    )).scalar() or 0)
+    if return_count > 0:
+        raise HTTPException(
+            400,
+            f"Cannot edit bill with {return_count} vendor return(s). Void returns first.",
+        )
+    pay_count = int((await db.execute(
+        select(func.count(VendorPaymentAllocation.id))
+        .join(VendorPayment, VendorPaymentAllocation.payment_id == VendorPayment.id)
+        .where(
+            VendorPaymentAllocation.bill_id == bill_id,
+            or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)),  # noqa: E712
+        )
+    )).scalar() or 0)
+    if pay_count > 0:
+        raise HTTPException(
+            400,
+            "Cannot edit a bill with active payment allocations. Void payments first.",
+        )
     if not data.items:
         raise HTTPException(400, "Bill must have at least one line item")
 
@@ -784,7 +812,7 @@ def _vendor_payment_dict(p, allocations=None):
 
 
 # ─── PAYMENTS: LIST ─────────────────────────────────────────────────────────
-@router.get("/payments/", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/payments/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_payments(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -842,7 +870,7 @@ async def list_payments(
 
 
 # ─── PAYMENTS: GET ──────────────────────────────────────────────────────────
-@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/payments/{payment_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(
         select(VendorPayment)
@@ -1149,7 +1177,7 @@ async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) ->
         else:
             bill.status = "pending"
 
-@router.get("/returns/", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/returns/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_returns(
     vendor_id: Optional[str] = None,
     branch_id: Optional[str] = None,
@@ -1211,7 +1239,7 @@ async def list_returns(
     out = [_return_dict(r, r.line_items) for r in returns]
     return paged(out, total, sk, lim)
 
-@router.get("/returns/{return_id}", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/returns/{return_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def get_return(return_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(VendorReturn).where(VendorReturn.id == return_id))
     r = result.scalar_one_or_none()
@@ -1983,7 +2011,7 @@ def _grn_dict(g, items=None):
 
 
 # ─── PO: LIST ─────────────────────────────────────────────────────────────────
-@router.get("/orders/", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/orders/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_orders(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -2047,7 +2075,7 @@ async def list_orders(
 
 
 # ─── PO: GET ──────────────────────────────────────────────────────────────────
-@router.get("/orders/{order_id}", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/orders/{order_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(
         select(PurchaseOrder)
@@ -2062,10 +2090,15 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── PO: CREATE ───────────────────────────────────────────────────────────────
 @router.post("/orders/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
-async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get_db)):
+async def create_order(
+    data: PurchaseOrderCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     if not data.items:
         raise HTTPException(400, "Purchase order must have at least one line item")
     today = datetime.now().strftime("%Y-%m-%d")
+    direct = await can_direct_commit(user, db, "purchases.approve")
 
     async def _alloc_po() -> str:
         count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
@@ -2088,14 +2121,18 @@ async def create_order(data: PurchaseOrderCreate, db: AsyncSession = Depends(get
         vendor_name=data.vendor_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
-        created_by=data.created_by,
+        created_by=data.created_by or user.name,
         date=data.date or today,
         expected_date=data.expected_date,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
         discount=round(data.discount or 0, 2),
         total=total,
-        status=PurchaseOrderStatus.confirmed,
+        status=(
+            PurchaseOrderStatus.confirmed
+            if direct
+            else PurchaseOrderStatus.pending_approval
+        ),
         notes=data.notes,
     )
     db.add(po)
@@ -2164,13 +2201,67 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
 
 
 # ─── PO: STATUS ───────────────────────────────────────────────────────────────
+class POApprove(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/orders/{order_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
+async def approve_order(
+    order_id: str,
+    body: POApprove,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    res = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == order_id))
+    po = res.scalar_one_or_none()
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    if po.created_by and po.created_by == user.name and po.status == PurchaseOrderStatus.pending_approval:
+        raise HTTPException(403, "You cannot approve your own purchase order")
+    if po.status == PurchaseOrderStatus.confirmed:
+        return {"status": "confirmed", "number": po.number, "already_processed": True}
+    if po.status != PurchaseOrderStatus.pending_approval:
+        raise HTTPException(400, f"PO is not pending approval (status={po.status.value})")
+    po.status = PurchaseOrderStatus.confirmed
+    if body.notes:
+        po.notes = (po.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
+    await db.commit()
+    return {"status": "confirmed", "number": po.number}
+
+
+class POReject(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/orders/{order_id}/reject", dependencies=[Depends(require_perm("purchases.approve"))])
+async def reject_order(
+    order_id: str,
+    body: POReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    res = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == order_id))
+    po = res.scalar_one_or_none()
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    if po.status == PurchaseOrderStatus.cancelled:
+        return {"status": "cancelled", "number": po.number, "already_processed": True}
+    if po.status != PurchaseOrderStatus.pending_approval:
+        raise HTTPException(400, f"Only pending-approval POs can be rejected (status={po.status.value})")
+    po.status = PurchaseOrderStatus.cancelled
+    if body.notes:
+        po.notes = (po.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    await db.commit()
+    return {"status": "cancelled", "number": po.number}
+
+
 @router.patch("/orders/{order_id}/status", dependencies=[Depends(require_perm("purchases.edit"))])
 async def update_order_status(order_id: str, body: PurchaseOrderStatusIn, db: AsyncSession = Depends(get_db)):
     """Confirm / cancel a PO. `converted` cannot be set manually — only
     the /convert endpoint sets it (atomically with bill creation)."""
     target = (body.status or "").strip().lower()
-    if target not in ("draft", "confirmed", "cancelled"):
-        raise HTTPException(400, "Invalid status — only draft / confirmed / cancelled allowed")
+    if target not in ("draft", "confirmed", "cancelled", "pending_approval"):
+        raise HTTPException(400, "Invalid status — only draft / confirmed / cancelled / pending_approval allowed")
     res = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == order_id))
     po = res.scalar_one_or_none()
     if not po:
@@ -2216,6 +2307,8 @@ async def convert_order_to_bill(
         )
     if po.status == PurchaseOrderStatus.cancelled:
         raise HTTPException(400, "Cannot convert a cancelled purchase order")
+    if po.status == PurchaseOrderStatus.pending_approval:
+        raise HTTPException(400, "Purchase order must be approved before converting to a bill")
 
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
@@ -2365,7 +2458,7 @@ class BillFromGRNIn(BaseModel):
         return _coerce_payment_mode_value(v)
 
 
-@router.get("/grns/", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/grns/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_grns(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -2417,7 +2510,7 @@ async def list_grns(
     return paged([_grn_dict(g) for g in rows], total, sk, lim)
 
 
-@router.get("/grns/{grn_id}", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/grns/{grn_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
     grn = res.scalar_one_or_none()
@@ -2448,6 +2541,8 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db)):
             raise HTTPException(404, "Purchase order not found")
         if po.status == PurchaseOrderStatus.cancelled:
             raise HTTPException(400, "Cannot receive against a cancelled PO")
+        if po.status == PurchaseOrderStatus.pending_approval:
+            raise HTTPException(400, "Purchase order must be approved before receiving stock")
         if po.status == PurchaseOrderStatus.converted:
             raise HTTPException(400, "PO already fully converted — use a new PO for additional receipts")
         if po.status == PurchaseOrderStatus.partially_received:
@@ -2497,6 +2592,8 @@ async def receive_from_po(
         raise HTTPException(404, "Purchase order not found")
     if po.status == PurchaseOrderStatus.cancelled:
         raise HTTPException(400, "Cannot receive against a cancelled PO")
+    if po.status == PurchaseOrderStatus.pending_approval:
+        raise HTTPException(400, "Purchase order must be approved before receiving stock")
     if po.status == PurchaseOrderStatus.converted:
         raise HTTPException(400, "PO already fully converted — use a new PO for additional receipts")
     if po.status == PurchaseOrderStatus.partially_received:
@@ -2673,7 +2770,7 @@ async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db)):
 
 
 # ─── GET ONE BILL (after /orders/, /returns/, /payments/ static paths) ───────
-@router.get("/{bill_id}", dependencies=[Depends(require_perm("purchases.view"))])
+@router.get("/{bill_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()

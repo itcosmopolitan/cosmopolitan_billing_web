@@ -218,7 +218,8 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
   return (
     <Modal
       open={open}
-      onClose={submitting ? () => {} : onClose}
+      onClose={onClose}
+      busy={submitting}
       title="New Vendor Return"
       icon="↩"
       size="lg"

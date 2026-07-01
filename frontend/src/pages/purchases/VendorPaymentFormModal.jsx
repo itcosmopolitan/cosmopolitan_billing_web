@@ -165,7 +165,8 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
   return (
     <Modal
       open={open}
-      onClose={submitting ? () => {} : onClose}
+      onClose={onClose}
+      busy={submitting}
       title="Record Vendor Payment"
       icon="💸"
       size="lg"

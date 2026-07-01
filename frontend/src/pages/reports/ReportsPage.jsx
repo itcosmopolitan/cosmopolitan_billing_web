@@ -807,11 +807,11 @@ export default function ReportsPage() {
                   name: b.branch,
                   sales: b.sales,
                   purchases: b.purchases,
-                  color: ['#6366f1','#a78bfa','#2dd4bf','#f5a623','#22c97a','#f5485c'][i % 6],
+                  color: ['#1f7a4d','#e87722','#2dd4bf','#f5a623','#22a86b','#f5485c'][i % 6],
                 }))
               : [
-                  {name:'Male',      sales:1480000, purchases:840000, color:'#6366f1'},
-                  {name:'Addu',      sales:1120000, purchases:620000, color:'#a78bfa'},
+                  {name:'Male',      sales:1480000, purchases:840000, color:'#1f7a4d'},
+                  {name:'Addu',      sales:1120000, purchases:620000, color:'#e87722'},
                   {name:'Hulhumalé', sales:860000,  purchases:480000, color:'#2dd4bf'},
                   {name:'Felidhoo',  sales:540000,  purchases:310000, color:'#f5a623'},
                 ]
@@ -840,8 +840,8 @@ export default function ReportsPage() {
                 <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`₹${(v/1000).toFixed(0)}K`}/>
                 <Tooltip content={<TT/>}/>
                 <Legend wrapperStyle={{fontSize:11,color:'var(--text-muted)'}}/>
-                <Bar dataKey="sales"     name="Male"      fill="#6366f1" radius={[3,3,0,0]}/>
-                <Bar dataKey="tnagar"    name="Addu"      fill="#a78bfa" radius={[3,3,0,0]}/>
+                <Bar dataKey="sales"     name="Male"      fill="#1f7a4d" radius={[3,3,0,0]}/>
+                <Bar dataKey="tnagar"    name="Addu"      fill="#e87722" radius={[3,3,0,0]}/>
                 <Bar dataKey="vadapalani" name="Hulhumalé" fill="#2dd4bf" radius={[3,3,0,0]}/>
               </BarChart>
             </ResponsiveContainer>

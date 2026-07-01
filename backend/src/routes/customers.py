@@ -10,6 +10,7 @@ from src.database import get_db
 from src.models import Customer, CustomerCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_customer
+from src.permissions import CUSTOMER_PICKER_READ
 from src.security import require_perm
 
 router = APIRouter()
@@ -56,7 +57,7 @@ _FIELD_TO_COLUMN = {
     "customer_type": "type",
 }
 
-@router.get("/", dependencies=[Depends(require_perm("customers.view"))])
+@router.get("/", dependencies=[Depends(require_perm(*CUSTOMER_PICKER_READ))])
 async def list_customers(
     search: Optional[str] = None,
     customer_type: Optional[str] = None,
@@ -145,7 +146,7 @@ async def list_customers(
         summary={"outstandingTotal": outstanding_total, "withBalanceCount": with_balance},
     )
 
-@router.get("/{customer_id}", dependencies=[Depends(require_perm("customers.view"))])
+@router.get("/{customer_id}", dependencies=[Depends(require_perm(*CUSTOMER_PICKER_READ))])
 async def get_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Customer).where(Customer.id == customer_id))
     c = result.scalar_one_or_none()

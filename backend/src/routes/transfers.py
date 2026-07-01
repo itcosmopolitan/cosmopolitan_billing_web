@@ -20,6 +20,8 @@ from src.routes._atomic import (
     is_tracked,
 )
 from src.routes._serializers import get_user_branch_ids, serialize_transfer
+from src.routes._approval import can_direct_commit
+from src.permissions import TRANSFER_DOCUMENT_READ
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 
 router = APIRouter()
@@ -100,7 +102,7 @@ async def _lock_transfer(
         raise HTTPException(400, "Transfer reference number does not match")
     return t
 
-@router.get("/", dependencies=[Depends(require_perm("transfers.view"))])
+@router.get("/", dependencies=[Depends(require_perm(*TRANSFER_DOCUMENT_READ))])
 async def list_transfers(
     status: Optional[str] = None,
     from_branch: Optional[str] = Depends(enforce_branch_access_optional),
@@ -249,7 +251,7 @@ async def _serialize_transfer_detail(
     return d
 
 
-@router.get("/{transfer_id}", dependencies=[Depends(require_perm("transfers.view"))])
+@router.get("/{transfer_id}", dependencies=[Depends(require_perm(*TRANSFER_DOCUMENT_READ))])
 async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(
         select(StockTransfer)
@@ -280,6 +282,7 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
     )
 
     from_name, to_name = await _branch_names(db, data.from_branch_id, data.to_branch_id)
+    direct = await can_direct_commit(user, db, "transfers.approve")
 
     t = StockTransfer(
         id=tid, ref_number=ref,
@@ -287,7 +290,7 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
         from_branch_name=from_name,
         to_branch_id=data.to_branch_id,
         to_branch_name=to_name,
-        requested_by=data.requested_by,
+        requested_by=data.requested_by or user.name,
         status=TransferStatus.pending,
         priority=data.priority,
         notes=data.notes,
@@ -296,6 +299,13 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
     db.add(t)
     for line in _add_transfer_lines(tid, data.items):
         db.add(line)
+    await db.flush()
+    if direct:
+        result = await _dispatch_transfer(
+            db, t, tid, approved_by=user.name,
+        )
+        await db.commit()
+        return {"id": tid, "ref_number": ref, **result}
     await db.commit()
     return {"id": tid, "ref_number": ref, "status": "pending"}
 
@@ -351,25 +361,38 @@ async def approve_transfer(
     transfer_id: str,
     body: TransferApprove,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
-    """Approve & dispatch a transfer.
+    """Approve & dispatch a transfer."""
+    t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
 
-    For tracked items we consume source batches in FIFO/FEFO order (honoring
-    the operator-picked `preferred_batch_id` if it has stock) and persist the
-    consumption manifest onto `TransferLineItem.batch_allocation` so that:
-      • `receive()` can recreate the same batches at the destination, and
-      • the UI can render which lots were drained from source.
+    if (
+        t.requested_by
+        and t.requested_by == user.name
+        and t.status == TransferStatus.pending
+    ):
+        raise HTTPException(403, "You cannot approve your own transfer request")
 
-    For untracked items we just decrement aggregate stock as before.
-    """
+    result = await _dispatch_transfer(
+        db, t, transfer_id, approved_by=body.approved_by or user.name,
+    )
+    await db.commit()
+    return result
+
+
+async def _dispatch_transfer(
+    db: AsyncSession,
+    t: StockTransfer,
+    transfer_id: str,
+    *,
+    approved_by: str,
+) -> dict:
+    """Approve & dispatch a transfer — consume source stock and mark in transit."""
     import json
 
     from sqlalchemy import text as _text
 
-    t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
-
     if t.status == TransferStatus.transit:
-        await db.commit()
         return {
             "status": "transit",
             "ref_number": t.ref_number,
@@ -380,14 +403,13 @@ async def approve_transfer(
         raise HTTPException(400, f"Transfer is already {t.status.value}")
 
     t.status = TransferStatus.transit
-    t.approved_by = body.approved_by
+    t.approved_by = approved_by
 
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     for line in lines_result.scalars().all():
         tracked, expiry_tracked = await is_tracked(db, line.item_id)
         if tracked:
             strategy = "fefo" if expiry_tracked else "fifo"
-            # Parse operator's explicit split (if any) — saved by create_transfer.
             explicit = None
             if line.requested_allocation:
                 try:
@@ -410,22 +432,6 @@ async def approve_transfer(
                     source_ref=transfer_id,
                 )
             except ValueError:
-                # Two very different failure modes land here:
-                #   (a) the operator's `explicit` allocation is invalid for
-                #       this source branch — wrong batch_id, batch belongs to
-                #       a different branch (e.g. the source branch was changed
-                #       in the UI after batches were picked), or insufficient
-                #       stock on a specific picked batch.
-                #   (b) genuine shortage at the source — even FIFO/FEFO can't
-                #       satisfy `line.qty` because the branch is short.
-                # The legacy code path treated both the same way (zero out
-                # ALL batches AND item_stock for the item at the source
-                # branch), which is catastrophically wrong for case (a) —
-                # we'd destroy perfectly good stock because the cart sent a
-                # batch_id from a different branch. So: if we had an explicit
-                # allocation, retry once without it (auto FIFO/FEFO at the
-                # real source). Only if THAT also fails do we accept that the
-                # source is genuinely short and fall back to the clamp.
                 consumed = []
                 if explicit:
                     try:
@@ -444,9 +450,6 @@ async def approve_transfer(
                     except ValueError:
                         consumed = []
                 if not consumed:
-                    # Genuine shortage at source — clamp and let receive()
-                    # fall back to one anonymous destination batch (Phase 4
-                    # audit will flag the gap).
                     await db.execute(
                         _text(
                             "UPDATE item_batches SET quantity = 0 "
@@ -485,8 +488,7 @@ async def approve_transfer(
                     source_ref=transfer_id,
                     notes=f"Transfer {t.ref_number} source clamp",
                 )
-    await db.commit()
-    return {"status": "transit", "ref_number": t.ref_number, "approved_by": body.approved_by}
+    return {"status": "transit", "ref_number": t.ref_number, "approved_by": approved_by}
 
 
 @router.post("/{transfer_id}/reject", dependencies=[Depends(require_perm("transfers.approve"))])

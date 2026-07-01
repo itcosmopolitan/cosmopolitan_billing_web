@@ -27,6 +27,7 @@ from src.models import (
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._stock_adjust_apply import apply_stock_adjustment
+from src.routes._approval import can_direct_commit
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 from src.routes._serializers import get_user_branch_ids
 
@@ -255,6 +256,56 @@ async def list_adjustments(
     return paged([_serialize(ar) for ar in rows], total, sk, lim)
 
 
+async def _approve_adjustment_record(
+    db: AsyncSession,
+    ar: AdjustmentRequest,
+    *,
+    approved_by: str,
+) -> dict:
+    """Apply stock and mark an adjustment request approved."""
+    if ar.status == AdjustmentStatus.approved:
+        return {
+            "status": "approved",
+            "ref_number": ar.ref_number,
+            "approved_by": ar.approved_by,
+            "already_processed": True,
+        }
+    if ar.status != AdjustmentStatus.pending:
+        raise HTTPException(400, f"Request is already {ar.status.value}")
+
+    try:
+        await apply_stock_adjustment(
+            db,
+            item_id=ar.item_id,
+            branch_id=ar.branch_id,
+            new_qty=ar.new_qty,
+            reason=ar.reason or "Adjustment",
+            notes=ar.notes,
+            batch_id=ar.batch_id,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    audit = StockAdjustment(
+        id=str(uuid.uuid4()),
+        item_id=ar.item_id,
+        branch_id=ar.branch_id,
+        before_qty=ar.before_qty,
+        after_qty=ar.new_qty,
+        reason=ar.reason,
+        notes=ar.notes,
+        adjusted_by=approved_by,
+        request_id=ar.id,
+    )
+    db.add(audit)
+    ar.status = AdjustmentStatus.approved
+    ar.approved_by = approved_by
+    ar.resolved_at = datetime.utcnow()
+    return {"status": "approved", "ref_number": ar.ref_number, "approved_by": approved_by}
+
+
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("adjustments.create"))])
 async def create_adjustment(
     data: AdjustmentCreate,
@@ -301,10 +352,17 @@ async def create_adjustment(
             notes=data.notes,
             batch_id=data.batch_id,
             status=AdjustmentStatus.pending,
-            requested_by=data.requested_by,
+            requested_by=data.requested_by or user.name,
         )
         db.add(ar)
         try:
+            await db.flush()
+            if await can_direct_commit(user, db, "adjustments.approve"):
+                result = await _approve_adjustment_record(
+                    db, ar, approved_by=user.name,
+                )
+                await db.commit()
+                return {"id": rid, "ref_number": ref, **result}
             await db.commit()
             return {"id": rid, "ref_number": ref, "status": "pending"}
         except IntegrityError as exc:
@@ -326,52 +384,16 @@ async def approve_adjustment(
     request_id: str,
     body: AdjustmentApprove,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     ar = await _lock_request(db, request_id, ref_number=body.ref_number)
 
-    if ar.status == AdjustmentStatus.approved:
-        await db.commit()
-        return {
-            "status": "approved",
-            "ref_number": ar.ref_number,
-            "approved_by": ar.approved_by,
-            "already_processed": True,
-        }
-    if ar.status != AdjustmentStatus.pending:
-        raise HTTPException(400, f"Request is already {ar.status.value}")
+    if ar.requested_by and ar.requested_by == user.name and ar.status == AdjustmentStatus.pending:
+        raise HTTPException(403, "You cannot approve your own adjustment request")
 
-    try:
-        await apply_stock_adjustment(
-            db,
-            item_id=ar.item_id,
-            branch_id=ar.branch_id,
-            new_qty=ar.new_qty,
-            reason=ar.reason or "Adjustment",
-            notes=ar.notes,
-            batch_id=ar.batch_id,
-        )
-    except LookupError as e:
-        raise HTTPException(404, str(e)) from e
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-
-    audit = StockAdjustment(
-        id=str(uuid.uuid4()),
-        item_id=ar.item_id,
-        branch_id=ar.branch_id,
-        before_qty=ar.before_qty,
-        after_qty=ar.new_qty,
-        reason=ar.reason,
-        notes=ar.notes,
-        adjusted_by=body.approved_by,
-        request_id=ar.id,
-    )
-    db.add(audit)
-    ar.status = AdjustmentStatus.approved
-    ar.approved_by = body.approved_by
-    ar.resolved_at = datetime.utcnow()
+    result = await _approve_adjustment_record(db, ar, approved_by=body.approved_by or user.name)
     await db.commit()
-    return {"status": "approved", "ref_number": ar.ref_number, "approved_by": body.approved_by}
+    return result
 
 
 @router.post("/{request_id}/reject", dependencies=[Depends(require_perm("adjustments.approve"))])
