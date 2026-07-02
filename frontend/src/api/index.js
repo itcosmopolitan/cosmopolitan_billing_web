@@ -354,6 +354,7 @@ export const AUTOCOMPLETE_UNIT_URL = '/autocomplete/unit'
 export const AUTOCOMPLETE_TAX_RATE_URL = '/autocomplete/tax-rate'
 export const AUTOCOMPLETE_BRANCH_URL = '/autocomplete/branch'
 export const AUTOCOMPLETE_ITEM_URL = '/autocomplete/item'
+export const AUTOCOMPLETE_STAFF_URL = '/autocomplete/staff'
 
 export const autocompleteAPI = {
   customers: (params) => api.get(AUTOCOMPLETE_CUSTOMER_URL, { params }),
@@ -363,6 +364,7 @@ export const autocompleteAPI = {
   taxRates: (params) => api.get(AUTOCOMPLETE_TAX_RATE_URL, { params }),
   branches: (params) => api.get(AUTOCOMPLETE_BRANCH_URL, { params }),
   items: (params) => api.get(AUTOCOMPLETE_ITEM_URL, { params }),
+  staff: (params) => api.get(AUTOCOMPLETE_STAFF_URL, { params }),
 }
 
 // ─── Vendors ──────────────────────────────────────────────────────────────────

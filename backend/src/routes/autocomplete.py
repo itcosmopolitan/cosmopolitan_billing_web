@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, Category, Customer, Item, ItemBranchConfig, ItemStock, TaxRate, Vendor
+from src.models import Branch, Category, Customer, Item, ItemBranchConfig, ItemStock, TaxRate, User, Vendor
 from src.security import require_perm
 
 router = APIRouter()
@@ -152,6 +152,7 @@ async def autocomplete_tax_rate(
 async def autocomplete_branch(
     search_text: Optional[str] = None,
     retail_only: bool = Query(True),
+    exclude_id: Optional[str] = None,
     limit: int = Query(30, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
@@ -159,6 +160,8 @@ async def autocomplete_branch(
     q = select(Branch).where(Branch.active.is_(True))
     if retail_only:
         q = q.where(Branch.code != "WH")
+    if exclude_id:
+        q = q.where(Branch.id != exclude_id)
     if search_text:
         term = f"%{search_text.strip()}%"
         q = q.where(or_(Branch.name.ilike(term), Branch.code.ilike(term)))
@@ -224,3 +227,20 @@ async def autocomplete_item(
             "expiry_tracking": item.expiry_tracking,
         })
     return out
+
+
+@router.get("/staff", dependencies=[Depends(require_perm("dashboard.view", "reports.view"))])
+async def autocomplete_staff(
+    search_text: Optional[str] = None,
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return `{ id, text }` rows for staff filter dropdowns."""
+    q = select(User).where(User.active.is_(True))
+    if search_text:
+        term = f"%{search_text.strip()}%"
+        q = q.where(or_(User.name.ilike(term), User.email.ilike(term)))
+    rows = (
+        await db.execute(q.order_by(User.name.asc()).limit(limit))
+    ).scalars().all()
+    return [{"id": u.id, "text": u.name} for u in rows]

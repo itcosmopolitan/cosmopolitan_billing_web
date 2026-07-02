@@ -322,9 +322,6 @@ export default function ItemFormPage({ mode = 'create' }) {
           <ItemFormFields
             form={form}
             patchForm={patchForm}
-            categories={categories}
-            unitOptions={unitOptions}
-            taxRates={taxRates}
             editing={isEdit}
             editWasTracked={editWasTracked}
             branches={branches}

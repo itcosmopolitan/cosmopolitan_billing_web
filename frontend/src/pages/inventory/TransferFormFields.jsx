@@ -1,5 +1,6 @@
-import { FormGroup, FormRow, AlertBar, AutocompleteDropdown } from '@/components/ui'
-import { TRANSFER_PRIORITY_OPTIONS, branchesToOptions } from '@/utils/dropdownOptions'
+import { FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { TRANSFER_PRIORITY_OPTIONS } from '@/utils/dropdownOptions'
+import { AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import {
   allocationSum,
@@ -10,7 +11,6 @@ import {
 export default function TransferFormFields({
   form,
   patchForm,
-  branches = [],
   items = [],
   itemsLoading = false,
   batchOptions = {},
@@ -26,8 +26,6 @@ export default function TransferFormFields({
     width: '100%',
     maxWidth: 320,
   }
-  const branchOptions = branchesToOptions(branches)
-  const toBranchOptions = branchOptions.filter((b) => b.id !== form.from_branch_id)
 
   return (
     <div className="transfer-form">
@@ -52,9 +50,9 @@ export default function TransferFormFields({
               <AutocompleteDropdown
                 value={form.from_branch_id || ''}
                 onSelectOption={(opt) => patchForm('from_branch_id', opt?.id || '')}
-                options={branchOptions}
+                fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+                fetchParams={{ retail_only: true }}
                 isSearchFieldRequired={false}
-                selectedLabel={branches.find((b) => b.id === form.from_branch_id)?.name}
                 placeholder="Select source…"
                 disabled={disabled}
                 style={compactSelectStyle}
@@ -67,9 +65,9 @@ export default function TransferFormFields({
               <AutocompleteDropdown
                 value={form.to_branch_id || ''}
                 onSelectOption={(opt) => patchForm('to_branch_id', opt?.id || '')}
-                options={toBranchOptions}
+                fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+                fetchParams={{ retail_only: true, exclude_id: form.from_branch_id }}
                 isSearchFieldRequired={false}
-                selectedLabel={branches.find((b) => b.id === form.to_branch_id)?.name}
                 placeholder="Select destination"
                 disabled={disabled || !form.from_branch_id}
                 style={compactSelectStyle}
@@ -93,11 +91,9 @@ export default function TransferFormFields({
               />
             </FormGroup>
             <FormGroup label="Expected dispatch date">
-              <input
-                className="form-input"
-                type="date"
+              <DatePicker
                 value={form.expected_date}
-                onChange={(e) => patchForm('expected_date', e.target.value)}
+                onChange={(v) => patchForm('expected_date', v)}
                 disabled={disabled}
               />
             </FormGroup>

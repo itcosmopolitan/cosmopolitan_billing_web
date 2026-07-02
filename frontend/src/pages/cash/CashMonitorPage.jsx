@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { cashAPI } from '@/api'
-import { SectionHeader, EmptyState } from '@/components/ui'
+import { SectionHeader, EmptyState, DatePicker } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
 
 function VarianceBadge({ variance, threshold = 500 }) {
@@ -137,11 +137,9 @@ export default function CashMonitorPage() {
         title="Branch Cash Monitor"
         subtitle={`Petty cash status across all branches — ${date}`}
       >
-        <input
-          className="form-input"
-          type="date"
+        <DatePicker
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={setDate}
           style={{ width: 148 }}
         />
       </SectionHeader>

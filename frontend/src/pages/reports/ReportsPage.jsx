@@ -1,12 +1,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { reportsAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
-import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown } from '@/components/ui'
-import { branchesToOptions } from '@/utils/dropdownOptions'
+import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value, 2))
@@ -414,7 +412,6 @@ const DEFAULT_CATEGORY = REPORT_CATEGORIES[0].id
 const DEFAULT_REPORT = REPORT_CATEGORIES[0].reports[0].id
 
 export default function ReportsPage() {
-  const branches = useAppStore((s) => s.branches)
   const today = new Date().toISOString().slice(0, 10)
   const defaultFrom = useMemo(() => {
     const from = new Date()
@@ -613,18 +610,19 @@ export default function ReportsPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(160px, 1fr))', gap: 12, alignItems: 'end' }}>
           <div>
             <label className="form-label">From</label>
-            <input className="form-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <DatePicker value={dateFrom} onChange={setDateFrom} />
           </div>
           <div>
             <label className="form-label">To</label>
-            <input className="form-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker value={dateTo} onChange={setDateTo} />
           </div>
           <div>
             <label className="form-label">Branch</label>
             <AutocompleteDropdown
               value={branchId}
               onChange={setBranchId}
-              options={branchesToOptions(branches)}
+              fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+              fetchParams={{ retail_only: false }}
               prependOptions={[{ id: '', label: 'All Branches' }]}
               isSearchFieldRequired={false}
               placeholder="All Branches"

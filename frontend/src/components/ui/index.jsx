@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import AutocompleteDropdown from './AutocompleteDropdown'
+import DatePicker from './DatePicker'
 export { default as AutocompleteDropdown } from './AutocompleteDropdown'
+export { default as DatePicker } from './DatePicker'
 
 function mapSelectOptions(options = []) {
   return options.map((o) => {

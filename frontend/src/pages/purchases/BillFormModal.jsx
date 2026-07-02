@@ -20,7 +20,7 @@
  */
 import { Fragment } from 'react'
 import { todayISO } from '@/utils/batchDates'
-import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -133,18 +133,18 @@ export default function BillFormModal({
             />
           </FormGroup>
           <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
-            <input className="form-input" type="date"
+            <DatePicker
               value={billForm.billDate || todayISO()}
-              onChange={(e) => pbf('billDate', e.target.value)} />
+              onChange={(v) => pbf('billDate', v)} />
           </FormGroup>
         </div>
 
         {!isGrn && !editMode && (
           <div className="bill-form-meta-grid">
             <FormGroup label="Due Date">
-              <input className="form-input" type="date"
+              <DatePicker
                 value={billForm.dueDate || ''}
-                onChange={(e) => pbf('dueDate', e.target.value)} />
+                onChange={(v) => pbf('dueDate', v)} />
             </FormGroup>
             <FormGroup label="Payment">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -185,9 +185,9 @@ export default function BillFormModal({
       {editMode && (
         <div style={{ marginBottom: 16 }}>
           <FormGroup label="Due Date">
-            <input className="form-input" type="date"
+            <DatePicker
               value={billForm.dueDate || ''}
-              onChange={(e) => pbf('dueDate', e.target.value)} />
+              onChange={(v) => pbf('dueDate', v)} />
           </FormGroup>
         </div>
       )}
@@ -295,7 +295,7 @@ export default function BillFormModal({
                           </label>
                           <label style={{ ...batchFieldStyle, flex: '0 0 145px' }}>
                             <span style={batchLabelStyle}>Mfg date</span>
-                            <input className="form-input" type="date"
+                            <DatePicker
                               value={it.mfgDate || ''}
                               onChange={(e) => { const n = [...billForm.items]; n[i].mfgDate = e.target.value; pbf('items', n) }}
                               style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
@@ -304,9 +304,9 @@ export default function BillFormModal({
                             <span style={batchLabelStyle}>
                               Expiry date{it.expiryTracking && <span style={{ color: 'var(--red)' }}> *</span>}
                             </span>
-                            <input className="form-input" type="date"
+                            <DatePicker
                               value={it.expiryDate || ''}
-                              onChange={(e) => { const n = [...billForm.items]; n[i].expiryDate = e.target.value; pbf('items', n) }}
+                              onChange={(v) => { const n = [...billForm.items]; n[i].expiryDate = v; pbf('items', n) }}
                               style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
                           </label>
                         </div>

@@ -5,7 +5,7 @@ import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   QUOTE_STATUS_FILTER_OPTIONS,
@@ -740,8 +740,8 @@ export default function SalesPage() {
             {/* Branch filter removed 2026-05-23 — Topbar active-branch
                 picker scopes things globally; a second filter here was
                 duplicative. */}
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} placeholder="From" />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo}   onChange={(e) => setDateTo(e.target.value)} placeholder="To" />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} placeholder="From" />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} placeholder="To" />
           </div>
 
           <Card bodyPadding={false}>
@@ -874,8 +874,8 @@ export default function SalesPage() {
               placeholder="All Status"
               style={{ width: 140 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={quoteLoading} isEmpty={!quoteLoading && quotations.length === 0} emptyIcon="📄" emptyTitle="No quotations" emptyDesc="No quotations created yet">
@@ -1124,8 +1124,8 @@ export default function SalesPage() {
               placeholder="All Status"
               style={{ width: 140 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩" emptyTitle="No credit notes" emptyDesc="Process a return to generate a credit note">
@@ -1234,8 +1234,8 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, customer…" />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💰" emptyTitle="No payments yet" emptyDesc="Record a payment to see it here.">
@@ -1344,8 +1344,8 @@ export default function SalesPage() {
               placeholder="All Status"
               style={{ width: 160 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📦" emptyTitle="No sales orders" emptyDesc="Create one directly or convert a quotation.">

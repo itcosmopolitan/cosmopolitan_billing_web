@@ -14,7 +14,7 @@
  * branch picker, matching the sales SO modal. Vendor uses the strict
  * VendorPicker; items use the shared InventoryItemPicker.
  */
-import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -127,9 +127,9 @@ export default function PurchaseOrderFormModal({
           />
         </FormGroup>
         <FormGroup label="Expected Date">
-          <input className="form-input" type="date" disabled={readOnly}
+          <DatePicker disabled={readOnly}
             value={poForm.expectedDate}
-            onChange={e => ppof('expectedDate', e.target.value)} />
+            onChange={(v) => ppof('expectedDate', v)} />
         </FormGroup>
       </div>
 

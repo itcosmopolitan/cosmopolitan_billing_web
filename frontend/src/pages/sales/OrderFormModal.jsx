@@ -19,7 +19,7 @@
  * load fine; their picker shows the cached name as "selected" so the
  * operator can still review or × out and re-pick.
  */
-import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -143,9 +143,9 @@ export default function OrderFormModal({
             />
           </FormGroup>
           <FormGroup label="Expected Date">
-            <input className="form-input" type="date" disabled={readOnly}
+            <DatePicker disabled={readOnly}
               value={orderForm.expectedDate}
-              onChange={e => pof('expectedDate', e.target.value)} />
+              onChange={(v) => pof('expectedDate', v)} />
           </FormGroup>
         </div>
       </div>

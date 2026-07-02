@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_ITEM_URL } from '@/api'
+import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_ITEM_URL, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -8,7 +8,6 @@ import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
   EmptyState, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown,
 } from '@/components/ui'
-import { branchesToOptions } from '@/utils/dropdownOptions'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
@@ -67,7 +66,6 @@ export default function AdjustmentsPage() {
   const [listTotal, setListTotal] = useState(0)
   const [summary, setSummary] = useState(null)
   const [listVersion, setListVersion] = useState(0)
-  const [branches, setBranches] = useState([])
   const [pickedItem, setPickedItem] = useState(null)
   const [listLoading, setListLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
@@ -98,11 +96,6 @@ export default function AdjustmentsPage() {
   const canActivity = can('history.view', 'comments.view')
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
-  const storeBranches = useAppStore((s) => s.branches)
-
-  useEffect(() => {
-    setBranches(storeBranches)
-  }, [storeBranches])
 
   useEffect(() => {
     const key = `${tab}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
@@ -587,7 +580,8 @@ export default function AdjustmentsPage() {
                   new_qty: '',
                 }))
               }}
-              options={branchesToOptions(branches)}
+              fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+              fetchParams={{ retail_only: true }}
               isSearchFieldRequired={false}
             />
           </FormGroup>

@@ -1,14 +1,11 @@
-import { useMemo } from 'react'
 import { FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_CATEGORY_URL, AUTOCOMPLETE_UNIT_URL, AUTOCOMPLETE_TAX_RATE_URL } from '@/api'
 import BranchPricingSection from './BranchPricingSection'
 
 /** Shared catalog + branch fields for New / Edit Item pages. */
 export default function ItemFormFields({
   form,
   patchForm,
-  categories = [],
-  unitOptions = [],
-  taxRates = [],
   editing = false,
   editWasTracked = false,
   branches = [],
@@ -22,7 +19,6 @@ export default function ItemFormFields({
   categoryActionBusy = false,
 }) {
   const showBranchSection = Boolean(onBranchConfigsChange) && branchSectionMode !== 'hidden'
-  const categoryLabel = categories.find((c) => c.id === form.categoryId)?.name
   const strategyHint = !form.batch_tracking
     ? 'Untracked — set stock per branch from Items & Stock.'
     : form.expiry_tracking
@@ -30,25 +26,6 @@ export default function ItemFormFields({
       : 'FIFO — add batches per branch from Items & Stock; oldest received consumed first.'
   const compactSelectStyle = { width: '100%', maxWidth: 420 }
   const dropdownStyle = { flex: 1, width: '100%', minWidth: 0 }
-
-  const categoryOptions = useMemo(
-    () => categories.map((c) => ({ id: c.id, label: c.name })),
-    [categories],
-  )
-  const unitDropdownOptions = useMemo(
-    () => unitOptions.map((u) => ({ id: u, label: u })),
-    [unitOptions],
-  )
-  const taxDropdownOptions = useMemo(() => {
-    const currentRate = form.tax_rate
-    const rows = taxRates.length > 0
-      ? taxRates.filter((t) => t.is_active !== false || String(t.rate) === String(currentRate))
-      : [{ rate: 0, is_active: true }, { rate: 8, is_active: true }]
-    return rows.map((t) => ({
-      id: String(t.rate),
-      label: `${t.rate}%${t.is_active === false ? ' (inactive)' : ''}`,
-    }))
-  }, [taxRates, form.tax_rate])
 
   return (
     <>
@@ -72,9 +49,8 @@ export default function ItemFormFields({
                   <AutocompleteDropdown
                     value={form.categoryId || ''}
                     onSelectOption={(opt) => patchForm('categoryId', opt?.id || '')}
-                    options={categoryOptions}
+                    fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
                     isSearchFieldRequired
-                    selectedLabel={categoryLabel}
                     placeholder="Select category…"
                     searchPlaceholder="Search categories…"
                     emptyLabel="No categories found"
@@ -92,9 +68,8 @@ export default function ItemFormFields({
                   <AutocompleteDropdown
                     value={form.unit || ''}
                     onSelectOption={(opt) => patchForm('unit', opt?.id || '')}
-                    options={unitDropdownOptions}
+                    fetchUrl={AUTOCOMPLETE_UNIT_URL}
                     isSearchFieldRequired
-                    selectedLabel={form.unit || undefined}
                     placeholder="Select unit…"
                     searchPlaceholder="Search units…"
                     emptyLabel="No units found"
@@ -111,9 +86,9 @@ export default function ItemFormFields({
                 <AutocompleteDropdown
                   value={form.tax_rate != null && form.tax_rate !== '' ? String(form.tax_rate) : ''}
                   onSelectOption={(opt) => patchForm('tax_rate', opt?.id ?? '')}
-                  options={taxDropdownOptions}
+                  fetchUrl={AUTOCOMPLETE_TAX_RATE_URL}
+                  fetchParams={{ include_rate: form.tax_rate }}
                   isSearchFieldRequired={false}
-                  selectedLabel={form.tax_rate !== '' && form.tax_rate != null ? `${form.tax_rate}%` : undefined}
                   placeholder="Select GST rate…"
                   emptyLabel="No tax rates found"
                   style={compactSelectStyle}

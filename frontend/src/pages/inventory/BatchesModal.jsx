@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
-import { Modal, FormGroup, FormRow, EmptyState, Chip, AlertBar } from '@/components/ui'
+import { Modal, FormGroup, FormRow, EmptyState, Chip, AlertBar, DatePicker } from '@/components/ui'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import { validateBatchDates, todayISO } from '@/utils/batchDates'
@@ -249,10 +249,10 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
           </FormRow>
           <FormRow>
             <FormGroup label="Mfg. Date">
-              <input className="form-input" type="date" max={today} value={form.mfg_date} onChange={(e) => setForm((f) => ({ ...f, mfg_date: e.target.value }))} title="Cannot be in the future" />
+              <DatePicker max={today} value={form.mfg_date} onChange={(v) => setForm((f) => ({ ...f, mfg_date: v }))} title="Cannot be in the future" />
             </FormGroup>
             <FormGroup label={`Expiry Date${item.expiry_tracking ? ' *' : ''}`}>
-              <input className="form-input" type="date" min={today} value={form.expiry_date} onChange={(e) => setForm((f) => ({ ...f, expiry_date: e.target.value }))} title="Must be today or later" />
+              <DatePicker min={today} value={form.expiry_date} onChange={(v) => setForm((f) => ({ ...f, expiry_date: v }))} title="Must be today or later" />
             </FormGroup>
           </FormRow>
           <FormRow>

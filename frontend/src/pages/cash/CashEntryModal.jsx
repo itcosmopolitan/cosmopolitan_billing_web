@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
-import { FormGroup, Modal, AutocompleteDropdown } from '@/components/ui'
+import { FormGroup, Modal, AutocompleteDropdown, DatePicker } from '@/components/ui'
 
 const DEFAULT_FORM = {
   type: 'out',
@@ -155,11 +155,9 @@ export default function CashEntryModal({ open, onClose, branchId, onSaved, editE
 
       {!editEntry && (
         <FormGroup label="Date">
-          <input
-            className="form-input"
-            type="date"
+          <DatePicker
             value={form.date}
-            onChange={(e) => pf('date', e.target.value)}
+            onChange={(v) => pf('date', v)}
           />
         </FormGroup>
       )}

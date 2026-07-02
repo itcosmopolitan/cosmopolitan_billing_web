@@ -16,7 +16,7 @@
  * OrderFormModal for the rationale + legacy-row handling notes — the
  * implementation here is the same.
  */
-import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -123,8 +123,8 @@ export default function QuoteFormModal({
           />
         </FormGroup>
         <FormGroup label="Valid Until">
-          <input className="form-input" type="date" disabled={readOnly}
-            value={quoteForm.validUntil} onChange={e => pqf('validUntil', e.target.value)} />
+          <DatePicker disabled={readOnly}
+            value={quoteForm.validUntil} onChange={(v) => pqf('validUntil', v)} />
         </FormGroup>
       </div>
       <FormGroup label="Items" required>

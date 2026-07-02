@@ -23,7 +23,7 @@
  *   • mode — 'convert' (default) creates GRN+bill; 'receive' stock only
  */
 import { useEffect, useState } from 'react'
-import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
@@ -277,9 +277,9 @@ export default function ConvertPOToBillModal({
                       {/* Mfg date — always optional. */}
                       <label style={{ flex: 1, minWidth: 0, ...fieldWrapStyle }}>
                         <span style={fieldLabelStyle}>Mfg date</span>
-                        <input className="form-input" type="date"
+                        <DatePicker
                           value={b.mfgDate || ''}
-                          onChange={(e) => updateBatch(line.item_id, 'mfgDate', e.target.value)}
+                          onChange={(v) => updateBatch(line.item_id, 'mfgDate', v)}
                           style={{ fontSize: 12, padding: '6px 8px' }} />
                       </label>
                       {/* Expiry date — required for FEFO (expiry-tracked) lines. */}
@@ -289,9 +289,9 @@ export default function ConvertPOToBillModal({
                             <span style={{ color: 'var(--red)' }}> * (required)</span>
                           )}
                         </span>
-                        <input className="form-input" type="date"
+                        <DatePicker
                           value={b.expiryDate || ''}
-                          onChange={(e) => updateBatch(line.item_id, 'expiryDate', e.target.value)}
+                          onChange={(v) => updateBatch(line.item_id, 'expiryDate', v)}
                           style={{
                             fontSize: 12, padding: '6px 8px',
                             ...(expiryMissing ? { borderColor: 'var(--red)' } : {}),
@@ -316,9 +316,9 @@ export default function ConvertPOToBillModal({
       {!isReceiveOnly && (
         <>
       <FormGroup label="Due Date">
-        <input className="form-input" type="date"
+        <DatePicker
           value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)} />
+          onChange={setDueDate} />
       </FormGroup>
 
       <div style={{ marginTop: 10 }}>

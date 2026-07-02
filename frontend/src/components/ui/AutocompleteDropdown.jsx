@@ -51,6 +51,7 @@ export default function AutocompleteDropdown({
   const [search, setSearch] = useState('')
   const [apiOptions, setApiOptions] = useState([])
   const [apiLoading, setApiLoading] = useState(false)
+  const [pickedLabel, setPickedLabel] = useState('')
   const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H, flipUp: false })
   const triggerRef = useRef(null)
   const popoverRef = useRef(null)
@@ -74,7 +75,7 @@ export default function AutocompleteDropdown({
     : effectiveOptions
 
   const selected = effectiveOptions.find((o) => o.id === value && !o.disabled)
-  const triggerLabel = selected?.label || (value && selectedLabel) || placeholder
+  const triggerLabel = selected?.label || (value && (selectedLabel || pickedLabel)) || placeholder
   const hasSelection = Boolean(selected || (value && selectedLabel))
   const listLoading = effectiveLoading && filteredOptions.length === 0
 
@@ -180,6 +181,7 @@ export default function AutocompleteDropdown({
 
   const pick = (opt) => {
     if (disabled || opt.disabled) return
+    setPickedLabel(opt.label || '')
     onChange?.(opt.id)
     onSelectOption?.(opt)
     setOpen(false)
@@ -187,10 +189,15 @@ export default function AutocompleteDropdown({
 
   const handleClear = (e) => {
     e.stopPropagation()
+    setPickedLabel('')
     onChange?.('')
     onSelectOption?.(null)
     onClear?.()
   }
+
+  useEffect(() => {
+    if (!value) setPickedLabel('')
+  }, [value])
 
   const popover = open ? createPortal(
     <div
@@ -292,20 +299,18 @@ export default function AutocompleteDropdown({
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
-        className={className}
+        className={`autocomplete-dropdown-trigger ${className}${disabled ? ' autocomplete-dropdown-trigger--disabled' : ''}`}
         onClick={() => !disabled && setOpen((v) => !v)}
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          height: 34,
-          padding: '0 10px',
-          fontSize: 12,
+          gap: 8,
           textAlign: 'left',
           cursor: disabled ? 'not-allowed' : 'pointer',
+          userSelect: 'none',
           color: hasSelection ? 'var(--text-primary)' : 'var(--text-muted)',
           flexShrink: 0,
-          opacity: disabled ? 0.65 : 1,
           ...style,
         }}
       >

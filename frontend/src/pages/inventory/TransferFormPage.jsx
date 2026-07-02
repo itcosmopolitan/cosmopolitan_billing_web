@@ -295,7 +295,6 @@ export default function TransferFormPage({ mode = 'create' }) {
               <TransferFormFields
                 form={form}
                 patchForm={patchForm}
-                branches={branches}
                 items={items}
                 itemsLoading={itemsLoading}
                 batchOptions={batchOptions}

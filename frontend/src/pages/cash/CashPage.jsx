@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { cashAPI } from '@/api'
+import { cashAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
-import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown } from '@/components/ui'
-import { branchesToOptions } from '@/utils/dropdownOptions'
+import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
@@ -127,17 +126,15 @@ export default function CashPage() {
         <AutocompleteDropdown
           value={branchId}
           onChange={setBranchId}
-          options={branchesToOptions(branches.filter((b) => (b.code || '').toUpperCase() !== 'WH'))}
+          fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+          fetchParams={{ retail_only: true }}
           isSearchFieldRequired={false}
-          selectedLabel={branches.find((b) => b.id === branchId)?.name}
           style={{ width: 160 }}
         />
 
-        <input
-          className="form-input"
-          type="date"
+        <DatePicker
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={setDate}
           style={{ width: 148 }}
         />
 

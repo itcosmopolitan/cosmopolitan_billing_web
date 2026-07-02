@@ -1,5 +1,6 @@
 import * as Icon from '@/components/ui/Icons'
 import { AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_STAFF_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 import ExportMenu from './ExportMenu'
 
 export default function DashboardHeader({
@@ -35,37 +36,28 @@ export default function DashboardHeader({
                   label: option.label,
                 }))}
                 isSearchFieldRequired={false}
-                style={{ height: 42 }}
               />
             </FilterField>
             <FilterField label="Staff">
               <AutocompleteDropdown
                 value={filters.staff_id}
                 onChange={(v) => onFilterChange('staff_id', v)}
-                options={(filterOptions.staff || []).map((staff) => ({
-                  id: staff.id,
-                  label: staff.name,
-                }))}
+                fetchUrl={AUTOCOMPLETE_STAFF_URL}
                 prependOptions={[{ id: '', label: 'All staff' }]}
                 isSearchFieldRequired
                 placeholder="All staff"
                 searchPlaceholder="Search staff…"
-                style={{ height: 42 }}
               />
             </FilterField>
             <FilterField label="Category">
               <AutocompleteDropdown
                 value={filters.category_id}
                 onChange={(v) => onFilterChange('category_id', v)}
-                options={(filterOptions.categories || []).map((category) => ({
-                  id: category.id,
-                  label: category.name,
-                }))}
+                fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
                 prependOptions={[{ id: '', label: 'All categories' }]}
                 isSearchFieldRequired
                 placeholder="All categories"
                 searchPlaceholder="Search categories…"
-                style={{ height: 42 }}
               />
             </FilterField>
             <button type="button" className="btn btn-ghost" onClick={onReset} title="Reset filters" style={{ height: 42 }}>

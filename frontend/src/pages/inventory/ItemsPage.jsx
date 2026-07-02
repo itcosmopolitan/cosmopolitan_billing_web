@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { itemsAPI, adjustmentsAPI } from '@/api'
+import { itemsAPI, adjustmentsAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
@@ -98,16 +98,6 @@ export default function ItemsPage({ mode = 'branch' }) {
 
       const data = await fetchAllList(itemsAPI.list, params)
       setItems(data || [])
-      if (data && data.length > 0) {
-        const uniqueCats = [...new Set(data.map((item) => item.categoryId))]
-        const cats = uniqueCats.map((catId) => ({
-          id: catId,
-          name: data.find((item) => item.categoryId === catId)?.categoryName || catId,
-        }))
-        setCategories(cats)
-      } else {
-        setCategories([])
-      }
     } catch (err) {
       console.error('Failed to fetch items:', err)
       toast.error('Failed to load items')
@@ -421,7 +411,7 @@ export default function ItemsPage({ mode = 'branch' }) {
           value={catFilter}
           onChange={setCatFilter}
           onSelectOption={(opt) => setCatFilter(opt?.id || '')}
-          options={categories.map((c) => ({ id: c.id, label: c.name }))}
+          fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
           prependOptions={[{ id: '', label: 'All Categories' }]}
           isSearchFieldRequired
           placeholder="All Categories"
@@ -434,9 +424,9 @@ export default function ItemsPage({ mode = 'branch' }) {
             value={branchFilter}
             onChange={setBranchFilter}
             onSelectOption={(opt) => opt?.id && setBranchFilter(opt.id)}
-            options={branches.map((b) => ({ id: b.id, label: b.name }))}
+            fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+            fetchParams={{ retail_only: true }}
             isSearchFieldRequired={false}
-            selectedLabel={branches.find((b) => b.id === branchFilter)?.name}
             placeholder="Select branch…"
             emptyLabel="No branches"
             style={{ width: 150 }}

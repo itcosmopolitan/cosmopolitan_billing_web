@@ -3,7 +3,7 @@
  * (quotation → invoice, sales order → invoice).
  */
 import { useState } from 'react'
-import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
@@ -126,9 +126,9 @@ export default function InvoiceFormModal({
             />
           </FormGroup>
           <FormGroup label="Invoice Date">
-            <input className="form-input" type="date"
+            <DatePicker
               value={invoiceForm.invoiceDate}
-              onChange={(e) => pif('invoiceDate', e.target.value)} />
+              onChange={(v) => pif('invoiceDate', v)} />
           </FormGroup>
         </div>
 

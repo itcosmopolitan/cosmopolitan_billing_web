@@ -21,13 +21,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { purchasesAPI, vendorsAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
+import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
-import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
 import VendorReturnFormModal from './VendorReturnFormModal'
@@ -118,11 +118,6 @@ export default function PurchasesPage() {
   const [showPayForm, setShowPayForm] = useState(false)
   const [payDetail, setPayDetail] = useState(null)
   const [activityTarget, setActivityTarget] = useState(null)
-
-  // Masters (only vendors — for the filter dropdown). Items + branches
-  // are no longer loaded as masters; pickers do their own paginated
-  // fetches on demand.
-  const [vendors, setVendors]   = useState([])
 
   const [listVersion, setListVersion] = useState(0)
 
@@ -284,32 +279,6 @@ export default function PurchasesPage() {
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
-
-  const loadMasters = useCallback(async () => {
-    try {
-      const vendorsData = await fetchAllList(vendorsAPI.list).catch(() => [])
-      setVendors(vendorsData || [])
-    } catch (err) {
-      console.error('Failed to fetch masters:', err)
-    }
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!loadMasters) return
-    const key = 'vendors-masters'
-    // simple module-level in-flight guard
-    if (!window.__inFlightPurchasesMasters) window.__inFlightPurchasesMasters = {}
-    if (window.__inFlightPurchasesMasters[key]) return
-    window.__inFlightPurchasesMasters[key] = true
-    ;(async () => {
-      try {
-        await loadMasters()
-      } finally {
-        delete window.__inFlightPurchasesMasters[key]
-      }
-    })()
-  }, [loadMasters])
 
   useEffect(() => {
     setBillSkip(0)
@@ -692,13 +661,12 @@ export default function PurchasesPage() {
               fetchUrl={AUTOCOMPLETE_VENDOR_URL}
               prependOptions={[{ id: '', label: 'All Vendors' }]}
               isSearchFieldRequired
-              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
               placeholder="All Vendors"
               searchPlaceholder="Search vendors…"
               style={{ width: 180 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={billLoading} isEmpty={!billLoading && bills.length === 0} emptyIcon="📋" emptyTitle="No bills found">
@@ -837,13 +805,12 @@ export default function PurchasesPage() {
               fetchUrl={AUTOCOMPLETE_VENDOR_URL}
               prependOptions={[{ id: '', label: 'All Vendors' }]}
               isSearchFieldRequired
-              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
               placeholder="All Vendors"
               searchPlaceholder="Search vendors…"
               style={{ width: 180 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📄" emptyTitle="No purchase orders" emptyDesc="POs you create will appear here. Convert one to a Bill to receive goods.">
@@ -1012,13 +979,12 @@ export default function PurchasesPage() {
               fetchUrl={AUTOCOMPLETE_VENDOR_URL}
               prependOptions={[{ id: '', label: 'All Vendors' }]}
               isSearchFieldRequired
-              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
               placeholder="All Vendors"
               searchPlaceholder="Search vendors…"
               style={{ width: 180 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={grnLoading} isEmpty={!grnLoading && grns.length === 0} emptyIcon="📦" emptyTitle="No goods receipts" emptyDesc="Receive stock with + New GRN, or create a bill / convert a PO (those also create a GRN).">
@@ -1113,13 +1079,12 @@ export default function PurchasesPage() {
               fetchUrl={AUTOCOMPLETE_VENDOR_URL}
               prependOptions={[{ id: '', label: 'All Vendors' }]}
               isSearchFieldRequired
-              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
               placeholder="All Vendors"
               searchPlaceholder="Search vendors…"
               style={{ width: 180 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩️" emptyTitle="No vendor returns" emptyDesc="Returns to vendors will appear here.">
@@ -1226,13 +1191,12 @@ export default function PurchasesPage() {
               fetchUrl={AUTOCOMPLETE_VENDOR_URL}
               prependOptions={[{ id: '', label: 'All Vendors' }]}
               isSearchFieldRequired
-              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
               placeholder="All Vendors"
               searchPlaceholder="Search vendors…"
               style={{ width: 180 }}
             />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💸" emptyTitle="No payments yet" emptyDesc="Record a vendor payment to see it here.">
