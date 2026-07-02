@@ -1,4 +1,5 @@
 import * as Icon from '@/components/ui/Icons'
+import { AutocompleteDropdown } from '@/components/ui'
 import ExportMenu from './ExportMenu'
 
 export default function DashboardHeader({
@@ -26,32 +27,46 @@ export default function DashboardHeader({
         >
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
             <FilterField label="Date range">
-              <select
-                className="form-input"
+              <AutocompleteDropdown
                 value={filters.range}
-                onChange={(e) => onFilterChange('range', e.target.value)}
+                onChange={(v) => onFilterChange('range', v)}
+                options={(filterOptions.rangeOptions || []).map((option) => ({
+                  id: option.value,
+                  label: option.label,
+                }))}
+                isSearchFieldRequired={false}
                 style={{ height: 42 }}
-              >
-                {(filterOptions.rangeOptions || []).map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+              />
             </FilterField>
             <FilterField label="Staff">
-              <select className="form-input" value={filters.staff_id} onChange={(e) => onFilterChange('staff_id', e.target.value)} style={{ height: 42 }}>
-                <option value="">All staff</option>
-                {(filterOptions.staff || []).map((staff) => (
-                  <option key={staff.id} value={staff.id}>{staff.name}</option>
-                ))}
-              </select>
+              <AutocompleteDropdown
+                value={filters.staff_id}
+                onChange={(v) => onFilterChange('staff_id', v)}
+                options={(filterOptions.staff || []).map((staff) => ({
+                  id: staff.id,
+                  label: staff.name,
+                }))}
+                prependOptions={[{ id: '', label: 'All staff' }]}
+                isSearchFieldRequired
+                placeholder="All staff"
+                searchPlaceholder="Search staff…"
+                style={{ height: 42 }}
+              />
             </FilterField>
             <FilterField label="Category">
-              <select className="form-input" value={filters.category_id} onChange={(e) => onFilterChange('category_id', e.target.value)} style={{ height: 42 }}>
-                <option value="">All categories</option>
-                {(filterOptions.categories || []).map((category) => (
-                  <option key={category.id} value={category.id}>{category.name}</option>
-                ))}
-              </select>
+              <AutocompleteDropdown
+                value={filters.category_id}
+                onChange={(v) => onFilterChange('category_id', v)}
+                options={(filterOptions.categories || []).map((category) => ({
+                  id: category.id,
+                  label: category.name,
+                }))}
+                prependOptions={[{ id: '', label: 'All categories' }]}
+                isSearchFieldRequired
+                placeholder="All categories"
+                searchPlaceholder="Search categories…"
+                style={{ height: 42 }}
+              />
             </FilterField>
             <button type="button" className="btn btn-ghost" onClick={onReset} title="Reset filters" style={{ height: 42 }}>
               Reset

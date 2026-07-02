@@ -4,7 +4,8 @@ import { customersAPI, branchesAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown } from '@/components/ui'
+import { CUSTOMER_TYPE_OPTIONS, branchesToOptions } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 export default function CustomersPage() {
@@ -199,11 +200,15 @@ export default function CustomersPage() {
 
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, phone, email…" />
-        <select className="form-input" style={{ width: 140 }} value={typeF} onChange={e => setTypeF(e.target.value)}>
-          <option value="">All Types</option>
-          <option value="retail">Retail</option>
-          <option value="wholesale">Wholesale / B2B</option>
-        </select>
+        <AutocompleteDropdown
+          value={typeF}
+          onChange={setTypeF}
+          options={CUSTOMER_TYPE_OPTIONS}
+          prependOptions={[{ id: '', label: 'All Types' }]}
+          isSearchFieldRequired={false}
+          placeholder="All Types"
+          style={{ width: 140 }}
+        />
       </div>
 
       <Card bodyPadding={false}>
@@ -287,8 +292,8 @@ export default function CustomersPage() {
         <FormGroup label="GST Reg No"><input className="form-input" value={form.gst_in} onChange={e=>pf('gst_in',e.target.value)} placeholder="For business customers" /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
         <FormRow>
-          <FormGroup label="Primary Branch" required><select className="form-input" value={form.branch_id} onChange={e=>pf('branch_id',e.target.value)}><option value="">Select branch…</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></FormGroup>
-          <FormGroup label="Type"><select className="form-input" value={form.customer_type} onChange={e=>pf('customer_type',e.target.value)}><option value="retail">Retail</option><option value="wholesale">Wholesale / B2B</option></select></FormGroup>
+          <FormGroup label="Primary Branch" required><AutocompleteDropdown value={form.branch_id} onChange={(v) => pf('branch_id', v)} options={branchesToOptions(branches)} prependOptions={[{ id: '', label: 'Select branch…' }]} isSearchFieldRequired={false} placeholder="Select branch…" /></FormGroup>
+          <FormGroup label="Type"><AutocompleteDropdown value={form.customer_type} onChange={(v) => pf('customer_type', v)} options={CUSTOMER_TYPE_OPTIONS} isSearchFieldRequired={false} /></FormGroup>
         </FormRow>
         <FormGroup label="Credit Limit (MVR)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
       </Modal>

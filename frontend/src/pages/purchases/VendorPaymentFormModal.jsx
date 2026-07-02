@@ -6,10 +6,10 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Modal, FormGroup, AlertBar, EmptyState } from '@/components/ui'
-import { purchasesAPI } from '@/api'
+import { Modal, FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
+import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
-import VendorPicker from './VendorPicker'
+import { PAYMENT_METHOD_WITH_CREDIT_OPTIONS } from '@/utils/dropdownOptions'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -180,19 +180,40 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
       }
     >
       <FormGroup label="Vendor" required>
-        <VendorPicker
-          value={vendor}
-          onPick={(v) => setVendor({
-            id: v.id,
-            name: v.name,
-            credit: v.credit_balance || v.creditBalance || 0,
-          })}
+        <AutocompleteDropdown
+          value={vendor?.id || ''}
+          clearable
           onClear={() => {
-            setVendor(null)
             setBills([])
             setCheckedIds(new Set())
             setApplyById({})
           }}
+          onSelectOption={async (opt) => {
+            if (!opt) {
+              setVendor(null)
+              setBills([])
+              setCheckedIds(new Set())
+              setApplyById({})
+              return
+            }
+            try {
+              const v = await vendorsAPI.get(opt.id)
+              setVendor({
+                id: v.id,
+                name: v.name,
+                credit: Number(v.credit_balance || v.creditBalance || 0),
+              })
+            } catch {
+              setVendor({ id: opt.id, name: opt.label, credit: 0 })
+            }
+          }}
+          fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+          isSearchFieldRequired
+          selectedLabel={vendor?.name}
+          placeholder="Search vendors…"
+          searchPlaceholder="Search vendors…"
+          emptyLabel="No vendors found. Add via the Vendors page."
+          style={{ width: '100%' }}
         />
       </FormGroup>
 
@@ -331,19 +352,15 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
                 <FormGroup label="Method" required>
-                  <select
-                    className="form-input"
+                  <AutocompleteDropdown
                     value={paymentMode}
-                    onChange={(e) => {
-                      const mode = e.target.value
-                      setPaymentMode(mode)
-                      if (mode === 'credit') seedApplyToBalances()
+                    onChange={setPaymentMode}
+                    onSelectOption={(opt) => {
+                      if (opt?.id === 'credit') seedApplyToBalances()
                     }}
-                  >
-                    {['cash', 'card', 'upi', 'bank_transfer', 'credit'].map((m) => (
-                      <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
-                    ))}
-                  </select>
+                    options={PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
+                    isSearchFieldRequired={false}
+                  />
                 </FormGroup>
                 <FormGroup label="Reference">
                   <input

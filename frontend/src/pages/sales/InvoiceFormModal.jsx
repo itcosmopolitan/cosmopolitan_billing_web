@@ -3,14 +3,15 @@
  * (quotation → invoice, sales order → invoice).
  */
 import { useState } from 'react'
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
 import { emptySaleLine } from './salesFormShared'
+import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 
 export default function InvoiceFormModal({
   open,
@@ -104,18 +105,24 @@ export default function InvoiceFormModal({
             />
           )}
           <FormGroup label="Customer" required>
-            <CustomerPicker
-              value={invoiceForm.customerId
-                ? { id: invoiceForm.customerId, name: invoiceForm.customerName }
-                : null}
-              onPick={(c) => {
-                pif('customerId', c.id)
-                pif('customerName', c.name)
+            <AutocompleteDropdown
+              value={invoiceForm.customerId || ''}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pif('customerId', '')
+                  pif('customerName', '')
+                  return
+                }
+                pif('customerId', opt.id)
+                pif('customerName', opt.label)
               }}
-              onClear={() => {
-                pif('customerId', '')
-                pif('customerName', '')
-              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              selectedLabel={invoiceForm.customerName || undefined}
+              placeholder="Search customers…"
+              searchPlaceholder="Search customers…"
+              emptyLabel="No customers found. Add via the Customers page."
+              style={{ width: '100%' }}
             />
           </FormGroup>
           <FormGroup label="Invoice Date">
@@ -146,18 +153,15 @@ export default function InvoiceFormModal({
                 <span>Payment received?</span>
               </label>
               {invoiceForm.paymentReceived && (
-                <select
-                  className="form-input"
+                <AutocompleteDropdown
                   value={invoiceForm.paymentMethod || ''}
-                  onChange={(e) => pif('paymentMethod', e.target.value || null)}
+                  onChange={(v) => pif('paymentMethod', v || null)}
+                  options={PAYMENT_METHOD_OPTIONS}
+                  prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
+                  isSearchFieldRequired={false}
+                  placeholder="Select method…"
                   style={{ fontSize: 13 }}
-                >
-                  <option value="" disabled>Select method…</option>
-                  <option value="cash">💵 Cash</option>
-                  <option value="card">💳 Card</option>
-                  <option value="upi">📱 UPI</option>
-                  <option value="bank_transfer">🏦 Bank Transfer</option>
-                </select>
+                />
               )}
             </div>
           </FormGroup>

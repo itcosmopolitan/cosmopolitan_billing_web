@@ -9,7 +9,7 @@ import { batchExpiryStatus } from '@/utils/batchExpiry'
 import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
   FormGroup, KPICard, EmptyState, Tag, PaginationBar,
-  SortableHeader, AlertBar, ConfirmDialog,
+  SortableHeader, AlertBar, ConfirmDialog, AutocompleteDropdown,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import BatchesModal from './BatchesModal'
@@ -417,14 +417,30 @@ export default function ItemsPage({ mode = 'branch' }) {
       {/* Filters */}
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, SKU, barcode…" />
-        <select className="form-input" style={{ width: 180 }} value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
-          <option value="">All Categories</option>
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <AutocompleteDropdown
+          value={catFilter}
+          onChange={setCatFilter}
+          onSelectOption={(opt) => setCatFilter(opt?.id || '')}
+          options={categories.map((c) => ({ id: c.id, label: c.name }))}
+          prependOptions={[{ id: '', label: 'All Categories' }]}
+          isSearchFieldRequired
+          placeholder="All Categories"
+          searchPlaceholder="Search categories…"
+          emptyLabel="No categories"
+          style={{ width: 180 }}
+        />
         {!isMaster && (
-          <select className="form-input" style={{ width: 150 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
+          <AutocompleteDropdown
+            value={branchFilter}
+            onChange={setBranchFilter}
+            onSelectOption={(opt) => opt?.id && setBranchFilter(opt.id)}
+            options={branches.map((b) => ({ id: b.id, label: b.name }))}
+            isSearchFieldRequired={false}
+            selectedLabel={branches.find((b) => b.id === branchFilter)?.name}
+            placeholder="Select branch…"
+            emptyLabel="No branches"
+            style={{ width: 150 }}
+          />
         )}
       </div>
 
@@ -444,9 +460,13 @@ export default function ItemsPage({ mode = 'branch' }) {
           titleRight={
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Within</span>
-              <select className="form-input" style={{ width: 90, padding: '4px 8px', fontSize: 12 }} value={nearExpiryDays} onChange={(e) => setNearExpiryDays(Number(e.target.value))}>
-                {[7, 15, 30, 60, 90, 180].map((d) => <option key={d} value={d}>{d} days</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={nearExpiryDays}
+                onChange={(v) => setNearExpiryDays(Number(v))}
+                options={[7, 15, 30, 60, 90, 180].map((d) => ({ id: d, label: `${d} days` }))}
+                isSearchFieldRequired={false}
+                style={{ width: 90, fontSize: 12 }}
+              />
             </div>
           }
           bodyPadding={false}
@@ -762,9 +782,12 @@ export default function ItemsPage({ mode = 'branch' }) {
               <input className="form-input" type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} autoFocus />
             </FormGroup>
             <FormGroup label="Reason">
-              <select className="form-input" value={adjReason} onChange={(e) => setAdjReason(e.target.value)}>
-                {['Physical count', 'Damaged / Spoilage', 'Theft / Shrinkage', 'Data correction', 'Expiry removal', 'Other'].map((r) => <option key={r}>{r}</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={adjReason}
+                onChange={setAdjReason}
+                options={['Physical count', 'Damaged / Spoilage', 'Theft / Shrinkage', 'Data correction', 'Expiry removal', 'Other'].map((r) => ({ id: r, label: r }))}
+                isSearchFieldRequired={false}
+              />
             </FormGroup>
             <FormGroup label="Notes">
               <textarea className="form-input" placeholder="Optional notes for the approver" style={{ height: 60 }} value={adjNotes} onChange={(e) => setAdjNotes(e.target.value)} />

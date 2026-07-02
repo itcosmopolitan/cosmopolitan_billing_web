@@ -16,9 +16,9 @@
  * OrderFormModal for the rationale + legacy-row handling notes — the
  * implementation here is the same.
  */
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
@@ -101,19 +101,25 @@ export default function QuoteFormModal({
           readOnly={readOnly}
         />
         <FormGroup label="Customer" required>
-          <CustomerPicker
+          <AutocompleteDropdown
             disabled={readOnly}
-            value={quoteForm.customerId
-              ? { id: quoteForm.customerId, name: quoteForm.customerName }
-              : null}
-            onPick={(c) => {
-              pqf('customerId', c.id)
-              pqf('customerName', c.name)
+            value={quoteForm.customerId || ''}
+            onSelectOption={(opt) => {
+              if (!opt) {
+                pqf('customerId', '')
+                pqf('customerName', '')
+                return
+              }
+              pqf('customerId', opt.id)
+              pqf('customerName', opt.label)
             }}
-            onClear={() => {
-              pqf('customerId', '')
-              pqf('customerName', '')
-            }}
+            fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+            isSearchFieldRequired
+            selectedLabel={quoteForm.customerName || undefined}
+            placeholder="Search customers…"
+            searchPlaceholder="Search customers…"
+            emptyLabel="No customers found. Add via the Customers page."
+            style={{ width: '100%' }}
           />
         </FormGroup>
         <FormGroup label="Valid Until">

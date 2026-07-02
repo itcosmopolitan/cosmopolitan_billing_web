@@ -19,9 +19,9 @@
  * load fine; their picker shows the cached name as "selected" so the
  * operator can still review or × out and re-pick.
  */
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
@@ -121,19 +121,25 @@ export default function OrderFormModal({
             readOnly={readOnly}
           />
           <FormGroup label="Customer" required>
-            <CustomerPicker
+            <AutocompleteDropdown
               disabled={readOnly}
-              value={orderForm.customerId
-                ? { id: orderForm.customerId, name: orderForm.customerName }
-                : null}
-              onPick={(c) => {
-                pof('customerId', c.id)
-                pof('customerName', c.name)
+              value={orderForm.customerId || ''}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pof('customerId', '')
+                  pof('customerName', '')
+                  return
+                }
+                pof('customerId', opt.id)
+                pof('customerName', opt.label)
               }}
-              onClear={() => {
-                pof('customerId', '')
-                pof('customerName', '')
-              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              selectedLabel={orderForm.customerName || undefined}
+              placeholder="Search customers…"
+              searchPlaceholder="Search customers…"
+              emptyLabel="No customers found. Add via the Customers page."
+              style={{ width: '100%' }}
             />
           </FormGroup>
           <FormGroup label="Expected Date">

@@ -1,4 +1,5 @@
 import { PAGE_SIZE_OPTIONS } from '@/utils/pagination'
+import AutocompleteDropdown from './AutocompleteDropdown'
 
 /**
  * Server list footer: page controls and per-page size (50 / 100 / 200 / 500).
@@ -64,23 +65,18 @@ export function PaginationBar({ total, skip, limit, onSkipChange, onLimitChange,
         </button>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
           <span style={{ fontSize: 12 }}>Per page</span>
-          <select
-            className="form-input"
-            style={{ width: 100, padding: '6px 8px' }}
+          <AutocompleteDropdown
             value={safeLimit}
-            disabled={disabled}
-            onChange={(e) => {
-              const next = Number(e.target.value)
+            onChange={(v) => {
+              const next = Number(v)
               onLimitChange(next)
               onSkipChange(0)
             }}
-          >
-            {PAGE_SIZE_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            options={PAGE_SIZE_OPTIONS.map((n) => ({ id: n, label: String(n) }))}
+            isSearchFieldRequired={false}
+            disabled={disabled}
+            style={{ width: 100 }}
+          />
         </label>
       </div>
     </div>

@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { adjustmentsAPI, branchesAPI, itemsAPI, summariesAPI } from '@/api'
+import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_ITEM_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
-  EmptyState, AlertBar, PaginationBar, SortableHeader, SearchSelect,
+  EmptyState, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown,
 } from '@/components/ui'
-import { DEFAULT_PAGE_SIZE, fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { branchesToOptions } from '@/utils/dropdownOptions'
+import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import RowActionsMenu from './RowActionsMenu'
@@ -67,8 +68,7 @@ export default function AdjustmentsPage() {
   const [summary, setSummary] = useState(null)
   const [listVersion, setListVersion] = useState(0)
   const [branches, setBranches] = useState([])
-  const [items, setItems] = useState([])
-  const [itemsLoading, setItemsLoading] = useState(false)
+  const [pickedItem, setPickedItem] = useState(null)
   const [listLoading, setListLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
@@ -99,7 +99,6 @@ export default function AdjustmentsPage() {
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
   const storeBranches = useAppStore((s) => s.branches)
-  const lastLoadItemsBranchRef = useRef(null)
 
   useEffect(() => {
     setBranches(storeBranches)
@@ -252,35 +251,7 @@ export default function AdjustmentsPage() {
     setActionKind(null)
   }
 
-  const loadItems = useCallback(async (branchId) => {
-    setItemsLoading(true)
-    setItems([])
-    try {
-      const rows = await fetchAllList(itemsAPI.list, { branch_id: branchId, listed_only: true })
-      setItems(rows || [])
-    } catch {
-      setItems([])
-      toast.error('Failed to load items')
-    } finally {
-      setItemsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!showNew) return
-    const branchId = newForm.branch_id
-    if (lastLoadItemsBranchRef.current === branchId) return
-    lastLoadItemsBranchRef.current = branchId
-    loadItems(branchId)
-  }, [showNew, newForm.branch_id, loadItems])
-
-  const picked = items.find((x) => x.id === newForm.item_id)
-
-  const itemOptions = useMemo(() => items.map((it) => ({
-    id: it.id,
-    label: `${it.name} — stock ${it.available_stock ?? 0}`,
-    searchText: `${it.name} ${it.sku || ''} ${it.barcode || ''}`.toLowerCase(),
-  })), [items])
+  const picked = pickedItem?.id === newForm.item_id ? pickedItem : null
 
   const loadBatches = async (itemId, branchId) => {
     if (!itemId) return
@@ -315,7 +286,7 @@ export default function AdjustmentsPage() {
     if (submitting) return
     if (!newForm.item_id) { toast.error('Select an item'); return }
     if (newForm.new_qty === '' || newForm.new_qty === null) { toast.error('Enter new quantity'); return }
-    const item = items.find((x) => x.id === newForm.item_id)
+    const item = pickedItem
     if (!item) return
     setSubmitting(true)
     try {
@@ -335,6 +306,7 @@ export default function AdjustmentsPage() {
           : `Adjustment ${res.ref_number} submitted for approval`,
       )
       setShowNew(false)
+      setPickedItem(null)
       setNewForm({
         branch_id: activeBranch?.id || 'br-001',
         item_id: '',
@@ -594,7 +566,7 @@ export default function AdjustmentsPage() {
         </div>
       </div>
 
-      <Modal open={showNew} onClose={() => setShowNew(false)} title="New Stock Adjustment Request" icon="⚖" size="md" busy={submitting}
+      <Modal open={showNew} onClose={() => { if (!submitting) { setShowNew(false); setPickedItem(null) } }} title="New Stock Adjustment Request" icon="⚖" size="md" busy={submitting}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowNew(false)} disabled={submitting}>Cancel</button>
           <button className="btn btn-primary" onClick={submitNew} disabled={submitting}>
@@ -603,39 +575,49 @@ export default function AdjustmentsPage() {
         </>}>
         <FormRow>
           <FormGroup label="Branch">
-            <select
-              className="form-input"
+            <AutocompleteDropdown
               value={newForm.branch_id}
-              onChange={(e) => setNewForm((f) => ({
-                ...f,
-                branch_id: e.target.value,
-                item_id: '',
-                batch_id: '',
-                new_qty: '',
-              }))}
-            >
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
+              onChange={(v) => {
+                setPickedItem(null)
+                setNewForm((f) => ({
+                  ...f,
+                  branch_id: v,
+                  item_id: '',
+                  batch_id: '',
+                  new_qty: '',
+                }))
+              }}
+              options={branchesToOptions(branches)}
+              isSearchFieldRequired={false}
+            />
           </FormGroup>
           <FormGroup label="Item" required>
-            <SearchSelect
+            <AutocompleteDropdown
               value={newForm.item_id}
-              options={itemOptions}
-              loading={itemsLoading}
-              loadingLabel="Loading items…"
+              fetchUrl={AUTOCOMPLETE_ITEM_URL}
+              fetchParams={{ branch_id: newForm.branch_id, listed_only: true }}
+              isSearchFieldRequired
               placeholder="Select item…"
               searchPlaceholder="Search by name, SKU, or barcode…"
               emptyLabel="No items at this branch"
-              onChange={(itemId) => {
-                const it = items.find((x) => x.id === itemId)
+              selectedLabel={picked?.name ? `${picked.name} — stock ${picked.available_stock ?? 0}` : undefined}
+              onSelectOption={(opt) => {
+                const raw = opt?.raw
+                setPickedItem(raw ? {
+                  id: raw.id,
+                  name: raw.name,
+                  available_stock: raw.available_stock ?? 0,
+                  batch_tracking: raw.batch_tracking,
+                  expiry_tracking: raw.expiry_tracking,
+                } : null)
                 setNewForm((f) => ({
                   ...f,
-                  item_id: itemId,
+                  item_id: opt?.id || '',
                   batch_id: '',
-                  new_qty: it ? String(it.available_stock ?? 0) : '',
+                  new_qty: raw ? String(raw.available_stock ?? 0) : '',
                 }))
               }}
-              disabled={submitting}
+              disabled={submitting || !newForm.branch_id}
             />
           </FormGroup>
         </FormRow>
@@ -684,9 +666,12 @@ export default function AdjustmentsPage() {
           />
         </FormGroup>
         <FormGroup label="Reason">
-          <select className="form-input" value={newForm.reason} onChange={(e) => setNewForm((f) => ({ ...f, reason: e.target.value }))}>
-            {REASONS.map((r) => <option key={r}>{r}</option>)}
-          </select>
+          <AutocompleteDropdown
+            value={newForm.reason}
+            onChange={(v) => setNewForm((f) => ({ ...f, reason: v }))}
+            options={REASONS.map((r) => ({ id: r, label: r }))}
+            isSearchFieldRequired={false}
+          />
         </FormGroup>
         <FormGroup label="Notes">
           <textarea

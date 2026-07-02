@@ -14,9 +14,9 @@
  * branch picker, matching the sales SO modal. Vendor uses the strict
  * VendorPicker; items use the shared InventoryItemPicker.
  */
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
-import VendorPicker from './VendorPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 
@@ -105,19 +105,25 @@ export default function PurchaseOrderFormModal({
           readOnly={readOnly}
         />
         <FormGroup label="Vendor" required>
-          <VendorPicker
+          <AutocompleteDropdown
             disabled={readOnly}
-            value={poForm.vendorId
-              ? { id: poForm.vendorId, name: poForm.vendorName }
-              : null}
-            onPick={(v) => {
-              ppof('vendorId', v.id)
-              ppof('vendorName', v.name)
+            value={poForm.vendorId || ''}
+            onSelectOption={(opt) => {
+              if (!opt) {
+                ppof('vendorId', '')
+                ppof('vendorName', '')
+                return
+              }
+              ppof('vendorId', opt.id)
+              ppof('vendorName', opt.label)
             }}
-            onClear={() => {
-              ppof('vendorId', '')
-              ppof('vendorName', '')
-            }}
+            fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+            isSearchFieldRequired
+            selectedLabel={poForm.vendorName || undefined}
+            placeholder="Search vendors…"
+            searchPlaceholder="Search vendors…"
+            emptyLabel="No vendors found. Add via the Vendors page."
+            style={{ width: '100%' }}
           />
         </FormGroup>
         <FormGroup label="Expected Date">

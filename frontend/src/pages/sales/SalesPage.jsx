@@ -5,8 +5,13 @@ import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
+import {
+  QUOTE_STATUS_FILTER_OPTIONS,
+  PAYMENT_MODE_LABEL_OPTIONS,
+  statusOptions,
+} from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
 import ReturnFormModal from './ReturnFormModal'
@@ -32,9 +37,8 @@ const VALID_TABS = new Set(TABS.map((t) => t.id))
 
 // Source-of-truth for renderable payment-method values — mirrors the
 // PaymentMode Literal in backend/src/routes/sales.py AND the POS payment
-// dropdown in POSPage.jsx. The three lists (this Set, the POS <select>,
-// and the record-payment <select> below) must stay aligned — there's no
-// shared constant yet, so when you change one, change all three.
+// dropdown in POSPage.jsx. Keep these aligned with PAYMENT_METHOD_OPTIONS
+// in @/utils/dropdownOptions.js when payment methods change.
 //
 // Legacy rows in the DB may still carry "credit" / "partial" / "cheque" /
 // "" / null from pre-2026-05-23 seeds; we explicitly DON'T fabricate a
@@ -724,10 +728,15 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search invoice #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={invStatusF} onChange={(e) => setInvStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['paid', 'pending', 'partial', 'overdue', 'draft'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={invStatusF}
+              onChange={setInvStatusF}
+              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'draft'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
             {/* Branch filter removed 2026-05-23 — Topbar active-branch
                 picker scopes things globally; a second filter here was
                 duplicative. */}
@@ -856,10 +865,15 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search quote #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={quoteStatusF} onChange={(e) => setQuoteStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','sent','accepted','rejected','converted'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={quoteStatusF}
+              onChange={setQuoteStatusF}
+              options={QUOTE_STATUS_FILTER_OPTIONS}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -1101,10 +1115,15 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search return #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={retStatusF} onChange={(e) => setRetStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['pending','processed','void'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={retStatusF}
+              onChange={setRetStatusF}
+              options={statusOptions(['pending', 'processed', 'void'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -1313,10 +1332,18 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search SO #, customer…" />
-            <select className="form-input" style={{ width: 160 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','confirmed','partially_invoiced','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g,' ').replace(/\b\w/g,(c)=>c.toUpperCase())}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={orderStatusF}
+              onChange={setOrderStatusF}
+              options={['draft', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
+                id: s,
+                label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+              }))}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 160 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -1559,14 +1586,19 @@ export default function SalesPage() {
                     Credit (2026-05-30) draws from the customer's stored
                     credit_balance; hidden for walk-ins, disabled when the
                     balance can't cover the invoice. */}
-                <select className="form-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>
-                  {['cash', 'card', 'upi', 'bank_transfer'].map((m) => <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>)}
-                  {!isWalkin && (
-                    <option value="credit" disabled={creditInsufficient}>
-                      CREDIT{avail != null ? ` (${fmt(avail)} available)` : ''}{creditInsufficient ? ' — insufficient' : ''}
-                    </option>
-                  )}
-                </select>
+                <AutocompleteDropdown
+                  value={payMode}
+                  onChange={setPayMode}
+                  options={[
+                    ...PAYMENT_MODE_LABEL_OPTIONS,
+                    ...(!isWalkin ? [{
+                      id: 'credit',
+                      label: `CREDIT${avail != null ? ` (${fmt(avail)} available)` : ''}${creditInsufficient ? ' — insufficient' : ''}`,
+                      disabled: creditInsufficient,
+                    }] : []),
+                  ]}
+                  isSearchFieldRequired={false}
+                />
                 {creditMode && creditInsufficient && (
                   <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
                     Available credit ({fmt(avail)}) is less than the balance ({fmt(balance)}). Pick another method.

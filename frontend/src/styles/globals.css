@@ -641,7 +641,8 @@ h4 { font-size: 14px; font-weight: 600; }
   gap: 8px;
 }
 
-.item-form-select-action > .form-input {
+.item-form-select-action > .form-input,
+.item-form-select-action > [role="combobox"].form-input {
   flex: 1 1 auto;
   min-width: 0;
 }

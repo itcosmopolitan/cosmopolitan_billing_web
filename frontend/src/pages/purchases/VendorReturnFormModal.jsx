@@ -17,7 +17,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Modal, FormGroup, AlertBar, EmptyState } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import { purchasesAPI, itemsAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
 
@@ -274,9 +274,12 @@ export default function VendorReturnFormModal({ open, onClose, onSaved }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, marginBottom: 12 }}>
             <FormGroup label="Reason" required>
-              <select className="form-input" value={reason} onChange={(e) => setReason(e.target.value)}>
-                {REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={reason}
+                onChange={setReason}
+                options={REASONS.map((r) => ({ id: r, label: r }))}
+                isSearchFieldRequired={false}
+              />
             </FormGroup>
           </div>
 

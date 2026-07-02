@@ -346,6 +346,25 @@ export const customersAPI = {
   update: (id, data) => api.put(`/customers/${id}`, data),
 }
 
+// ─── Autocomplete (dropdown typeahead) ───────────────────────────────────────
+export const AUTOCOMPLETE_CUSTOMER_URL = '/autocomplete/customer'
+export const AUTOCOMPLETE_VENDOR_URL = '/autocomplete/vendor'
+export const AUTOCOMPLETE_CATEGORY_URL = '/autocomplete/category'
+export const AUTOCOMPLETE_UNIT_URL = '/autocomplete/unit'
+export const AUTOCOMPLETE_TAX_RATE_URL = '/autocomplete/tax-rate'
+export const AUTOCOMPLETE_BRANCH_URL = '/autocomplete/branch'
+export const AUTOCOMPLETE_ITEM_URL = '/autocomplete/item'
+
+export const autocompleteAPI = {
+  customers: (params) => api.get(AUTOCOMPLETE_CUSTOMER_URL, { params }),
+  vendors: (params) => api.get(AUTOCOMPLETE_VENDOR_URL, { params }),
+  categories: (params) => api.get(AUTOCOMPLETE_CATEGORY_URL, { params }),
+  units: (params) => api.get(AUTOCOMPLETE_UNIT_URL, { params }),
+  taxRates: (params) => api.get(AUTOCOMPLETE_TAX_RATE_URL, { params }),
+  branches: (params) => api.get(AUTOCOMPLETE_BRANCH_URL, { params }),
+  items: (params) => api.get(AUTOCOMPLETE_ITEM_URL, { params }),
+}
+
 // ─── Vendors ──────────────────────────────────────────────────────────────────
 export const vendorsAPI = {
   list:   (params) => api.get('/vendors/',            { params }),

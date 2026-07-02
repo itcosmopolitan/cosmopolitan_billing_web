@@ -5,7 +5,8 @@ import { reportsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
-import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown } from '@/components/ui'
+import { branchesToOptions } from '@/utils/dropdownOptions'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value, 2))
@@ -620,20 +621,23 @@ export default function ReportsPage() {
           </div>
           <div>
             <label className="form-label">Branch</label>
-            <select className="form-input" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-              <option value="">All Branches</option>
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>{branch.name}</option>
-              ))}
-            </select>
+            <AutocompleteDropdown
+              value={branchId}
+              onChange={setBranchId}
+              options={branchesToOptions(branches)}
+              prependOptions={[{ id: '', label: 'All Branches' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Branches"
+            />
           </div>
           <div>
             <label className="form-label">Report</label>
-            <select className="form-input" value={reportType} onChange={(e) => handleReportTypeChange(e.target.value)}>
-              {reportOptions.map((report) => (
-                <option key={report.id} value={report.id}>{report.label}</option>
-              ))}
-            </select>
+            <AutocompleteDropdown
+              value={reportType}
+              onChange={handleReportTypeChange}
+              options={reportOptions.map((report) => ({ id: report.id, label: report.label }))}
+              isSearchFieldRequired={false}
+            />
           </div>
           {/* <button className="btn btn-primary" style={{ height: 40, marginTop: 6 }} onClick={handleGenerate}>Generate</button> */}
           <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportExcel}>Export Excel</button>

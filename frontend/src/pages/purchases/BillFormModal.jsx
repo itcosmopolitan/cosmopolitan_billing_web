@@ -20,11 +20,12 @@
  */
 import { Fragment } from 'react'
 import { todayISO } from '@/utils/batchDates'
-import { Modal, FormGroup, AlertBar } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
-import VendorPicker from './VendorPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 
 export default function BillFormModal({
   open,
@@ -111,18 +112,24 @@ export default function BillFormModal({
             />
           )}
           <FormGroup label="Vendor" required>
-            <VendorPicker
-              value={billForm.vendorId
-                ? { id: billForm.vendorId, name: billForm.vendorName }
-                : null}
-              onPick={(v) => {
-                pbf('vendorId', v.id)
-                pbf('vendorName', v.name)
+            <AutocompleteDropdown
+              value={billForm.vendorId || ''}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pbf('vendorId', '')
+                  pbf('vendorName', '')
+                  return
+                }
+                pbf('vendorId', opt.id)
+                pbf('vendorName', opt.label)
               }}
-              onClear={() => {
-                pbf('vendorId', '')
-                pbf('vendorName', '')
-              }}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              isSearchFieldRequired
+              selectedLabel={billForm.vendorName || undefined}
+              placeholder="Search vendors…"
+              searchPlaceholder="Search vendors…"
+              emptyLabel="No vendors found. Add via the Vendors page."
+              style={{ width: '100%' }}
             />
           </FormGroup>
           <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
@@ -159,18 +166,15 @@ export default function BillFormModal({
                   <span>Payment paid?</span>
                 </label>
                 {billForm.paymentReceived && (
-                  <select
-                    className="form-input"
+                  <AutocompleteDropdown
                     value={billForm.paymentMethod || ''}
-                    onChange={(e) => pbf('paymentMethod', e.target.value || null)}
+                    onChange={(v) => pbf('paymentMethod', v || null)}
+                    options={PAYMENT_METHOD_OPTIONS}
+                    prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
+                    isSearchFieldRequired={false}
+                    placeholder="Select method…"
                     style={{ fontSize: 13 }}
-                  >
-                    <option value="" disabled>Select method…</option>
-                    <option value="cash">💵 Cash</option>
-                    <option value="card">💳 Card</option>
-                    <option value="upi">📱 UPI</option>
-                    <option value="bank_transfer">🏦 Bank Transfer</option>
-                  </select>
+                  />
                 )}
               </div>
             </FormGroup>

@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { salesAPI } from '@/api'
-import { Modal, FormGroup, AlertBar } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
 
 export default function POSRefundModal({ open, onClose, branchId, onSuccess }) {
@@ -185,16 +185,21 @@ export default function POSRefundModal({ open, onClose, branchId, onSuccess }) {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 14 }}>
             <FormGroup label="Refund Method" required>
-              <select
-                className="form-input"
+              <AutocompleteDropdown
                 value={refundMethod}
-                onChange={(e) => setRefundMethod(e.target.value)}
-              >
-                <option value="cash">💵 Cash (refund from drawer)</option>
-                <option value="credit" disabled={isWalkin}>
-                  🏦 Store Credit{isWalkin ? ' (walk-in — pick Cash)' : ''}
-                </option>
-              </select>
+                onChange={setRefundMethod}
+                options={[
+                  { id: 'cash', label: '💵 Cash (refund from drawer)' },
+                  {
+                    id: 'credit',
+                    label: `🏦 Store Credit${isWalkin ? ' (walk-in — pick Cash)' : ''}`,
+                    disabled: isWalkin,
+                  },
+                ]}
+                isSearchFieldRequired={false}
+                placeholder="Refund method…"
+                style={{ width: '100%' }}
+              />
             </FormGroup>
             <FormGroup label="Reason">
               <input

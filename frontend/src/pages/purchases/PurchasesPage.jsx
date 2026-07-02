@@ -21,11 +21,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { purchasesAPI, vendorsAPI } from '@/api'
+import { purchasesAPI, vendorsAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
+import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
@@ -676,14 +677,26 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search bill #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={billStatusF} onChange={(e) => setBillStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['paid','pending','partial','overdue','cancelled'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={billStatusF}
+              onChange={setBillStatusF}
+              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -806,14 +819,29 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','pending_approval','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={orderStatusF}
+              onChange={setOrderStatusF}
+              options={['draft', 'pending_approval', 'confirmed', 'partially_received', 'converted', 'cancelled'].map((s) => ({
+                id: s,
+                label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+              }))}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -969,16 +997,26 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search GRN #, vendor, PO…" />
-            <select className="form-input" style={{ width: 140 }} value={grnStatusF} onChange={(e) => setGrnStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['received', 'cancelled'].map((s) => (
-                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={grnStatusF}
+              onChange={setGrnStatusF}
+              options={statusOptions(['received', 'cancelled'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -1060,14 +1098,26 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search return #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={retStatusF} onChange={(e) => setRetStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','approved','void'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={retStatusF}
+              onChange={setRetStatusF}
+              options={statusOptions(['draft', 'approved', 'void'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -1170,10 +1220,17 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, vendor…" />
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              selectedLabel={vendors.find((v) => v.id === vendorF)?.name}
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
@@ -1340,11 +1397,12 @@ export default function PurchasesPage() {
               </FormGroup>
               <FormGroup label="Payment Method" required>
                 {/* Same 4 methods as POS — see purchases.py PaymentMode Literal. */}
-                <select className="form-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>
-                  {['cash', 'card', 'upi', 'bank_transfer'].map((m) => (
-                    <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
-                  ))}
-                </select>
+                <AutocompleteDropdown
+                  value={payMode}
+                  onChange={setPayMode}
+                  options={PAYMENT_MODE_LABEL_OPTIONS}
+                  isSearchFieldRequired={false}
+                />
               </FormGroup>
               <FormGroup label="Reference / Transaction ID">
                 <input className="form-input"

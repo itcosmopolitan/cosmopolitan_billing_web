@@ -27,10 +27,10 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Modal, FormGroup, AlertBar, EmptyState } from '@/components/ui'
-import { salesAPI } from '@/api'
+import { Modal, FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
+import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
-import CustomerPicker from './CustomerPicker'
+import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -144,6 +144,15 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
   const creditMode = paymentMode === 'credit'
   const creditInsufficient = creditMode && totals.allocated > avail + 0.001
 
+  const paymentModeOptions = useMemo(() => [
+    ...PAYMENT_MODE_LABEL_OPTIONS,
+    {
+      id: 'credit',
+      label: `CREDIT (${fmt(avail)} available)`,
+      disabled: avail <= 0,
+    },
+  ], [avail])
+
   // Lock every Apply Amount to the row's balance when credit is chosen
   // (overpaying with credit is nonsensical — would debit then re-credit).
   const seedApplyToBalances = () => {
@@ -238,15 +247,40 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
           triggers the invoice fetch above. Clearing resets everything
           back to the unpicked state (modal stays open). */}
       <FormGroup label="Customer" required>
-        <CustomerPicker
-          value={customer}
-          onPick={(c) => setCustomer({ id: c.id, name: c.name, credit: Number(c.credit_balance || 0) })}
+        <AutocompleteDropdown
+          value={customer?.id || ''}
+          clearable
           onClear={() => {
-            setCustomer(null)
             setInvoices([])
             setCheckedIds(new Set())
             setApplyById({})
           }}
+          onSelectOption={async (opt) => {
+            if (!opt) {
+              setCustomer(null)
+              setInvoices([])
+              setCheckedIds(new Set())
+              setApplyById({})
+              return
+            }
+            try {
+              const c = await customersAPI.get(opt.id)
+              setCustomer({
+                id: c.id,
+                name: c.name,
+                credit: Number(c.credit_balance || 0),
+              })
+            } catch {
+              setCustomer({ id: opt.id, name: opt.label, credit: 0 })
+            }
+          }}
+          fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+          isSearchFieldRequired
+          selectedLabel={customer?.name}
+          placeholder="Search customers…"
+          searchPlaceholder="Search customers…"
+          emptyLabel="No customers found. Add via the Customers page."
+          style={{ width: '100%' }}
         />
       </FormGroup>
 
@@ -390,22 +424,15 @@ export default function PaymentFormModal({ open, onClose, onSaved }) {
                       credit_balance to settle the selected invoices.
                       Disabled when the customer has no credit. Picking it
                       locks each Apply Amount to that row's balance. */}
-                  <select
-                    className="form-input"
+                  <AutocompleteDropdown
                     value={paymentMode}
-                    onChange={(e) => {
-                      const m = e.target.value
-                      setPaymentMode(m)
-                      if (m === 'credit') seedApplyToBalances()
+                    onChange={setPaymentMode}
+                    onSelectOption={(opt) => {
+                      if (opt?.id === 'credit') seedApplyToBalances()
                     }}
-                  >
-                    {['cash', 'card', 'upi', 'bank_transfer'].map((m) => (
-                      <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
-                    ))}
-                    <option value="credit" disabled={avail <= 0}>
-                      CREDIT ({fmt(avail)} available)
-                    </option>
-                  </select>
+                    options={paymentModeOptions}
+                    isSearchFieldRequired={false}
+                  />
                   {creditMode && (
                     <div style={{
                       fontSize: 11, marginTop: 4,

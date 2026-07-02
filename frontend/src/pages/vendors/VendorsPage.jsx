@@ -3,7 +3,8 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown } from '@/components/ui'
+import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 
 export default function VendorsPage() {
@@ -283,7 +284,7 @@ export default function VendorsPage() {
         <FormGroup label="Email"><input className="form-input" type="email" value={form.email} onChange={e=>pf('email',e.target.value)} /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
         <FormRow><FormGroup label="GST Reg No"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="GST registration number" /></FormGroup>
-        <FormGroup label="Payment Terms"><select className="form-input" value={form.payment_terms} onChange={e=>pf('payment_terms',e.target.value)}>{['Advance','COD','7 days','15 days','30 days','45 days','60 days','Weekly'].map(t=><option key={t}>{t}</option>)}</select></FormGroup></FormRow>
+        <FormGroup label="Payment Terms"><AutocompleteDropdown value={form.payment_terms} onChange={(v) => pf('payment_terms', v)} options={VENDOR_PAYMENT_TERMS_OPTIONS} isSearchFieldRequired={false} /></FormGroup></FormRow>
       </Modal>
 
       <Modal open={showEdit} onClose={()=>setShowEdit(false)} title="Edit Vendor" icon="✏️" size="md" busy={saving}
@@ -294,7 +295,7 @@ export default function VendorsPage() {
         <FormGroup label="Email"><input className="form-input" type="email" value={form.email} onChange={e=>pf('email',e.target.value)} /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
         <FormRow><FormGroup label="GST Reg No"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="GST registration number" /></FormGroup>
-        <FormGroup label="Payment Terms"><select className="form-input" value={form.payment_terms} onChange={e=>pf('payment_terms',e.target.value)}>{['Advance','COD','7 days','15 days','30 days','45 days','60 days','Weekly'].map(t=><option key={t}>{t}</option>)}</select></FormGroup></FormRow>
+        <FormGroup label="Payment Terms"><AutocompleteDropdown value={form.payment_terms} onChange={(v) => pf('payment_terms', v)} options={VENDOR_PAYMENT_TERMS_OPTIONS} isSearchFieldRequired={false} /></FormGroup></FormRow>
       </Modal>
 
       <Modal open={!!showDetail} onClose={()=>setShowDetail(null)} title={showDetail?.name} icon="🏭" size="md"

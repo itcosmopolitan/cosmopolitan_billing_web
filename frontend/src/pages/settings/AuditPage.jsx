@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { SectionHeader, Card, SearchBar, Tag } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Tag, AutocompleteDropdown } from '@/components/ui'
 
 const AUDIT_LOGS = [
   { id:1, action:'Invoice Created',       user:'Arjun M.',    module:'Sales',    ref:'INV-2024-1847', detail:'Created invoice for Rajesh Stores — MVR10,642', time:'16 Apr 2024, 10:42 AM', risk:'low' },
@@ -36,16 +36,28 @@ export default function AuditPage() {
 
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search action, user, reference…" />
-        <select className="form-input" style={{width:140}} value={module} onChange={e=>setModule(e.target.value)}>
-          <option value="">All Modules</option>
-          {['Sales','Purchases','Inventory','Finance','Cash','Auth'].map(m=><option key={m}>{m}</option>)}
-        </select>
-        <select className="form-input" style={{width:130}} value={risk} onChange={e=>setRisk(e.target.value)}>
-          <option value="">All Risk Levels</option>
-          <option value="high">High Risk</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
-        </select>
+        <AutocompleteDropdown
+          value={module}
+          onChange={setModule}
+          options={['Sales', 'Purchases', 'Inventory', 'Finance', 'Cash', 'Auth'].map((m) => ({ id: m, label: m }))}
+          prependOptions={[{ id: '', label: 'All Modules' }]}
+          isSearchFieldRequired={false}
+          placeholder="All Modules"
+          style={{ width: 140 }}
+        />
+        <AutocompleteDropdown
+          value={risk}
+          onChange={setRisk}
+          options={[
+            { id: 'high', label: 'High Risk' },
+            { id: 'medium', label: 'Medium' },
+            { id: 'low', label: 'Low' },
+          ]}
+          prependOptions={[{ id: '', label: 'All Risk Levels' }]}
+          isSearchFieldRequired={false}
+          placeholder="All Risk Levels"
+          style={{ width: 130 }}
+        />
       </div>
 
       <Card bodyPadding={false}>
