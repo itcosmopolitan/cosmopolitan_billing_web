@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.item_branch import effective_cost_price, effective_reorder_level, effective_selling_price
-from src.models import AuditLog, Branch, Item, ItemBatch, ItemBranchConfig, ItemStock, User
+from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemStock, User, AuditLog
 from src.pagination import (
     normalize_limit,
     normalize_skip,
@@ -27,6 +27,8 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
     set_stock_atomic,
 )
+from src.permissions import ITEM_CATALOG_READ
+from src.routes._approval import can_direct_commit
 from src.security import current_user, require_perm
 
 router = APIRouter()
@@ -359,7 +361,44 @@ class ItemPatch(BaseModel):
     batch_tracking: Optional[bool] = None
     expiry_tracking: Optional[bool] = None
 
-@router.get("/", dependencies=[Depends(require_perm("items.view", "pos.use"))])
+
+
+class InventoryCategoryCreate(BaseModel):
+    name: str
+    icon: Optional[str] = "📦"
+
+
+@router.get("/categories", dependencies=[Depends(require_perm("items.view", "item_master.view", "item_master.create", "item_master.edit"))])
+async def list_categories(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Category).order_by(asc(Category.name)))).scalars().all()
+    return [
+        {"id": row.id, "name": row.name, "icon": row.icon or "📦"}
+        for row in rows
+    ]
+
+
+@router.post("/categories", dependencies=[Depends(require_perm("item_master.create", "item_master.edit"))], status_code=201)
+async def create_category(data: InventoryCategoryCreate, db: AsyncSession = Depends(get_db)):
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Category name is required")
+
+    existing = (
+        await db.execute(select(Category).where(func.lower(Category.name) == name.lower()))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, "Category already exists")
+
+    category = Category(
+        id=f"cat-{uuid.uuid4().hex[:8]}",
+        name=name,
+        icon=data.icon or "📦",
+    )
+    db.add(category)
+    await db.commit()
+    return {"id": category.id, "name": category.name, "icon": category.icon, "message": "Category created"}
+
+@router.get("/", dependencies=[Depends(require_perm(*ITEM_CATALOG_READ))])
 async def list_items(
     search: Optional[str] = None,
     category_id: Optional[str] = None,
@@ -387,8 +426,18 @@ async def list_items(
 
     filter_listed = listed_only if listed_only is not None else (pos_mode or not master_mode)
 
-    q = select(Item).where(Item.active == True).options(selectinload(Item.category))  # noqa: E712
-    cq = select(func.count(Item.id)).where(Item.active == True)  # noqa: E712
+    q = select(Item).options(selectinload(Item.category))
+    cq = select(func.count(Item.id))
+
+    if master_mode and status == "pending":
+        q = q.where(Item.approval_status == ItemApprovalStatus.pending)
+        cq = cq.where(Item.approval_status == ItemApprovalStatus.pending)
+    elif master_mode and status == "inactive":
+        q = q.where(Item.active == False, Item.approval_status != ItemApprovalStatus.pending)  # noqa: E712
+        cq = cq.where(Item.active == False, Item.approval_status != ItemApprovalStatus.pending)  # noqa: E712
+    else:
+        q = q.where(Item.active == True)  # noqa: E712
+        cq = cq.where(Item.active == True)  # noqa: E712
 
     if filter_listed and branch_id:
         listed_join = and_(
@@ -511,6 +560,13 @@ async def list_items(
         }
         if master_mode:
             row["available_branch_count"] = avail_branch_counts.get(item.id, 0)
+            row["active"] = bool(item.active)
+            row["approval_status"] = (
+                item.approval_status.value
+                if hasattr(item.approval_status, "value")
+                else str(item.approval_status or "approved")
+            )
+            row["created_by"] = item.created_by
         out.append(row)
     if pos_mode and not include_total:
         return paged(
@@ -526,12 +582,13 @@ async def list_items(
         )
     return paged(out, total, sk, lim)
 
-@router.post("/", dependencies=[Depends(require_perm("items.create"))])
+@router.post("/", dependencies=[Depends(require_perm("item_master.create"))])
 async def create_item(
     data: ItemCreate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    direct = await can_direct_commit(user, db, "item_master.approve")
     item = Item(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -548,6 +605,12 @@ async def create_item(
         emoji=data.emoji,
         batch_tracking=data.batch_tracking,
         expiry_tracking=data.expiry_tracking,
+        active=direct,
+        approval_status=(
+            ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
+        ),
+        created_by=user.name,
+        approved_by=user.name if direct else None,
     )
     db.add(item)
     await db.flush()
@@ -628,9 +691,99 @@ async def create_item(
         metadata={"sku": item.sku, "name": item.name},
     )
     await db.commit()
-    return {"id": item.id, "message": "Item created"}
+    status = item.approval_status.value if hasattr(item.approval_status, "value") else "approved"
+    return {
+        "id": item.id,
+        "message": "Item created" if direct else "Item submitted for approval",
+        "approval_status": status,
+        "active": bool(item.active),
+    }
 
-@router.put("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
+
+
+@router.get("/{item_id}", dependencies=[Depends(require_perm(*ITEM_CATALOG_READ))])
+async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Item)
+        .where(Item.id == item_id)
+        .options(selectinload(Item.category))
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    return {
+        "id": item.id,
+        "name": item.name,
+        "sku": item.sku,
+        "barcode": item.barcode,
+        "categoryId": item.category_id,
+        "categoryName": item.category.name if item.category else "Uncategorized",
+        "brand": item.brand,
+        "unit": item.unit,
+        "default_cost_price": item.cost_price,
+        "cost_price": item.cost_price,
+        "default_selling_price": item.selling_price,
+        "selling_price": item.selling_price,
+        "tax_rate": item.tax_rate,
+        "hsn_code": item.hsn_code,
+        "default_reorder_level": item.reorder_level,
+        "reorder_level": item.reorder_level,
+        "emoji": item.emoji,
+        "batch_tracking": item.batch_tracking,
+        "expiry_tracking": item.expiry_tracking,
+        "active": item.active,
+    }
+
+@router.post("/{item_id}/approve", dependencies=[Depends(require_perm("item_master.approve"))])
+async def approve_item(
+    item_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    result = await db.execute(select(Item).where(Item.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if item.created_by and item.created_by == user.name and item.approval_status == ItemApprovalStatus.pending:
+        raise HTTPException(403, "You cannot approve your own item submission")
+    if item.approval_status == ItemApprovalStatus.approved and item.active:
+        return {"id": item.id, "approval_status": "approved", "already_processed": True}
+    if item.approval_status == ItemApprovalStatus.rejected:
+        raise HTTPException(400, "Rejected items cannot be approved — create a new item")
+    item.active = True
+    item.approval_status = ItemApprovalStatus.approved
+    item.approved_by = user.name
+    await db.commit()
+    return {"id": item.id, "approval_status": "approved", "active": True}
+
+
+class ItemReject(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/{item_id}/reject", dependencies=[Depends(require_perm("item_master.approve"))])
+async def reject_item(
+    item_id: str,
+    body: ItemReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    result = await db.execute(select(Item).where(Item.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if item.approval_status == ItemApprovalStatus.rejected:
+        return {"id": item.id, "approval_status": "rejected", "already_processed": True}
+    if item.approval_status != ItemApprovalStatus.pending:
+        raise HTTPException(400, "Only pending items can be rejected")
+    item.approval_status = ItemApprovalStatus.rejected
+    item.active = False
+    item.approved_by = None
+    await db.commit()
+    return {"id": item.id, "approval_status": "rejected", "notes": body.notes}
+
+@router.put("/{item_id}", dependencies=[Depends(require_perm("item_master.edit"))])
 async def update_item(
     item_id: str,
     data: ItemCreate,
@@ -684,7 +837,7 @@ async def update_item(
 
 @router.get(
     "/{item_id}/branches",
-    dependencies=[Depends(require_perm("items.view"))],
+    dependencies=[Depends(require_perm("items.view", "item_master.view"))],
 )
 async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
     item_res = await db.execute(select(Item).where(Item.id == item_id))
@@ -740,7 +893,7 @@ async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.put(
     "/{item_id}/branches",
-    dependencies=[Depends(require_perm("items.edit"))],
+    dependencies=[Depends(require_perm("item_master.edit"))],
 )
 async def update_item_branches(
     item_id: str,
@@ -799,7 +952,7 @@ async def update_item_branches(
     return {"message": "Branch configuration updated"}
 
 
-@router.patch("/{item_id}", dependencies=[Depends(require_perm("items.edit"))])
+@router.patch("/{item_id}", dependencies=[Depends(require_perm("item_master.edit"))])
 async def patch_item(
     item_id: str,
     data: ItemPatch,
@@ -893,7 +1046,7 @@ def _batch_dict(b: ItemBatch, *, item_name: Optional[str] = None) -> dict:
 
 @router.get(
     "/{item_id}/batches",
-    dependencies=[Depends(require_perm("items.view"))],
+    dependencies=[Depends(require_perm(*ITEM_CATALOG_READ))],
 )
 async def list_item_batches(
     item_id: str,
@@ -1044,7 +1197,7 @@ async def patch_batch(
 # ─── Near-expiry rollup (used by Items page KPI) ─────────────────────────────
 @router.get(
     "/batches/near-expiry",
-    dependencies=[Depends(require_perm("items.view"))],
+    dependencies=[Depends(require_perm("items.view", "item_master.view"))],
 )
 async def near_expiry_batches(
     branch_id: Optional[str] = None,

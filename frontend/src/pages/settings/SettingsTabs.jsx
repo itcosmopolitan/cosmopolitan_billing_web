@@ -60,6 +60,8 @@ export function TaxConfigTab({ refreshKey = 0 }) {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [taxSaving, setTaxSaving] = useState(false)
+  const [taxRowBusy, setTaxRowBusy] = useState(false)
   const [form, setForm] = useState(EMPTY_TAX_FORM)
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -132,6 +134,7 @@ export function TaxConfigTab({ refreshKey = 0 }) {
   }
 
   const saveTax = async () => {
+    if (taxSaving) return
     const rate = Number(form.rate)
     if (Number.isNaN(rate) || rate < 0 || rate > 100) {
       toast.error('Enter a valid rate between 0 and 100')
@@ -146,6 +149,7 @@ export function TaxConfigTab({ refreshKey = 0 }) {
       label: form.label.trim(),
       examples: form.examples.trim(),
     }
+    setTaxSaving(true)
     try {
       if (editing) {
         await taxRatesAPI.update(editing.id, payload)
@@ -160,17 +164,23 @@ export function TaxConfigTab({ refreshKey = 0 }) {
       setTaxListVersion((v) => v + 1)
     } catch (err) {
       console.error(err)
+    } finally {
+      setTaxSaving(false)
     }
   }
 
   const toggleTaxActive = async (tax) => {
+    if (taxRowBusy || taxSaving) return
     const nextActive = !tax.is_active
+    setTaxRowBusy(true)
     try {
       await taxRatesAPI.update(tax.id, { is_active: nextActive })
       toast.success(nextActive ? 'Tax rate marked as active' : 'Tax rate marked as inactive')
       setTaxListVersion((v) => v + 1)
     } catch (err) {
       console.error(err)
+    } finally {
+      setTaxRowBusy(false)
     }
   }
 
@@ -222,6 +232,7 @@ export function TaxConfigTab({ refreshKey = 0 }) {
                       <td><Chip status={r.is_active ? 'active' : 'inactive'} /></td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={taxRowBusy || taxSaving}
                           ariaLabel={`Actions for ${r.label}`}
                           actions={[
                             {
@@ -261,10 +272,13 @@ export function TaxConfigTab({ refreshKey = 0 }) {
         title={editing ? 'Edit Tax Rate' : 'Add Tax Rate'}
         icon="🧾"
         size="sm"
+        busy={taxSaving}
         footer={
           <>
-            <button className="btn btn-secondary" onClick={() => { setShowModal(false); setEditing(null) }}>Cancel</button>
-            <button className="btn btn-primary" onClick={saveTax}>{editing ? 'Save Changes' : 'Create Tax Rate'}</button>
+            <button className="btn btn-secondary" onClick={() => { setShowModal(false); setEditing(null) }} disabled={taxSaving}>Cancel</button>
+            <button className="btn btn-primary" onClick={saveTax} disabled={taxSaving}>
+              {taxSaving ? 'Saving…' : (editing ? 'Save Changes' : 'Create Tax Rate')}
+            </button>
           </>
         }
       >
@@ -641,7 +655,7 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="checkbox" checked={showCustomer} onChange={(e) => setShowCustomer(e.target.checked)} disabled={!canEdit} />
-              <span>Show customer name / GSTIN</span>
+              <span>Show customer name / GST Reg No</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="checkbox" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} disabled={!canEdit} />

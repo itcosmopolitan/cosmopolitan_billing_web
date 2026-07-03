@@ -281,7 +281,8 @@ export default function ReturnFormModal({ open, onClose, onSaved }) {
   return (
     <Modal
       open={open}
-      onClose={submitting ? () => {} : onClose}
+      onClose={onClose}
+      busy={submitting}
       title="New Return / Credit Note"
       icon="↩"
       size="lg"

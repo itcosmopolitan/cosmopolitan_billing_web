@@ -20,6 +20,7 @@ export const createBranchRow = (branch = null, overrides = {}) => {
     is_available: true,
     cost_price: '',
     selling_price: '',
+    opening_stock: '',
     reorder_level: '',
     available_stock: 0,
     ...overrides,
@@ -33,6 +34,7 @@ export const branchRowFromApi = (br) => createBranchRow(
     is_available: true,
     cost_price: br.cost_price ?? '',
     selling_price: br.selling_price ?? '',
+    opening_stock: '',
     reorder_level: br.reorder_level ?? '',
     available_stock: br.available_stock ?? 0,
   },
@@ -79,14 +81,20 @@ export function validateItemForm(form, branchConfigs) {
   return { ok: true }
 }
 
-function branchConfigFields(bc) {
-  return {
+function branchConfigFields(bc, { includeOpeningStock = false } = {}) {
+  const out = {
     branch_id: bc.branch_id,
     is_available: true,
     cost_price: bc.cost_price === '' || bc.cost_price == null ? null : Number(bc.cost_price),
     selling_price: bc.selling_price === '' || bc.selling_price == null ? null : Number(bc.selling_price),
     reorder_level: bc.reorder_level === '' || bc.reorder_level == null ? null : Number(bc.reorder_level),
   }
+  if (includeOpeningStock) {
+    out.opening_stock = bc.opening_stock === '' || bc.opening_stock == null
+      ? 0
+      : Number(bc.opening_stock)
+  }
+  return out
 }
 
 export function buildCatalogPayload(form, branchFilter) {
@@ -114,17 +122,24 @@ export function buildCreatePayload(form, branchConfigs, branchFilter) {
   const payload = buildCatalogPayload(form, branchFilter)
   const listed = branchConfigs.filter((bc) => bc.branch_id)
   if (listed.length > 0) {
-    payload.branch_configs = listed.map(branchConfigFields)
+    payload.branch_configs = listed.map((bc) => branchConfigFields(
+      bc,
+      { includeOpeningStock: !form.batch_tracking },
+    ))
   }
   return payload
 }
 
 /** Branch matrix for PUT /items/{id}/branches — includes unlisted branches removed from the grid. */
 export function buildBranchUpdatePayload(branchConfigs, previouslyListedIds = []) {
+  const previouslyListed = new Set(previouslyListedIds)
   const currentIds = new Set(branchConfigs.filter((bc) => bc.branch_id).map((bc) => bc.branch_id))
   const branches = branchConfigs
     .filter((bc) => bc.branch_id)
-    .map(branchConfigFields)
+    .map((bc) => branchConfigFields(
+      bc,
+      { includeOpeningStock: !previouslyListed.has(bc.branch_id) },
+    ))
 
   for (const id of previouslyListedIds) {
     if (!currentIds.has(id)) {

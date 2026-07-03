@@ -15,7 +15,7 @@ const QUICK_ACTIONS = [
   { icon: '🔄', label: 'Transfer Stock', path: '/transfers' },
 ]
 
-const BRANCH_COLORS = ['#6366f1', '#a78bfa', '#2dd4bf', '#f5a623', '#22c97a', '#f5485c']
+const BRANCH_COLORS = ['#1f7a4d', '#e87722', '#2dd4bf', '#f5a623', '#22a86b', '#f5485c']
 const ALERT_BORDER = { red: 'var(--red)', amber: 'var(--amber)', blue: 'var(--blue)' }
 const ALERT_ICON = { danger: '🔴', warning: '🟡', info: '🔵' }
 // API returns `{type: "danger"|"warning"|"info"}`; map to colour + icon.
@@ -76,8 +76,13 @@ export default function Dashboard() {
   const trendTotal = salesTrend.reduce((s, d) => s + (d.sales || 0), 0)
   const trendAvg   = salesTrend.length ? trendTotal / salesTrend.length : 0
   const trendPeak  = salesTrend.reduce((m, d) => Math.max(m, d.sales || 0), 0)
-  // Display fmt helpers for the trend footer (in lakhs / thousands).
-  const fmtLakh = (n) => n >= 100000 ? `₹${(n / 100000).toFixed(2)}L` : fmt(Math.round(n))
+  const fmtCompact = (n) => {
+    const abs = Math.abs(Number(n) || 0)
+      if (abs >= 1000000000) return `MVR ${(abs / 1000000000).toFixed(2)}B`
+      if (abs >= 1000000) return `MVR ${(abs / 1000000).toFixed(2)}M`
+      if (abs >= 1000) return `MVR ${(abs / 1000).toFixed(2)}K`
+      return fmt(Math.round(abs))
+  }
 
   return (
     <div className="page-container">
@@ -124,27 +129,27 @@ export default function Dashboard() {
             <AreaChart data={salesTrend} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#1f7a4d" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#1f7a4d" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="gPurch" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#a78bfa" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#e87722" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#e87722" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `₹${(v/1000).toFixed(0)}K`} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `MVR ${(v/1000).toFixed(0)}K`} />
               <Tooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-muted)' }} />
-              <Area type="monotone" dataKey="sales" name="Sales" stroke="#6366f1" strokeWidth={2.5} fill="url(#gSales)" dot={false} />
-              <Area type="monotone" dataKey="purchases" name="Purchases" stroke="#a78bfa" strokeWidth={2} fill="url(#gPurch)" dot={false} />
+              <Area type="monotone" dataKey="sales" name="Sales" stroke="#1f7a4d" strokeWidth={2.5} fill="url(#gSales)" dot={false} />
+              <Area type="monotone" dataKey="purchases" name="Purchases" stroke="#e87722" strokeWidth={2} fill="url(#gPurch)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
           <div style={{ display: 'flex', gap: 20, marginTop: 8, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total ({trendPeriod})</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtLakh(trendTotal)}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg/Day</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtLakh(trendAvg)}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Peak</div><div style={{ fontSize: 17, fontWeight: 600, color: 'var(--green)' }}>{fmtLakh(trendPeak)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total ({trendPeriod})</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendTotal)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg/Day</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendAvg)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Peak</div><div style={{ fontSize: 17, fontWeight: 600, color: 'var(--green)' }}>{fmtCompact(trendPeak)}</div></div>
           </div>
         </Card>
 

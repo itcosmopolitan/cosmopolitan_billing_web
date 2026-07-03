@@ -20,7 +20,7 @@ function DataTable({ title, columns, rows = [], loading = false, rowHeight = 44,
       {title && (
         <div className="card-header" style={{ padding: '12px 16px' }}>
           <h4 style={{ margin: 0, flex: 1 }}>{title}</h4>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{rows.length.toLocaleString('en-IN')} rows</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{rows.length.toLocaleString('en-MV')} rows</span>
         </div>
       )}
       <div

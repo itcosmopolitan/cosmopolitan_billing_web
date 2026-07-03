@@ -25,6 +25,7 @@ const BRANCH_TABS = [
 
 const MASTER_TABS = [
   { id: 'all',      label: 'All Items' },
+  { id: 'pending',  label: 'Pending Approval' },
   { id: 'inactive', label: 'Inactive' },
 ]
 
@@ -58,6 +59,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [adjLoading, setAdjLoading] = useState(false)
   // activity drawer used only in master mode
   const [activityTarget, setActivityTarget] = useState(null)
+  const [adjSubmitting, setAdjSubmitting] = useState(false)
   const [batchesModal, setBatchesModal] = useState(null) // item whose batches we're viewing
   const [nearExpiry, setNearExpiry]     = useState([])   // batches expiring within horizon
   const [nearExpiryDays, setNearExpiryDays] = useState(30)
@@ -88,7 +90,12 @@ export default function ItemsPage({ mode = 'branch' }) {
     try {
       setLoading(true)
       const params = isMaster
-        ? { master_mode: true, branch_id: branchFilter }
+        ? {
+            master_mode: true,
+            branch_id: branchFilter,
+            ...(tab === 'pending' ? { status: 'pending' } : {}),
+            ...(tab === 'inactive' ? { status: 'inactive' } : {}),
+          }
         : { branch_id: branchFilter, listed_only: true }
       const data = await fetchAllList(itemsAPI.list, params)
       setItems(data || [])
@@ -109,7 +116,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     } finally {
       setLoading(false)
     }
-  }, [branchFilter, isMaster])
+  }, [branchFilter, isMaster, tab])
 
   useEffect(() => {
     fetchItems()
@@ -156,7 +163,7 @@ export default function ItemsPage({ mode = 'branch' }) {
       const ids = new Set(nearExpiry.map((b) => b.itemId))
       list = list.filter((p) => ids.has(p.id))
     }
-    if (tab === 'inactive') list = list.filter((p) => p.active === false)
+    if (tab === 'inactive' && !isMaster) list = list.filter((p) => p.active === false)
     // Sort: numeric columns sort numerically, everything else string-compare.
     // 'category_id' uses the resolved categoryName for a UX that matches what
     // the user sees in the column.
@@ -205,6 +212,38 @@ export default function ItemsPage({ mode = 'branch' }) {
     navigate(`/item-master/${item.id}/edit`)
   }
 
+  const [itemActionBusy, setItemActionBusy] = useState(null)
+
+  const approveItem = async (item) => {
+    if (itemActionBusy) return
+    setItemActionBusy(item.id)
+    try {
+      await itemsAPI.approve(item.id)
+      toast.success(`${item.name} approved`)
+      await fetchItems()
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to approve item')
+    } finally {
+      setItemActionBusy(null)
+    }
+  }
+
+  const rejectItem = async (item) => {
+    if (itemActionBusy) return
+    setItemActionBusy(item.id)
+    try {
+      await itemsAPI.reject(item.id)
+      toast.success(`${item.name} rejected`)
+      await fetchItems()
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to reject item')
+    } finally {
+      setItemActionBusy(null)
+    }
+  }
+
   // Open the stock adjustment modal. For batch-tracked items we lazily fetch
   // the live batch list so the operator can pick a specific lot — defaulting
   // to "aggregate" which routes through FIFO/FEFO on the backend.
@@ -230,13 +269,15 @@ export default function ItemsPage({ mode = 'branch' }) {
   }
 
   const saveAdj = async () => {
+    if (adjSubmitting) return
     if (adjQty === '' || adjQty === null) { toast.error('Enter adjusted quantity'); return }
     if (!can('adjustments.create')) {
       toast.error('You do not have permission to request stock adjustments')
       return
     }
+    setAdjSubmitting(true)
     try {
-      await adjustmentsAPI.create({
+      const res = await adjustmentsAPI.create({
         branch_id: branchFilter,
         item_id: showAdj.id,
         item_name: showAdj.name,
@@ -246,7 +287,11 @@ export default function ItemsPage({ mode = 'branch' }) {
         batch_id: adjBatchId || undefined,
         requested_by: user?.name || 'Staff',
       })
-      toast.success(`Adjustment request submitted for ${showAdj.name}`)
+      toast.success(
+        res.status === 'approved'
+          ? `Adjustment ${res.ref_number} applied for ${showAdj.name}`
+          : `Adjustment ${res.ref_number} submitted for approval`,
+      )
       await fetchItems()
       setShowAdj(null)
     } catch (err) {
@@ -277,15 +322,15 @@ export default function ItemsPage({ mode = 'branch' }) {
             'Category': item.categoryName || '—',
             'Brand': item.brand || '—',
             'Unit': item.unit,
-            'Cost Price (₹)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
-            'Selling Price (₹)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
+            'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+            'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
             'GST (%)': item.tax_rate,
             ...(isMaster
               ? { 'Active Branches': item.available_branch_count ?? 0 }
               : {
                 'Stock': item.available_stock,
                 'Reorder Level': item.reorder_level,
-                'Stock Value (₹)': (item.available_stock || 0) * (item.cost_price || 0),
+                'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
               }),
           }))
           exportToCSV(exportData, `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
@@ -294,7 +339,7 @@ export default function ItemsPage({ mode = 'branch' }) {
         {!isMaster && can('adjustments.create') && (
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Request Adjustment</button>
         )}
-        {isMaster && can('items.create') && (
+        {isMaster && can('item_master.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
         )}
       </SectionHeader>
@@ -421,7 +466,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                   <SortableHeader label="Category" sortKey="category_id" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
                   <SortableHeader label={isMaster ? 'Default Cost' : 'Cost'} sortKey="cost_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
                   <SortableHeader label={isMaster ? 'Default Price' : 'Price'} sortKey="selling_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  {isMaster && <th>Branches</th>}
+                  {isMaster && <th>{tab === 'pending' ? 'Raised By' : 'Branches'}</th>}
                   <th>GST</th>
                   {!isMaster && (
                     <SortableHeader label="Stock" sortKey="available_stock" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
@@ -483,7 +528,11 @@ export default function ItemsPage({ mode = 'branch' }) {
                       </td>
                       {isMaster && (
                         <td>
-                          <Tag>{p.available_branch_count ?? 0} active</Tag>
+                          {tab === 'pending' ? (
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.created_by || '—'}</span>
+                          ) : (
+                            <Tag>{p.available_branch_count ?? 0} active</Tag>
+                          )}
                         </td>
                       )}
                       <td><Tag>{p.tax_rate}%</Tag></td>
@@ -495,16 +544,25 @@ export default function ItemsPage({ mode = 'branch' }) {
                       {!isMaster && <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>}
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!itemActionBusy}
                           ariaLabel={`Actions for ${p.name}`}
                           actions={isMaster ? [
                             {
-                              label: 'Activity',
-                              hidden: !(can('history.view') || can('comments.view')),
-                              onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name}` }),
+                              label: 'Approve',
+                              hidden: tab !== 'pending' || !can('item_master.approve'),
+                              disabled: itemActionBusy === p.id,
+                              onClick: () => approveItem(p),
+                            },
+                            {
+                              label: 'Reject',
+                              danger: true,
+                              hidden: tab !== 'pending' || !can('item_master.approve'),
+                              disabled: itemActionBusy === p.id,
+                              onClick: () => rejectItem(p),
                             },
                             {
                               label: 'Edit item',
-                              hidden: !can('items.edit'),
+                              hidden: tab === 'pending' || !can('item_master.edit'),
                               onClick: () => openEdit(p),
                             },
                           ] : [
@@ -541,10 +599,12 @@ export default function ItemsPage({ mode = 'branch' }) {
       {!isMaster && (
         <>
       {/* Stock Adjustment Modal — batch-aware */}
-      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
+      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'} busy={adjSubmitting}
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowAdj(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={saveAdj}>Submit for Approval</button>
+          <button className="btn btn-secondary" onClick={() => setShowAdj(null)} disabled={adjSubmitting}>Cancel</button>
+          <button className="btn btn-primary" onClick={saveAdj} disabled={adjSubmitting}>
+            {adjSubmitting ? 'Submitting…' : 'Submit for Approval'}
+          </button>
         </>}>
         {showAdj && (
           <>

@@ -2,16 +2,16 @@ import { useState } from 'react'
 import { SectionHeader, Card, SearchBar, Tag } from '@/components/ui'
 
 const AUDIT_LOGS = [
-  { id:1, action:'Invoice Created',       user:'Arjun M.',    module:'Sales',    ref:'INV-2024-1847', detail:'Created invoice for Rajesh Stores — ₹10,642', time:'16 Apr 2024, 10:42 AM', risk:'low' },
-  { id:2, action:'Discount Applied',      user:'Kavitha R.',  module:'Sales',    ref:'INV-2024-1844', detail:'Invoice discount ₹200 applied (1.1%) — within threshold', time:'16 Apr 2024, 11:18 AM', risk:'low' },
+  { id:1, action:'Invoice Created',       user:'Arjun M.',    module:'Sales',    ref:'INV-2024-1847', detail:'Created invoice for Rajesh Stores — MVR10,642', time:'16 Apr 2024, 10:42 AM', risk:'low' },
+  { id:2, action:'Discount Applied',      user:'Kavitha R.',  module:'Sales',    ref:'INV-2024-1844', detail:'Invoice discount MVR200 applied (1.1%) — within threshold', time:'16 Apr 2024, 11:18 AM', risk:'low' },
   { id:3, action:'Stock Transfer Approved',user:'Suresh Anand',module:'Inventory',ref:'TRF-2024-041',  detail:'Approved stock transfer AN→TN (3 items)', time:'16 Apr 2024, 11:30 AM', risk:'medium' },
-  { id:4, action:'Payment Recorded',      user:'Arjun M.',    module:'Finance',  ref:'INV-2024-1842', detail:'Partial payment ₹20,000 recorded for Anand Traders', time:'16 Apr 2024, 12:00 PM', risk:'low' },
-  { id:5, action:'Cash Entry',            user:'Kavitha R.',  module:'Cash',     ref:'CE-007',        detail:'Cash out ₹2,400 — Electricity bill TNEB-APR24', time:'16 Apr 2024, 12:15 PM', risk:'low' },
+  { id:4, action:'Payment Recorded',      user:'Arjun M.',    module:'Finance',  ref:'INV-2024-1842', detail:'Partial payment MVR20,000 recorded for Anand Traders', time:'16 Apr 2024, 12:00 PM', risk:'low' },
+  { id:5, action:'Cash Entry',            user:'Kavitha R.',  module:'Cash',     ref:'CE-007',        detail:'Cash out MVR2,400 — Electricity bill TNEB-APR24', time:'16 Apr 2024, 12:15 PM', risk:'low' },
   { id:6, action:'Invoice Cancelled',     user:'Kavitha R.',  module:'Sales',    ref:'INV-2024-1839', detail:'Invoice cancelled — Customer return', time:'15 Apr 2024, 05:30 PM', risk:'high' },
   { id:7, action:'Stock Adjustment',      user:'Deepa S.',    module:'Inventory',ref:'ADJ-041',       detail:'Basmati Rice reduced from 78 to 62 — Physical count', time:'15 Apr 2024, 06:00 PM', risk:'medium' },
   { id:8, action:'User Login',            user:'Suresh Anand',module:'Auth',     ref:'SYS',           detail:'Admin login from 103.x.x.x (Chrome/Windows)', time:'16 Apr 2024, 09:00 AM', risk:'low' },
-  { id:9, action:'Purchase Bill Edited',  user:'Kavitha R.',  module:'Purchases',ref:'PUR-2024-0409', detail:'Bill amount revised from ₹22,400 to ₹22,000 (discount added)', time:'14 Apr 2024, 03:10 PM', risk:'high' },
-  { id:10,action:'New Item Added',        user:'Deepa S.',    module:'Inventory',ref:'pr-016',        detail:'New item Chana Dal 1kg added — Cost ₹88, Price ₹110', time:'13 Apr 2024, 10:00 AM', risk:'low' },
+  { id:9, action:'Purchase Bill Edited',  user:'Kavitha R.',  module:'Purchases',ref:'PUR-2024-0409', detail:'Bill amount revised from MVR22,400 to MVR22,000 (discount added)', time:'14 Apr 2024, 03:10 PM', risk:'high' },
+  { id:10,action:'New Item Added',        user:'Deepa S.',    module:'Inventory',ref:'pr-016',        detail:'New item Chana Dal 1kg added — Cost MVR88, Price MVR110', time:'13 Apr 2024, 10:00 AM', risk:'low' },
 ]
 
 const RISK_COLORS = { low:'var(--green)', medium:'var(--amber)', high:'var(--red)' }

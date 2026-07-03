@@ -5,7 +5,7 @@ export function lineDiscountToPercent(line) {
   const price = Number(line.price || 0)
   const gross = qty * price
   const raw = Math.max(0, Number(line.lineDiscount || 0))
-  if (line.lineDiscountType === '₹') {
+  if (line.lineDiscountType === 'MVR') {
     if (gross <= 0) return 0
     return Math.min(100, (raw / gross) * 100)
   }
@@ -36,6 +36,8 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
     lineDiscountType: '%',
+    batchAllocation: it.batchAllocation || [],
+    batchAllocationCustom: Boolean(it.batchAllocation?.length),
     ...(withOrderLineId && it.id ? { orderLineId: it.id } : {}),
   }))
 }
@@ -73,6 +75,7 @@ export const emptyInvoiceForm = (branchId) => ({
   discount: 0,
   discountType: '%',
   invoiceDate: new Date().toISOString().split('T')[0],
+  dueDate: '',
   paymentReceived: false,
   paymentMethod: null,
   notes: '',
@@ -85,7 +88,7 @@ export function quoteFromRow(q, branchId) {
     branchId: q.branchId || branchId,
     items: mapSaleLines(q.items),
     discount: q.discount || 0,
-    discountType: '₹',
+    discountType: 'MVR',
     validUntil: q.validUntil || '',
     notes: q.notes || '',
   }
@@ -98,7 +101,7 @@ export function orderFromRow(so, branchId) {
     branchId: so.branchId || branchId,
     items: mapSaleLines(so.items),
     discount: so.discount || 0,
-    discountType: '₹',
+    discountType: 'MVR',
     expectedDate: so.expectedDate || '',
     notes: so.notes || '',
   }
@@ -107,12 +110,15 @@ export function orderFromRow(so, branchId) {
 export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) {
   return {
     ...emptyInvoiceForm(doc.branchId || branchId),
+    number: doc.number || '',
     customerName: doc.customerName || '',
     customerId: doc.customerId || '',
     branchId: doc.branchId || branchId,
     items: mapSaleLines(doc.items, { withOrderLineId }),
     discount: doc.discount || 0,
-    discountType: '₹',
+    discountType: 'MVR',
+    invoiceDate: doc.date || doc.invoiceDate || new Date().toISOString().split('T')[0],
+    dueDate: doc.dueDate || '',
     notes: doc.notes || '',
   }
 }

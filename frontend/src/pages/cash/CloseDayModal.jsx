@@ -87,7 +87,7 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
         ))}
       </div>
 
-      <FormGroup label="Physical Count (₹)" required>
+      <FormGroup label="Physical Count (MVR)" required>
         <input
           className="form-input"
           type="number"

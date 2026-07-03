@@ -20,12 +20,15 @@ export default function InvoiceFormModal({
   pif,
   saving = false,
   conversionLabel = null,
+  editMode = false,
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
-  const title = conversionLabel
-    ? `Create Invoice — from ${conversionLabel}`
-    : 'Create Invoice'
+  const title = editMode
+    ? `Edit Invoice — ${invoiceForm.number || ''}`
+    : conversionLabel
+      ? `Create Invoice — from ${conversionLabel}`
+      : 'Create Invoice'
   const pickedIds = invoiceForm.items.map((it) => it.item_id).filter(Boolean)
   const [allocEditor, setAllocEditor] = useState(null)
 
@@ -64,7 +67,7 @@ export default function InvoiceFormModal({
     const it = next[i]
     const gross = Number(it.qty || 0) * Number(it.price || 0)
     const raw = Math.max(0, Number(it.lineDiscount || 0))
-    const wasAmount = it.lineDiscountType === '₹'
+    const wasAmount = it.lineDiscountType === 'MVR'
     let newVal
     if (wasAmount) {
       newVal = gross > 0 ? (raw / gross) * 100 : 0
@@ -74,7 +77,7 @@ export default function InvoiceFormModal({
     next[i] = {
       ...it,
       lineDiscount: Math.round(newVal * 100) / 100,
-      lineDiscountType: wasAmount ? '%' : '₹',
+      lineDiscountType: wasAmount ? '%' : 'MVR',
     }
     pif('items', next)
   }
@@ -82,77 +85,100 @@ export default function InvoiceFormModal({
   const disableLineDiscount = shouldDisableLineDiscount(invoiceForm.discount)
 
   const formBody = (
-    <>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <DocumentNumberField
-          label="Invoice #"
-          docType="sales_invoice"
-          branchId={invoiceForm.branchId}
-          value={invoiceForm.number}
-          onChange={(v) => pif('number', v)}
-        />
-        <FormGroup label="Customer" required>
-          <CustomerPicker
-            value={invoiceForm.customerId
-              ? { id: invoiceForm.customerId, name: invoiceForm.customerName }
-              : null}
-            onPick={(c) => {
-              pif('customerId', c.id)
-              pif('customerName', c.name)
-            }}
-            onClear={() => {
-              pif('customerId', '')
-              pif('customerName', '')
-            }}
-          />
-        </FormGroup>
-        <FormGroup label="Invoice Date">
-          <input className="form-input" type="date"
-            value={invoiceForm.invoiceDate}
-            onChange={(e) => pif('invoiceDate', e.target.value)} />
-        </FormGroup>
+    <div className="invoice-form-shell">
+      <div className="invoice-form-panel">
+        <div className="invoice-form-panel__head">Invoice basics</div>
+        <div className="invoice-form-grid">
+          {editMode ? (
+            <FormGroup label="Invoice #">
+              <input className="form-input" value={invoiceForm.number || ''} readOnly
+                style={{ background: 'var(--bg-subtle)', cursor: 'default' }} />
+            </FormGroup>
+          ) : (
+            <DocumentNumberField
+              label="Invoice #"
+              docType="sales_invoice"
+              branchId={invoiceForm.branchId}
+              value={invoiceForm.number}
+              onChange={(v) => pif('number', v)}
+            />
+          )}
+          <FormGroup label="Customer" required>
+            <CustomerPicker
+              value={invoiceForm.customerId
+                ? { id: invoiceForm.customerId, name: invoiceForm.customerName }
+                : null}
+              onPick={(c) => {
+                pif('customerId', c.id)
+                pif('customerName', c.name)
+              }}
+              onClear={() => {
+                pif('customerId', '')
+                pif('customerName', '')
+              }}
+            />
+          </FormGroup>
+          <FormGroup label="Invoice Date">
+            <input className="form-input" type="date"
+              value={invoiceForm.invoiceDate}
+              onChange={(e) => pif('invoiceDate', e.target.value)} />
+          </FormGroup>
+        </div>
+
+        <div className="invoice-form-payment">
+          <FormGroup label="Payment">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 420 }}>
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 10px',
+                border: `1.5px solid ${invoiceForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
+                background: invoiceForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
+                borderRadius: 6, cursor: 'pointer',
+                fontSize: 13, fontWeight: 500,
+                color: invoiceForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={!!invoiceForm.paymentReceived}
+                  onChange={(e) => pif('paymentReceived', e.target.checked)}
+                  style={{ accentColor: 'var(--accent)' }}
+                />
+                <span>Payment received?</span>
+              </label>
+              {invoiceForm.paymentReceived && (
+                <select
+                  className="form-input"
+                  value={invoiceForm.paymentMethod || ''}
+                  onChange={(e) => pif('paymentMethod', e.target.value || null)}
+                  style={{ fontSize: 13 }}
+                >
+                  <option value="" disabled>Select method…</option>
+                  <option value="cash">💵 Cash</option>
+                  <option value="card">💳 Card</option>
+                  <option value="upi">📱 UPI</option>
+                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                </select>
+              )}
+            </div>
+          </FormGroup>
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-        <FormGroup label="Payment">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '8px 10px',
-              border: `1.5px solid ${invoiceForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
-              background: invoiceForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
-              borderRadius: 6, cursor: 'pointer',
-              fontSize: 13, fontWeight: 500,
-              color: invoiceForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
-            }}>
-              <input
-                type="checkbox"
-                checked={!!invoiceForm.paymentReceived}
-                onChange={(e) => pif('paymentReceived', e.target.checked)}
-                style={{ accentColor: 'var(--accent)' }}
-              />
-              <span>Payment received?</span>
-            </label>
-            {invoiceForm.paymentReceived && (
-              <select
-                className="form-input"
-                value={invoiceForm.paymentMethod || ''}
-                onChange={(e) => pif('paymentMethod', e.target.value || null)}
-                style={{ fontSize: 13 }}
-              >
-                <option value="" disabled>Select method…</option>
-                <option value="cash">💵 Cash</option>
-                <option value="card">💳 Card</option>
-                <option value="upi">📱 UPI</option>
-                <option value="bank_transfer">🏦 Bank Transfer</option>
-              </select>
-            )}
-          </div>
-        </FormGroup>
-      </div>
+      {editMode && (
+        <div style={{ marginBottom: 16 }}>
+          <FormGroup label="Due Date">
+            <input className="form-input" type="date"
+              value={invoiceForm.dueDate || ''}
+              onChange={(e) => pif('dueDate', e.target.value)} />
+          </FormGroup>
+        </div>
+      )}
 
-      <FormGroup label="Items" required>
-        <table className="data-table" style={{ marginBottom: 12 }}>
+      <div className="invoice-form-panel">
+        <div className="invoice-form-panel__head">Line items</div>
+        <div className="invoice-form-panel__sub">Add inventory lines, then adjust discount and lot split where needed.</div>
+        <div className="invoice-form-table-wrap">
+        <table className="data-table invoice-form-table" style={{ marginBottom: 12 }}>
           <thead>
             <tr>
               <th>Item</th>
@@ -169,7 +195,7 @@ export default function InvoiceFormModal({
                 ? { id: it.item_id, name: it.name }
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
-              const type = it.lineDiscountType === '₹' ? '₹' : '%'
+              const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -199,7 +225,7 @@ export default function InvoiceFormModal({
                       onChange={(e) => { const n = [...invoiceForm.items]; n[i].price = e.target.value; pif('items', n) }} />
                   </td>
                   <td>
-                    <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
+                    <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>
                       <input className="form-input" type="number" disabled={disableLineDiscount}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
@@ -238,11 +264,12 @@ export default function InvoiceFormModal({
             })}
           </tbody>
         </table>
+        </div>
         <button className="btn btn-secondary btn-sm"
           onClick={() => pif('items', [...invoiceForm.items, emptySaleLine()])}>
           + Add Item
         </button>
-      </FormGroup>
+      </div>
 
       {allocEditor != null && invoiceForm.items[allocEditor.index] && (
         <BatchAllocationModal
@@ -272,20 +299,22 @@ export default function InvoiceFormModal({
         </p>
       )}
 
-      <DocumentTotalsStrip
-        items={invoiceForm.items}
-        entityDiscount={invoiceForm.discount}
-        entityDiscountType={invoiceForm.discountType || '%'}
-        onEntityDiscountChange={(v) => pif('discount', v)}
-        onEntityDiscountTypeChange={(t) => pif('discountType', t)}
-        lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
-      />
+      <div className="invoice-form-panel invoice-form-panel--muted">
+        <DocumentTotalsStrip
+          items={invoiceForm.items}
+          entityDiscount={invoiceForm.discount}
+          entityDiscountType={invoiceForm.discountType || '%'}
+          onEntityDiscountChange={(v) => pif('discount', v)}
+          onEntityDiscountTypeChange={(t) => pif('discountType', t)}
+          lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+        />
 
-      <FormGroup label="Notes">
-        <textarea className="form-input" style={{ height: 72 }}
-          value={invoiceForm.notes} onChange={(e) => pif('notes', e.target.value)} />
-      </FormGroup>
-    </>
+        <FormGroup label="Notes">
+          <textarea className="form-input" style={{ height: 72 }}
+            value={invoiceForm.notes} onChange={(e) => pif('notes', e.target.value)} />
+        </FormGroup>
+      </div>
+    </div>
   )
 
   if (embedded) return formBody
@@ -293,10 +322,11 @@ export default function InvoiceFormModal({
   return (
     <Modal
       open={open}
-      onClose={saving ? () => {} : onClose}
+      onClose={onClose}
       title={title}
       icon="🧾"
       size="lg"
+      busy={saving}
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>

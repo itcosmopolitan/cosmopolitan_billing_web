@@ -27,6 +27,7 @@ export default function CustomersPage() {
   const branches = useAppStore((s) => s.branches)
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
+  const [saving, setSaving] = useState(false)
   const [form, setForm]         = useState({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id:'', credit_limit:'10000', customer_type:'retail' })
 
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
@@ -106,9 +107,11 @@ export default function CustomersPage() {
   }), [custTotal, custSummary, customers])
 
   const save = async () => {
+    if (saving) return
     if (!form.name) { toast.error('Customer name required'); return }
     if (!form.branch_id) { toast.error('Select a branch'); return }
 
+    setSaving(true)
     try {
       const payload = {
         name: form.name,
@@ -123,13 +126,14 @@ export default function CustomersPage() {
 
       await customersAPI.create(payload)
       setListVersion((v) => v + 1)
-      await loadBranches()
       toast.success('Customer added successfully')
       setShowAdd(false)
       setForm({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id: branches[0]?.id || '', credit_limit:'10000', customer_type:'retail' })
     } catch (err) {
       console.error('Failed to save customer:', err)
       toast.error('Failed to add customer')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -172,11 +176,11 @@ export default function CustomersPage() {
             'Phone': c.phone || '—',
             'Email': c.email || '—',
             'Address': c.address || '—',
-            'GST IN': c.gstIn || '—',
+            'GST Reg No': c.gstIn || '—',
             'Type': (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
-            'Credit Limit (₹)': c.creditLimit || 0,
-            'Outstanding (₹)': c.outstanding || 0,
-            'Total Purchases (₹)': c.totalPurchases || 0,
+            'Credit Limit (MVR)': c.creditLimit || 0,
+            'Outstanding (MVR)': c.outstanding || 0,
+            'Total Purchases (MVR)': c.totalPurchases || 0,
           }))
           exportToCSV(exportData, `Customers_${new Date().toISOString().split('T')[0]}.csv`)
           toast.success('Customers exported')
@@ -231,7 +235,7 @@ export default function CustomersPage() {
                   <tr key={c.id}>
                     <td>
                       <div style={{ fontWeight:500, color:'var(--text-primary)', fontSize:13 }}>{c.name}</div>
-                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.gstIn || 'No GSTIN'}</div>
+                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.gstIn || 'No GST Reg No'}</div>
                     </td>
                     <td>
                       <div style={{ fontSize:12.5 }}>{c.phone}</div>
@@ -275,18 +279,18 @@ export default function CustomersPage() {
       </Card>
 
       {/* Add Customer */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" icon="👤" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save Customer</button></>}>
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" icon="👤" size="md" busy={saving}
+        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Customer'}</button></>}>
         <FormRow><FormGroup label="Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} placeholder="Full name or company" /></FormGroup>
         <FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} placeholder="10-digit mobile" /></FormGroup></FormRow>
         <FormRow><FormGroup label="Email"><input className="form-input" value={form.email} onChange={e=>pf('email',e.target.value)} type="email" /></FormGroup>
-        <FormGroup label="GSTIN"><input className="form-input" value={form.gst_in} onChange={e=>pf('gst_in',e.target.value)} placeholder="For B2B customers" /></FormGroup></FormRow>
+        <FormGroup label="GST Reg No"><input className="form-input" value={form.gst_in} onChange={e=>pf('gst_in',e.target.value)} placeholder="For business customers" /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
         <FormRow>
           <FormGroup label="Primary Branch" required><select className="form-input" value={form.branch_id} onChange={e=>pf('branch_id',e.target.value)}><option value="">Select branch…</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></FormGroup>
           <FormGroup label="Type"><select className="form-input" value={form.customer_type} onChange={e=>pf('customer_type',e.target.value)}><option value="retail">Retail</option><option value="wholesale">Wholesale / B2B</option></select></FormGroup>
         </FormRow>
-        <FormGroup label="Credit Limit (₹)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
+        <FormGroup label="Credit Limit (MVR)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
       </Modal>
 
       {/* Detail Modal */}
@@ -297,7 +301,7 @@ export default function CustomersPage() {
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
               {[
                 {label:'Phone', value:showDetail.phone},{label:'Email', value:showDetail.email||'—'},
-                {label:'GSTIN', value:showDetail.gstIn||'—'},{label:'Type', value:showDetail.type==='wholesale'?'Wholesale':'Retail'},
+                {label:'GST Reg No', value:showDetail.gstIn||'—'},{label:'Type', value:showDetail.type==='wholesale'?'Wholesale':'Retail'},
                 {label:'Credit Limit', value:fmt(showDetail.creditLimit)},
                 {label:'Outstanding', value:<span style={{color:showDetail.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(showDetail.outstanding)}</span>},
                 {label:'Store Credit', value:<span style={{color:showDetail.creditBalance>0?'var(--accent)':'var(--text-muted)'}}>{showDetail.creditBalance>0?fmt(showDetail.creditBalance):'—'}</span>},

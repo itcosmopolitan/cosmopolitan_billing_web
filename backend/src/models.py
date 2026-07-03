@@ -17,10 +17,17 @@ from src.database import Base
 class UserRole(str, enum.Enum):
     super_admin       = "super_admin"
     branch_manager    = "branch_manager"
+    branch_supervisor = "branch_supervisor"
     cashier           = "cashier"
     inventory_manager = "inventory_manager"
     finance           = "finance"
     purchase_admin    = "purchase_admin"
+
+
+class ItemApprovalStatus(str, enum.Enum):
+    approved = "approved"
+    pending  = "pending"
+    rejected = "rejected"
 
 class InvoiceStatus(str, enum.Enum):
     draft   = "draft"
@@ -71,6 +78,7 @@ class PurchaseOrderStatus(str, enum.Enum):
     purchase workflows grow new states (e.g. `approved_pending_receipt`).
     """
     draft              = "draft"
+    pending_approval   = "pending_approval"
     confirmed          = "confirmed"
     partially_received = "partially_received"
     converted          = "converted"
@@ -268,6 +276,13 @@ class Item(Base):
     batch_tracking  = Column(Boolean, default=False)
     expiry_tracking = Column(Boolean, default=False)
     active          = Column(Boolean, default=True)
+    approval_status = Column(
+        SAEnum(ItemApprovalStatus),
+        default=ItemApprovalStatus.approved,
+        nullable=False,
+    )
+    created_by      = Column(String)
+    approved_by     = Column(String)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

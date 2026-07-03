@@ -8,7 +8,7 @@
  *     No inline branch picker on either form.
  *   • Bills + POs use VendorPicker + InventoryItemPicker (mirror of
  *     CustomerPicker + items picker from Sales).
- *   • Per-line discount with % / ₹ toggle (mirror of SO/Quote modals).
+ *   • Per-line discount with % / MVR toggle (mirror of SO/Quote modals).
  *   • Bills are immutable — only Record Payment + Cancel.
  *   • PO → Bill convert uses ConvertPOToBillModal with batch capture
  *     for tracked items (operator types the actual lot # / mfg / expiry
@@ -604,6 +604,24 @@ export default function PurchasesPage() {
     })
   }
 
+  const approvePO = async (po) => {
+    if (!po?.id) return
+    await runRowAction(po.id, 'approve-po', async () => {
+      await purchasesAPI.orders.approve(po.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${po.number} approved`)
+    })
+  }
+
+  const rejectPO = async (po) => {
+    if (!po?.id) return
+    await runRowAction(po.id, 'reject-po', async () => {
+      await purchasesAPI.orders.reject(po.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${po.number} rejected`)
+    })
+  }
+
   const billFromGrn = (grn) => {
     if (!grn?.id) return
     navigate(`/purchases/bills/new?fromGrn=${grn.id}`)
@@ -638,9 +656,9 @@ export default function PurchasesPage() {
             'Vendor': b.vendorName || '—',
             'Bill Date': b.date || '—',
             'Due Date': b.dueDate || '—',
-            'Amount (₹)': b.total || 0,
-            'Paid (₹)': b.paidAmount || 0,
-            'Outstanding (₹)': (b.total || 0) - (b.paidAmount || 0),
+            'Amount (MVR)': b.total || 0,
+            'Paid (MVR)': b.paidAmount || 0,
+            'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
             'Status': (b.status || '—').toUpperCase(),
           }))
           exportToCSV(exportData, `Purchases_${new Date().toISOString().split('T')[0]}.csv`)
@@ -700,7 +718,7 @@ export default function PurchasesPage() {
                   {bills.map((b) => {
                     const balance = (b.total || 0) - (b.paidAmount || 0)
                     const canPay = b.status !== 'paid' && b.status !== 'cancelled'
-                    const canEdit = b.status !== 'paid' && b.status !== 'cancelled'
+                    const canEdit = b.status !== 'paid' && b.status !== 'cancelled' && !(b.paidAmount > 0)
                     const canCancel = b.status !== 'cancelled' && !(b.paidAmount > 0)
                     return (
                       <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
@@ -726,6 +744,7 @@ export default function PurchasesPage() {
                         <td><ReturnStatusChip status={b.returnStatus} /></td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for ${b.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(b.id), onClick: () => setShowDetail(b) },
@@ -789,7 +808,7 @@ export default function PurchasesPage() {
             <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
             <select className="form-input" style={{ width: 140 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
               <option value="">All Status</option>
-              {['draft','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
+              {['draft','pending_approval','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
             </select>
             <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
               <option value="">All Vendors</option>
@@ -826,7 +845,8 @@ export default function PurchasesPage() {
                     const isConverted = o.status === 'converted'
                     const isCancelled = o.status === 'cancelled'
                     const isPartiallyReceived = o.status === 'partially_received'
-                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived
+                    const isPendingApproval = o.status === 'pending_approval'
+                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived && !isPendingApproval
                     return (
                       <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -846,8 +866,22 @@ export default function PurchasesPage() {
                         <td>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <RowActionsMenu
+                              busy={!!actionBusy}
                               ariaLabel={`Actions for ${o.number}`}
                               actions={[
+                                {
+                                  label: 'Approve',
+                                  hidden: !isPendingApproval || !can('purchases.approve'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => approvePO(o),
+                                },
+                                {
+                                  label: 'Reject',
+                                  danger: true,
+                                  hidden: !isPendingApproval || !can('purchases.approve'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => rejectPO(o),
+                                },
                                 {
                                   label: 'View',
                                   hidden: !(isConverted || isCancelled || isPartiallyReceived) || !can('purchases.edit'),
@@ -978,6 +1012,7 @@ export default function PurchasesPage() {
                         <td style={{ fontSize: 12 }}>{hasBill ? 'Linked' : '—'}</td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for ${g.number}`}
                             actions={[
                               {
@@ -1080,6 +1115,7 @@ export default function PurchasesPage() {
                       <td><Chip status={r.status} /></td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
                             { label: 'View', disabled: isRowBusy(r.id), onClick: () => setReturnDetail(r) },
@@ -1189,6 +1225,7 @@ export default function PurchasesPage() {
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || '—'}</td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for payment ${p.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
@@ -1279,7 +1316,7 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Payment Modal ─────────────────────────────────────────── */}
-      <Modal open={!!showPay} onClose={() => !paySaving && setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm"
+      <Modal open={!!showPay} onClose={() => setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm" busy={paySaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowPay(null)} disabled={paySaving}>Cancel</button>
           <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
@@ -1294,7 +1331,7 @@ export default function PurchasesPage() {
                 Balance: <strong>{fmt(balance)}</strong> for {showPay.vendorName || 'vendor'}
               </AlertBar>
               <div style={{ height: 14 }} />
-              <FormGroup label="Amount Paid (₹)" required>
+              <FormGroup label="Amount Paid (MVR)" required>
                 <input className="form-input" type="number"
                   value={payAmt}
                   onChange={(e) => setPayAmt(e.target.value)}
@@ -1321,7 +1358,7 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Cancel Bill Confirm ───────────────────────────────────── */}
-      <Modal open={!!showCancel} onClose={() => !cancelSaving && setShowCancel(null)} title="Cancel Bill" icon="⚠️" size="sm"
+      <Modal open={!!showCancel} onClose={() => setShowCancel(null)} title="Cancel Bill" icon="⚠️" size="sm" busy={cancelSaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowCancel(null)} disabled={cancelSaving}>Keep Bill</button>
           <button className="btn btn-danger" onClick={cancelBill} disabled={cancelSaving}>

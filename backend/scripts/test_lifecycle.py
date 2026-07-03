@@ -397,6 +397,44 @@ class LifecycleTester:
         assert credit_after >= credit_before + float(inv.get("total") or 0) - 0.01
         return {"invoice_id": inv["id"], "number": inv["number"]}
 
+    def test_unpaid_invoice_edit(self, invoice_id: str) -> None:
+        """Add a missed line to a pending invoice."""
+        inv = self.req("GET", f"/sales/{invoice_id}")
+        assert inv.get("status") == "pending"
+        assert (inv.get("paidAmount") or 0) == 0
+        updated = self.req("PUT", f"/sales/{invoice_id}", json={
+            "customer_id": CUSTOMER,
+            "customer_name": CUSTOMER_NAME,
+            "items": [
+                {"item_id": ITEM_TRACKED, "name": ITEM_TRACKED_NAME,
+                 "qty": 1, "price": 160, "tax_rate": 18},
+                {"item_id": ITEM_BATCH, "name": ITEM_BATCH_NAME,
+                 "qty": 1, "price": 120, "tax_rate": 5},
+            ],
+            "discount": 0,
+            "notes": "lifecycle edit — added missed item",
+        }, expect=200)
+        assert len(updated.get("items") or []) == 2
+        assert updated.get("notes") == "lifecycle edit — added missed item"
+
+    def test_unpaid_bill_edit(self, bill_id: str) -> None:
+        """Edit a pending bill line items."""
+        bill = self.req("GET", f"/purchases/{bill_id}")
+        assert bill.get("status") == "pending"
+        assert (bill.get("paidAmount") or 0) == 0
+        updated = self.req("PUT", f"/purchases/{bill_id}", json={
+            "vendor_id": VENDOR,
+            "vendor_name": VENDOR_NAME,
+            "items": [
+                {"item_id": ITEM_TRACKED, "name": ITEM_TRACKED_NAME,
+                 "qty": 2, "cost": 128, "tax_rate": 18},
+            ],
+            "discount": 0,
+            "notes": "lifecycle edit — qty corrected",
+        }, expect=200)
+        assert len(updated.get("items") or []) == 1
+        assert updated["items"][0]["qty"] == 2
+
     def test_sales_return_credit(self, invoice_id: str) -> str:
         inv = self.req("GET", f"/sales/{invoice_id}")
         line = inv["items"][0]
@@ -547,6 +585,14 @@ def main() -> int:
     def _pos_refund():
         ctx["pos_refund"] = t.test_pos_sale_credit_refund()
     t.run("POS: Sale + store-credit refund", _pos_refund)
+
+    def _invoice_edit():
+        t.test_unpaid_invoice_edit(ctx["quote_inv"]["invoice_id"])
+    t.run("Sales: Edit unpaid invoice", _invoice_edit)
+
+    def _bill_edit():
+        t.test_unpaid_bill_edit(ctx["direct_bill"]["bill"]["id"])
+    t.run("Purchases: Edit unpaid bill", _bill_edit)
 
     def _sales_return():
         ctx["return_id"] = t.test_sales_return_credit(ctx["direct_inv"]["invoice_id"])

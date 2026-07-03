@@ -13,14 +13,6 @@ export const api = axios.create({
 const _originalGet = api.get.bind(api)
 const _inFlightGetRequests = new Map()
 api.get = (url, config) => {
-  // AbortController-backed requests must not dedupe — remounting a tab (React
-  // StrictMode or switching settings tabs) aborts the first signal while the
-  // deduped promise is still in-flight, so the next caller gets a canceled
-  // promise and no new network request is sent.
-  if (config?.signal) {
-    return _originalGet(url, config)
-  }
-
   // Create a stable key from url + sorted params
   const params = (config && config.params) ? config.params : undefined
   let key
@@ -36,6 +28,21 @@ api.get = (url, config) => {
   return promise
 }
 
+/** Dedupe session-expiry handling when many requests 401 at once. */
+let handlingSessionExpiry = false
+
+export function resetSessionExpiryGuard() {
+  handlingSessionExpiry = false
+}
+
+function isLoginRequest(url) {
+  return url.includes('/auth/login')
+}
+
+function isAuthMeRequest(url) {
+  return url.includes('/auth/me')
+}
+
 // Request interceptor — attach token
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('retailos_token')
@@ -47,15 +54,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res.data,
   (err) => {
-    // Intentional cancellation (tab switch, unmount) — not an error for the user.
-    if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
-      return Promise.reject(err)
-    }
-
     const rawDetail = err?.response?.data?.detail
     const status = err?.response?.status
     const url = err?.config?.url || ''
-    const isAuthEndpoint = url.startsWith('/auth/')
 
     // Some endpoints return structured detail objects (e.g. bulk-delete
     // returns `{blocked: [...], message: "..."}` so the caller can render
@@ -84,16 +85,23 @@ api.interceptors.response.use(
       Array.isArray(rawDetail.blocked)
 
     if (status === 401) {
-      // Always surface the message — silent redirect on 401 made wrong-password
-      // login look broken (no toast, no UI change).
-      toast.error(msg)
-      // Don't kick the user to /login if the failing request IS /auth/login
-      // (already there) or /auth/me (App.jsx boot — RequireAuth handles it).
-      if (!isAuthEndpoint) {
-        localStorage.removeItem('retailos_token')
-        const here = window.location.pathname
-        if (here !== '/login') window.location.href = '/login'
+      if (isLoginRequest(url)) {
+        // Wrong credentials — operator is already on the login form.
+        toast.error(msg || 'Invalid email or password')
+      } else if (!isAuthMeRequest(url) && !isLoginRequest(url)) {
+        // Session expired or invalid token — redirect once, no error spam.
+        if (!handlingSessionExpiry) {
+          handlingSessionExpiry = true
+          localStorage.removeItem('retailos_token')
+          const here = window.location.pathname
+          if (here !== '/login') {
+            window.location.replace('/login')
+          } else {
+            resetSessionExpiryGuard()
+          }
+        }
       }
+      // Boot-time /auth/me failure: RequireAuth sends user to login — stay silent.
     } else if (!isBulkDeleteBlocked) {
       toast.error(msg)
     }
@@ -144,6 +152,8 @@ export const itemsAPI = {
   get:     (id)     => api.get(`/items/${id}`),
   create:  (data)   => api.post('/items/', data),
   update:  (id, data) => api.put(`/items/${id}`, data),
+  approve: (id)     => api.post(`/items/${id}/approve`),
+  reject:  (id, notes) => api.post(`/items/${id}/reject`, { notes }),
   adjust:  (data)   => api.post('/items/adjust', data),
   delete:  (id)     => api.delete(`/items/${id}`),
   getBranches:    (id) => api.get(`/items/${id}/branches`),
@@ -158,6 +168,10 @@ export const itemsAPI = {
     patch:       (batchId, data)  => api.patch(`/items/batches/${batchId}`, data),
     nearExpiry:  (params)         => api.get('/items/batches/near-expiry', { params }),
   },
+  categories: {
+    list:   ()     => api.get('/items/categories'),
+    create: (data) => api.post('/items/categories', data),
+  },
 }
 
 // ─── Sales ────────────────────────────────────────────────────────────────────
@@ -165,6 +179,7 @@ export const salesAPI = {
   list:    (params) => api.get('/sales/',             { params }),
   get:     (id)     => api.get(`/sales/${id}`),
   create:  (data)   => api.post('/sales/', data),
+  update:  (id, data) => api.put(`/sales/${id}`, data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
   // creditPurchases endpoint removed 2026-05-23 (Sales Phase 1) — see
@@ -242,8 +257,6 @@ export const purchasesAPI = {
   create:  (data)   => api.post('/purchases/', data),
   update:  (id, data) => api.put(`/purchases/${id}`, data),
   payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
-  // 2026-05-24: cancel endpoint added. Sales has the equivalent.
-  // Bills are immutable — only Record Payment + Cancel are allowed.
   cancel:  (id)     => api.post(`/purchases/${id}/cancel`),
   // Purchase Orders — mirror of salesAPI.orders. PO is the intent doc;
   // convert spawns a bill (which is what moves stock + creates batches).
@@ -253,6 +266,8 @@ export const purchasesAPI = {
     create:       (data)   => api.post('/purchases/orders/', data),
     update:       (id, data) => api.put(`/purchases/orders/${id}`, data),
     updateStatus: (id, status) => api.patch(`/purchases/orders/${id}/status`, { status }),
+    approve:      (id, notes) => api.post(`/purchases/orders/${id}/approve`, { notes }),
+    reject:       (id, notes) => api.post(`/purchases/orders/${id}/reject`, { notes }),
     convert:      (id, body) => api.post(`/purchases/orders/${id}/convert`, body),
   },
   grns: {

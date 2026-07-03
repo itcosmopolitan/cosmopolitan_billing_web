@@ -2,15 +2,31 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as Icon from '@/components/ui/Icons'
 
+function MiniSpinner({ size = 14 }) {
+  return (
+    <svg className="spinner" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
+      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 /**
  * Three-dot row action menu. Pass `actions` as
- * [{ label, onClick, hidden?, disabled?, danger? }].
+ * [{ label, onClick, hidden?, disabled?, danger?, loadingLabel? }].
+ *
+ * Async `onClick` handlers are awaited; the trigger and all items stay
+ * disabled until the promise settles. Pass `busy` when the parent page
+ * already has an in-flight row action (blocks every menu on the page).
  */
-export default function RowActionsMenu({ actions, ariaLabel = 'Row actions' }) {
+export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', busy = false }) {
   const triggerRef = useRef(null)
   const menuRef = useRef(null)
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ top: 0, left: 0 })
+  const [pendingLabel, setPendingLabel] = useState(null)
+
+  const menuBusy = busy || !!pendingLabel
 
   const visible = (actions || []).filter((a) => !a.hidden)
   if (visible.length === 0) return null
@@ -34,10 +50,13 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions' }) {
         triggerRef.current?.contains(e.target)
         || menuRef.current?.contains(e.target)
       ) return
+      if (menuBusy) return
       setOpen(false)
     }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
-    const onScroll = () => setOpen(false)
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !menuBusy) setOpen(false)
+    }
+    const onScroll = () => { if (!menuBusy) setOpen(false) }
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey)
     window.addEventListener('scroll', onScroll, true)
@@ -46,7 +65,24 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions' }) {
       document.removeEventListener('keydown', onKey)
       window.removeEventListener('scroll', onScroll, true)
     }
-  }, [open])
+  }, [open, menuBusy])
+
+  useEffect(() => {
+    if (menuBusy) setOpen(false)
+  }, [menuBusy])
+
+  const runAction = async (action) => {
+    if (action.disabled || menuBusy) return
+    setOpen(false)
+    const result = action.onClick?.()
+    if (!result || typeof result.then !== 'function') return
+    setPendingLabel(action.label)
+    try {
+      await result
+    } finally {
+      setPendingLabel(null)
+    }
+  }
 
   const menu = open ? createPortal(
     <div
@@ -66,43 +102,49 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions' }) {
         padding: '4px 0',
       }}
     >
-      {visible.map((action) => (
-        <button
-          key={action.label}
-          type="button"
-          role="menuitem"
-          disabled={action.disabled}
-          onClick={() => {
-            if (action.disabled) return
-            setOpen(false)
-            action.onClick?.()
-          }}
-          style={{
-            display: 'block',
-            width: '100%',
-            padding: '8px 14px',
-            border: 'none',
-            background: 'transparent',
-            textAlign: 'left',
-            fontSize: 12.5,
-            fontWeight: 500,
-            cursor: action.disabled ? 'not-allowed' : 'pointer',
-            color: action.danger ? 'var(--red)' : 'var(--text-secondary)',
-            opacity: action.disabled ? 0.5 : 1,
-          }}
-          onMouseEnter={(e) => {
-            if (action.disabled) return
-            e.currentTarget.style.background = action.danger ? 'var(--red-bg)' : 'var(--bg-hover)'
-            if (!action.danger) e.currentTarget.style.color = 'var(--text-primary)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.color = action.danger ? 'var(--red)' : 'var(--text-secondary)'
-          }}
-        >
-          {action.label}
-        </button>
-      ))}
+      {visible.map((action) => {
+        const isPending = pendingLabel === action.label
+        const itemDisabled = action.disabled || menuBusy
+        const label = isPending
+          ? (action.loadingLabel || `${action.label}…`)
+          : action.label
+        return (
+          <button
+            key={action.label}
+            type="button"
+            role="menuitem"
+            disabled={itemDisabled}
+            onClick={() => runAction(action)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              width: '100%',
+              padding: '8px 14px',
+              border: 'none',
+              background: 'transparent',
+              textAlign: 'left',
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: itemDisabled ? 'not-allowed' : 'pointer',
+              color: action.danger ? 'var(--red)' : 'var(--text-secondary)',
+              opacity: itemDisabled ? 0.5 : 1,
+            }}
+            onMouseEnter={(e) => {
+              if (itemDisabled) return
+              e.currentTarget.style.background = action.danger ? 'var(--red-bg)' : 'var(--bg-hover)'
+              if (!action.danger) e.currentTarget.style.color = 'var(--text-primary)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent'
+              e.currentTarget.style.color = action.danger ? 'var(--red)' : 'var(--text-secondary)'
+            }}
+          >
+            {isPending && <MiniSpinner size={14} />}
+            {label}
+          </button>
+        )
+      })}
     </div>,
     document.body,
   ) : null
@@ -116,10 +158,15 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions' }) {
         aria-label={ariaLabel}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        style={{ padding: '4px 8px', lineHeight: 1 }}
+        aria-busy={menuBusy}
+        disabled={menuBusy}
+        onClick={() => {
+          if (menuBusy) return
+          setOpen((v) => !v)
+        }}
+        style={{ padding: '4px 8px', lineHeight: 1, opacity: menuBusy ? 0.5 : 1 }}
       >
-        <Icon.MoreVertical size={16} />
+        {menuBusy && pendingLabel ? <MiniSpinner size={14} /> : <Icon.MoreVertical size={16} />}
       </button>
       {menu}
     </>

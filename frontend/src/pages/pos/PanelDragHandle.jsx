@@ -20,16 +20,17 @@ export default function PanelDragHandle({ panel, onDragEnd, title }) {
       style={{
         flexShrink: 0,
         cursor: 'grab',
-        padding: '6px 7px',
-        borderRadius: 8,
-        border: '1px solid var(--border-default)',
-        background: 'var(--bg-raised)',
+        padding: '5px 6px',
+        borderRadius: 6,
+        border: '1px dashed var(--border-default)',
+        background: 'transparent',
         color: 'var(--text-muted)',
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: 700,
         lineHeight: 1,
         letterSpacing: -0.5,
         userSelect: 'none',
+        opacity: 0.85,
       }}
     >
       ⋮⋮

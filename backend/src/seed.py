@@ -161,8 +161,8 @@ async def seed():
             User(id="usr-001", name="Suresh Anand", email="suresh@srimurugan.com",  hashed_password=hp("admin123"),    role="super_admin",       role_id="role-super-admin",       branch_id="br-001", avatar="SA", active=True,  must_change_password=False, all_branches=False),
             User(id="usr-002", name="Kavitha R.",   email="kavitha@srimurugan.com", hashed_password=hp("kavitha123"),  role="branch_manager",    role_id="role-branch-manager",    branch_id="br-001", avatar="KR", active=True,  must_change_password=False, all_branches=False),
             User(id="usr-003", name="Arjun M.",     email="arjun@srimurugan.com",   hashed_password=hp("arjun123"),    role="cashier",           role_id="role-cashier",           branch_id="br-001", avatar="AM", active=True,  must_change_password=False, all_branches=False),
-            User(id="usr-004", name="Deepa S.",     email="deepa@srimurugan.com",   hashed_password=hp("deepa123"),    role="inventory_manager", role_id="role-inventory-manager", branch_id="br-002", avatar="DS", active=True,  must_change_password=False, all_branches=False),
-            User(id="usr-005", name="Prakash V.",   email="prakash@srimurugan.com", hashed_password=hp("prakash123"),  role="finance",           role_id="role-finance",           branch_id="br-001", avatar="PV", active=False, must_change_password=False, all_branches=False),
+            User(id="usr-004", name="Deepa S.",     email="deepa@srimurugan.com",   hashed_password=hp("deepa123"),    role="branch_supervisor", role_id="role-branch-supervisor", branch_id="br-002", avatar="DS", active=True,  must_change_password=False, all_branches=False),
+            User(id="usr-005", name="Prakash V.",   email="prakash@srimurugan.com", hashed_password=hp("prakash123"),  role="branch_supervisor", role_id="role-branch-supervisor", branch_id="br-001", avatar="PV", active=False, must_change_password=False, all_branches=False),
             User(id="usr-006", name="Mohan K.",     email="mohan@srimurugan.com",   hashed_password=hp("mohan123"),    role="branch_manager",    role_id="role-branch-manager",    branch_id="br-002", avatar="MK", active=True,  must_change_password=False, all_branches=False),
         ]
         for u in users:
@@ -171,7 +171,7 @@ async def seed():
         # ── User ↔ Branch assignments (multi-branch, 2026-05-18) ──────────────
         # Suresh + Prakash get every branch enumerated (replaces the previous
         # all_branches=True shortcut). Single-branch staff (Kavitha, Arjun,
-        # Mohan) get one row each. Deepa (inventory_manager) keeps her two
+        # Mohan) get one row each. Deepa (branch_supervisor) keeps her two
         # rows to demo the multi-branch UI out of the box: br-002 retail +
         # br-005 warehouse.
         ALL_BRANCH_IDS = ["br-001", "br-002", "br-003", "br-004", "br-005"]
@@ -415,7 +415,7 @@ async def seed():
                 # 2026-05-23: "partial" was never a valid payment_mode (it's a
                 # status). The 20k advance was made in cash; the remaining
                 # 25,040 is captured by status='partial' + paid_amount<total.
-                "payment_mode":"cash","status":"partial","notes":"Balance ₹25,040 due May 1",
+                "payment_mode":"cash","status":"partial","notes":"Balance MVR25,040 due May 1",
                 "items":[
                     {"id":"si-006a","item_id":"pr-001","name":"Basmati Rice 5kg","qty":100,"price":299,"tax_rate":0,"line_total":29900},
                     {"id":"si-006b","item_id":"pr-002","name":"Toor Dal 1kg","qty":100,"price":148,"tax_rate":5,"line_total":14800},
@@ -629,11 +629,11 @@ async def seed():
 
         # ── Audit Logs ────────────────────────────────────────────────────────
         logs = [
-            AuditLog(id=str(uuid.uuid4()), action="Invoice Created",    user_id="usr-003", user_name="Arjun M.",    module="Sales",    ref="INV-2024-1847", detail="Created invoice for Rajesh Stores — ₹10,642", risk="low"),
-            AuditLog(id=str(uuid.uuid4()), action="Discount Applied",   user_id="usr-002", user_name="Kavitha R.",  module="Sales",    ref="INV-2024-1844", detail="Invoice discount ₹200 applied (1.1%)",         risk="low"),
+            AuditLog(id=str(uuid.uuid4()), action="Invoice Created",    user_id="usr-003", user_name="Arjun M.",    module="Sales",    ref="INV-2024-1847", detail="Created invoice for Rajesh Stores — MVR10,642", risk="low"),
+            AuditLog(id=str(uuid.uuid4()), action="Discount Applied",   user_id="usr-002", user_name="Kavitha R.",  module="Sales",    ref="INV-2024-1844", detail="Invoice discount MVR200 applied (1.1%)",         risk="low"),
             AuditLog(id=str(uuid.uuid4()), action="Transfer Approved",  user_id="usr-001", user_name="Suresh Anand",module="Inventory",ref="TRF-2024-041",  detail="Approved stock transfer Male→Addu (3 items)",    risk="medium"),
-            AuditLog(id=str(uuid.uuid4()), action="Payment Recorded",   user_id="usr-003", user_name="Arjun M.",   module="Finance",  ref="INV-2024-1842", detail="Partial payment ₹20,000 for Anand Traders",     risk="low"),
-            AuditLog(id=str(uuid.uuid4()), action="Cash Entry",         user_id="usr-002", user_name="Kavitha R.",  module="Cash",    ref="CE-003",        detail="Cash out ₹2,400 — Electricity TNEB-APR24",      risk="low"),
+            AuditLog(id=str(uuid.uuid4()), action="Payment Recorded",   user_id="usr-003", user_name="Arjun M.",   module="Finance",  ref="INV-2024-1842", detail="Partial payment MVR20,000 for Anand Traders",     risk="low"),
+            AuditLog(id=str(uuid.uuid4()), action="Cash Entry",         user_id="usr-002", user_name="Kavitha R.",  module="Cash",    ref="CE-003",        detail="Cash out MVR2,400 — Electricity TNEB-APR24",      risk="low"),
             AuditLog(id=str(uuid.uuid4()), action="Invoice Cancelled",  user_id="usr-002", user_name="Kavitha R.",  module="Sales",   ref="INV-2024-1839", detail="Invoice cancelled — Customer return",            risk="high"),
             AuditLog(id=str(uuid.uuid4()), action="Stock Adjustment",   user_id="usr-004", user_name="Deepa S.",    module="Inventory",ref="ADJ-041",       detail="Basmati Rice reduced 78→62 — Physical count",   risk="medium"),
             AuditLog(id=str(uuid.uuid4()), action="User Login",         user_id="usr-001", user_name="Suresh Anand",module="Auth",    ref="SYS",           detail="Admin login from 103.x.x.x (Chrome/Windows)",   risk="low"),

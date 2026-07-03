@@ -199,7 +199,7 @@ export default function CartRow({
             <button type="button" onClick={() => onDiscTypeChange('pct')} disabled={disableDiscount}
               style={{ border: 'none', borderRight: '1px solid var(--border-default)', background: discType === 'pct' ? 'var(--accent-bg)' : 'transparent', color: discType === 'pct' ? 'var(--accent)' : 'var(--text-muted)', cursor: disableDiscount ? 'not-allowed' : 'pointer', fontSize: 11, padding: '4px 7px', fontWeight: 600 }}>%</button>
             <button type="button" onClick={() => onDiscTypeChange('flat')} disabled={disableDiscount}
-              style={{ border: 'none', background: discType === 'flat' ? 'var(--accent-bg)' : 'transparent', color: discType === 'flat' ? 'var(--accent)' : 'var(--text-muted)', cursor: disableDiscount ? 'not-allowed' : 'pointer', fontSize: 11, padding: '4px 7px', fontWeight: 600 }}>₹</button>
+                    style={{ border: 'none', background: discType === 'flat' ? 'var(--accent-bg)' : 'transparent', color: discType === 'flat' ? 'var(--accent)' : 'var(--text-muted)', cursor: disableDiscount ? 'not-allowed' : 'pointer', fontSize: 11, padding: '4px 7px', fontWeight: 600 }}>MVR</button>
           </div>
         </div>
       </td>

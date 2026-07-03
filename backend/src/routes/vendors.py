@@ -3,13 +3,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Vendor, VendorCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_vendor
+from src.permissions import VENDOR_PICKER_READ
 from src.security import require_perm
 
 router = APIRouter()
@@ -32,7 +33,7 @@ class VendorUpdate(BaseModel):
     gstin: Optional[str] = None
     payment_terms: Optional[str] = None
 
-@router.get("/", dependencies=[Depends(require_perm("vendors.view"))])
+@router.get("/", dependencies=[Depends(require_perm(*VENDOR_PICKER_READ))])
 async def list_vendors(
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
@@ -45,11 +46,31 @@ async def list_vendors(
     lim = normalize_limit(limit)
     q = select(Vendor)
     cq = select(func.count(Vendor.id))
+    conds = []
     if search:
         term = f"%{search}%"
-        q = q.where(Vendor.name.ilike(term))
-        cq = cq.where(Vendor.name.ilike(term))
+        search_filter = or_(
+            Vendor.name.ilike(term),
+            Vendor.contact_person.ilike(term),
+            Vendor.phone.ilike(term),
+            Vendor.email.ilike(term),
+        )
+        q = q.where(search_filter)
+        cq = cq.where(search_filter)
+        conds.append(search_filter)
     total = int((await db.execute(cq)).scalar() or 0)
+    outstanding_total = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Vendor.outstanding), 0)).where(
+                    and_(*conds) if conds else True
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    wb_filter = and_(Vendor.outstanding > 0, *conds) if conds else (Vendor.outstanding > 0)
+    with_balance = int((await db.execute(select(func.count(Vendor.id)).where(wb_filter))).scalar() or 0)
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -68,9 +89,15 @@ async def list_vendors(
     )
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     items = [serialize_vendor(v) for v in result.scalars().all()]
-    return paged(items, total, sk, lim)
+    return paged(
+        items,
+        total,
+        sk,
+        lim,
+        summary={"outstandingTotal": outstanding_total, "withBalanceCount": with_balance},
+    )
 
-@router.get("/{vendor_id}", dependencies=[Depends(require_perm("vendors.view"))])
+@router.get("/{vendor_id}", dependencies=[Depends(require_perm(*VENDOR_PICKER_READ))])
 async def get_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Vendor).where(Vendor.id == vendor_id))
     v = result.scalar_one_or_none()

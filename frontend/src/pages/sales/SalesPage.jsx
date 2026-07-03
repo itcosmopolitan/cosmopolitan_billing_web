@@ -575,7 +575,7 @@ export default function SalesPage() {
     try {
       const res = await salesAPI.payment(showPayment.id, { amount, mode: payMode, ref: payRef })
       setSalesListVersion((v) => v + 1)
-      await loadBranches()
+      setPayListVersion((v) => v + 1)
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
@@ -591,7 +591,7 @@ export default function SalesPage() {
     } catch (err) {
       console.error('Failed to record payment:', err)
       // Toast already fired by the global axios interceptor with the
-      // server's detail (e.g. "Walk-in invoice — reduce amount to ₹X" or
+      // server's detail (e.g. "Walk-in invoice — reduce amount to MVRX" or
       // "Invoice already settled"). Don't double-toast here.
     } finally {
       setPaySaving(false)
@@ -705,9 +705,9 @@ export default function SalesPage() {
             'Invoice Number': i.number || i.id,
             'Customer': i.customerName || 'Walk-in',
             'Date': i.date || '—',
-            'Amount (₹)': i.total || 0,
-            'Paid (₹)': i.paidAmount || 0,
-            'Outstanding (₹)': (i.total || 0) - (i.paidAmount || 0),
+            'Amount (MVR)': i.total || 0,
+            'Paid (MVR)': i.paidAmount || 0,
+            'Outstanding (MVR)': (i.total || 0) - (i.paidAmount || 0),
             'Status': statusLabel(i.status),
           }))
           exportToCSV(exportData, `Sales_${new Date().toISOString().split('T')[0]}.csv`)
@@ -790,14 +790,21 @@ export default function SalesPage() {
                       <td><ReturnStatusChip status={inv.returnStatus} /></td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!actionBusy}
                           ariaLabel={`Actions for ${inv.number}`}
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
                             {
-                              label: 'Activity',
-                              hidden: !canActivity,
+                              label: 'Edit',
+                              hidden: !(
+                                can('invoices.edit')
+                                && inv.status !== 'cancelled'
+                                && inv.status !== 'paid'
+                                && !(inv.paidAmount > 0)
+                                && (inv.origin || 'invoice').toLowerCase() !== 'pos'
+                              ),
                               disabled: isRowBusy(inv.id),
-                              onClick: () => setActivityTarget({ recordType: 'sales_invoice', recordId: inv.id, title: `Invoice ${inv.number || inv.id}` }),
+                              onClick: () => navigate(`/sales/invoices/${inv.id}/edit`),
                             },
                             {
                               label: 'Record payment',
@@ -893,6 +900,7 @@ export default function SalesPage() {
                       <td>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for ${q.number}`}
                             actions={[
                               {
@@ -1148,6 +1156,7 @@ export default function SalesPage() {
                       <td><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
                       <td>
                         <RowActionsMenu
+                          busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
                             {
@@ -1255,6 +1264,7 @@ export default function SalesPage() {
                         </td>
                         <td className="text-right">
                           <RowActionsMenu
+                            busy={!!actionBusy}
                             ariaLabel={`Actions for payment ${p.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
@@ -1351,6 +1361,7 @@ export default function SalesPage() {
                         <td>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <RowActionsMenu
+                              busy={!!actionBusy}
                               ariaLabel={`Actions for ${o.number}`}
                               actions={[
                                 {
@@ -1478,7 +1489,7 @@ export default function SalesPage() {
       </Modal>
 
       {/* Payment Modal */}
-      <Modal open={!!showPayment} onClose={() => !paySaving && setShowPayment(null)} title="Record Payment" icon="💳" size="sm"
+      <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm" busy={paySaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowPayment(null)} disabled={paySaving}>Cancel</button>
           <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
@@ -1508,7 +1519,7 @@ export default function SalesPage() {
                   stay editable so excess routes to credit_balance.
                   Credit mode also locks to the full balance — drawing
                   partial credit / overpaying with credit is nonsensical. */}
-              <FormGroup label="Amount Received (₹)" required>
+              <FormGroup label="Amount Received (MVR)" required>
                 <input
                   className="form-input"
                   type="number"
@@ -1565,7 +1576,7 @@ export default function SalesPage() {
       </Modal>
 
       {/* Cancel Invoice Confirm */}
-      <Modal open={!!showCancelInvoice} onClose={() => !cancelSaving && setShowCancelInvoice(null)} title="Cancel Invoice" icon="⚠️" size="sm"
+      <Modal open={!!showCancelInvoice} onClose={() => setShowCancelInvoice(null)} title="Cancel Invoice" icon="⚠️" size="sm" busy={cancelSaving}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowCancelInvoice(null)} disabled={cancelSaving}>Keep Invoice</button>
           <button className="btn btn-danger" onClick={cancelInvoice} disabled={cancelSaving}>

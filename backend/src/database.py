@@ -362,6 +362,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("audit_logs", "record_id",      "VARCHAR"),
     ("audit_logs", "event_type",     "VARCHAR"),
     ("audit_logs", "event_metadata", "TEXT"),
+    # Approval workflow: item master pending creates.
+    ("items", "approval_status", "VARCHAR DEFAULT 'approved' NOT NULL"),
+    ("items", "created_by",      "VARCHAR"),
+    ("items", "approved_by",     "VARCHAR"),
 ]
 
 _REQUIRED_AUDIT_ACTIVITY_COLUMNS = {
@@ -375,10 +379,11 @@ _REQUIRED_AUDIT_ACTIVITY_COLUMNS = {
 LEGACY_ROLE_TO_ID: dict[str, str] = {
     "super_admin":       "role-super-admin",
     "branch_manager":    "role-branch-manager",
+    "branch_supervisor": "role-branch-supervisor",
     "cashier":           "role-cashier",
-    "inventory_manager": "role-inventory-manager",
-    "finance":           "role-finance",
-    "purchase_admin":    "role-purchase-admin",
+    "inventory_manager": "role-branch-supervisor",
+    "finance":           "role-branch-supervisor",
+    "purchase_admin":    "role-branch-supervisor",
 }
 
 
@@ -413,17 +418,19 @@ async def init_schema() -> None:
     start = time.perf_counter()
     logger.info("Starting schema initialization")
     async with engine.connect() as ddl_conn:
-        await (await ddl_conn.execution_options(isolation_level="AUTOCOMMIT")).run_sync(
-            Base.metadata.create_all
-        )
+        autocommit_conn = await ddl_conn.execution_options(isolation_level="AUTOCOMMIT")
+        await autocommit_conn.run_sync(Base.metadata.create_all)
+        # PG requires new enum labels to be committed before they can be referenced.
+        await _ensure_pg_enum_values(autocommit_conn)
     async with engine.begin() as conn:
         await _ensure_columns(conn)
         await _ensure_audit_log_indexes(conn)
         await _ensure_nullable_columns(conn)
-        await _ensure_pg_enum_values(conn)
         await _bootstrap_system_roles(conn)
         await _ensure_activity_seed_markers_table(conn)
         await _bootstrap_activity_role_defaults(conn)
+        await _migrate_item_master_permissions(conn)
+        await _purge_legacy_system_roles(conn)
         await _bootstrap_document_numbering(conn)
         await _bootstrap_default_tax_rates(conn)
         await _bootstrap_invoice_template(conn)
@@ -464,10 +471,8 @@ async def assert_activity_audit_schema() -> None:
 
 
 async def _bootstrap_system_roles(conn) -> None:
-    """Idempotently insert the 6 system roles (D6). Lets demo databases that
-    weren't re-seeded after this PR still pick up the new RBAC tables.
-    A re-seed via seed.py drops everything first, so there's no conflict."""
-    # Local import avoids a top-level cycle (system_roles is a leaf module).
+    """Idempotently insert/update system roles. Lets demo databases that
+    weren't re-seeded after this PR still pick up the new RBAC tables."""
     import json
 
     from src.system_roles import SYSTEM_ROLES
@@ -476,18 +481,23 @@ async def _bootstrap_system_roles(conn) -> None:
     existing = {r[0]: r[1] for r in rows}
     for rid, key, label, color, description, perms in SYSTEM_ROLES:
         if rid in existing:
-            current = existing[rid] or []
-            if isinstance(current, str):
-                try:
-                    current = json.loads(current)
-                except json.JSONDecodeError:
-                    current = []
-            merged = list(dict.fromkeys([*(current or []), *perms]))
-            if merged != (current or []):
-                await conn.execute(
-                    text("UPDATE roles SET permissions = :perms WHERE id = :id AND is_system = :is_system"),
-                    {"id": rid, "perms": json.dumps(merged), "is_system": True},
-                )
+            await conn.execute(
+                text(
+                    "UPDATE roles SET key = :key, label = :label, description = :desc, "
+                    "color = :color, permissions = :perms, is_system = :is_system, active = :active "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": rid,
+                    "key": key,
+                    "label": label,
+                    "desc": description,
+                    "color": color,
+                    "perms": json.dumps(perms),
+                    "is_system": True,
+                    "active": True,
+                },
+            )
             continue
         await conn.execute(
             text(
@@ -505,6 +515,63 @@ async def _bootstrap_system_roles(conn) -> None:
                 "active": True,
             },
         )
+
+async def _migrate_item_master_permissions(conn) -> None:
+    """Rewrite legacy items.create/edit/delete/approve → item_master.* on custom roles."""
+    import json
+
+    legacy_map = {
+        "items.create": "item_master.create",
+        "items.edit": "item_master.edit",
+        "items.delete": "item_master.delete",
+        "items.approve": "item_master.approve",
+    }
+    rows = (await conn.execute(text("SELECT id, permissions FROM roles"))).fetchall()
+    for rid, raw in rows:
+        perms = raw or []
+        if isinstance(perms, str):
+            try:
+                perms = json.loads(perms)
+            except json.JSONDecodeError:
+                perms = []
+        if not isinstance(perms, list):
+            continue
+        out: list[str] = []
+        changed = False
+        for p in perms:
+            if p == "items.*":
+                out.extend(["item_master.*", "items.*"])
+                changed = True
+            elif p in legacy_map:
+                out.append(legacy_map[p])
+                changed = True
+            elif p not in out:
+                out.append(p)
+        if not changed:
+            continue
+        deduped = list(dict.fromkeys(out))
+        await conn.execute(
+            text("UPDATE roles SET permissions = :perms WHERE id = :id"),
+            {"id": rid, "perms": json.dumps(deduped)},
+        )
+
+
+async def _purge_legacy_system_roles(conn) -> None:
+    """Move users off old system roles, then delete those role rows."""
+    from src.system_roles import LEGACY_SYSTEM_ROLE_IDS
+
+    if not LEGACY_SYSTEM_ROLE_IDS:
+        return
+    in_list = ", ".join(f"'{rid}'" for rid in LEGACY_SYSTEM_ROLE_IDS)
+    await conn.execute(
+        text(
+            f"UPDATE users SET role_id = 'role-branch-supervisor', role = 'branch_supervisor' "
+            f"WHERE role_id IN ({in_list})"
+        )
+    )
+    await conn.execute(
+        text(f"DELETE FROM roles WHERE id IN ({in_list}) AND is_system = true")
+    )
 
 
 async def _bootstrap_activity_role_defaults(conn) -> None:
@@ -666,7 +733,9 @@ async def _ensure_audit_log_indexes(conn) -> None:
 # members added later need an explicit ALTER TYPE … ADD VALUE.
 _PG_ENUM_VALUES: list[tuple[str, str]] = [
     ("purchaseorderstatus", "partially_received"),
+    ("purchaseorderstatus", "pending_approval"),
     ("salesorderstatus", "partially_invoiced"),
+    ("userrole", "branch_supervisor"),
 ]
 
 

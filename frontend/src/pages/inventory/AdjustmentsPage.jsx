@@ -329,7 +329,11 @@ export default function AdjustmentsPage() {
         batch_id: newForm.batch_id || undefined,
         requested_by: user?.name || 'Staff',
       })
-      toast.success(`Adjustment ${res.ref_number} submitted for approval`)
+      toast.success(
+        res.status === 'approved'
+          ? `Adjustment ${res.ref_number} applied`
+          : `Adjustment ${res.ref_number} submitted for approval`,
+      )
       setShowNew(false)
       setNewForm({
         branch_id: activeBranch?.id || 'br-001',
@@ -536,6 +540,7 @@ export default function AdjustmentsPage() {
                       </td>
                       <td className="text-right">
                         <RowActionsMenu
+                          busy={!!actionBusy || deleteBusy}
                           ariaLabel={`Actions for ${r.ref_number}`}
                           actions={[
                             {
@@ -589,7 +594,7 @@ export default function AdjustmentsPage() {
         </div>
       </div>
 
-      <Modal open={showNew} onClose={() => !submitting && setShowNew(false)} title="New Stock Adjustment Request" icon="⚖" size="md"
+      <Modal open={showNew} onClose={() => setShowNew(false)} title="New Stock Adjustment Request" icon="⚖" size="md" busy={submitting}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowNew(false)} disabled={submitting}>Cancel</button>
           <button className="btn btn-primary" onClick={submitNew} disabled={submitting}>

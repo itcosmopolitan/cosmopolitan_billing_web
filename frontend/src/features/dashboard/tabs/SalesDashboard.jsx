@@ -159,7 +159,7 @@ function TargetAchievementPanel({ data = {} }) {
                 />
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-                <span>₹0</span>
+                <span>MVR 0</span>
                 <span>{formatCompactCurrency(target)}</span>
               </div>
             </div>
