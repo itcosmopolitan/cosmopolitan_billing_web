@@ -109,7 +109,7 @@ cosmopolitan_billing_web/
 │   ├── models.py       # 16+ ORM models
 │   ├── seed.py         # Demo data seeder
 │   └── routes/         # 14 API route files (incl. roles, permissions)
-├── docs/               # USERS_AND_ROLES, ISSUES, WORKSHEET
+├── docs/               # USERS_AND_ROLES, APPROVAL_FLOW, NOTIFICATIONS, …
 ├── run.sh              # macOS/Linux launcher
 ├── run.bat             # Windows launcher
 ├── stop.bat            # Windows stop

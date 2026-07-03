@@ -39,6 +39,8 @@ from src.routes import (
     users,
     vendors,
     summaries,
+    notifications,
+    notifications_ws,
 )
 
 # ─── Load Configuration ────────────────────────────────────────────────────
@@ -127,6 +129,7 @@ app.include_router(purchases.router,  prefix=f"{PREFIX}/purchases", tags=["Purch
 app.include_router(transfers.router,  prefix=f"{PREFIX}/transfers", tags=["Transfers"])
 app.include_router(adjustments.router, prefix=f"{PREFIX}/adjustments", tags=["Adjustments"])
 app.include_router(summaries.router,    prefix=f"{PREFIX}/summaries",    tags=["Summaries"])
+app.include_router(notifications.router, prefix=f"{PREFIX}/notifications", tags=["Notifications"])
 app.include_router(cash.router,       prefix=f"{PREFIX}/cash",      tags=["Cash"])
 app.include_router(reports.router,    prefix=f"{PREFIX}/reports",   tags=["Reports"])
 app.include_router(users.router,      prefix=f"{PREFIX}/users",     tags=["Users"])
@@ -135,6 +138,32 @@ app.include_router(permissions.router, prefix=f"{PREFIX}/permissions", tags=["Pe
 app.include_router(settings_routes.router, prefix=f"{PREFIX}/settings", tags=["Settings"])
 app.include_router(taxes.router,       prefix=f"{PREFIX}/taxes",       tags=["Taxes"])
 app.include_router(customer_display.router, prefix=f"{PREFIX}/ws", tags=["Customer Display WS"])
+app.include_router(notifications_ws.router, prefix=f"{PREFIX}/ws", tags=["Notifications WS"])
+
+async def _run_notification_scan_once() -> None:
+    from src.database import get_async_session
+    from src.notifications.scanner import run_notification_scan
+
+    settings = config.get()
+    if not settings.notification_scan_enabled:
+        return
+    async_session = get_async_session()
+    async with async_session() as db:
+        await run_notification_scan(db)
+
+
+async def _notification_scan_loop() -> None:
+    settings = config.get()
+    if not settings.notification_scan_enabled:
+        return
+    interval_sec = max(1, settings.notification_scan_interval_hours) * 3600
+    while True:
+        await asyncio.sleep(interval_sec)
+        try:
+            await _run_notification_scan_once()
+        except Exception:
+            logger.exception("Scheduled notification scan failed")
+
 
 @app.on_event("startup")
 async def startup():
@@ -143,6 +172,16 @@ async def startup():
         await init_schema()
         await assert_activity_audit_schema()
         logger.info("FastAPI application startup completed")
+
+        async def _initial_scan() -> None:
+            await asyncio.sleep(2)
+            try:
+                await _run_notification_scan_once()
+            except Exception:
+                logger.exception("Initial notification scan failed")
+
+        asyncio.create_task(_notification_scan_loop())
+        asyncio.create_task(_initial_scan())
     except Exception:
         logger.exception("Application startup failed during database initialization")
         raise

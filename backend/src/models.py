@@ -1374,6 +1374,38 @@ class InvoiceTemplateSettings(Base):
     updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ─── In-App Notifications ─────────────────────────────────────────────────────
+class Notification(Base):
+  __tablename__ = "notifications"
+  __table_args__ = (
+      Index("ix_notifications_active", "resolved_at", "created_at"),
+  )
+
+  id                 = Column(String, primary_key=True)
+  dedupe_key         = Column(String, unique=True, nullable=False)
+  kind               = Column(String, nullable=False)
+  severity           = Column(String, default="info", nullable=False)
+  title              = Column(String, nullable=False)
+  body               = Column(Text)
+  branch_id          = Column(String)
+  module             = Column(String)
+  ref_type           = Column(String)
+  ref_id             = Column(String)
+  href               = Column(String, default="/")
+  exclude_user_name  = Column(String)
+  created_at         = Column(DateTime, default=datetime.utcnow)
+  resolved_at        = Column(DateTime)
+  expires_at         = Column(DateTime)
+
+
+class NotificationRead(Base):
+  __tablename__ = "notification_reads"
+
+  notification_id = Column(String, ForeignKey("notifications.id", ondelete="CASCADE"), primary_key=True)
+  user_id         = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+  read_at         = Column(DateTime, default=datetime.utcnow)
+
+
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 class AuditLog(Base):
     __tablename__ = "audit_logs"

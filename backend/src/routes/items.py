@@ -1029,6 +1029,19 @@ async def create_item(
         item.approved_by = user.name
         item.approved_at = datetime.utcnow()
 
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_created",
+        action="Item Created",
+        detail=f"Created item {item.name} ({item.sku})",
+        metadata={"sku": item.sku, "name": item.name},
+    )
+    if not direct:
+        from src.notifications.store import emit_item_pending, notify_refresh
+
+        await emit_item_pending(db, item)
     await db.commit()
     status = item.approval_status.value if hasattr(item.approval_status, "value") else "approved"
     await _write_post_commit_audit(
@@ -1041,6 +1054,8 @@ async def create_item(
         branch_id=data.branch_id,
         metadata={"item_id": item.id, "sku": item.sku, "name": item.name, "status": status},
     )
+    if not direct:
+        await notify_refresh()
     return {
         "id": item.id,
         "message": ("Item created and approved" if direct else "Item submitted for approval"),
@@ -1122,6 +1137,9 @@ async def approve_item(
     item.rejected_by = None
     item.rejected_at = None
     item.rejection_reason = None
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.item_master_pending:{item.id}")
     await db.commit()
     await _write_post_commit_audit(
         db,
@@ -1143,6 +1161,7 @@ async def approve_item(
         metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
     )
     await db.commit()
+    await notify_refresh()
     return {"id": item.id, "approval_status": "approved", "status": "approved", "active": True}
 
 
@@ -1181,6 +1200,9 @@ async def reject_item(
     item.rejected_at = datetime.utcnow()
     item.rejection_reason = reason
     item.approved_at = None
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.item_master_pending:{item.id}")
     await db.commit()
     await _write_post_commit_audit(
         db,
@@ -1202,6 +1224,7 @@ async def reject_item(
         metadata={"item_id": item.id, "sku": item.sku, "name": item.name, "reason": reason},
     )
     await db.commit()
+    await notify_refresh()
     return {"id": item.id, "approval_status": "rejected", "status": "rejected", "reason": reason}
 
 @router.put("/{item_id}", dependencies=[Depends(require_perm("item_master.edit"))])

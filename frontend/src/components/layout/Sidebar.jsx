@@ -18,11 +18,11 @@ const navItems = [
   { section: 'Main',      path: '/dashboard',  Icon: Icon.Dashboard,   label: 'Dashboard',       perm: 'dashboard.view' },
   { section: null,        path: '/pos',        Icon: Icon.Receipt,     label: 'POS Billing',     perm: 'pos.use' },
   { section: 'Inventory', path: '/item-master', Icon: Icon.List,     label: 'Item Master',     perm: 'item_master.view' },
-  { section: null,        path: '/items',      Icon: Icon.Package,  label: 'Items & Stock',   perm: 'items.view',     badge: 4 },
-  { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view', badge: 1 },
+  { section: null,        path: '/items',      Icon: Icon.Package,  label: 'Items & Stock',   perm: 'items.view' },
+  { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view' },
   { section: null,        path: '/adjustments', Icon: Icon.Scale,     label: 'Stock Adjustments', perm: 'adjustments.view' },
   { section: 'Commerce',  path: '/sales',      Icon: Icon.ShoppingBag, label: 'Sales',           perm: 'invoices.view' },
-  { section: null,        path: '/purchases',  Icon: Icon.Clipboard,   label: 'Purchases',       perm: 'purchases.view', badge: 5 },
+  { section: null,        path: '/purchases',  Icon: Icon.Clipboard,   label: 'Purchases',       perm: 'purchases.view' },
   { section: null,        path: '/customers',  Icon: Icon.Users,       label: 'Customers',       perm: 'customers.view' },
   { section: null,        path: '/vendors',    Icon: Icon.Factory,     label: 'Vendors',         perm: 'vendors.view' },
   { section: 'Finance',   path: '/cash',       Icon: Icon.Wallet,      label: 'Cash Control',    perm: 'cash.view' },
@@ -184,37 +184,12 @@ export default function Sidebar() {
                     )}
                     <item.Icon size={18} strokeWidth={isActive ? 2 : 1.75} />
                     {!sidebarCollapsed && (
-                      <>
-                        <span style={{
-                          flex: 1, whiteSpace: 'nowrap',
-                          overflow: 'hidden', textOverflow: 'ellipsis',
-                        }}>
-                          {item.label}
-                        </span>
-                        {item.badge && (
-                          <span style={{
-                            background: isActive ? 'var(--accent)' : 'var(--red)',
-                            color: '#fff',
-                            fontSize: 10, fontWeight: 700,
-                            minWidth: 18, height: 18,
-                            padding: '0 6px',
-                            borderRadius: 9,
-                            display: 'inline-flex',
-                            alignItems: 'center', justifyContent: 'center',
-                            lineHeight: 1,
-                          }}>
-                            {item.badge}
-                          </span>
-                        )}
-                      </>
-                    )}
-                    {sidebarCollapsed && item.badge && (
                       <span style={{
-                        position: 'absolute', top: 4, right: 4,
-                        width: 8, height: 8, borderRadius: '50%',
-                        background: 'var(--red)',
-                        boxShadow: '0 0 0 2px var(--bg-surface)',
-                      }} />
+                        flex: 1, whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        {item.label}
+                      </span>
                     )}
                   </>
                 )}

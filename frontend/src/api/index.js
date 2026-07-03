@@ -478,6 +478,14 @@ export const settingsAPI = {
   }),
 }
 
+// ─── Notifications ────────────────────────────────────────────────────────────
+export const notificationsAPI = {
+  list:    (params) => api.get('/notifications/', { params }),
+  count:   (params) => api.get('/notifications/count', { params }),
+  read:    (id)     => api.post(`/notifications/${id}/read`),
+  readAll: (params) => api.post('/notifications/read-all', null, { params }),
+}
+
 // ─── Tax rates ───────────────────────────────────────────────────────────────
 export const taxRatesAPI = {
   list:   (params, config) => api.get('/taxes/', { params, ...config }),

@@ -62,9 +62,13 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     support_email: str = "support@indogreeninternational.com"
     # ─── Dashboard Read Models ────────────────────────────────────────────
-    # Disabled by default because materialized views require an external
-    # refresh step. When false, dashboard APIs query source tables directly.
     dashboard_use_materialized_views: bool = False
+
+    # ─── Notifications ──────────────────────────────────────────────────────
+    notification_expiry_within_days: int = 30
+    notification_scan_enabled: bool = True
+    notification_scan_interval_hours: int = 24
+    notification_internal_token: str = ""
 
 # ─── Global Config Instance ────────────────────────────────────────────────
 _settings: Settings = None
