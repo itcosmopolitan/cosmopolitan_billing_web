@@ -38,6 +38,8 @@ PERMISSIONS: dict[str, list[str]] = {
     "users":     ["view", "create", "edit", "delete", "manage_roles"],
     "settings":  ["view", "edit"],
     "audit":     ["view"],
+    "history":   ["view"],
+    "comments":  ["view", "add", "edit_own", "delete_any"],
 }
 
 # ─── Operational read bundles ────────────────────────────────────────────────

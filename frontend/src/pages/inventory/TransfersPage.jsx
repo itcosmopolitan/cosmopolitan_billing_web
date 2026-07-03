@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
+import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
@@ -46,6 +47,7 @@ export default function TransfersPage() {
   const user = useAppStore((s) => s.user)
   const tab = tabFromSearchParams(searchParams)
   const [showDetail, setShowDetail] = useState(null)
+  const [activityTarget, setActivityTarget] = useState(null)
   const [transfers, setTransfers] = useState([])
   const [listTotal, setListTotal] = useState(0)
   const [summary, setSummary] = useState(null)
@@ -64,6 +66,7 @@ export default function TransfersPage() {
   const lastFetchKeyRef = useRef(null)
   const canDelete = can('transfers.delete')
   const canCreate = can('transfers.create')
+  const canActivity = can('history.view', 'comments.view')
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
@@ -431,6 +434,12 @@ export default function TransfersPage() {
                               onClick: () => setShowDetail(t),
                             },
                             {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: isRowBusy(t.id),
+                              onClick: () => setActivityTarget({ recordType: 'stock_transfer', recordId: t.id, title: `Transfer ${t.ref_number || t.id}` }),
+                            },
+                            {
                               label: 'Edit',
                               hidden: t.status !== 'pending' || !canCreate,
                               disabled: isRowBusy(t.id),
@@ -640,6 +649,14 @@ export default function TransfersPage() {
           </>
         )}
       </Modal>
+
+      <ActivityDrawer
+        open={!!activityTarget}
+        onClose={() => setActivityTarget(null)}
+        recordType={activityTarget?.recordType}
+        recordId={activityTarget?.recordId}
+        title={activityTarget?.title}
+      />
 
       <Modal
         open={!!deleteTargets?.length}

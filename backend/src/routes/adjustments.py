@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from datetime import datetime
@@ -19,6 +20,7 @@ from src.models import DocumentNumberCounter
 from src.models import (
     AdjustmentRequest,
     AdjustmentStatus,
+    AuditLog,
     Branch,
     ItemBatch,
     ItemStock,
@@ -32,6 +34,8 @@ from src.security import current_user, enforce_branch_access, enforce_branch_acc
 from src.routes._serializers import get_user_branch_ids
 
 router = APIRouter()
+
+_REF_SEQ_TAIL = re.compile(r"(\d+)$")
 
 
 class AdjustmentCreate(BaseModel):
@@ -92,10 +96,33 @@ def _serialize(ar: AdjustmentRequest) -> dict:
     }
 
 
-_VALID_STATUSES = {s.value for s in AdjustmentStatus}
-
-
-_REF_SEQ_TAIL = re.compile(r"(\d+)$")
+def _log_adjustment_history(
+    db: AsyncSession,
+    *,
+    user: User,
+    adjustment_id: str,
+    adjustment_number: str,
+    event_type: str,
+    action: str,
+    detail: str,
+    metadata: Optional[dict] = None,
+    risk: str = "low",
+) -> None:
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        record_type="stock_adjustment",
+        record_id=adjustment_id,
+        event_type=event_type,
+        event_metadata=json.dumps(metadata or {}, default=str),
+        action=action,
+        user_id=user.id if user is not None else None,
+        user_name=user.name if user is not None else None,
+        module="inventory",
+        ref=adjustment_number,
+        detail=detail,
+        risk=risk,
+        ip_address=None,
+    ))
 
 
 def _max_adj_seq_from_refs(refs: list[str]) -> int:
@@ -355,6 +382,20 @@ async def create_adjustment(
             requested_by=data.requested_by or user.name,
         )
         db.add(ar)
+        _log_adjustment_history(
+            db,
+            user=user,
+            adjustment_id=rid,
+            adjustment_number=ref,
+            event_type="created",
+            action="Adjustment request created",
+            detail=f"Created adjustment request {ref} for {data.item_name} at branch {branch_name}",
+            metadata={
+                "branch_id": data.branch_id,
+                "item_id": data.item_id,
+                "reason": data.reason,
+            },
+        )
         try:
             await db.flush()
             if await can_direct_commit(user, db, "adjustments.approve"):
@@ -391,6 +432,56 @@ async def approve_adjustment(
     if ar.requested_by and ar.requested_by == user.name and ar.status == AdjustmentStatus.pending:
         raise HTTPException(403, "You cannot approve your own adjustment request")
 
+    try:
+        await apply_stock_adjustment(
+            db,
+            item_id=ar.item_id,
+            branch_id=ar.branch_id,
+            new_qty=ar.new_qty,
+            reason=ar.reason or "Adjustment",
+            notes=ar.notes,
+            batch_id=ar.batch_id,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    audit = StockAdjustment(
+        id=str(uuid.uuid4()),
+        item_id=ar.item_id,
+        branch_id=ar.branch_id,
+        before_qty=ar.before_qty,
+        after_qty=ar.new_qty,
+        reason=ar.reason,
+        notes=ar.notes,
+        adjusted_by=body.approved_by,
+        request_id=ar.id,
+    )
+    db.add(audit)
+    ar.status = AdjustmentStatus.approved
+    ar.approved_by = body.approved_by
+    ar.resolved_at = datetime.utcnow()
+
+    _log_adjustment_history(
+        db,
+        user=user,
+        adjustment_id=request_id,
+        adjustment_number=ar.ref_number,
+        event_type="approved",
+        action="Adjustment approved",
+        detail=f"Adjustment {ar.ref_number} approved by {body.approved_by}",
+    )
+    _log_adjustment_history(
+        db,
+        user=user,
+        adjustment_id=request_id,
+        adjustment_number=ar.ref_number,
+        event_type="qty_changed",
+        action="Adjustment quantity changed",
+        detail=f"Adjustment {ar.ref_number} qty changed from {ar.before_qty} to {ar.new_qty}",
+        metadata={"field": "qty", "old": ar.before_qty, "new": ar.new_qty},
+    )
     result = await _approve_adjustment_record(db, ar, approved_by=body.approved_by or user.name)
     await db.commit()
     return result
@@ -401,6 +492,7 @@ async def reject_adjustment(
     request_id: str,
     body: AdjustmentReject,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     ar = await _lock_request(db, request_id, ref_number=body.ref_number)
 
@@ -418,6 +510,16 @@ async def reject_adjustment(
     ar.rejected_by = body.rejected_by
     ar.rejection_notes = body.rejection_notes
     ar.resolved_at = datetime.utcnow()
+
+    _log_adjustment_history(
+        db,
+        user=user,
+        adjustment_id=request_id,
+        adjustment_number=ar.ref_number,
+        event_type="rejected",
+        action="Adjustment rejected",
+        detail=f"Adjustment {ar.ref_number} rejected by {body.rejected_by}",
+    )
     await db.commit()
     return {"status": "rejected", "ref_number": ar.ref_number}
 
@@ -427,6 +529,7 @@ async def delete_adjustment(
     request_id: str,
     ref_number: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Remove a pending adjustment request.
 
@@ -447,6 +550,17 @@ async def delete_adjustment(
             f"Only pending adjustments can be deleted; this request is {status}",
         )
 
+    _log_adjustment_history(
+        db,
+        user=user,
+        adjustment_id=request_id,
+        adjustment_number=ar.ref_number,
+        event_type="cancelled",
+        action="delete_adjustment",
+        detail=f"Adjustment {ar.ref_number} deleted",
+        metadata={"reason": "deleted"},
+        risk="medium",
+    )
     await db.delete(ar)
     await db.commit()
     return {"status": "deleted", "ref_number": ref_number}

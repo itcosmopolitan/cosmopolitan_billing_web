@@ -14,6 +14,7 @@ import {
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import BatchesModal from './BatchesModal'
 import RowActionsMenu from './RowActionsMenu'
+import ActivityDrawer from '@/components/activity/ActivityDrawer'
 
 const BRANCH_TABS = [
   { id: 'all',      label: 'All Items' },
@@ -40,6 +41,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const isMaster = mode === 'master'
   const navigate = useNavigate()
   const can = useCan()
+  const canActivity = can('history.view', 'comments.view')
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const user = useAppStore((s) => s.user)
@@ -56,6 +58,8 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [adjBatches, setAdjBatches] = useState([])      // batch list when adjusting a tracked item
   const [adjBatchId, setAdjBatchId] = useState('')      // selected single-batch id (or '' = aggregate)
   const [adjLoading, setAdjLoading] = useState(false)
+  // activity drawer used only in master mode
+  const [activityTarget, setActivityTarget] = useState(null)
   const [adjSubmitting, setAdjSubmitting] = useState(false)
   const [batchesModal, setBatchesModal] = useState(null) // item whose batches we're viewing
   const [nearExpiry, setNearExpiry]     = useState([])   // batches expiring within horizon
@@ -558,6 +562,12 @@ export default function ItemsPage({ mode = 'branch' }) {
                               onClick: () => rejectItem(p),
                             },
                             {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: itemActionBusy === p.id,
+                              onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
+                            },
+                            {
                               label: 'Edit item',
                               hidden: tab === 'pending' || !can('item_master.edit'),
                               onClick: () => openEdit(p),
@@ -752,7 +762,16 @@ export default function ItemsPage({ mode = 'branch' }) {
         }}
         canAdd={can('items.adjust')}
       />
-        </>
+      </>
+      )}
+      {isMaster && (
+        <ActivityDrawer
+          open={!!activityTarget}
+          onClose={() => setActivityTarget(null)}
+          recordType={activityTarget?.recordType}
+          recordId={activityTarget?.recordId}
+          title={activityTarget?.title}
+        />
       )}
     </div>
   )

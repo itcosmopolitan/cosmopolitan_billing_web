@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { adjustmentsAPI, branchesAPI, itemsAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
+import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
   EmptyState, AlertBar, PaginationBar, SortableHeader, SearchSelect,
@@ -59,6 +60,7 @@ export default function AdjustmentsPage() {
   const can = useCan()
   const user = useAppStore((s) => s.user)
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const [activityTarget, setActivityTarget] = useState(null)
   const [tab, setTab] = useState('all')
   const [requests, setRequests] = useState([])
   const [listTotal, setListTotal] = useState(0)
@@ -93,6 +95,7 @@ export default function AdjustmentsPage() {
   const selectAllRef = useRef(null)
 
   const canDelete = can('adjustments.delete')
+  const canActivity = can('history.view', 'comments.view')
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
   const storeBranches = useAppStore((s) => s.branches)
@@ -546,6 +549,12 @@ export default function AdjustmentsPage() {
                               onClick: () => setShowDetail(r),
                             },
                             {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: isRowBusy(r.id),
+                              onClick: () => setActivityTarget({ recordType: 'stock_adjustment', recordId: r.id, title: `Adjustment ${r.ref_number || r.id}` }),
+                            },
+                            {
                               label: actionKind === 'approve' && isRowBusy(r.id) ? 'Approving…' : 'Approve',
                               hidden: r.status !== 'pending' || !can('adjustments.approve'),
                               disabled: isRowBusy(r.id),
@@ -846,6 +855,13 @@ export default function AdjustmentsPage() {
           </>
         )}
       </Modal>
+      <ActivityDrawer
+        open={!!activityTarget}
+        onClose={() => setActivityTarget(null)}
+        recordType={activityTarget?.recordType}
+        recordId={activityTarget?.recordId}
+        title={activityTarget?.title}
+      />
     </div>
   )
 }

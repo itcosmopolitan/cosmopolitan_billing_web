@@ -6,6 +6,7 @@ import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel } from '@/components/ui'
+import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
 import ReturnFormModal from './ReturnFormModal'
@@ -52,6 +53,7 @@ export default function SalesPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const can = useCan()
+  const canActivity = can('history.view', 'comments.view')
   const tabParam = searchParams.get('tab')
   const tab = VALID_TABS.has(tabParam) ? tabParam : 'invoices'
   const setTab = useCallback((id) => {
@@ -73,6 +75,7 @@ export default function SalesPage() {
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
+  const [activityTarget, setActivityTarget] = useState(null)
   // 2026-05-30: customer's available credit balance, fetched when the
   // Record Payment modal opens for a customer invoice. The invoice row
   // doesn't carry credit_balance, so we pull it from customersAPI.get to
@@ -792,6 +795,12 @@ export default function SalesPage() {
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
                             {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setActivityTarget({ recordType: 'sales_invoice', recordId: inv.id, title: `Invoice ${inv.number || inv.id}` }),
+                            },
+                            {
                               label: 'Edit',
                               hidden: !(
                                 can('invoices.edit')
@@ -944,6 +953,12 @@ export default function SalesPage() {
                                 onClick: () => navigate(`/sales/quotations/${q.id}/edit?view=1`),
                               },
                               {
+                                label: 'Activity',
+                                hidden: !canActivity,
+                                disabled: isRowBusy(q.id),
+                                onClick: () => setActivityTarget({ recordType: 'quotation', recordId: q.id, title: `Quotation ${q.number || q.id}` }),
+                              },
+                              {
                                 label: 'Delete',
                                 danger: true,
                                 hidden: !can('invoices.delete'),
@@ -1004,6 +1019,14 @@ export default function SalesPage() {
         blocked={deleteBlocked}
         submitting={deleting}
         reversalLines={reversalLinesForTabKey(deleteOneTarget?.tabKey || tab)}
+      />
+
+      <ActivityDrawer
+        open={!!activityTarget}
+        onClose={() => setActivityTarget(null)}
+        recordType={activityTarget?.recordType}
+        recordId={activityTarget?.recordId}
+        title={activityTarget?.title}
       />
 
       {/* Payment detail (read-only) — shows allocations + credit. */}
@@ -1142,6 +1165,12 @@ export default function SalesPage() {
                           busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
+                            {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: isRowBusy(r.id),
+                              onClick: () => setActivityTarget({ recordType: 'sales_return', recordId: r.id, title: `Return ${r.number || r.id}` }),
+                            },
                             {
                               label: actionKind === 'void-return' && isRowBusy(r.id) ? 'Voiding…' : 'Void',
                               danger: true,
@@ -1346,6 +1375,12 @@ export default function SalesPage() {
                                   hidden: isConverted || isCancelled || !can('invoices.edit'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/orders/${o.id}/edit`),
+                                },
+                                {
+                                  label: 'Activity',
+                                  hidden: !canActivity,
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => setActivityTarget({ recordType: 'sales_order', recordId: o.id, title: `SO ${o.number || o.id}` }),
                                 },
                                 {
                                   label: 'Convert to invoice',

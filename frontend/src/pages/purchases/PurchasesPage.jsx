@@ -25,6 +25,7 @@ import { purchasesAPI, vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag } from '@/components/ui'
+import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
@@ -67,6 +68,7 @@ export default function PurchasesPage() {
   const [vendorF, setVendorF]     = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
+  const canActivity = can('history.view', 'comments.view')
 
   // Bills state
   const [bills, setBills]       = useState([])
@@ -114,6 +116,7 @@ export default function PurchasesPage() {
   const [payLoading, setPayLoading] = useState(false)
   const [showPayForm, setShowPayForm] = useState(false)
   const [payDetail, setPayDetail] = useState(null)
+  const [activityTarget, setActivityTarget] = useState(null)
 
   // Masters (only vendors — for the filter dropdown). Items + branches
   // are no longer loaded as masters; pickers do their own paginated
@@ -746,6 +749,12 @@ export default function PurchasesPage() {
                             actions={[
                               { label: 'View', disabled: isRowBusy(b.id), onClick: () => setShowDetail(b) },
                               {
+                                label: 'Activity',
+                                hidden: !canActivity,
+                                disabled: isRowBusy(b.id),
+                                onClick: () => setActivityTarget({ recordType: 'purchase_bill', recordId: b.id, title: `Bill ${b.number || b.id}` }),
+                              },
+                              {
                                 label: 'Edit',
                                 hidden: !canEdit || !can('purchases.edit'),
                                 disabled: isRowBusy(b.id),
@@ -880,6 +889,12 @@ export default function PurchasesPage() {
                                   onClick: () => navigate(`/purchases/orders/${o.id}/edit?view=1`),
                                 },
                                 {
+                                  label: 'Activity',
+                                  hidden: !canActivity,
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => setActivityTarget({ recordType: 'purchase_order', recordId: o.id, title: `PO ${o.number || o.id}` }),
+                                },
+                                {
                                   label: 'Edit',
                                   hidden: !canReceiveOrConvert || !can('purchases.edit'),
                                   disabled: isRowBusy(o.id),
@@ -1001,6 +1016,12 @@ export default function PurchasesPage() {
                             ariaLabel={`Actions for ${g.number}`}
                             actions={[
                               {
+                                label: 'Activity',
+                                hidden: !canActivity,
+                                disabled: isRowBusy(g.id),
+                                onClick: () => setActivityTarget({ recordType: 'grn', recordId: g.id, title: `GRN ${g.number || g.id}` }),
+                              },
+                              {
                                 label: 'Create bill',
                                 hidden: !isReceived || hasBill || !can('purchases.create'),
                                 disabled: isRowBusy(g.id),
@@ -1098,6 +1119,12 @@ export default function PurchasesPage() {
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
                             { label: 'View', disabled: isRowBusy(r.id), onClick: () => setReturnDetail(r) },
+                            {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: isRowBusy(r.id),
+                              onClick: () => setActivityTarget({ recordType: 'vendor_return', recordId: r.id, title: `Return ${r.number || r.id}` }),
+                            },
                             {
                               label: actionKind === 'void-return' && isRowBusy(r.id) ? 'Voiding…' : 'Void',
                               danger: true,
@@ -1466,6 +1493,14 @@ export default function PurchasesPage() {
         )}
       </Modal>
 
+      <ActivityDrawer
+        open={!!activityTarget}
+        onClose={() => setActivityTarget(null)}
+        recordType={activityTarget?.recordType}
+        recordId={activityTarget?.recordId}
+        title={activityTarget?.title}
+      />
+
       <BulkDeleteConfirmModal
         open={deleteOpen || !!deleteOneTarget}
         onClose={() => { setDeleteOpen(false); setDeleteOneTarget(null); setDeleteBlocked([]) }}
@@ -1477,5 +1512,5 @@ export default function PurchasesPage() {
         reversalLines={reversalLinesForTab()}
       />
     </div>
-  )
-}
+      )
+  }
