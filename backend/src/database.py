@@ -362,6 +362,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("audit_logs", "record_id",      "VARCHAR"),
     ("audit_logs", "event_type",     "VARCHAR"),
     ("audit_logs", "event_metadata", "TEXT"),
+    ("audit_logs", "user_role",      "VARCHAR DEFAULT 'unknown' NOT NULL"),
+    ("audit_logs", "reference_id",   "VARCHAR DEFAULT ''"),
     # Approval workflow: item master pending creates.
     ("items", "approval_status", "VARCHAR DEFAULT 'approved' NOT NULL"),
     ("items", "created_by",      "VARCHAR"),
@@ -762,16 +764,37 @@ async def _ensure_pg_enum_values(conn) -> None:
 async def _ensure_nullable_columns(conn) -> None:
     """Ensure columns that should be nullable are nullable in existing DBs."""
     if conn.dialect.name == "postgresql":
-        nullable = (
-            await conn.execute(
-                text(
-                    "SELECT is_nullable FROM information_schema.columns "
-                    "WHERE table_name = 'items' AND column_name = 'category_id'"
-                )
+        result = await conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'items' AND column_name = 'category_id'"
             )
-        ).scalar_one_or_none()
+        )
+        nullable = result.scalar_one_or_none()
         if nullable == "NO":
             await conn.execute(text("ALTER TABLE items ALTER COLUMN category_id DROP NOT NULL"))
+
+        for table, column in (("audit_logs", "user_role"), ("audit_logs", "reference_id")):
+            result = await conn.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = :table AND column_name = :column"
+                ),
+                {"table": table, "column": column},
+            )
+            is_nullable = result.scalar_one_or_none()
+            if is_nullable == "NO":
+                await conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL"))
+
+        result = await conn.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'audit_logs' AND column_name = 'reference_id'"
+            )
+        )
+        default_value = result.scalar_one_or_none()
+        if default_value is None:
+            await conn.execute(text("ALTER TABLE audit_logs ALTER COLUMN reference_id SET DEFAULT ''"))
 
 
 async def _bootstrap_document_numbering(conn) -> None:

@@ -1369,6 +1369,7 @@ class AuditLog(Base):
     # Optional polymorphic target for record-level timeline queries.
     record_type = Column(String)
     record_id   = Column(String)
+    reference_id = Column(String, nullable=True, default=None)
     # Canonical activity event key (e.g. status_changed, payment_recorded).
     event_type  = Column(String)
     # JSON-encoded supplemental payload for cross-links and before/after diffs.
@@ -1376,6 +1377,7 @@ class AuditLog(Base):
     action     = Column(String, nullable=False)
     user_id    = Column(String)
     user_name  = Column(String)
+    user_role  = Column(String, nullable=False, default="unknown")
     module     = Column(String)
     ref        = Column(String)
     detail     = Column(Text)

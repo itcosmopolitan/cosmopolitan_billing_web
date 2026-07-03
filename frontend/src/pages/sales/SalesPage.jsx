@@ -795,6 +795,12 @@ export default function SalesPage() {
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
                             {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setActivityTarget({ recordType: 'sales_invoice', recordId: inv.id, title: `Invoice ${inv.number || inv.id}` }),
+                            },
+                            {
                               label: 'Edit',
                               hidden: !(
                                 can('invoices.edit')

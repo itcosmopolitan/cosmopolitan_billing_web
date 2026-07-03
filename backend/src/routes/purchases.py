@@ -90,6 +90,17 @@ def _coerce_payment_mode_value(v):
     return s
 
 
+def _audit_log_user_role(user: Optional[User]) -> str:
+    if user is None:
+        return "unknown"
+    role = getattr(user, "role", None)
+    if role is None:
+        return "unknown"
+    if hasattr(role, "value"):
+        return str(role.value)
+    return str(role)
+
+
 def _log_purchase_bill_history(
     db: AsyncSession,
     *,
@@ -112,6 +123,7 @@ def _log_purchase_bill_history(
         action=action or event_type,
         user_id=user.id if user is not None else None,
         user_name=user.name if user is not None else None,
+        user_role=_audit_log_user_role(user),
         module="purchases",
         ref=bill_number,
         detail=detail,

@@ -402,7 +402,7 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
     await db.flush()
     if direct:
         result = await _dispatch_transfer(
-            db, t, tid, approved_by=user.name,
+            db, t, tid, user=user, approved_by=user.name,
         )
         await db.commit()
         return {"id": tid, "ref_number": ref, **result}
@@ -497,7 +497,7 @@ async def approve_transfer(
         raise HTTPException(403, "You cannot approve your own transfer request")
 
     result = await _dispatch_transfer(
-        db, t, transfer_id, approved_by=body.approved_by or user.name,
+        db, t, transfer_id, user=user, approved_by=body.approved_by or user.name,
     )
     await db.commit()
     return result
@@ -508,6 +508,7 @@ async def _dispatch_transfer(
     t: StockTransfer,
     transfer_id: str,
     *,
+    user: User,
     approved_by: str,
 ) -> dict:
     """Approve & dispatch a transfer — consume source stock and mark in transit."""
@@ -618,10 +619,10 @@ async def _dispatch_transfer(
         transfer_number=t.ref_number,
         event_type="transit",
         action="Transfer dispatched",
-        detail=f"Transfer approved and dispatched by {body.approved_by}",
+        detail=f"Transfer approved and dispatched by {approved_by}",
     )
     await db.commit()
-    return {"status": "transit", "ref_number": t.ref_number, "approved_by": body.approved_by}
+    return {"status": "transit", "ref_number": t.ref_number, "approved_by": approved_by}
 
 
 @router.post("/{transfer_id}/reject", dependencies=[Depends(require_perm("transfers.approve"))])

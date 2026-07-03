@@ -43,6 +43,24 @@ async def _build_session() -> AsyncSession:
     return SessionLocal()
 
 
+async def _assert_audit_log_defaults_user_role() -> None:
+    db = await _build_session()
+    try:
+        log = AuditLog(id="audit-default", action="test_action", detail="test detail")
+        db.add(log)
+        await db.commit()
+        saved = await db.get(AuditLog, "audit-default")
+        assert saved is not None
+        assert saved.user_role == "unknown"
+        assert getattr(saved, "reference_id", None) in (None, "")
+    finally:
+        await db.close()
+
+
+def test_audit_log_defaults_user_role_when_missing() -> None:
+    asyncio.run(_assert_audit_log_defaults_user_role())
+
+
 async def _seed(db: AsyncSession):
     branch = Branch(id="b1", name="Main", code="MAIN")
     vendor = Vendor(id="v1", name="Acme Vendor")

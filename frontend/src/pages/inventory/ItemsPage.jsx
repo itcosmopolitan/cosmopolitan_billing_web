@@ -41,6 +41,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const isMaster = mode === 'master'
   const navigate = useNavigate()
   const can = useCan()
+  const canActivity = can('history.view', 'comments.view')
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const user = useAppStore((s) => s.user)
@@ -559,6 +560,12 @@ export default function ItemsPage({ mode = 'branch' }) {
                               hidden: tab !== 'pending' || !can('item_master.approve'),
                               disabled: itemActionBusy === p.id,
                               onClick: () => rejectItem(p),
+                            },
+                            {
+                              label: 'Activity',
+                              hidden: !canActivity,
+                              disabled: itemActionBusy === p.id,
+                              onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
                             },
                             {
                               label: 'Edit item',
