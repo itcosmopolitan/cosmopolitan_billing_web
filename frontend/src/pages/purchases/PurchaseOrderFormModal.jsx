@@ -19,6 +19,7 @@ import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { emptyPurchaseLine } from './purchaseFormShared'
 
 // Per-row discount via lineDiscountType. Backend stores percent only.
 
@@ -194,8 +195,15 @@ export default function PurchaseOrderFormModal({
                   </td>
                   {!readOnly && (
                     <td>
-                      <button className="btn btn-danger btn-xs"
-                        onClick={() => ppof('items', poForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      {poForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => ppof('items', poForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -205,26 +213,27 @@ export default function PurchaseOrderFormModal({
         </table>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
-            onClick={() => ppof('items', [...poForm.items, { item_id: null, name: '', qty: 1, cost: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>
+            onClick={() => ppof('items', [...poForm.items, emptyPurchaseLine()])}>
             + Add Item
           </button>
         )}
       </FormGroup>
 
-      <DocumentTotalsStrip
-        items={poForm.items}
-        entityDiscount={poForm.discount}
-        entityDiscountType={poForm.discountType || '%'}
-        onEntityDiscountChange={readOnly ? undefined : (v) => ppof('discount', v)}
-        onEntityDiscountTypeChange={readOnly ? undefined : (t) => ppof('discountType', t)}
-        readOnly={readOnly}
-        lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
-      />
-
-      <FormGroup label="Notes">
-        <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-          value={poForm.notes} onChange={e => ppof('notes', e.target.value)} />
-      </FormGroup>
+      <div className="invoice-form-panel invoice-form-panel--muted">
+        <DocumentTotalsStrip
+          items={poForm.items}
+          entityDiscount={poForm.discount}
+          entityDiscountType={poForm.discountType || '%'}
+          onEntityDiscountChange={readOnly ? undefined : (v) => ppof('discount', v)}
+          onEntityDiscountTypeChange={readOnly ? undefined : (t) => ppof('discountType', t)}
+          readOnly={readOnly}
+          lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+          showWhenEmpty
+          notes={poForm.notes}
+          onNotesChange={readOnly ? undefined : (v) => ppof('notes', v)}
+          notesHint="Will be displayed on the purchase order"
+        />
+      </div>
     </>
   )
 

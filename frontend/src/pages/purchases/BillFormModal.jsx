@@ -26,6 +26,7 @@ import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
+import { emptyPurchaseLine } from './purchaseFormShared'
 
 export default function BillFormModal({
   open,
@@ -272,8 +273,15 @@ export default function BillFormModal({
                       </div>
                     </td>
                     <td>
-                      <button className="btn btn-danger btn-xs"
-                        onClick={() => pbf('items', billForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      {billForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => pbf('items', billForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   </tr>
                   {it.batchTracking && (
@@ -320,7 +328,7 @@ export default function BillFormModal({
         </table>
         </div>
         <button className="btn btn-secondary btn-sm"
-          onClick={() => pbf('items', [...billForm.items, { item_id: null, name: '', qty: 1, cost: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%', batchTracking: false, expiryTracking: false, batchNumber: '', mfgDate: '', expiryDate: '' }])}>
+          onClick={() => pbf('items', [...billForm.items, emptyPurchaseLine()])}>
           + Add Item
         </button>
         </FormGroup>
@@ -334,13 +342,11 @@ export default function BillFormModal({
           onEntityDiscountChange={(v) => pbf('discount', v)}
           onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
           lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+          showWhenEmpty
+          notes={billForm.notes || ''}
+          onNotesChange={(v) => pbf('notes', v)}
+          notesHint={isGrn ? 'Will be displayed on the goods receipt' : 'Will be displayed on the bill'}
         />
-
-        <FormGroup label="Notes">
-          <textarea className="form-input" style={{ height: 72 }}
-            value={billForm.notes || ''}
-            onChange={(e) => pbf('notes', e.target.value)} />
-        </FormGroup>
       </div>
     </div>
   )

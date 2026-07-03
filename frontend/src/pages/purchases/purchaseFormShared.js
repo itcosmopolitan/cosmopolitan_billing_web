@@ -14,13 +14,13 @@ export function lineDiscountToPercent(line) {
 
 export function mapPurchaseLines(items) {
   return (items || []).map((it) => ({
+    ...emptyPurchaseLine(),
     item_id: it.itemId || it.item_id || null,
     name: it.name || '',
     qty: it.qty ?? it.receivedQty ?? 0,
     cost: it.cost,
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
-    lineDiscountType: '%',
     batchTracking: Boolean(it.batchTracking),
     expiryTracking: Boolean(it.expiryTracking),
     batchNumber: it.batchNumber || '',
@@ -29,6 +29,21 @@ export function mapPurchaseLines(items) {
   }))
 }
 
+export const emptyPurchaseLine = () => ({
+  item_id: null,
+  name: '',
+  qty: 1,
+  cost: 0,
+  taxRate: 0,
+  lineDiscount: 0,
+  lineDiscountType: '%',
+  batchTracking: false,
+  expiryTracking: false,
+  batchNumber: '',
+  mfgDate: '',
+  expiryDate: '',
+})
+
 export const emptyBillForm = (branchId) => ({
   vendorId: '',
   vendorName: '',
@@ -36,7 +51,7 @@ export const emptyBillForm = (branchId) => ({
   number: '',
   billDate: new Date().toISOString().split('T')[0],
   dueDate: '',
-  items: [],
+  items: [emptyPurchaseLine()],
   discount: 0,
   discountType: '%',
   paymentReceived: false,
@@ -49,7 +64,7 @@ export const emptyPoForm = (branchId) => ({
   vendorName: '',
   branchId,
   number: '',
-  items: [],
+  items: [emptyPurchaseLine()],
   discount: 0,
   discountType: '%',
   expectedDate: '',

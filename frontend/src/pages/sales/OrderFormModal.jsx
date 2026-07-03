@@ -24,6 +24,7 @@ import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { emptySaleLine } from './salesFormShared'
 
 // Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
 
@@ -235,8 +236,15 @@ export default function OrderFormModal({
                   </td>
                   {!readOnly && (
                     <td>
-                      <button className="btn btn-danger btn-xs"
-                        onClick={() => pof('items', orderForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      {orderForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => pof('items', orderForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -247,7 +255,7 @@ export default function OrderFormModal({
         </div>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
-            onClick={() => pof('items', [...orderForm.items, { item_id: null, name: '', qty: 1, price: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>
+            onClick={() => pof('items', [...orderForm.items, emptySaleLine()])}>
             + Add Item
           </button>
         )}
@@ -262,12 +270,11 @@ export default function OrderFormModal({
           onEntityDiscountTypeChange={readOnly ? undefined : (t) => pof('discountType', t)}
           readOnly={readOnly}
           lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          showWhenEmpty
+          notes={orderForm.notes}
+          onNotesChange={readOnly ? undefined : (v) => pof('notes', v)}
+          notesHint="Will be displayed on the sales order"
         />
-
-        <FormGroup label="Notes">
-          <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-            value={orderForm.notes} onChange={e => pof('notes', e.target.value)} />
-        </FormGroup>
       </div>
     </div>
   )

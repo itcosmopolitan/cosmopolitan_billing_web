@@ -84,6 +84,7 @@ export default function InvoiceFormModal({
   }
 
   const disableLineDiscount = shouldDisableLineDiscount(invoiceForm.discount)
+  const hasBatchLines = invoiceForm.items.some((it) => it.batchTracking)
 
   const formBody = (
     <div className="invoice-form-shell">
@@ -189,7 +190,7 @@ export default function InvoiceFormModal({
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 95, textAlign: 'right' }}>Price</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
-              <th style={{ minWidth: 160 }}>Lots</th>
+              {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
               <th style={{ width: 60 }} />
             </tr>
           </thead>
@@ -239,29 +240,38 @@ export default function InvoiceFormModal({
                       </button>
                     </div>
                   </td>
+                  {hasBatchLines && (
+                    <td>
+                      <LineBatchAllocationField
+                        itemId={it.item_id}
+                        branchId={invoiceForm.branchId}
+                        qty={it.qty}
+                        batchTracking={it.batchTracking}
+                        expiryTracking={it.expiryTracking}
+                        allocation={it.batchAllocation}
+                        allocationCustom={it.batchAllocationCustom}
+                        onChange={(alloc, custom) => patchLine(i, {
+                          batchAllocation: alloc,
+                          batchAllocationCustom: custom,
+                        })}
+                        onEdit={({ batches, expiryTracked }) => setAllocEditor({
+                          index: i,
+                          batches,
+                          expiryTracked,
+                        })}
+                      />
+                    </td>
+                  )}
                   <td>
-                    <LineBatchAllocationField
-                      itemId={it.item_id}
-                      branchId={invoiceForm.branchId}
-                      qty={it.qty}
-                      batchTracking={it.batchTracking}
-                      expiryTracking={it.expiryTracking}
-                      allocation={it.batchAllocation}
-                      allocationCustom={it.batchAllocationCustom}
-                      onChange={(alloc, custom) => patchLine(i, {
-                        batchAllocation: alloc,
-                        batchAllocationCustom: custom,
-                      })}
-                      onEdit={({ batches, expiryTracked }) => setAllocEditor({
-                        index: i,
-                        batches,
-                        expiryTracked,
-                      })}
-                    />
-                  </td>
-                  <td>
-                    <button className="btn btn-danger btn-xs"
-                      onClick={() => pif('items', invoiceForm.items.filter((_, j) => j !== i))}>Remove</button>
+                    {invoiceForm.items.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-xs"
+                        onClick={() => pif('items', invoiceForm.items.filter((_, j) => j !== i))}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </td>
                 </tr>
               )
@@ -297,7 +307,7 @@ export default function InvoiceFormModal({
         />
       )}
 
-      {invoiceForm.items.some((it) => it.batchTracking) && (
+      {hasBatchLines && (
         <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
           Batch-tracked items use FIFO/FEFO auto-split. Click <strong>✎ Edit split</strong> to pick specific lots.
         </p>
@@ -311,12 +321,10 @@ export default function InvoiceFormModal({
           onEntityDiscountChange={(v) => pif('discount', v)}
           onEntityDiscountTypeChange={(t) => pif('discountType', t)}
           lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          showWhenEmpty
+          notes={invoiceForm.notes}
+          onNotesChange={(v) => pif('notes', v)}
         />
-
-        <FormGroup label="Notes">
-          <textarea className="form-input" style={{ height: 72 }}
-            value={invoiceForm.notes} onChange={(e) => pif('notes', e.target.value)} />
-        </FormGroup>
       </div>
     </div>
   )
