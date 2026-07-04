@@ -12,16 +12,48 @@ import {
 import BrandLogo from '@/components/BrandLogo'
 import { Eye, EyeOff } from '@/components/ui/Icons'
 
-const DEMO_USERS = [
-  { email: 'suresh@srimurugan.com',  password: 'admin123',   name: 'Suresh Anand', role: 'Super Admin',       avatar: 'SA' },
-  { email: 'kavitha@srimurugan.com', password: 'kavitha123', name: 'Kavitha R.',   role: 'Branch Manager',    avatar: 'KR' },
-  { email: 'arjun@srimurugan.com',   password: 'arjun123',   name: 'Arjun M.',     role: 'Cashier',           avatar: 'AM' },
+const MailIcon = (props) => (
+  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+    <rect x="2" y="4" width="20" height="16" rx="2.5" />
+    <path d="M2.5 6.5L12 13l9.5-6.5" />
+  </svg>
+)
+const LockIcon = (props) => (
+  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+    <rect x="4" y="11" width="16" height="9" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </svg>
+)
+const ArrowRightIcon = (props) => (
+  <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </svg>
+)
+const CheckIcon = (props) => (
+  <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+)
+const ClockIcon = (props) => (
+  <svg viewBox="0 0 24 24" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+)
+
+const LEDGER_BADGES = ['GST verified', 'Live audit trail', 'Branch secure']
+
+const LEDGER_ROWS = [
+  { name: 'Invoice reconciliation', id: 'INV-2026-1048', amount: '₹42,860', status: 'ok', label: 'Matched' },
+  { name: 'Supplier settlement', id: 'VEN-8841', amount: '₹18,420', status: 'pending', label: 'Pending' },
+  { name: 'Cash drawer close', id: 'BR-MDU-03', amount: '₹67,900', status: 'ok', label: 'Verified' },
+  { name: 'Stock adjustment', id: 'ADJ-5172', amount: '12 units', status: 'ok', label: 'Posted' },
 ]
 
-const FEATURES = [
-  { icon: '🏢', label: 'Multi-Branch Management' },
-  { icon: '📦', label: 'Real-Time Inventory Tracking' },
-  { icon: '📊', label: 'Sales & Revenue Analytics' },
+const LEDGER_STATS = [
+  { value: '99.8%', label: 'Sync accuracy' },
+  { value: '24/7', label: 'Audit logging' },
+  { value: '4', label: 'Active branches' },
 ]
 
 export default function LoginPage() {
@@ -29,18 +61,11 @@ export default function LoginPage() {
   const setSession = useAppStore((s) => s.setSession)
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
-  const [selectedRole, setSelectedRole] = useState('Super Admin')
   const [email, setEmail] = useState('suresh@srimurugan.com')
   const [password, setPassword] = useState('admin123')
   const [rememberMe, setRememberMe] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
-
-  const selectRole = (user) => {
-    setSelectedRole(user.role)
-    setEmail(user.email)
-    setPassword(user.password)
-  }
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -72,34 +97,39 @@ export default function LoginPage() {
   return (
     <div className="page-wrapper login-shell">
       <div className="login-card login-grid">
-          <section className="login-panel login-panel--form">
+        <section className="login-panel login-panel--form">
           <div className="login-panel-inner">
-            <div className="login-logo">
-              <BrandLogo className="login-logo-img" height={36} maxWidth={280} />
+            <div className="login-brand-row">
+              <BrandLogo className="login-logo-img" height={26} maxWidth={200} />
             </div>
+            <div className="login-eyebrow">Billing &amp; audit workspace</div>
 
             <div className="login-heading">
-              <h1>Welcome Back</h1>
-              <p>Enter your email and password to access your account.</p>
+              <h1>Sign in to your workspace</h1>
+              <p>Access invoices, reconciliations, and audit trails for your organization.</p>
             </div>
 
             <form onSubmit={handleLogin} className="login-form">
               <div className="form-group">
-                <label className="form-label">Email</label>
-                <input
-                  className="form-input"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="sellostore@company.com"
-                  required
-                  autoFocus
-                />
+                <label className="form-label">Work email</label>
+                <div className="login-input-wrap">
+                  <MailIcon className="login-input-icon" />
+                  <input
+                    className="form-input"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="sellostore@company.com"
+                    required
+                    autoFocus
+                  />
+                </div>
               </div>
 
               <div className="form-group">
                 <label className="form-label">Password</label>
-                <div className="login-password-field">
+                <div className="login-input-wrap">
+                  <LockIcon className="login-input-icon" />
                   <input
                     className="form-input"
                     type={showPassword ? 'text' : 'password'}
@@ -116,17 +146,13 @@ export default function LoginPage() {
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
                     aria-pressed={showPassword}
                   >
-                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
               </div>
 
               <div className="login-form-footer">
-                <label className="login-remember">
-                  <input type="checkbox" checked={rememberMe} onChange={() => setRememberMe(!rememberMe)} />
-                  Remember Me
-                </label>
-                <button type="button" className="login-forgot" onClick={() => toast('Forgot password flow coming soon')}>Forgot Your Password?</button>
+                <button type="button" className="login-forgot" onClick={() => toast('Forgot password flow coming soon')}>Forgot password?</button>
               </div>
 
               <button className="btn btn-primary btn-lg login-submit" type="submit" disabled={loading}>
@@ -134,49 +160,71 @@ export default function LoginPage() {
                   <span className="login-submit-loading">Signing in…</span>
                 ) : (
                   <>
-                    <span className="login-submit-label">Log In</span>
-                    <span className="login-submit-icon">→</span>
+                    <span className="login-submit-label">Sign in to workspace</span>
+                    <ArrowRightIcon className="login-submit-icon" />
                   </>
                 )}
               </button>
             </form>
+
+            <p className="login-footnote">
+              <LockIcon width={12} height={12} />
+              Sessions are encrypted end-to-end
+            </p>
           </div>
         </section>
 
         <section className="login-panel login-panel--hero">
-          <div className="shape-1" />
-          <div className="shape-2" />
-          <div className="shape-3" />
-          <div className="shape-4" />
-          <div className="hero-copy">
-            <span className="hero-tag">DASHBOARD PREVIEW</span>
-            <h2>Effortlessly manage your team and operations.</h2>
-            <p>Log in to access your CRM dashboard and oversee sales, stock, and retail performance in one place.</p>
+          <img className="login-hero-photo" src="/assets/login-hero.jpg" alt="" aria-hidden="true" />
+          <div className="login-hero-scrim" />
+          <div className="login-hero-grid" />
+
+          <div className="login-hero-badges" aria-label="Security features">
+            {LEDGER_BADGES.map((badge) => (
+              <span className="login-hero-badge" key={badge}>
+                <CheckIcon aria-hidden="true" />
+                {badge}
+              </span>
+            ))}
           </div>
 
-          <div className="hero-visual">
-            <div className="dashboard-showcase">
-              <img className="dashboard-image" src="/assets/dashboard-screenshot.png" alt="Dashboard preview" />
-{/* 
-              <div className="dashboard-card dashboard-card--analytics">
-                <div className="card-title">Total Sales</div>
-                <div className="card-value">$189,374</div>
-                <div className="card-note">+18.3% this month</div>
-              </div> */}
+          <div className="hero-copy">
+            <h2>Close books faster with <span>verified ledgers.</span></h2>
+            <p>Track invoices, purchases, branch cash, and stock changes with a clear record of every approval.</p>
+          </div>
 
-              <div className="dashboard-card dashboard-card--orders">
-                <div className="card-title">Orders</div>
-                <div className="card-value">1,248</div>
-              </div>
-
-              {/* <div className="dashboard-card dashboard-card--category">
-                <div className="card-title">Top Category</div>
-                <div className="card-value">Electronics</div>
-              </div> */}
+          <div className="login-ledger-card" aria-label="Recent ledger activity">
+            <div className="login-ledger-head">
+              <span>Ledger activity</span>
+              <span className="login-ledger-live">Live</span>
+            </div>
+            <div className="login-ledger-body">
+              {LEDGER_ROWS.map((row) => (
+                <div className="login-ledger-row" key={row.id}>
+                  <div>
+                    <span className="login-ledger-name">{row.name}</span>
+                    <span className="login-ledger-id">{row.id}</span>
+                  </div>
+                  <span className="login-ledger-amount">{row.amount}</span>
+                  <span className={`login-ledger-status login-ledger-status--${row.status}`}>
+                    {row.status === 'ok' ? <CheckIcon aria-hidden="true" /> : <ClockIcon aria-hidden="true" />}
+                    {row.label}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
-          </section>
-        </div>
+
+          <div className="login-stat-strip" aria-label="Workspace stats">
+            {LEDGER_STATS.map((stat) => (
+              <div className="login-stat" key={stat.label}>
+                <div className="login-stat-value">{stat.value}</div>
+                <div className="login-stat-label">{stat.label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
     </div>
   )
 }
