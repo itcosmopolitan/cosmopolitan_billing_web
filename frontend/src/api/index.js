@@ -13,6 +13,14 @@ export const api = axios.create({
 const _originalGet = api.get.bind(api)
 const _inFlightGetRequests = new Map()
 api.get = (url, config) => {
+  // AbortController-backed requests must not dedupe — remounting a tab (React
+  // StrictMode or switching settings tabs) aborts the first signal while the
+  // deduped promise is still in-flight, so the next caller gets a canceled
+  // promise and no new network request is sent.
+  if (config?.signal) {
+    return _originalGet(url, config)
+  }
+
   // Create a stable key from url + sorted params
   const params = (config && config.params) ? config.params : undefined
   let key
@@ -54,6 +62,11 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res.data,
   (err) => {
+    // Intentional cancellation (tab switch, unmount) — not an error for the user.
+    if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
+      return Promise.reject(err)
+    }
+
     const rawDetail = err?.response?.data?.detail
     const status = err?.response?.status
     const url = err?.config?.url || ''
@@ -92,8 +105,8 @@ api.interceptors.response.use(
         // Session expired or invalid token — redirect once, no error spam.
         if (!handlingSessionExpiry) {
           handlingSessionExpiry = true
-          localStorage.removeItem('retailos_token')
-          const here = window.location.pathname
+        localStorage.removeItem('retailos_token')
+        const here = window.location.pathname
           if (here !== '/login') {
             window.location.replace('/login')
           } else {
