@@ -907,31 +907,9 @@ export default function SettingsPage() {
                 placeholder="Choose branches…"
               />
             </FormGroup>
-            <FormGroup label="Temporary password" required>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  className="form-input"
-                  type="text"
-                  value={userForm.password}
-                  onChange={e=>puf('password', e.target.value)}
-                  style={{ fontFamily: 'DM Mono, monospace', flex: 1 }}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={()=>puf('password', generateTempPassword())}
-                  title="Generate a new random password"
-                >
-                  Regenerate
-                </button>
-              </div>
-            </FormGroup>
             <AlertBar type="blue" icon="ℹ">
-              The user signs in with this temporary password and is required
-              to change it on first login. The temp password will be emailed to
-              them automatically once the account is created.
+              A temporary password will be emailed to the new user automatically.
+              They must change it on first login for security.
             </AlertBar>
           </Modal>
 
