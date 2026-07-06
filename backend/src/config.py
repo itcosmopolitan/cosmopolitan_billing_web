@@ -56,7 +56,11 @@ class Settings(BaseSettings):
 
     # ─── Demo Mode ────────────────────────────────────────────────────────
     demo_mode: bool = True
-
+    # ─── Email / Resend ───────────────────────────────────────────────────
+    resend_api_key: str = ""
+    resend_from_email: str = "onboarding@resend.dev"
+    frontend_url: str = "http://localhost:5173"
+    support_email: str = "support@indogreeninternational.com"
     # ─── Dashboard Read Models ────────────────────────────────────────────
     # Disabled by default because materialized views require an external
     # refresh step. When false, dashboard APIs query source tables directly.

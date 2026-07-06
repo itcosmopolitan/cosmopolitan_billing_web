@@ -66,6 +66,9 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [recoveryMode, setRecoveryMode] = useState(false)
+  const [recoveryEmail, setRecoveryEmail] = useState('')
+  const [recoveryLoading, setRecoveryLoading] = useState(false)
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -94,6 +97,28 @@ export default function LoginPage() {
     }
   }
 
+  const handleForgotPassword = async (e) => {
+    e.preventDefault()
+    if (recoveryLoading) return
+    const emailToRecover = recoveryEmail.trim().toLowerCase()
+    if (!emailToRecover) {
+      toast.error('Enter your work email to receive a temporary password')
+      return
+    }
+    setRecoveryLoading(true)
+    try {
+      const result = await authAPI.forgotPassword(emailToRecover)
+      toast.success(result?.message || 'If an account exists for that email, a temporary password will be sent.')
+      setRecoveryMode(false)
+      setEmail(emailToRecover)
+      setPassword('')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setRecoveryLoading(false)
+    }
+  }
+
   return (
     <div className="page-wrapper login-shell">
       <div className="login-card login-grid">
@@ -109,63 +134,98 @@ export default function LoginPage() {
               <p>Access invoices, reconciliations, and audit trails for your organization.</p>
             </div>
 
-            <form onSubmit={handleLogin} className="login-form">
-              <div className="form-group">
-                <label className="form-label">Work email</label>
-                <div className="login-input-wrap">
-                  <MailIcon className="login-input-icon" />
-                  <input
-                    className="form-input"
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="sellostore@company.com"
-                    required
-                    autoFocus
-                  />
+            {recoveryMode ? (
+              <form onSubmit={handleForgotPassword} className="login-form">
+                <div className="form-group">
+                  <label className="form-label">Work email</label>
+                  <div className="login-input-wrap">
+                    <MailIcon className="login-input-icon" />
+                    <input
+                      className="form-input"
+                      type="email"
+                      value={recoveryEmail}
+                      onChange={(e) => setRecoveryEmail(e.target.value)}
+                      placeholder="sellostore@company.com"
+                      required
+                      autoFocus
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div className="form-group">
-                <label className="form-label">Password</label>
-                <div className="login-input-wrap">
-                  <LockIcon className="login-input-icon" />
-                  <input
-                    className="form-input"
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
-                    required
-                    autoComplete="current-password"
-                  />
-                  <button
-                    type="button"
-                    className="login-password-toggle"
-                    onClick={() => setShowPassword((v) => !v)}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    aria-pressed={showPassword}
-                  >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                <div className="login-form-footer">
+                  <button type="button" className="login-forgot" onClick={() => setRecoveryMode(false)}>
+                    Back to sign in
                   </button>
                 </div>
-              </div>
 
-              <div className="login-form-footer">
-                <button type="button" className="login-forgot" onClick={() => toast('Forgot password flow coming soon')}>Forgot password?</button>
-              </div>
+                <button className="btn btn-primary btn-lg login-submit" type="submit" disabled={recoveryLoading}>
+                  {recoveryLoading ? 'Generating temp password…' : 'Generate temporary password'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleLogin} className="login-form">
+                <div className="form-group">
+                  <label className="form-label">Work email</label>
+                  <div className="login-input-wrap">
+                    <MailIcon className="login-input-icon" />
+                    <input
+                      className="form-input"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="sellostore@company.com"
+                      required
+                      autoFocus
+                    />
+                  </div>
+                </div>
 
-              <button className="btn btn-primary btn-lg login-submit" type="submit" disabled={loading}>
-                {loading ? (
-                  <span className="login-submit-loading">Signing in…</span>
-                ) : (
-                  <>
-                    <span className="login-submit-label">Sign in to workspace</span>
-                    <ArrowRightIcon className="login-submit-icon" />
-                  </>
-                )}
-              </button>
-            </form>
+                <div className="form-group">
+                  <label className="form-label">Password</label>
+                  <div className="login-input-wrap">
+                    <LockIcon className="login-input-icon" />
+                    <input
+                      className="form-input"
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••••••"
+                      required
+                      autoComplete="current-password"
+                    />
+                    <button
+                      type="button"
+                      className="login-password-toggle"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="login-form-footer">
+                  <button type="button" className="login-forgot" onClick={() => {
+                    setRecoveryEmail(email)
+                    setRecoveryMode(true)
+                  }}>
+                    Forgot password?
+                  </button>
+                </div>
+
+                <button className="btn btn-primary btn-lg login-submit" type="submit" disabled={loading}>
+                  {loading ? (
+                    <span className="login-submit-loading">Signing in…</span>
+                  ) : (
+                    <>
+                      <span className="login-submit-label">Sign in to workspace</span>
+                      <ArrowRightIcon className="login-submit-icon" />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
 
             <p className="login-footnote">
               <LockIcon width={12} height={12} />

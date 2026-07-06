@@ -124,8 +124,8 @@ export default function ChangePasswordPage() {
         <div style={{ marginBottom: 22, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
           {forced ? (
             <>
-              Your administrator created this account with a temporary password.
-              Pick a new one to continue. Minimum {MIN_LENGTH} characters.
+              A temporary password has been generated. Use it to sign in, then set a new password.
+              Minimum {MIN_LENGTH} characters.
             </>
           ) : (
             <>Enter your current password and a new one of at least {MIN_LENGTH} characters.</>

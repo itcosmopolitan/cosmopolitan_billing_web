@@ -7,6 +7,9 @@ this change fixes.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
+from src.email_utils import send_temp_password_email
 from src.models import User
 from src.security import (
     create_access_token,
@@ -24,6 +28,12 @@ from src.security import (
     verify_password_async,
 )
 
+try:
+    import resend
+except ImportError:  # pragma: no cover - optional dependency, handled at runtime.
+    resend = None
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Minimum password length enforced on /auth/change-password. Matches the
@@ -40,6 +50,28 @@ class LoginRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+def _generate_temp_password() -> str:
+    return secrets.token_urlsafe(9)
+
+
+def _get_settings():
+    try:
+        return config.get()
+    except RuntimeError:
+        return config.load()
+
+
+def _get_settings():
+    try:
+        return config.get()
+    except RuntimeError:
+        return config.load()
 
 
 @router.post("/login")
@@ -83,6 +115,48 @@ async def me(
     """Always 401 without a valid token — the frontend uses this on app boot
     to rehydrate the session and on refresh to re-fetch permissions."""
     return await user_with_permissions(user, db)
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Issue a one-time temporary password for an existing active user.
+
+    The flow is intentionally self-service and does not depend on email delivery
+    infrastructure: it resets the account password and sends the temporary
+    credential by email if the address exists.
+    """
+    normalized_email = data.email.lower()
+    user = (
+        await db.execute(select(User).where(User.email == normalized_email))
+    ).scalar_one_or_none()
+
+    if not user or not user.active:
+        return {
+            "message": "If an account exists for that email, a temporary password will be sent.",
+        }
+
+    temp_password = _generate_temp_password()
+    user.hashed_password = await hash_password_async(temp_password)
+    user.must_change_password = True
+    await db.commit()
+
+    try:
+        await asyncio.to_thread(
+            send_temp_password_email,
+            normalized_email,
+            temp_password,
+            first_name=user.name,
+            welcome=False,
+        )
+    except Exception as exc:  # pragma: no cover - depends on outbound email config.
+        logger.exception("Failed to send temporary password email", exc_info=exc)
+
+    return {
+        "message": "If an account exists for that email, a temporary password will be sent.",
+    }
 
 
 @router.post("/change-password")

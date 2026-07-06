@@ -1,9 +1,12 @@
+import asyncio
 import secrets
 import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr
+
+from src.email_utils import send_temp_password_email
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -234,12 +237,24 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
 
     payload = serialize_user(u)
     await attach_branch_ids(db, [payload])
+
+    try:
+        await asyncio.to_thread(
+            send_temp_password_email,
+            normalized_email,
+            temp_password,
+            first_name=data.name,
+            welcome=True,
+        )
+    except Exception:
+        # Don't fail user creation if email sending is temporarily broken.
+        # The admin can still see the created user and re-send via the forgot
+        # password flow later.
+        pass
+
     return {
         **payload,
-        # SECURITY: only included in this create response. /auth/login and
-        # /auth/me never echo the password. Admin should treat this as
-        # sensitive and share it out of band.
-        "temp_password": temp_password,
+        "message": "The new user has been emailed a temporary password.",
     }
 
 
