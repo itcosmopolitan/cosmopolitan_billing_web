@@ -144,6 +144,7 @@ api.interceptors.response.use(
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export const authAPI = {
   login:  (email, password) => api.post('/auth/login', { email, password }),
+  forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
   logout: ()                => api.post('/auth/logout'),
   me:     ()                => api.get('/auth/me'),
   // Self-serve password change. Requires old password (defense against

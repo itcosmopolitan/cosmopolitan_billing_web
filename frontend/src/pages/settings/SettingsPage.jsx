@@ -423,14 +423,9 @@ export default function SettingsPage() {
       setUserSkip(0)
       setUserListVersion((v) => v + 1)
       setShowUser(false)
-      // Show the post-create confirmation modal with the temp password to
-      // share. Prefer the server-echoed `temp_password` (covers the case
-      // where the server generated one because the admin cleared the
-      // field) and fall back to what we sent.
       setCreatedUser({
         name: userForm.name,
         email: userForm.email,
-        password: result?.temp_password || userForm.password,
       })
       setUserForm({ name:'', email:'', role_id:'', branch_ids:[], active:true, password:'' })
     } catch (err) {
@@ -912,31 +907,9 @@ export default function SettingsPage() {
                 placeholder="Choose branches…"
               />
             </FormGroup>
-            <FormGroup label="Temporary password" required>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  className="form-input"
-                  type="text"
-                  value={userForm.password}
-                  onChange={e=>puf('password', e.target.value)}
-                  style={{ fontFamily: 'DM Mono, monospace', flex: 1 }}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={()=>puf('password', generateTempPassword())}
-                  title="Generate a new random password"
-                >
-                  Regenerate
-                </button>
-              </div>
-            </FormGroup>
             <AlertBar type="blue" icon="ℹ">
-              The user signs in with this temporary password and is required
-              to change it on first login. No email is sent — share the password
-              with them securely (Signal / WhatsApp / in person, not email).
+              A temporary password will be emailed to the new user automatically.
+              They must change it on first login for security.
             </AlertBar>
           </Modal>
 
@@ -951,7 +924,6 @@ export default function SettingsPage() {
             size="sm"
             footer={
               <>
-                <button className="btn btn-secondary" onClick={copyTempPassword}>Copy password</button>
                 <button className="btn btn-primary" onClick={()=>setCreatedUser(null)}>Got it</button>
               </>
             }
@@ -960,24 +932,10 @@ export default function SettingsPage() {
               <div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
                   <strong>{createdUser.name}</strong> ({createdUser.email}) was created.
-                  Share this temporary password securely &mdash; they&apos;ll be required
-                  to change it on first login.
-                </div>
-                <div style={{
-                  padding: '12px 14px',
-                  background: 'var(--bg-raised)',
-                  border: '1px solid var(--border-default)',
-                  borderRadius: 8,
-                  fontFamily: 'DM Mono, monospace',
-                  fontSize: 15,
-                  textAlign: 'center',
-                  letterSpacing: '0.04em',
-                  userSelect: 'all',
-                }}>
-                  {createdUser.password}
+                  A temporary password has been sent to their email address.
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 10 }}>
-                  This password won&apos;t be shown again. The server only stores the bcrypt hash.
+                  The new user will need to sign in with that temporary password and change it on first login.
                 </div>
               </div>
             )}
