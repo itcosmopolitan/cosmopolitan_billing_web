@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import toast from 'react-hot-toast'
+import { itemsAPI } from '@/api'
 import { AlertBar, EmptyState } from '@/components/ui'
 import { createBranchRow, retailBranches } from './itemFormShared'
 
@@ -15,12 +18,17 @@ export default function BranchPricingSection({
   defaultReorder,
   batchTracking = false,
   onChange,
+  itemId = null,
 }) {
   const isEdit = mode === 'edit'
   const showCreateOpeningStock = !isEdit && !batchTracking
   const showEditOpeningStock = isEdit && !batchTracking
   const initiallyListed = new Set(initialListedIds)
   const options = retailBranches(branches)
+
+  const [checkingBatches, setCheckingBatches] = useState(false)
+  const [batchWarningData, setBatchWarningData] = useState(null)
+  const [pendingRemoveRowId, setPendingRemoveRowId] = useState(null)
 
   const usedBranchIds = new Set(
     branchConfigs.map((r) => r.branch_id).filter(Boolean),
@@ -46,6 +54,57 @@ export default function BranchPricingSection({
   const removeRow = (rowId) => {
     onChange(branchConfigs.filter((r) => r._rowId !== rowId))
   }
+
+  const handleRemoveBranchClick = async (rowId) => {
+    const row = branchConfigs.find((r) => r._rowId === rowId)
+    if (!row || !row.branch_id) {
+      // Empty row, just remove it
+      removeRow(rowId)
+      return
+    }
+    
+    // Only check for batches in edit mode with an item ID
+    if (!isEdit || !itemId) {
+      removeRow(rowId)
+      return
+    }
+    
+    setCheckingBatches(true)
+    setPendingRemoveRowId(rowId)
+    try {
+      const info = await itemsAPI.getBranchBatchInfo(itemId, row.branch_id)
+      if (info.batch_count > 0 || info.stock_qty > 0) {
+        // Show warning
+        setBatchWarningData({
+          rowId,
+          branchName: row.branch_name,
+          ...info,
+        })
+      } else {
+        // No batches/stock, safe to remove
+        removeRow(rowId)
+      }
+    } catch (err) {
+      // If API fails, allow removal anyway (safer to fail open)
+      console.error('Failed to check batch info:', err)
+      removeRow(rowId)
+    } finally {
+      setCheckingBatches(false)
+    }
+  }
+
+  const handleConfirmRemoval = () => {
+    if (batchWarningData?.rowId) {
+      removeRow(batchWarningData.rowId)
+    }
+    setBatchWarningData(null)
+  }
+
+  const handleCancelRemoval = () => {
+    setBatchWarningData(null)
+  }
+
+
 
   const canAddMore = branchConfigs.length < options.length
   const costPlaceholder = (v) => (v === '' || v == null ? `Default ${defaultCost || 0}` : undefined)
@@ -194,11 +253,12 @@ export default function BranchPricingSection({
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"
-                      onClick={() => removeRow(r._rowId)}
-                      title="Remove branch"
+                      onClick={() => handleRemoveBranchClick(r._rowId)}
+                      disabled={checkingBatches && pendingRemoveRowId === r._rowId}
+                      title={checkingBatches && pendingRemoveRowId === r._rowId ? 'Checking…' : 'Remove branch'}
                       aria-label="Remove branch"
                     >
-                      ✕
+                      {checkingBatches && pendingRemoveRowId === r._rowId ? '⏳' : '✕'}
                     </button>
                   </td>
                 </tr>
@@ -212,6 +272,84 @@ export default function BranchPricingSection({
       {!isEdit && (
         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
           Default reorder level: {defaultReorder || 10}. Leave branch reorder blank to use the default.
+        </div>
+      )}
+
+      {/* Batch removal warning modal */}
+      {batchWarningData && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: '#fff',
+            borderRadius: 8,
+            boxShadow: '0 10px 30px rgba(0, 0, 0, 0.3)',
+            maxWidth: 380,
+            width: '90%',
+            textAlign: 'center',
+            padding: '32px 24px 24px',
+          }}>
+            {/* Icon */}
+            <div style={{
+              fontSize: 32,
+              marginBottom: 16,
+            }}>
+              ⚠️
+            </div>
+
+            {/* Title */}
+            <div style={{
+              fontSize: 16,
+              fontWeight: 600,
+              color: '#000',
+              marginBottom: 12,
+            }}>
+              Remove "{batchWarningData.branchName}" branch?
+            </div>
+
+            {/* Description */}
+            <div style={{
+              fontSize: 13,
+              color: '#666',
+              lineHeight: 1.6,
+              marginBottom: 24,
+            }}>
+              This branch has <strong>{batchWarningData.batch_count > 0 ? `${batchWarningData.batch_count} batch(es)` : ''}{batchWarningData.batch_count > 0 && batchWarningData.stock_qty > 0 ? ' and ' : ''}{batchWarningData.stock_qty > 0 ? `${batchWarningData.stock_qty} units` : ''}</strong>. Removing this branch will permanently delete all batches and stock data for this item at this branch.
+            </div>
+
+            {/* Buttons */}
+            <div style={{
+              display: 'flex',
+              gap: 12,
+              justifyContent: 'center',
+            }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleCancelRemoval}
+                style={{ minWidth: 100 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={handleConfirmRemoval}
+                style={{ minWidth: 100 }}
+              >
+                Yes, Remove
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

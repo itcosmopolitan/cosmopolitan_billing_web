@@ -15,6 +15,7 @@ export default function ItemFormFields({
   initialListedIds = [],
   onBranchConfigsChange,
   branchSectionMode = 'create',
+  itemId = null,
   onAddCategory,
   onAddUnit,
   categoryActionBusy = false,
@@ -150,6 +151,7 @@ export default function ItemFormFields({
           defaultReorder={form.reorder_level}
           batchTracking={Boolean(form.batch_tracking)}
           onChange={onBranchConfigsChange}
+          itemId={itemId}
         />
       )}
     </>

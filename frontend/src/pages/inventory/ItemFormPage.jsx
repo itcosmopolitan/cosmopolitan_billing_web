@@ -83,10 +83,30 @@ export default function ItemFormPage({ mode = 'create' }) {
   }, [can, navigate, isEdit])
 
   useEffect(() => {
-    taxRatesAPI.list()
+    if (isEdit && loading) return
+    const params = { active_only: true }
+    const currentRate = form.tax_rate
+    if (currentRate !== '' && currentRate != null && currentRate !== undefined) {
+      params.include_inactive_rates = String(currentRate)
+    }
+    fetchAllList((p) => taxRatesAPI.list({ ...p, ...params }))
       .then((data) => setTaxRates(Array.isArray(data) ? data : []))
       .catch((err) => console.error('Failed to load tax rates:', err))
   }, [form.tax_rate, isEdit, loading])
+
+  useEffect(() => {
+    let cancelled = false
+    dashAPI.filters()
+      .then((data) => {
+        if (cancelled) return
+        setCategories(data?.categories || [])
+      })
+      .catch((err) => {
+        console.error('Failed to load categories:', err)
+        setCategories([])
+      })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     if (!isEdit || !itemId) return
@@ -123,6 +143,24 @@ export default function ItemFormPage({ mode = 'create' }) {
     })()
     return () => { cancelled = true }
   }, [isEdit, itemId, defaultBranchId, navigate])
+
+  // Listen for branch deletions performed elsewhere (Items & Stock).
+  useEffect(() => {
+    if (!isEdit || !itemId) return undefined
+    const handler = (e) => {
+      try {
+        const { item_id, branch_id } = e.detail || {}
+        if (!item_id || item_id !== itemId) return
+        // Remove the branch row if present
+        setBranchConfigs((rows) => rows.filter((r) => r.branch_id !== branch_id))
+        setInitialListedIds((ids) => ids.filter((id) => id !== branch_id))
+      } catch (err) {
+        // ignore
+      }
+    }
+    window.addEventListener('item-branch-removed', handler)
+    return () => window.removeEventListener('item-branch-removed', handler)
+  }, [isEdit, itemId])
 
   useEffect(() => {
     if (isEdit) return
@@ -209,15 +247,26 @@ export default function ItemFormPage({ mode = 'create' }) {
       if (isEdit) {
         const catalog = buildCatalogPayload(form, defaultBranchId)
         const res = await itemsAPI.update(itemId, catalog)
-        await itemsAPI.updateBranches(
+        const branchRes = await itemsAPI.updateBranches(
           itemId,
           buildBranchUpdatePayload(branchConfigs, initialListedIds),
         )
         const ch = res?.data?.batch_tracking_change
+        const br = branchRes?.data
+        
+        // Build toast message with all the changes
+        const messages = []
+
         if (ch?.action === 'disabled') {
-          toast.success(`Item updated — ${ch.batches_deleted ?? 0} batch(es) removed`)
+          messages.push(`${ch.batches_deleted ?? 0} batch(es) removed`)
         } else if (ch?.action === 'enabled') {
-          toast.success(`Item updated — ${ch.batches_seeded ?? 0} opening batch(es) created`)
+          messages.push(`${ch.batches_seeded ?? 0} opening batch(es) created`)
+        }
+        if (br?.total_batches_deleted) {
+          messages.push(`${br.total_batches_deleted} batch(es) deleted from removed branches`)
+        }
+        if (messages.length > 0) {
+          toast.success(`Item updated — ${messages.join('; ')}`)
         } else {
           toast.success('Item updated')
         }
@@ -283,6 +332,7 @@ export default function ItemFormPage({ mode = 'create' }) {
             initialListedIds={initialListedIds}
             onBranchConfigsChange={setBranchConfigs}
             branchSectionMode={isEdit ? 'edit' : 'create'}
+            itemId={itemId}
             onAddCategory={openAddCategory}
             onAddUnit={openAddUnit}
             categoryActionBusy={addingCategory}

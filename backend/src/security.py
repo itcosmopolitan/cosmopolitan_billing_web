@@ -11,7 +11,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
+import logging
+
+logger = logging.getLogger("cosmopolitan.security")
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -165,6 +168,7 @@ def require_perm(*needed: str):
     async def _dep(
         user: User = Depends(current_user),
         db: AsyncSession = Depends(get_db),
+        request: Request = None,
     ) -> User:
         granted: list[str] = []
         if user.role_id:
@@ -188,6 +192,19 @@ def require_perm(*needed: str):
             return user
         if any(p in granted_set for p in needed):
             return user
+
+        try:
+            path = request.url.path if request is not None else "<unknown>"
+        except Exception:
+            path = "<unknown>"
+        logger.warning(
+            "Permission denied: user_id=%s role_id=%s needed=%s granted=%s path=%s",
+            getattr(user, "id", None),
+            getattr(user, "role_id", None),
+            ','.join(needed),
+            ','.join(sorted(granted_set)),
+            path,
+        )
 
         raise HTTPException(
             status_code=403,

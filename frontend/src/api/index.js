@@ -116,7 +116,26 @@ api.interceptors.response.use(
       }
       // Boot-time /auth/me failure: RequireAuth sends user to login — stay silent.
     } else if (!isBulkDeleteBlocked) {
-      toast.error(msg)
+      // Suppress duplicate identical toasts within a short window to avoid
+      // spamming the user when multiple concurrent requests fail for the
+      // same reason (e.g. permission check). Keep a tiny in-memory cache
+      // keyed by message + status.
+      if (!api._recentErrors) api._recentErrors = new Map()
+      const key = `${status}:${msg}`
+      const now = Date.now()
+      const prev = api._recentErrors.get(key) || 0
+      // Skip if we showed this exact message in the last 2000ms
+      if (now - prev > 2000) {
+        api._recentErrors.set(key, now)
+        toast.error(msg)
+        // Periodically clean old entries to avoid unbounded growth
+        if (api._recentErrors.size > 1000) {
+          const cutoff = now - 60_000
+          for (const [k, t] of api._recentErrors.entries()) {
+            if (t < cutoff) api._recentErrors.delete(k)
+          }
+        }
+      }
     }
     return Promise.reject(err)
   }
@@ -165,12 +184,14 @@ export const itemsAPI = {
   get:     (id)     => api.get(`/items/${id}`),
   create:  (data)   => api.post('/items/', data),
   update:  (id, data) => api.put(`/items/${id}`, data),
+  patch:   (id, data) => api.patch(`/items/${id}`, data),
   approve: (id)     => api.post(`/items/${id}/approve`),
   reject:  (id, notes) => api.post(`/items/${id}/reject`, { notes }),
   adjust:  (data)   => api.post('/items/adjust', data),
-  delete:  (id)     => api.delete(`/items/${id}`),
+  delete:  (id, params) => api.delete(`/items/${id}`, { params }),
   getBranches:    (id) => api.get(`/items/${id}/branches`),
   updateBranches: (id, data) => api.put(`/items/${id}/branches`, data),
+  getBranchBatchInfo: (itemId, branchId) => api.get(`/items/${itemId}/branches/${branchId}/batch-info`),
   // Batch / lot tracking (FIFO + FEFO inventory). `listBatches` returns
   // batches ordered nearest-expiry first; `createBatch` adds a new lot and
   // also bumps the per-branch stock counter; `patchBatch` edits metadata
@@ -384,9 +405,10 @@ export const cashAPI = {
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
 export const reportsAPI = {
-  salesSummary:          (params) => api.get('/reports/sales-summary',      { params }),
-  purchaseSummary:       (params) => api.get('/reports/purchase-summary',   { params }),
-  taxSummary:            (params) => api.get('/reports/tax-summary',        { params }),
+  salesSummary:    (params) => api.get('/reports/sales-summary',    { params }),
+  purchaseSummary: (params) => api.get('/reports/purchase-summary', { params }),
+  taxSummary:      (params) => api.get('/reports/tax-summary',      { params }),
+  stockMovement:   (params) => api.get('/reports/stock-movement',   { params }),
   salesRegister:         (params) => api.get('/reports/sales-register',     { params }),
   dailySales:            (params) => api.get('/reports/daily-sales',        { params }),
   productSales:          (params) => api.get('/reports/product-sales',      { params }),

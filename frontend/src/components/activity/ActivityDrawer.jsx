@@ -560,30 +560,31 @@ export default function ActivityDrawer({ open, onClose, recordType, recordId, ti
                       </div>
                     ) : (
                       <>
-                        {(event.can_edit || event.can_delete) && (
+                        {event.can_delete && (
                           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12, justifyContent: 'flex-end' }}>
-                            {event.can_edit && (
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-xs"
-                                onClick={() => handleStartEdit(event.id, event.body)}
-                                disabled={submitting}
-                                style={{ minWidth: 90, borderRadius: 999, background: 'var(--bg-info)', color: 'var(--text-info)', border: '1px solid var(--border-default)' }}
-                              >
-                                Edit
-                              </button>
-                            )}
-                            {event.can_delete && (
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-xs"
-                                onClick={() => handleDeleteComment(event.id)}
-                                disabled={submitting}
-                                style={{ minWidth: 90, borderRadius: 999, background: 'var(--bg-danger)', color: 'var(--text-danger)', border: '1px solid var(--border-default)' }}
-                              >
-                                Delete
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-xs"
+                              onClick={() => handleDeleteComment(event.id)}
+                              disabled={submitting}
+                              style={{
+                                minWidth: 40,
+                                width: 40,
+                                height: 32,
+                                borderRadius: 8,
+                                background: 'transparent',
+                                color: 'var(--text-danger)',
+                                border: '1px solid var(--border-default)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: 0,
+                              }}
+                              aria-label="Delete comment"
+                              title="Delete comment"
+                            >
+                              🗑
+                            </button>
                           </div>
                         )}
                       </>

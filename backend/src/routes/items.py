@@ -5,7 +5,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import and_, asc, delete, func, select, text
+from sqlalchemy import and_, asc, delete, func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +14,37 @@ from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.item_branch import effective_cost_price, effective_reorder_level, effective_selling_price
 from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemStock, User, AuditLog
+from src.models import (
+    AdjustmentRequest,
+    AdjustmentStatus,
+    Branch,
+    Category,
+    GoodsReceiptNote,
+    GRNLineItem,
+    Item,
+    ItemBatch,
+    ItemBranchConfig,
+    ItemStock,
+    PurchaseBill,
+    PurchaseLineItem,
+    PurchaseOrder,
+    PurchaseOrderLineItem,
+    Quotation,
+    QuotationLineItem,
+    ReturnLineItem,
+    SaleInvoice,
+    SaleLineItem,
+    SalesOrder,
+    SalesOrderLineItem,
+    SalesReturn,
+    SalesReturnLineItem,
+    StockAdjustment,
+    StockMovement,
+    StockReservation,
+    StockTransfer,
+    TransferLineItem,
+    TransferStatus,
+)
 from src.pagination import (
     normalize_limit,
     normalize_skip,
@@ -267,6 +299,204 @@ async def _apply_batch_tracking_toggle(
         await db.flush()
     return {"action": "enabled", "batches_seeded": seeded}
 
+async def _item_inventory_blockers(
+    db: AsyncSession,
+    item_id: str,
+    branch_id: Optional[str] = None,
+) -> list[str]:
+    """Check blockers for item deletion/deactivation.
+    
+    If branch_id is provided, only check that branch's stock and transactions.
+    If branch_id is None, check globally (for Item Master operations).
+    """
+    reasons: list[str] = []
+
+    if branch_id:
+        # Branch-specific checks (Items & Stock page context)
+        stock_res = await db.execute(
+            select(ItemStock.quantity).where(
+                ItemStock.item_id == item_id,
+                ItemStock.branch_id == branch_id,
+            )
+        )
+        qty = int(stock_res.scalar() or 0)
+        if qty > 0:
+            reasons.append(f"branch has {qty} units in stock")
+
+        batch_res = await db.execute(
+            select(func.sum(ItemBatch.quantity)).where(
+                ItemBatch.item_id == item_id,
+                ItemBatch.branch_id == branch_id,
+            )
+        )
+        if int(batch_res.scalar() or 0) > 0:
+            reasons.append("branch has non-zero batch quantity")
+
+        pending_adj = await db.execute(
+            select(AdjustmentRequest.id).where(
+                AdjustmentRequest.item_id == item_id,
+                AdjustmentRequest.branch_id == branch_id,
+                AdjustmentRequest.status == AdjustmentStatus.pending,
+            ).limit(1)
+        )
+        if pending_adj.scalar_one_or_none():
+            reasons.append("branch has pending stock adjustment requests")
+
+        transfer_exists = await db.execute(
+            select(StockTransfer.id)
+            .join(TransferLineItem, TransferLineItem.transfer_id == StockTransfer.id)
+            .where(
+                TransferLineItem.item_id == item_id,
+                or_(
+                    StockTransfer.from_branch_id == branch_id,
+                    StockTransfer.to_branch_id == branch_id,
+                ),
+                StockTransfer.status.in_(
+                    [TransferStatus.pending, TransferStatus.approved, TransferStatus.transit]
+                ),
+            )
+            .limit(1)
+        )
+        if transfer_exists.scalar_one_or_none():
+            reasons.append("branch has pending or active stock transfer requests")
+    else:
+        # Global checks (Item Master context)
+        stock_res = await db.execute(
+            select(func.sum(ItemStock.quantity)).where(ItemStock.item_id == item_id)
+        )
+        if int(stock_res.scalar() or 0) > 0:
+            reasons.append("item has non-zero stock")
+
+        batch_res = await db.execute(
+            select(func.sum(ItemBatch.quantity)).where(ItemBatch.item_id == item_id)
+        )
+        if int(batch_res.scalar() or 0) > 0:
+            reasons.append("item has non-zero batch quantity")
+
+        pending_adj = await db.execute(
+            select(AdjustmentRequest.id).where(
+                AdjustmentRequest.item_id == item_id,
+                AdjustmentRequest.status == AdjustmentStatus.pending,
+            ).limit(1)
+        )
+        if pending_adj.scalar_one_or_none():
+            reasons.append("item has pending stock adjustment requests")
+
+        transfer_exists = await db.execute(
+            select(StockTransfer.id)
+            .join(TransferLineItem, TransferLineItem.transfer_id == StockTransfer.id)
+            .where(
+                TransferLineItem.item_id == item_id,
+                StockTransfer.status.in_(
+                    [TransferStatus.pending, TransferStatus.approved, TransferStatus.transit]
+                ),
+            )
+            .limit(1)
+        )
+        if transfer_exists.scalar_one_or_none():
+            reasons.append("item has pending or active stock transfer requests")
+
+    return reasons
+
+async def _item_has_historical_references(
+    db: AsyncSession,
+    item_id: str,
+    branch_id: Optional[str] = None,
+) -> bool:
+    """Check if item has historical transaction references.
+
+    If branch_id is provided, only check that branch's transactions.
+    If branch_id is None, check globally.
+    """
+    if branch_id:
+        branch_checks = [
+            (SaleLineItem, SaleInvoice, SaleLineItem.invoice_id, SaleInvoice.branch_id),
+            (PurchaseLineItem, PurchaseBill, PurchaseLineItem.bill_id, PurchaseBill.branch_id),
+            (QuotationLineItem, Quotation, QuotationLineItem.quotation_id, Quotation.branch_id),
+            (SalesReturnLineItem, SalesReturn, SalesReturnLineItem.return_id, SalesReturn.branch_id),
+        ]
+
+        for line_model, parent_model, line_fk, parent_branch in branch_checks:
+            result = await db.execute(
+                select(line_model.id)
+                .join(parent_model, line_fk == parent_model.id)
+                .where(
+                    line_model.item_id == item_id,
+                    parent_branch == branch_id,
+                ).limit(1)
+            )
+            if result.scalar_one_or_none():
+                return True
+
+        for model in (AdjustmentRequest, StockAdjustment):
+            result = await db.execute(
+                select(model.id).where(
+                    model.item_id == item_id,
+                    model.branch_id == branch_id,
+                ).limit(1)
+            )
+            if result.scalar_one_or_none():
+                return True
+
+        return False
+
+    for model in (
+        SaleLineItem,
+        SalesOrderLineItem,
+        PurchaseLineItem,
+        PurchaseOrderLineItem,
+        QuotationLineItem,
+        GRNLineItem,
+        ReturnLineItem,
+        SalesReturnLineItem,
+        AdjustmentRequest,
+        StockAdjustment,
+        StockMovement,
+        StockReservation,
+        TransferLineItem,
+    ):
+        result = await db.execute(select(model.id).where(model.item_id == item_id).limit(1))
+        if result.scalar_one_or_none():
+            return True
+
+    return False
+
+
+async def _get_branch_batch_info(
+    db: AsyncSession,
+    item_id: str,
+    branch_id: str,
+) -> dict:
+    """Get info about batches and stock at a branch for an item.
+    
+    Returns dict with:
+    - batch_count: number of batches
+    - batch_qty: total quantity in batches
+    - stock_qty: quantity in item_stock
+    """
+    # Count batches
+    batch_res = await db.execute(
+        select(func.count(ItemBatch.id), func.sum(ItemBatch.quantity)).where(
+            ItemBatch.item_id == item_id,
+            ItemBatch.branch_id == branch_id,
+        )
+    )
+    batch_count, batch_qty = batch_res.one()
+    
+    # Get stock quantity
+    stock_res = await db.execute(
+        select(ItemStock.quantity).where(
+            ItemStock.item_id == item_id,
+            ItemStock.branch_id == branch_id,
+        )
+    )
+    stock_qty = stock_res.scalar() or 0
+    
+    return {
+        "batch_count": int(batch_count or 0),
+        "batch_qty": int(batch_qty or 0),
+        "stock_qty": int(stock_qty or 0),
+    }
 class ItemCreate(BaseModel):
     name: str
     sku: Optional[str] = None
@@ -282,6 +512,8 @@ class ItemCreate(BaseModel):
     emoji: str = "📦"
     batch_tracking: bool = False
     expiry_tracking: bool = False
+    active: Optional[bool] = None
+    branch_id: Optional[str] = None
     opening_stock: int = 0
     branch_id: str = "br-001"
     # Optional opening-batch metadata. Honored only when batch_tracking is
@@ -360,6 +592,11 @@ class ItemPatch(BaseModel):
     emoji: Optional[str] = None
     batch_tracking: Optional[bool] = None
     expiry_tracking: Optional[bool] = None
+    # Allow branch-specific deactivate/activate requests and toggling active
+    # via PATCH: include `active` and `branch_id` so the route's deactivation
+    # blocker logic receives the intended values.
+    active: Optional[bool] = None
+    branch_id: Optional[str] = None
 
 
 
@@ -404,6 +641,7 @@ async def list_items(
     category_id: Optional[str] = None,
     branch_id: Optional[str] = "br-001",
     status: Optional[str] = None,
+    include_inactive: bool = False,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
     page_no: Optional[int] = Query(None, ge=1),
@@ -435,16 +673,27 @@ async def list_items(
     elif master_mode and status == "inactive":
         q = q.where(Item.active == False, Item.approval_status != ItemApprovalStatus.pending)  # noqa: E712
         cq = cq.where(Item.active == False, Item.approval_status != ItemApprovalStatus.pending)  # noqa: E712
-    else:
+    # Note: do not pre-filter by `active` here — apply the active/inactive
+    # filter later based on the `include_inactive` flag so callers that set
+    # `include_inactive=true` actually receive inactive rows. The previous
+    # unconditional filter caused the Inactive tab to never show deactivated
+    # items.
+
+    if not include_inactive:
         q = q.where(Item.active == True)  # noqa: E712
         cq = cq.where(Item.active == True)  # noqa: E712
 
-    if filter_listed and branch_id:
+    if branch_id and (filter_listed or not master_mode):
         listed_join = and_(
             ItemBranchConfig.item_id == Item.id,
             ItemBranchConfig.branch_id == branch_id,
             ItemBranchConfig.is_available == True,  # noqa: E712
         )
+        if filter_listed:
+            listed_join = and_(
+                listed_join,
+                ItemBranchConfig.is_available == True,  # noqa: E712
+            )
         q = q.join(ItemBranchConfig, listed_join)
         cq = cq.join(ItemBranchConfig, listed_join)
 
@@ -557,6 +806,7 @@ async def list_items(
             "is_available": bool(cfg.is_available) if cfg else False,
             "branch_cost_override": cfg.cost_price if cfg else None,
             "branch_price_override": cfg.selling_price if cfg else None,
+            "active": bool(item.active),
         }
         if master_mode:
             row["available_branch_count"] = avail_branch_counts.get(item.id, 0)
@@ -582,6 +832,13 @@ async def list_items(
         )
     return paged(out, total, sk, lim)
 
+async def _validate_category_id(category_id: Optional[str], db: AsyncSession) -> None:
+    if not category_id:
+        return
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(400, detail=f"Invalid category_id: {category_id}")
+    
 @router.post("/", dependencies=[Depends(require_perm("item_master.create"))])
 async def create_item(
     data: ItemCreate,
@@ -589,6 +846,7 @@ async def create_item(
     user: User = Depends(current_user),
 ):
     direct = await can_direct_commit(user, db, "item_master.approve")
+    await _validate_category_id(data.category_id, db)
     item = Item(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -795,6 +1053,8 @@ async def update_item(
     if not item:
         raise HTTPException(404, "Item not found")
 
+    await _validate_category_id(data.category_id, db)
+
     was_tracked = bool(item.batch_tracking)
     item.name = data.name
     item.sku = data.sku or item.sku
@@ -834,6 +1094,27 @@ async def update_item(
         out["batch_tracking_change"] = toggle_meta
     return out
 
+@router.get(
+    "/{item_id}/branches/{branch_id}/batch-info",
+    dependencies=[Depends(require_perm("items.view"))],
+)
+async def get_branch_batch_info(
+    item_id: str,
+    branch_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if a branch has batches or stock before removal.
+    
+    Used by the Item Master form to warn users before deleting a branch
+    that has existing batches/stock.
+    """
+    item_res = await db.execute(select(Item).where(Item.id == item_id))
+    item = item_res.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    
+    info = await _get_branch_batch_info(db, item_id, branch_id)
+    return info
 
 @router.get(
     "/{item_id}/branches",
@@ -907,6 +1188,11 @@ async def update_item_branches(
         raise HTTPException(404, "Item not found")
 
     branch_ids = set((await db.execute(select(Branch.id))).scalars().all())
+    
+    total_batches_deleted = 0
+    total_stock_deleted = 0
+    removed_branches_info = []
+
     for bc in data.branches:
         if bc.branch_id not in branch_ids:
             raise HTTPException(400, f"Unknown branch: {bc.branch_id}")
@@ -933,6 +1219,59 @@ async def update_item_branches(
                 mfg_date=bc.opening_mfg_date,
                 expiry_date=bc.opening_expiry_date,
             )
+        
+        # When a branch is being removed (is_available = False), delete its batches and stock
+        if not bc.is_available:
+            # Delete batches for this branch
+            batch_delete_res = await db.execute(
+                delete(ItemBatch).where(
+                    ItemBatch.item_id == item_id,
+                    ItemBatch.branch_id == bc.branch_id,
+                )
+            )
+            batches_deleted = int(batch_delete_res.rowcount or 0)
+            
+            # Delete stock for this branch
+            stock_delete_res = await db.execute(
+                delete(ItemStock).where(
+                    ItemStock.item_id == item_id,
+                    ItemStock.branch_id == bc.branch_id,
+                )
+            )
+            stock_deleted = int(stock_delete_res.rowcount or 0)
+            
+            total_batches_deleted += batches_deleted
+            total_stock_deleted += stock_deleted
+            
+            if batches_deleted > 0 or stock_deleted > 0:
+                # Get branch name for logging
+                branch_res = await db.execute(select(Branch.name).where(Branch.id == bc.branch_id))
+                branch_name = branch_res.scalar_one_or_none() or bc.branch_id
+                
+                removed_branches_info.append({
+                    "branch_id": bc.branch_id,
+                    "branch_name": branch_name,
+                    "batches_deleted": batches_deleted,
+                    "stock_deleted": stock_deleted,
+                })
+                
+                _log_item_history(
+                    db,
+                    user=user,
+                    item=item,
+                    event_type="item_branch_removed",
+                    action="Item Branch Removed",
+                    detail=f"Removed branch {branch_name} from item {item.name} ({item.sku}). Deleted {batches_deleted} batch(es) and {stock_deleted} stock row(s).",
+                    metadata={
+                        "branch_id": bc.branch_id,
+                        "branch_name": branch_name,
+                        "batches_deleted": batches_deleted,
+                        "stock_deleted": stock_deleted,
+                        "sku": item.sku,
+                        "name": item.name,
+                    },
+                    risk="medium",
+                )
 
     item_ref = item.name if item else item_id
     _log_item_history(
@@ -949,7 +1288,14 @@ async def update_item_branches(
         },
     )
     await db.commit()
-    return {"message": "Branch configuration updated"}
+    response = {"message": "Branch configuration updated"}
+    if total_batches_deleted > 0 or total_stock_deleted > 0:
+        response["branches_removed"] = removed_branches_info
+        response["total_batches_deleted"] = total_batches_deleted
+        response["total_stock_deleted"] = total_stock_deleted
+    
+    return response
+
 
 
 @router.patch("/{item_id}", dependencies=[Depends(require_perm("item_master.edit"))])
@@ -965,7 +1311,15 @@ async def patch_item(
         raise HTTPException(404, "Item not found")
     was_tracked = bool(item.batch_tracking)
     updates = data.model_dump(exclude_unset=True)
+    branch_id = updates.pop("branch_id", None)
     toggle_meta = None
+    if "active" in updates and updates["active"] is False:
+        blockers = await _item_inventory_blockers(db, item_id, branch_id=branch_id)
+        if blockers:
+            raise HTTPException(
+                400,
+                "Cannot deactivate item: " + "; ".join(blockers),
+            )
     if "batch_tracking" in updates:
         will_track = bool(updates["batch_tracking"])
         toggle_meta = await _apply_batch_tracking_toggle(
@@ -993,6 +1347,122 @@ async def patch_item(
     if toggle_meta:
         out["batch_tracking_change"] = toggle_meta
     return out
+
+@router.delete("/{item_id}", dependencies=[Depends(require_perm("item_master.delete"))])
+async def delete_item(
+    item_id: str,
+    branch_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Item).where(Item.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    blockers = await _item_inventory_blockers(db, item_id, branch_id=branch_id)
+    if blockers:
+        raise HTTPException(
+            400,
+            "Cannot delete item: " + "; ".join(blockers),
+        )
+
+    if await _item_has_historical_references(db, item_id, branch_id=branch_id):
+        raise HTTPException(
+            400,
+            "Cannot delete item because it has historical transactional references",
+        )
+
+    if branch_id:
+        adjustment_ref = await db.execute(
+            select(AdjustmentRequest.id)
+            .where(
+                AdjustmentRequest.item_id == item_id,
+                AdjustmentRequest.branch_id == branch_id,
+            )
+            .limit(1)
+        )
+        if adjustment_ref.scalar_one_or_none():
+            raise HTTPException(
+                400,
+                "Cannot delete item because it is still referenced by adjustment requests in this branch",
+            )
+
+        stock_adjustment_ref = await db.execute(
+            select(StockAdjustment.id)
+            .where(
+                StockAdjustment.item_id == item_id,
+                StockAdjustment.branch_id == branch_id,
+            )
+            .limit(1)
+        )
+        if stock_adjustment_ref.scalar_one_or_none():
+            raise HTTPException(
+                400,
+                "Cannot delete item because it is still referenced by stock adjustment history in this branch",
+            )
+
+        await db.execute(
+            delete(ItemBatch).where(
+                ItemBatch.item_id == item_id,
+                ItemBatch.branch_id == branch_id,
+            )
+        )
+        await db.execute(
+            delete(ItemBranchConfig).where(
+                ItemBranchConfig.item_id == item_id,
+                ItemBranchConfig.branch_id == branch_id,
+            )
+        )
+        await db.execute(
+            delete(ItemStock).where(
+                ItemStock.item_id == item_id,
+                ItemStock.branch_id == branch_id,
+            )
+        )
+
+        # If the item no longer has any branch listings, delete the master
+        # item row too when it is safely removable.
+        remaining_branches = await db.execute(
+            select(func.count(ItemBranchConfig.id)).where(ItemBranchConfig.item_id == item_id)
+        )
+        if int(remaining_branches.scalar() or 0) == 0:
+            if not await _item_has_historical_references(db, item_id):
+                await db.execute(delete(Item).where(Item.id == item_id))
+
+        await db.commit()
+        return {"deleted": item_id, "branch_id": branch_id}
+
+    adjustment_ref = await db.execute(
+        select(AdjustmentRequest.id).where(AdjustmentRequest.item_id == item_id).limit(1)
+    )
+    if adjustment_ref.scalar_one_or_none():
+        raise HTTPException(
+            400,
+            "Cannot delete item because it is still referenced by adjustment requests",
+        )
+
+    stock_adjustment_ref = await db.execute(
+        select(StockAdjustment.id).where(StockAdjustment.item_id == item_id).limit(1)
+    )
+    if stock_adjustment_ref.scalar_one_or_none():
+        raise HTTPException(
+            400,
+            "Cannot delete item because it is still referenced by stock adjustment history",
+        )
+
+    await db.execute(delete(ItemBatch).where(ItemBatch.item_id == item_id))
+    await db.execute(delete(ItemBranchConfig).where(ItemBranchConfig.item_id == item_id))
+    await db.execute(delete(ItemStock).where(ItemStock.item_id == item_id))
+    try:
+        await db.execute(delete(Item).where(Item.id == item_id))
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            400,
+            "Cannot delete item because it is still referenced by other records",
+        )
+    await db.commit()
+    return {"deleted": item_id}
 
 @router.post("/adjust", dependencies=[Depends(require_perm("adjustments.approve"))])
 async def adjust_stock(data: StockAdjustRequest, db: AsyncSession = Depends(get_db)):
