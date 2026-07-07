@@ -227,7 +227,7 @@ Existing `/users` routes get `Depends(require_perm("users.*"))` and `POST /users
 Wrap `current_user` in a middleware that, after a successful state-changing call (POST/PUT/PATCH/DELETE), writes an `AuditLog` row with `user_id`, `user_name`, `module` (from URL prefix), `ref` (resource id when known), `risk` (lookup table by route), and `ip_address` (`request.client.host`).
 
 Risk levels:
-- `high`: `users.*`, `roles.*`, `items.delete`, `invoices.delete`, `pos.refund`, `pos.override_price`
+- `high`: `users.*`, `roles.*`, `item_master.delete`, `invoices.delete`, `pos.refund`, `pos.override_price`
 - `medium`: most other writes
 - `low`: not logged (reads)
 

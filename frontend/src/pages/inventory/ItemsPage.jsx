@@ -72,6 +72,8 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [itemSortOrder, setItemSortOrder] = useState('asc')
   const [loading, setLoading]   = useState(true)
   const [categories, setCategories] = useState([])
+  const [confirmAction, setConfirmAction] = useState(null)
+  const [actionBusy, setActionBusy] = useState(false)
 
   // Client-side sort because the page fetches all items at once via
   // fetchAllList and paginates locally. If/when this switches to true
@@ -91,13 +93,9 @@ export default function ItemsPage({ mode = 'branch' }) {
     try {
       setLoading(true)
       const params = isMaster
-        ? {
-            master_mode: true,
-            branch_id: branchFilter,
-            ...(tab === 'pending' ? { status: 'pending' } : {}),
-            ...(tab === 'inactive' ? { status: 'inactive' } : {}),
-          }
-        : { branch_id: branchFilter, listed_only: true }
+        ? { master_mode: true, branch_id: branchFilter, include_inactive: tab === 'inactive' }
+        : { branch_id: branchFilter, listed_only: tab === 'inactive' ? false : true, include_inactive: tab === 'inactive' }
+
       const data = await fetchAllList(itemsAPI.list, params)
       setItems(data || [])
       if (data && data.length > 0) {
@@ -122,6 +120,13 @@ export default function ItemsPage({ mode = 'branch' }) {
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
+
+  useEffect(() => {
+    if (activeBranch?.id && activeBranch.id !== branchFilter) {
+      setBranchFilter(activeBranch.id)
+    }
+  }, [activeBranch?.id])
+
 
   useEffect(() => {
     setItemSkip(0)
@@ -300,6 +305,50 @@ export default function ItemsPage({ mode = 'branch' }) {
       toast.error('Failed to submit adjustment request')
     } finally {
       setAdjSubmitting(false)
+    }
+  }
+
+  const handleConfirmAction = async () => {
+    if (!confirmAction) return
+    setActionBusy(true)
+    try {
+      const { type, item } = confirmAction
+      if (type === 'delete') {
+        // Master page must perform a global delete (no branch_id param).
+        // Branch-mode (Items & Stock) should pass branch_id to delete only that branch data.
+        if (isMaster) {
+          await itemsAPI.delete(item.id)
+        } else {
+          await itemsAPI.delete(item.id, { branch_id: branchFilter })
+          // Notify any open Item Master edit page to remove this branch row
+          try {
+            window.dispatchEvent(new CustomEvent('item-branch-removed', {
+              detail: { item_id: item.id, branch_id: branchFilter },
+            }))
+          } catch (e) {
+            // ignore in environments where window/custom events are unavailable
+          }
+        }
+        toast.success(`Deleted ${item.name}`)
+      } else {
+        // Pass branchFilter in body for branch-specific deactivate check
+        await itemsAPI.patch(item.id, { 
+          active: type === 'reactivate',
+          branch_id: branchFilter,
+        })
+        toast.success(`${item.name} ${type === 'reactivate' ? 'reactivated' : 'deactivated'}`)
+      }
+      setConfirmAction(null)
+      await fetchItems()
+    } catch (err) {
+      console.error('Failed action:', err)
+        // Global axios interceptor already shows HTTP error toasts. Show a
+        // local toast only for non-HTTP errors (network, JS exceptions)
+        if (!err?.response) {
+          toast.error(err?.message || 'Action failed')
+        }
+    } finally {
+      setActionBusy(false)
     }
   }
 
@@ -500,6 +549,9 @@ export default function ItemsPage({ mode = 'branch' }) {
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                               {p.brand}
+                              {!p.active && (
+                                <span style={{ marginLeft: 6, fontSize: 11.5, color: 'var(--red)' }}>Inactive</span>
+                              )}
                               {!isMaster && p.batch_tracking && p.batches_count > 0 && (
                                 <span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>
                                   · {p.batches_count} batch{p.batches_count === 1 ? '' : 'es'}
@@ -572,6 +624,17 @@ export default function ItemsPage({ mode = 'branch' }) {
                               hidden: tab === 'pending' || !can('item_master.edit'),
                               onClick: () => openEdit(p),
                             },
+                            {
+                              label: p.active ? 'Deactivate item' : 'Reactivate item',
+                              hidden: !can('item_master.edit', 'items.edit'),
+                              onClick: () => setConfirmAction({ type: p.active ? 'deactivate' : 'reactivate', item: p }),
+                            },
+                            {
+                              label: 'Delete item',
+                              hidden: !can('item_master.delete'),
+                              danger: true,
+                              onClick: () => setConfirmAction({ type: 'delete', item: p }),
+                            },
                           ] : [
                             {
                               label: 'Request adjustment',
@@ -582,6 +645,17 @@ export default function ItemsPage({ mode = 'branch' }) {
                               label: 'View batches',
                               hidden: !p.batch_tracking || !can('items.view'),
                               onClick: () => setBatchesModal(p),
+                            },
+                            {
+                              label: p.active ? 'Deactivate item' : 'Reactivate item',
+                              hidden: !can('item_master.edit', 'items.edit'),
+                              onClick: () => setConfirmAction({ type: p.active ? 'deactivate' : 'reactivate', item: p }),
+                            },
+                            {
+                              label: 'Delete item',
+                              hidden: !can('item_master.delete'),
+                              danger: true,
+                              onClick: () => setConfirmAction({ type: 'delete', item: p }),
                             },
                           ]}
                         />
@@ -603,10 +677,27 @@ export default function ItemsPage({ mode = 'branch' }) {
         />
       </Card>
 
+      <ConfirmDialog
+        open={!!confirmAction}
+        onClose={() => !actionBusy && setConfirmAction(null)}
+        onConfirm={handleConfirmAction}
+        title={confirmAction ? (confirmAction.type === 'delete' ? 'Delete item?' : confirmAction.type === 'deactivate' ? 'Deactivate item?' : 'Reactivate item?') : ''}
+        message={confirmAction ? (
+          confirmAction.type === 'delete'
+            ? `Delete ${confirmAction.item.name}? This cannot be undone.`
+            : confirmAction.type === 'deactivate'
+              ? `Deactivate ${confirmAction.item.name}? This will prevent it from being sold or listed.`
+              : `Reactivate ${confirmAction.item.name}? This will restore it to active catalog listings.`
+        ) : ''}
+        confirmLabel={confirmAction?.type === 'delete' ? 'Delete' : 'Yes'}
+        danger={confirmAction?.type === 'delete'}
+      />
+
+
       {!isMaster && (
         <>
       {/* Stock Adjustment Modal — batch-aware */}
-      <Modal open={!!showAdj} onClose={() => setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'} busy={adjSubmitting}
+      <Modal open={!!showAdj} onClose={() => !adjSubmitting && setShowAdj(null)} title="Request Stock Adjustment" icon="⚖" size={showAdj?.batch_tracking ? 'md' : 'sm'}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdj(null)} disabled={adjSubmitting}>Cancel</button>
           <button className="btn btn-primary" onClick={saveAdj} disabled={adjSubmitting}>
@@ -701,8 +792,19 @@ export default function ItemsPage({ mode = 'branch' }) {
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowAdjSelect(false)}>Close</button>
         </>}>
-        <SearchBar value={adjSelectSearch} onChange={setAdjSelectSearch} placeholder="Search by name, SKU, or barcode…" />
+        <SearchBar
+          value={adjSelectSearch}
+          onChange={setAdjSelectSearch}
+          placeholder="Search by name, SKU, or barcode…"
+          style={{ opacity: loading ? 0.6 : 1, pointerEvents: loading ? 'none' : 'auto' }}
+        />
         <div style={{ marginTop: 12, maxHeight: 400, overflowY: 'auto' }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)', fontSize: 13 }}>
+              Loading items…
+            </div>
+          ) : (
+            <>
           {items.filter(item =>
             adjSelectSearch === '' ||
             item.name.toLowerCase().includes(adjSelectSearch.toLowerCase()) ||
@@ -747,6 +849,8 @@ export default function ItemsPage({ mode = 'branch' }) {
             <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
               No items found
             </div>
+          )}
+          </>
           )}
         </div>
       </Modal>

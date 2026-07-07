@@ -7,7 +7,7 @@
  * Usage:
  *   const can = useCan()
  *   {can('items.create') && <Button>+ Add Item</Button>}
- *   {can('items.edit', 'items.delete') && <RowActions />}   // OR-of-perms
+ *   {can('items.edit', 'item_master.delete') && <RowActions />}   // prefer master-level delete
  */
 import { useAppStore } from '@/store'
 
@@ -17,6 +17,9 @@ const expand = (granted = [], catalog = {}) => {
     Object.entries(catalog).forEach(([m, acts]) =>
       acts.forEach((a) => out.add(`${m}.${a}`))
     )
+    // Also mark the wildcard itself so callers can short-circuit
+    // (perm catalog may not be available yet during early renders).
+    out.add('*')
     return out
   }
   granted.forEach((p) => {

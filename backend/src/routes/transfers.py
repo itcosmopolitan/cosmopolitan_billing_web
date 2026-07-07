@@ -20,6 +20,7 @@ from src.routes._atomic import (
     consume_batches_atomic,
     is_tracked,
 )
+from src.routes.items import _upsert_branch_config
 from src.routes._serializers import get_user_branch_ids, serialize_transfer
 from src.routes._approval import can_direct_commit
 from src.permissions import TRANSFER_DOCUMENT_READ
@@ -727,6 +728,8 @@ async def receive_transfer(
                     source_ref=transfer_id,
                     received_date=(src.received_date if src else None),
                 )
+            # Ensure destination branch is listed for this item after receive
+            await _upsert_branch_config(db, item_id=line.item_id, branch_id=t.to_branch_id, is_available=True)    
         elif tracked:
             # No allocation persisted (e.g. legacy transfer approved before
             # this column existed). Create a single transfer batch carrying
@@ -739,6 +742,8 @@ async def receive_transfer(
                 source_type="transfer",
                 source_ref=transfer_id,
             )
+            # Ensure destination branch is listed for this item after receive
+            await _upsert_branch_config(db, item_id=line.item_id, branch_id=t.to_branch_id, is_available=True)
         else:
             await adjust_stock_atomic(
                 db,
@@ -749,6 +754,8 @@ async def receive_transfer(
                 source_type="transfer",
                 source_ref=transfer_id,
             )
+            # Ensure destination branch is listed for this item after receive
+            await _upsert_branch_config(db, item_id=line.item_id, branch_id=t.to_branch_id, is_available=True)
     _log_transfer_history(
         db,
         user=user,
