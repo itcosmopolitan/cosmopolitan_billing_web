@@ -24,7 +24,7 @@ import toast from 'react-hot-toast'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
@@ -603,6 +603,65 @@ export default function PurchasesPage() {
     })
   }
 
+  const refreshCurrentTab = () => {
+    setListVersion((v) => v + 1)
+    toast.success('List refreshed')
+  }
+
+  const exportCurrentTab = () => {
+    const stamp = new Date().toISOString().split('T')[0]
+    if (tab === 'bills') {
+      exportToCSV(bills.map((b) => ({
+        'Bill Number': b.number || b.id,
+        Vendor: b.vendorName || '—',
+        'Bill Date': b.date || '—',
+        'Due Date': b.dueDate || '—',
+        'Amount (MVR)': b.total || 0,
+        'Paid (MVR)': b.paidAmount || 0,
+        'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
+        Status: (b.status || '—').toUpperCase(),
+      })), `PurchaseBills_${stamp}.csv`)
+    } else if (tab === 'orders') {
+      exportToCSV(orders.map((o) => ({
+        'PO Number': o.number || o.id,
+        Vendor: o.vendorName || '—',
+        Date: o.date || '—',
+        'Amount (MVR)': o.total || 0,
+        Status: (o.status || '—').toUpperCase(),
+      })), `PurchaseOrders_${stamp}.csv`)
+    } else if (tab === 'grns') {
+      exportToCSV(grns.map((g) => ({
+        'GRN Number': g.number || g.id,
+        Vendor: g.vendorName || '—',
+        Date: g.date || '—',
+        'Amount (MVR)': g.total || 0,
+        Status: (g.status || '—').toUpperCase(),
+      })), `GRNs_${stamp}.csv`)
+    } else if (tab === 'returns') {
+      exportToCSV(returns.map((r) => ({
+        'Return Number': r.number || r.id,
+        Vendor: r.vendorName || '—',
+        Date: r.date || '—',
+        'Amount (MVR)': r.total || 0,
+        Status: (r.status || '—').toUpperCase(),
+      })), `VendorReturns_${stamp}.csv`)
+    } else if (tab === 'payments') {
+      exportToCSV(payments.map((p) => ({
+        'Payment Number': p.number || p.id,
+        Vendor: p.vendorName || '—',
+        Date: p.date || '—',
+        'Amount (MVR)': p.amount || 0,
+        Method: p.paymentMode || '—',
+      })), `VendorPayments_${stamp}.csv`)
+    }
+    toast.success('List exported')
+  }
+
+  const listMenuActions = buildListPageMenuActions({
+    onExport: exportCurrentTab,
+    onRefresh: refreshCurrentTab,
+  })
+
   return (
     <div className="page-container">
       <SectionHeader title="Purchase Management" subtitle="Vendor bills, purchase orders, and payments">
@@ -616,23 +675,10 @@ export default function PurchasesPage() {
             </button>
           </>
         )}
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = bills.map(b => ({
-            'Bill Number': b.number || b.id,
-            'Vendor': b.vendorName || '—',
-            'Bill Date': b.date || '—',
-            'Due Date': b.dueDate || '—',
-            'Amount (MVR)': b.total || 0,
-            'Paid (MVR)': b.paidAmount || 0,
-            'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
-            'Status': (b.status || '—').toUpperCase(),
-          }))
-          exportToCSV(exportData, `Purchases_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Purchases exported')
-        }}>↓ Export</button>
         {createAction && (
           <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
         )}
+        <PageActionsMenu actions={listMenuActions} />
       </SectionHeader>
 
       <Tabs tabs={TABS} active={tab} onChange={(id) => navigate(`/purchases?tab=${id}`)} />

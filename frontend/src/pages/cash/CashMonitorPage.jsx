@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
-import { SectionHeader, EmptyState, DatePicker } from '@/components/ui'
+import { SectionHeader, EmptyState, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
 
 function VarianceBadge({ variance, threshold = 500 }) {
@@ -108,6 +109,7 @@ export default function CashMonitorPage() {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [version, setVersion] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -118,7 +120,7 @@ export default function CashMonitorPage() {
       if (!cancelled) setLoading(false)
     })
     return () => { cancelled = true }
-  }, [date])
+  }, [date, version])
 
   const branches = data?.branches || []
   const summary = data?.summary || {}
@@ -142,6 +144,13 @@ export default function CashMonitorPage() {
           onChange={setDate}
           style={{ width: 148 }}
         />
+        <PageActionsMenu actions={buildListPageMenuActions({
+          hideExport: true,
+          onRefresh: () => {
+            setVersion((v) => v + 1)
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       {/* Summary chips */}

@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 
@@ -187,24 +187,29 @@ export default function VendorsPage() {
   return (
     <div className="page-container">
       <SectionHeader title="Vendor Master" subtitle="Manage suppliers, payment terms, and outstanding payables">
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = vendors.map(v => ({
-            'Vendor Name': v.name,
-            'Contact Person': v.contact_person || '—',
-            'Phone': v.phone || '—',
-            'Email': v.email || '—',
-            'Address': v.address || '—',
-            'GST Reg No': v.gstin || '—',
-            'Payment Terms': v.payment_terms || '—',
-            'Total Purchases (MVR)': v.totalPurchases || 0,
-            'Outstanding (MVR)': v.outstanding || 0,
-          }))
-          exportToCSV(exportData, `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Vendors exported')
-        }}>↓ Export</button>
         {can('vendors.create') && (
           <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: () => {
+            exportToCSV(vendors.map((v) => ({
+              'Vendor Name': v.name,
+              'Contact Person': v.contact_person || '—',
+              Phone: v.phone || '—',
+              Email: v.email || '—',
+              Address: v.address || '—',
+              'GST Reg No': v.gstin || '—',
+              'Payment Terms': v.payment_terms || '—',
+              'Total Purchases (MVR)': v.totalPurchases || 0,
+              'Outstanding (MVR)': v.outstanding || 0,
+            })), `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
+            toast.success('Vendors exported')
+          },
+          onRefresh: () => {
+            setListVersion((v) => v + 1)
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       <div className="grid-kpi" style={{marginBottom:20}}>

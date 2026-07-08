@@ -7,6 +7,7 @@ import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
   EmptyState, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown,
+  PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
@@ -387,6 +388,13 @@ export default function AdjustmentsPage() {
         {can('adjustments.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ Request Adjustment</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          hideExport: true,
+          onRefresh: () => {
+            setListVersion((v) => v + 1)
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
 

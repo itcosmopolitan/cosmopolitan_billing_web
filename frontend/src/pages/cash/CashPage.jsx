@@ -5,7 +5,7 @@ import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
-import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
@@ -164,6 +164,13 @@ export default function CashPage() {
             Close Day
           </button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          hideExport: true,
+          onRefresh: () => {
+            refresh()
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       {/* ── Variance alert ── */}

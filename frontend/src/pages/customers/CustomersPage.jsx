@@ -4,7 +4,7 @@ import { customersAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
@@ -171,24 +171,29 @@ export default function CustomersPage() {
   return (
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = customers.map(c => ({
-            'Name': c.name,
-            'Phone': c.phone || '—',
-            'Email': c.email || '—',
-            'Address': c.address || '—',
-            'GST Reg No': c.gstIn || '—',
-            'Type': (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
-            'Credit Limit (MVR)': c.creditLimit || 0,
-            'Outstanding (MVR)': c.outstanding || 0,
-            'Total Purchases (MVR)': c.totalPurchases || 0,
-          }))
-          exportToCSV(exportData, `Customers_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Customers exported')
-        }}>↓ Export</button>
         {can('customers.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>+ Add Customer</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: () => {
+            exportToCSV(customers.map((c) => ({
+              Name: c.name,
+              Phone: c.phone || '—',
+              Email: c.email || '—',
+              Address: c.address || '—',
+              'GST Reg No': c.gstIn || '—',
+              Type: (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
+              'Credit Limit (MVR)': c.creditLimit || 0,
+              'Outstanding (MVR)': c.outstanding || 0,
+              'Total Purchases (MVR)': c.totalPurchases || 0,
+            })), `Customers_${new Date().toISOString().split('T')[0]}.csv`)
+            toast.success('Customers exported')
+          },
+          onRefresh: () => {
+            setListVersion((v) => v + 1)
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       <div className="grid-kpi" style={{ marginBottom: 20 }}>

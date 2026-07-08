@@ -5,7 +5,7 @@ import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   QUOTE_STATUS_FILTER_OPTIONS,
@@ -682,6 +682,68 @@ export default function SalesPage() {
 
   const createAction = tabCreateAction()
 
+  const refreshCurrentTab = () => {
+    if (tab === 'invoices') setSalesListVersion((v) => v + 1)
+    else if (tab === 'orders') setOrderListVersion((v) => v + 1)
+    else if (tab === 'quotes') setQuoteListVersion((v) => v + 1)
+    else if (tab === 'returns') setRetListVersion((v) => v + 1)
+    else if (tab === 'payments') setPayListVersion((v) => v + 1)
+    toast.success('List refreshed')
+  }
+
+  const exportCurrentTab = () => {
+    const stamp = new Date().toISOString().split('T')[0]
+    if (tab === 'invoices') {
+      exportToCSV(invoices.map((i) => ({
+        'Invoice Number': i.number || i.id,
+        Customer: i.customerName || 'Walk-in',
+        Date: i.date || '—',
+        'Amount (MVR)': i.total || 0,
+        'Paid (MVR)': i.paidAmount || 0,
+        'Outstanding (MVR)': (i.total || 0) - (i.paidAmount || 0),
+        Status: statusLabel(i.status),
+      })), `Invoices_${stamp}.csv`)
+    } else if (tab === 'orders') {
+      exportToCSV(orders.map((o) => ({
+        'Order Number': o.number || o.id,
+        Customer: o.customerName || '—',
+        Date: o.date || '—',
+        'Amount (MVR)': o.total || 0,
+        Status: statusLabel(o.status),
+      })), `SalesOrders_${stamp}.csv`)
+    } else if (tab === 'quotes') {
+      exportToCSV(quotations.map((q) => ({
+        'Quote Number': q.number || q.id,
+        Customer: q.customerName || '—',
+        Date: q.date || '—',
+        'Amount (MVR)': q.total || 0,
+        Status: statusLabel(q.status),
+      })), `Quotations_${stamp}.csv`)
+    } else if (tab === 'returns') {
+      exportToCSV(returns.map((r) => ({
+        'Return Number': r.number || r.id,
+        Customer: r.customerName || '—',
+        Date: r.date || '—',
+        'Amount (MVR)': r.total || 0,
+        Status: statusLabel(r.status),
+      })), `Returns_${stamp}.csv`)
+    } else if (tab === 'payments') {
+      exportToCSV(payments.map((p) => ({
+        'Payment Number': p.number || p.id,
+        Customer: p.customerName || '—',
+        Date: p.date || '—',
+        'Amount (MVR)': p.amount || 0,
+        Method: p.paymentMode || '—',
+      })), `Payments_${stamp}.csv`)
+    }
+    toast.success('List exported')
+  }
+
+  const listMenuActions = buildListPageMenuActions({
+    onExport: exportCurrentTab,
+    onRefresh: refreshCurrentTab,
+  })
+
   return (
     <div className="page-container">
       <SectionHeader title="Sales Management" subtitle="Invoices, orders, quotations, and customer payments">
@@ -698,22 +760,10 @@ export default function SalesPage() {
             </button>
           </>
         )}
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = invoices.map(i => ({
-            'Invoice Number': i.number || i.id,
-            'Customer': i.customerName || 'Walk-in',
-            'Date': i.date || '—',
-            'Amount (MVR)': i.total || 0,
-            'Paid (MVR)': i.paidAmount || 0,
-            'Outstanding (MVR)': (i.total || 0) - (i.paidAmount || 0),
-            'Status': statusLabel(i.status),
-          }))
-          exportToCSV(exportData, `Sales_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Sales exported')
-        }}>↓ Export</button>
         {createAction && (
           <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
         )}
+        <PageActionsMenu actions={listMenuActions} />
       </SectionHeader>
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />

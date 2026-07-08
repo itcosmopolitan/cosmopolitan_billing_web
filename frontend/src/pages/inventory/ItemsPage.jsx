@@ -10,6 +10,7 @@ import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
   FormGroup, KPICard, EmptyState, Tag, PaginationBar,
   SortableHeader, AlertBar, ConfirmDialog, AutocompleteDropdown,
+  PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import BatchesModal from './BatchesModal'
@@ -71,6 +72,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [itemSortBy, setItemSortBy] = useState('name')
   const [itemSortOrder, setItemSortOrder] = useState('asc')
   const [loading, setLoading]   = useState(true)
+  const [listVersion, setListVersion] = useState(0)
   const [categories, setCategories] = useState([])
   const [confirmAction, setConfirmAction] = useState(null)
   const [actionBusy, setActionBusy] = useState(false)
@@ -105,7 +107,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     } finally {
       setLoading(false)
     }
-  }, [branchFilter, isMaster, tab])
+  }, [branchFilter, isMaster, tab, listVersion])
 
   useEffect(() => {
     fetchItems()
@@ -354,34 +356,40 @@ export default function ItemsPage({ mode = 'branch' }) {
           ? 'Central product catalog — create items, defaults, and branch listing'
           : 'Branch inventory — request stock corrections (manager approval required)'}
       >
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = filtered.map(item => ({
-            'Item Name': item.name,
-            'SKU': item.sku || '—',
-            'Barcode': item.barcode || '—',
-            'Category': item.categoryName || '—',
-            'Brand': item.brand || '—',
-            'Unit': item.unit,
-            'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
-            'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
-            'GST (%)': item.tax_rate,
-            ...(isMaster
-              ? { 'Active Branches': item.available_branch_count ?? 0 }
-              : {
-                'Stock': item.available_stock,
-                'Reorder Level': item.reorder_level,
-                'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
-              }),
-          }))
-          exportToCSV(exportData, `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Items exported')
-        }}>↓ Export</button>
         {!isMaster && can('adjustments.create') && (
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Request Adjustment</button>
         )}
         {isMaster && can('item_master.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: () => {
+            exportToCSV(filtered.map((item) => ({
+              'Item Name': item.name,
+              SKU: item.sku || '—',
+              Barcode: item.barcode || '—',
+              Category: item.categoryName || '—',
+              Brand: item.brand || '—',
+              Unit: item.unit,
+              'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+              'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
+              'GST (%)': item.tax_rate,
+              ...(isMaster
+                ? { 'Active Branches': item.available_branch_count ?? 0 }
+                : {
+                  Stock: item.available_stock,
+                  'Reorder Level': item.reorder_level,
+                  'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
+                }),
+            })), `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
+            toast.success('Items exported')
+          },
+          onRefresh: () => {
+            setListVersion((v) => v + 1)
+            if (!isMaster) loadNearExpiry()
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       {/* KPIs */}

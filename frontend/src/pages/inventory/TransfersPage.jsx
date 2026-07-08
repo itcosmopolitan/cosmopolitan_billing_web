@@ -5,7 +5,7 @@ import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
-import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate } from '@/utils/helpers'
@@ -325,6 +325,13 @@ export default function TransfersPage() {
         {canCreate && (
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/transfers/new')}>+ New Transfer</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          hideExport: true,
+          onRefresh: () => {
+            setListVersion((v) => v + 1)
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
 

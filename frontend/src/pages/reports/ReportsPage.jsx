@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
-import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value, 2))
@@ -604,7 +604,19 @@ export default function ReportsPage() {
 
   return (
     <div className="page-container">
-      <SectionHeader/>
+      <SectionHeader
+        title="Reports & Analytics"
+        subtitle="Sales, purchases, inventory, tax, and operational reports"
+      >
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: exportExcel,
+          onRefresh: () => {
+            setSkip(0)
+            setRunKey(Date.now())
+            toast.success('Report refreshed')
+          },
+        })} />
+      </SectionHeader>
 
       <div style={{ marginBottom: 18, display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(160px, 1fr))', gap: 12, alignItems: 'end' }}>
@@ -638,8 +650,6 @@ export default function ReportsPage() {
             />
           </div>
           {/* <button className="btn btn-primary" style={{ height: 40, marginTop: 6 }} onClick={handleGenerate}>Generate</button> */}
-          <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportExcel}>Export Excel</button>
-          {/* <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportPdf}>Export PDF</button> */}
         </div>
         <div>
           <SearchBar value={search} onChange={setSearch} placeholder="Search invoices, products, customers…" style={{ width: '100%' }} />
@@ -698,23 +708,7 @@ export default function ReportsPage() {
       </Card>
       {/* ── STOCK MOVEMENT ──────────────────────────────────────── */}
       {tab === 'stock' && (
-        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} titleRight={
-          <button className="btn btn-secondary btn-sm" onClick={() => {
-            const exportData = stockRows.map(r => ({
-              'Item': r.item_name,
-              'SKU': r.sku,
-              'Opening Stock': r.opening,
-              'Purchased': r.purchases_in,
-              'Sold': r.sales_out,
-              'Transferred': r.transfers_net,
-              'Adjusted': r.adjustments,
-              'Closing Stock': r.closing,
-              'Variance': r.variance,
-            }))
-            exportToCSV(exportData, `Stock_Movement_${dateFrom}_to_${dateTo}.csv`)
-            toast.success('Stock movement report exported')
-          }}>↓ Export</button>
-        } bodyPadding={false}>
+        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} bodyPadding={false}>
           {stockRows.length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
               {stockData ? 'No stock movement in this period.' : 'Click Generate to load stock data.'}

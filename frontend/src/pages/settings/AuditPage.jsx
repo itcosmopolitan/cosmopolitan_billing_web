@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { SectionHeader, Card, SearchBar, Tag, AutocompleteDropdown } from '@/components/ui'
+import toast from 'react-hot-toast'
+import { SectionHeader, Card, SearchBar, Tag, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 
 const AUDIT_LOGS = [
   { id:1, action:'Invoice Created',       user:'Arjun M.',    module:'Sales',    ref:'INV-2024-1847', detail:'Created invoice for Rajesh Stores — MVR10,642', time:'16 Apr 2024, 10:42 AM', risk:'low' },
@@ -32,7 +33,12 @@ export default function AuditPage() {
 
   return (
     <div className="page-container">
-      <SectionHeader title="Audit Trail" subtitle="Complete log of all sensitive actions, edits, and role-sensitive operations" />
+      <SectionHeader title="Audit Trail" subtitle="Complete log of all sensitive actions, edits, and role-sensitive operations">
+        <PageActionsMenu actions={buildListPageMenuActions({
+          hideExport: true,
+          onRefresh: () => toast.success('List refreshed'),
+        })} />
+      </SectionHeader>
 
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search action, user, reference…" />
