@@ -18,6 +18,7 @@ export default function DocumentFormShell({
   onSave,
   saveLabel = 'Save',
   saving = false,
+  saveDisabled = false,
   readOnly = false,
   summaryCards = [],
   hideHeader = false,
@@ -31,7 +32,7 @@ export default function DocumentFormShell({
     </button>
   )
   const saveButton = !readOnly && onSave && (
-    <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>
+    <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving || saveDisabled}>
       {saving ? 'Saving…' : saveLabel}
     </button>
   )

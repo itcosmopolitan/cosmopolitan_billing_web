@@ -30,8 +30,6 @@ import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptio
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
-import VendorReturnFormModal from './VendorReturnFormModal'
-import VendorPaymentFormModal from './VendorPaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
@@ -115,7 +113,6 @@ export default function PurchasesPage() {
   const [paySortBy, setPaySortBy] = useState('created_at')
   const [paySortOrder, setPaySortOrder] = useState('desc')
   const [payLoading, setPayLoading] = useState(false)
-  const [showPayForm, setShowPayForm] = useState(false)
   const [payDetail, setPayDetail] = useState(null)
   const [activityTarget, setActivityTarget] = useState(null)
 
@@ -240,10 +237,10 @@ export default function PurchasesPage() {
       return { label: '+ New GRN', onClick: () => navigate('/purchases/grns/new') }
     }
     if (tab === 'returns' && can('purchases.create')) {
-      return { label: '+ New Return', onClick: () => setShowNewReturn(true) }
+      return { label: '+ New Return', onClick: () => navigate('/purchases/returns/new') }
     }
     if (tab === 'payments' && can('purchases.edit')) {
-      return { label: '+ New Payment', onClick: () => setShowPayForm(true) }
+      return { label: '+ New Payment', onClick: () => navigate('/purchases/payments/new') }
     }
     return null
   }
@@ -254,7 +251,6 @@ export default function PurchasesPage() {
   const [showDetail, setShowDetail] = useState(null)
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
-  const [showNewReturn, setShowNewReturn] = useState(false)
   const [returnDetail, setReturnDetail] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -1397,20 +1393,6 @@ export default function PurchasesPage() {
           </>
         )}
       </Modal>
-
-      {/* ── Return Form ───────────────────────────────────────────── */}
-      <VendorReturnFormModal
-        open={showNewReturn}
-        onClose={() => setShowNewReturn(false)}
-        onSaved={() => setListVersion((v) => v + 1)}
-      />
-
-      {/* ── Payment Form ──────────────────────────────────────────── */}
-      <VendorPaymentFormModal
-        open={showPayForm}
-        onClose={() => setShowPayForm(false)}
-        onSaved={() => setListVersion((v) => v + 1)}
-      />
 
       {/* ── Payment Detail (read-only) ────────────────────────────── */}
       <Modal

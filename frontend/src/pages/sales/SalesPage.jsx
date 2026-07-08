@@ -14,8 +14,6 @@ import {
 } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
-import ReturnFormModal from './ReturnFormModal'
-import PaymentFormModal from './PaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
@@ -29,7 +27,7 @@ const TABS = [
   { id: 'returns',   label: 'Credit Notes / Returns' },
   // 2026-05-24: standalone Payments record — lists every payment ever
   // recorded (single-invoice via the row Pay button OR multi-invoice
-  // via + New Payment). See PaymentFormModal for the create flow.
+  // via + New Payment). See PaymentFormPage for the create flow.
   { id: 'payments',  label: 'Payments' },
 ]
 
@@ -123,9 +121,6 @@ export default function SalesPage() {
   const [payLoading, setPayLoading] = useState(false)
   const [branches, setBranches] = useState([])
 
-  // New Return modal — fully self-contained (manages its own state); we
-  // only flip the open flag.
-  const [showReturnForm, setShowReturnForm] = useState(false)
   // 2026-05-25: bulk-delete state. One shared selection map keyed by
   // the tab name (so switching tabs doesn't bleed selections). The
   // modal opens against the CURRENT tab when "Delete N" is clicked.
@@ -295,8 +290,7 @@ export default function SalesPage() {
     return [`${plural('item')} removed`]
   }
 
-  // Payments tab state + new-payment modal trigger.
-  const [showPayForm, setShowPayForm] = useState(false)
+  // Payments tab state.
   const [payments, setPayments] = useState([])
   const [payTotal, setPayTotal] = useState(0)
   const [paySkip, setPaySkip] = useState(0)
@@ -678,10 +672,10 @@ export default function SalesPage() {
       return { label: '+ Create Quotation', onClick: () => navigate('/sales/quotations/new') }
     }
     if (tab === 'returns' && can('invoices.create')) {
-      return { label: '+ New Return', onClick: () => setShowReturnForm(true) }
+      return { label: '+ New Return', onClick: () => navigate('/sales/returns/new') }
     }
     if (tab === 'payments' && can('invoices.edit')) {
-      return { label: '+ New Payment', onClick: () => setShowPayForm(true) }
+      return { label: '+ New Payment', onClick: () => navigate('/sales/payments/new') }
     }
     return null
   }
@@ -1005,21 +999,6 @@ export default function SalesPage() {
           </Card>
         </>
       )}
-
-      <ReturnFormModal
-        open={showReturnForm}
-        onClose={() => setShowReturnForm(false)}
-        onSaved={() => { setRetListVersion((v) => v + 1); setSalesListVersion((v) => v + 1) }}
-      />
-
-      <PaymentFormModal
-        open={showPayForm}
-        onClose={() => setShowPayForm(false)}
-        onSaved={() => {
-          setPayListVersion((v) => v + 1)
-          setSalesListVersion((v) => v + 1)   // invoices may have flipped to paid/partial
-        }}
-      />
 
       {/* 2026-05-25: bulk-delete confirm modal — single instance,
           re-rendered per tab. The submit handler routes to the right
