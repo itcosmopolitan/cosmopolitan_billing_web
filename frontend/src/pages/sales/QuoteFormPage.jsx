@@ -135,7 +135,6 @@ export default function QuoteFormPage({ mode = 'create' }) {
       subtitle="Quotations"
       icon="📄"
       onBack={goBack}
-      backLabel="← Back to Quotations"
       onSave={readOnly ? null : save}
       saveLabel={isEdit ? 'Save Changes' : 'Create Quotation'}
       saving={saving}

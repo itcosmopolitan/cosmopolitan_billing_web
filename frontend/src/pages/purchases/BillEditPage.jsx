@@ -103,7 +103,6 @@ export default function BillEditPage() {
       subtitle="Bills"
       icon="📋"
       onBack={() => navigate('/purchases?tab=bills')}
-      backLabel="← Back"
       onSave={save}
       saveLabel="Save Changes"
       saving={saving}

@@ -194,7 +194,6 @@ export default function InvoiceFormPage() {
       icon="🧾"
       hideHeader
       onBack={goBack}
-      backLabel="← Back"
       onSave={save}
       saveLabel="Create Invoice"
       saving={saving}

@@ -333,11 +333,11 @@ export default function TransferFormPage({ mode = 'create' }) {
       />
 
       <div className="page-footer-bar" style={{ left: footerLeft }}>
-        <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>
-          ← Back to Transfers
-        </button>
         <button type="button" className="btn btn-primary" onClick={saveTransfer} disabled={saving || itemsLoading}>
           {saving ? 'Saving…' : (isEdit ? 'Update Transfer' : 'Submit Request')}
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>
+          Cancel
         </button>
       </div>
     </>

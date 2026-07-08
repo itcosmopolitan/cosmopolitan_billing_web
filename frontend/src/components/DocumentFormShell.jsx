@@ -6,7 +6,7 @@ const SIDEBAR_W_COLLAPSED = 68
 
 /**
  * Full-page document form layout — mirrors ItemFormPage / TransferFormPage.
- * Fixed footer with Back + Save; body scrolls inside Card.
+ * Fixed footer with primary Save (left) + Cancel (right); body scrolls inside Card.
  */
 export default function DocumentFormShell({
   title,
@@ -14,7 +14,7 @@ export default function DocumentFormShell({
   icon,
   children,
   onBack,
-  backLabel = '← Back',
+  backLabel = 'Cancel',
   onSave,
   saveLabel = 'Save',
   saving = false,
@@ -24,6 +24,17 @@ export default function DocumentFormShell({
 }) {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const footerLeft = sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W
+
+  const cancelButton = (
+    <button type="button" className="btn btn-secondary" onClick={onBack} disabled={saving}>
+      {backLabel}
+    </button>
+  )
+  const saveButton = !readOnly && onSave && (
+    <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>
+      {saving ? 'Saving…' : saveLabel}
+    </button>
+  )
 
   return (
     <div className="page-container page-container--with-footer">
@@ -46,14 +57,8 @@ export default function DocumentFormShell({
       )}
       <Card>{children}</Card>
       <div className="page-footer-bar" style={{ left: footerLeft }}>
-        <button type="button" className="btn btn-secondary" onClick={onBack} disabled={saving}>
-          {backLabel}
-        </button>
-        {!readOnly && onSave && (
-          <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>
-            {saving ? 'Saving…' : saveLabel}
-          </button>
-        )}
+        {saveButton}
+        {cancelButton}
       </div>
     </div>
   )

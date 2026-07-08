@@ -386,11 +386,11 @@ export default function ItemFormPage({ mode = 'create' }) {
       </Modal>
 
       <div className="page-footer-bar" style={{ left: footerLeft }}>
-        <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>
-          ← Back to Item Master
-        </button>
         <button type="button" className="btn btn-primary" onClick={saveItem} disabled={saving}>
           {saving ? 'Saving…' : (isEdit ? 'Update Item' : 'Save Item')}
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>
+          Cancel
         </button>
       </div>
     </>

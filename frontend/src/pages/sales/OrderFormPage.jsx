@@ -172,7 +172,6 @@ export default function OrderFormPage({ mode = 'create' }) {
       subtitle="Sales Orders"
       icon="📦"
       onBack={goBack}
-      backLabel="← Back to Sales Orders"
       onSave={readOnly ? null : save}
       saveLabel={isEdit ? 'Save Changes' : 'Create Sales Order'}
       saving={saving}
