@@ -548,11 +548,14 @@ async def approve_adjustment(
         reference_id=ar.ref_number,
         detail=f"Adjustment {ar.ref_number} for {ar.item_name} approved by {body.approved_by}",
         user=user,
-        adjustment_id=request_id,
-        adjustment_number=ar.ref_number,
-        event_type="approved",
-        action="Adjustment approved",
-        detail=f"Adjustment {ar.ref_number} approved by {body.approved_by}",
+        request=request,
+        branch_id=ar.branch_id,
+        metadata={
+            "adjustment_id": request_id,
+            "adjustment_number": ar.ref_number,
+            "event_type": "approved",
+            "item_id": ar.item_id,
+        },
     )
     _log_adjustment_history(
         db,

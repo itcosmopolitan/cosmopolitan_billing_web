@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { useEffect } from "react";
 import type { AuditLog } from "../../types/audit";
 import { RiskBadge } from "./RiskBadge";
 import { useAppStore } from "../../store";
@@ -10,6 +11,12 @@ interface Props {
 
 export function AuditDetailPanel({ log, onClose }: Props) {
   const branches = useAppStore((s) => s.branches);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    if (log) document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [log, onClose]);
 
   if (!log) return null;
 
@@ -65,19 +72,69 @@ export function AuditDetailPanel({ log, onClose }: Props) {
     if (value === null || value === undefined || value === "") return "-";
     if (typeof value === "string") return value;
     if (typeof value === "number" || typeof value === "boolean") return String(value);
-    if (Array.isArray(value)) return value.map(formatSimpleValue).join(", ");
-    if (typeof value === "object") return JSON.stringify(value);
+    if (Array.isArray(value)) {
+      if (value.length === 0) return "[]";
+      const items = value.map(formatSimpleValue);
+      if (value.every((item) => item === null || item === undefined || typeof item !== "object")) {
+        return items.join(", ");
+      }
+      return `[${items.join(", ")}]`;
+    }
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
     return String(value);
+  };
+
+  const resolveBranchName = (branchId: unknown) => {
+    if (branchId === null || branchId === undefined || branchId === "") return "—";
+    const id = String(branchId);
+    const branch = branches.find((b: { id: string; name?: string }) => b.id === id);
+    return branch?.name || id;
+  };
+
+  const labelForMetadataKey = (key: string) => {
+    switch (key) {
+      case "from_branch_id":
+        return "From Branch";
+      case "to_branch_id":
+        return "To Branch";
+      case "transfer_id":
+        return "Transfer ID";
+      case "qty_total":
+        return "Total Quantity";
+      case "stock_value":
+        return "Stock Value";
+      case "approver_id":
+        return "Approver ID";
+      case "requester_id":
+        return "Requester ID";
+      default:
+        return toTitleCase(key);
+    }
   };
 
   const renderMetadataRows = (metadata: Record<string, unknown>, excludeKeys: string[] = []) =>
     Object.entries(metadata)
       .filter(([key]) => !excludeKeys.includes(key))
       .filter(([, value]) => value !== null && value !== undefined && value !== "")
-      .map(([key, value]) => ({
-        label: toTitleCase(key),
-        value: formatSimpleValue(value),
-      }));
+      .map(([key, value]) => {
+        const label = labelForMetadataKey(key);
+        if (key === "from_branch_id" || key === "to_branch_id") {
+          return {
+            label,
+            value: resolveBranchName(value),
+          };
+        }
+        return {
+          label,
+          value: formatSimpleValue(value),
+        };
+      });
 
   const formatChangeSummary = (metadata: Record<string, unknown>) => {
     const updatedFields = metadata.updated_fields;
@@ -85,8 +142,10 @@ export function AuditDetailPanel({ log, onClose }: Props) {
       return `Updated fields: ${updatedFields.map((item) => toTitleCase(String(item))).join(", ")}`;
     }
 
-    if (metadata.before_qty !== undefined && metadata.new_qty !== undefined) {
-      return `Quantity changed from ${formatSimpleValue(metadata.before_qty)} to ${formatSimpleValue(metadata.new_qty)}`;
+    const beforeQty = metadata.before_qty ?? metadata.old_qty ?? metadata.prev_qty;
+    const newQty = metadata.new_qty ?? metadata.qty ?? metadata.quantity;
+    if (beforeQty !== undefined && newQty !== undefined) {
+      return `Quantity changed from ${formatSimpleValue(beforeQty)} to ${formatSimpleValue(newQty)}`;
     }
 
     if (metadata.before_value !== undefined && metadata.after_value !== undefined) {
@@ -98,8 +157,27 @@ export function AuditDetailPanel({ log, onClose }: Props) {
 
   const renderChangeRows = (metadata: Record<string, unknown>) => {
     const changes = metadata.changes;
-    if (!changes || typeof changes !== "object" || Array.isArray(changes)) return [];
+    if (!changes) return [];
 
+    if (Array.isArray(changes)) {
+      return changes
+        .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object" && !Array.isArray(item))
+        .map((change, index) => {
+          const fieldName = change.field ? toTitleCase(String(change.field)) : `Change ${index + 1}`;
+          const itemName = typeof change.item_name === "string" ? `${change.item_name}: ` : "";
+          const before = formatSimpleValue(change.before ?? change.old);
+          const after = formatSimpleValue(change.after ?? change.new);
+          const value = before !== "-" || after !== "-"
+            ? `${before} → ${after}`
+            : formatSimpleValue(change.detail ?? change);
+          return {
+            label: `${itemName}${fieldName}`,
+            value,
+          };
+        });
+    }
+
+    if (typeof changes !== "object") return [];
     return Object.entries(changes as Record<string, unknown>)
       .map(([field, rawValue]) => {
         if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) return null;
@@ -124,104 +202,158 @@ export function AuditDetailPanel({ log, onClose }: Props) {
     ? renderMetadataRows(eventMetadata, ["updated_fields", "changes", "item_id"])
     : [];
   const metadataRowsFiltered = log.metadata_
-    ? renderMetadataRows(log.metadata_, ["item_id"])
+    ? renderMetadataRows(log.metadata_, ["updated_fields", "changes", "item_id"])
     : [];
-  const changeRows = eventMetadata ? renderChangeRows(eventMetadata) : [];
-  const changeSummary = eventMetadata ? formatChangeSummary(eventMetadata) : null;
-  const metadataBranchName =
-    log.metadata_ && typeof log.metadata_.branch_name === "string" ? String(log.metadata_.branch_name) : "";
-  const eventBranchName =
-    eventMetadata && typeof eventMetadata.branch_name === "string" ? String(eventMetadata.branch_name) : "";
-  const resolvedBranchName = branches.find((b: { id: string; name?: string }) => b.id === log.branch_id)?.name;
-  const branchLabel = eventBranchName || metadataBranchName || resolvedBranchName || log.branch_id || "-";
+  const changeRows = [
+    ...(eventMetadata ? renderChangeRows(eventMetadata) : []),
+    ...(log.metadata_ ? renderChangeRows(log.metadata_) : []),
+  ];
+  const changeSummary = formatChangeSummary(eventMetadata ?? log.metadata_ ?? {});
+  const branchLabel = (() => {
+    const apiBranchName = (log as AuditLog & { branch_name?: string | null }).branch_name;
+    if (apiBranchName) return apiBranchName;
+    if (log.branch_id) {
+      const branch = branches.find((b: { id: string; name?: string }) => b.id === log.branch_id);
+      if (branch?.name) return branch.name;
+      return String(log.branch_id);
+    }
+    return "—";
+  })();
+
+  const roleLabel = ((): string => {
+    const r = log.user_role ?? '';
+    const s = String(r).trim();
+    if (!s) return '—';
+    if (s.toLowerCase() === 'unknown') return '—';
+    return toTitleCase(s);
+  })();
+
+  const moduleLabel = ((): string => {
+    const m = log.module ?? '';
+    const s = String(m).trim();
+    if (!s) return '—';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  })();
+
+  const actionName = toTitleCase(log.action || 'Event');
+  const detailString = getSimpleSummary();
+
+  const riskColor = (risk: string | null | undefined) => {
+    const r = (risk || '').toString().toLowerCase();
+    if (r === 'high') return '#dc2626';
+    if (r === 'medium') return '#f59e0b';
+    return '#16a34a';
+  };
+
+  const combinedMetadata = [...eventMetadataRows, ...metadataRowsFiltered];
+  const metadataDisplayRows = [...combinedMetadata, ...changeRows];
+  const rawMetadata = eventMetadata ?? log.metadata_ ?? null;
 
   return (
-    <div className="fixed inset-0 z-50">
-      <button
-        type="button"
-        aria-label="Close detail panel"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/30"
-      />
-      <aside className="absolute top-0 right-0 h-screen w-[400px] bg-white border-l shadow-[-8px_0_24px_rgba(15,23,42,0.12)] overflow-y-auto">
-      <div className="p-4 border-b flex items-center justify-between">
-        <h2 className="text-base font-semibold">Audit Detail</h2>
-        <button type="button" onClick={onClose} className="text-xl leading-none text-slate-500 hover:text-slate-800">
-          ×
-        </button>
-      </div>
-
-      <div className="p-4 space-y-4">
-        <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
-          <div className="text-xs uppercase tracking-wide text-slate-400 font-medium mb-1">What happened</div>
-          <div className="text-sm font-medium text-slate-800">{getSimpleSummary()}</div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{ borderTop: `4px solid ${riskColor(log.risk)}`, width: 760, maxWidth: 'calc(100% - 32px)' }}
+        className="rounded-2xl bg-white p-6 shadow-2xl"
+      >
+        {/* HEADER */}
+        <div className="flex items-start justify-between border-b border-gray-100 pb-4 mb-4">
+          <div>
+            <div className="text-base font-semibold text-gray-900">{actionName}</div>
+            <div className="text-sm text-gray-500">{detailString}</div>
+          </div>
+          <div>
+            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm text-gray-600">×</button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div><span className="text-slate-500">User:</span> {log.user_name || "-"}</div>
-          <div><span className="text-slate-500">Role:</span> {log.user_role || "-"}</div>
-          <div><span className="text-slate-500">IP Address:</span> {log.ip_address || "-"}</div>
-          <div><span className="text-slate-500">Device:</span> {parseDevice(log.device_info)}</div>
-          <div><span className="text-slate-500">Module:</span> {log.module || "-"}</div>
-          <div><span className="text-slate-500">Branch:</span> {branchLabel}</div>
-          <div className="flex items-center gap-2"><span className="text-slate-500">Risk:</span> <RiskBadge risk={log.risk} /></div>
+        {/* KEY FIELDS GRID */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">User</div>
+            <div className="text-sm text-gray-800 font-medium">{log.user_name || '—'}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Role</div>
+            <div className="text-sm text-gray-800 font-medium">{roleLabel}</div>
+          </div>
+
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">IP Address</div>
+            <div className="text-sm text-gray-800 font-medium">{log.ip_address || '—'}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Device</div>
+            <div className="text-sm text-gray-800 font-medium">{parseDevice(log.device_info)}</div>
+          </div>
+
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Module</div>
+            <div className="text-sm text-gray-800 font-medium">{moduleLabel}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Branch</div>
+            <div className="text-sm text-gray-800 font-medium">{branchLabel || '—'}</div>
+          </div>
+
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Risk</div>
+            <div className="text-sm text-gray-800 font-medium"><RiskBadge risk={log.risk} /></div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Timestamp</div>
+            <div className="text-sm text-gray-800 font-medium">{formatLocalTimestamp(log.created_at)}</div>
+          </div>
         </div>
 
-        <div className="text-sm">
-          <div className="text-slate-500 mb-1">Reference</div>
-          <div className="font-mono text-xs bg-slate-50 border rounded p-2">{log.reference_id || "-"}</div>
+        {/* REFERENCE CHIP */}
+        <div className="mb-4">
+          <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-1">Reference</div>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 font-mono text-sm text-indigo-600">{log.reference_id || '—'}</div>
         </div>
 
-        <div className="text-sm">
-          <div className="text-slate-500 mb-1">Timestamp</div>
-          <div>{formatLocalTimestamp(log.created_at)}</div>
+        <div className="mb-4">
+          <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-1">Description</div>
+          <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 whitespace-pre-wrap break-words">
+            {log.detail || '—'}
+          </div>
         </div>
 
-        {eventMetadataRows.length > 0 && (
-          <div className="text-sm">
-            <div className="text-slate-500 mb-1">What changed</div>
-            {changeSummary && (
-              <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-sm text-slate-700 mb-2">
-                {changeSummary}
-              </div>
-            )}
-            {changeRows.length > 0 && (
-              <div className="space-y-2 mb-2">
-                {changeRows.map((row) => (
-                  <div key={row.label} className="rounded-lg border border-indigo-100 bg-white px-3 py-2">
-                    <div className="text-xs uppercase tracking-wide text-slate-400 font-medium">{row.label}</div>
-                    <div className="text-sm text-slate-700 mt-0.5 break-words">{row.value}</div>
+        {changeSummary && (
+          <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
+            {changeSummary}
+          </div>
+        )}
+
+        {metadataDisplayRows.length > 0 ? (
+          <div className="mb-4">
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-2">Metadata</div>
+            <div className="grid grid-cols-2 gap-2">
+              {metadataDisplayRows.map((row, index) => {
+                const val = String(row.value ?? '');
+                const isLong = val.length > 24;
+                const displayVal = isLong ? `${val.slice(0, 8)}...` : val || '-';
+                return (
+                  <div key={`${row.label}-${index}`} className="bg-gray-50 rounded-lg px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-widest text-gray-400">{row.label}</div>
+                    <div className="text-sm text-gray-700 font-medium truncate" title={isLong ? val : undefined}>{displayVal}</div>
                   </div>
-                ))}
-              </div>
-            )}
-            <div className="space-y-2">
-              {eventMetadataRows.map((row) => (
-                <div key={row.label} className="rounded-lg border border-slate-100 bg-white px-3 py-2">
-                  <div className="text-xs uppercase tracking-wide text-slate-400 font-medium">{row.label}</div>
-                  <div className="text-sm text-slate-700 mt-0.5 break-words">{row.value}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
-        )}
-
-        {metadataRowsFiltered.length > 0 && (
-          <div className="text-sm">
-            <div className="text-slate-500 mb-1">Metadata</div>
-            <div className="space-y-2">
-              {metadataRowsFiltered.map((row) => (
-                <div key={row.label} className="rounded-lg border border-slate-100 bg-white px-3 py-2">
-                  <div className="text-xs uppercase tracking-wide text-slate-400 font-medium">{row.label}</div>
-                  <div className="text-sm text-slate-700 mt-0.5 break-words">{row.value}</div>
-                </div>
-              ))}
-            </div>
+        ) : rawMetadata ? (
+          <div className="mb-4">
+            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-2">Raw Metadata</div>
+            <pre className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 overflow-x-auto whitespace-pre-wrap">
+              {JSON.stringify(rawMetadata, null, 2)}
+            </pre>
           </div>
-        )}
+        ) : null}
 
       </div>
-      </aside>
     </div>
   );
 }

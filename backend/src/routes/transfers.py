@@ -385,7 +385,12 @@ async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), use
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("transfers.create"))])
-async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_transfer(
+    data: TransferCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     if data.from_branch_id == data.to_branch_id:
         raise HTTPException(400, "Source and destination branches must differ")
     await enforce_branch_access(data.from_branch_id, user=user, db=db)
@@ -433,7 +438,12 @@ async def create_transfer(data: TransferCreate, db: AsyncSession = Depends(get_d
     await db.flush()
     if direct:
         result = await _dispatch_transfer(
-            db, t, tid, user=user, approved_by=user.name,
+            db,
+            t,
+            tid,
+            user=user,
+            approved_by=user.name,
+            request=Request(scope={"type": "http"}, receive=lambda: None),
         )
         await db.commit()
         return {"id": tid, "ref_number": ref, **result}

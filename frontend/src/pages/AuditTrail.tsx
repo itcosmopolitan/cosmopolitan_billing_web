@@ -3,6 +3,7 @@ import { AuditDetailPanel } from "../components/audit/AuditDetailPanel";
 import { AuditFiltersBar } from "../components/audit/AuditFilters";
 import { AuditTable } from "../components/audit/AuditTable";
 import { useAuditTrail } from "../hooks/useAuditTrail";
+import { PaginationBar } from "../components/ui/PaginationBar";
 
 export default function AuditTrailPage() {
   const { data, filters, loading, error, selected, setSelected, updateFilter, goToPage } = useAuditTrail();
@@ -59,24 +60,18 @@ export default function AuditTrailPage() {
         <AuditTable logs={rows} selected={selected} onSelect={setSelected} onClearFilters={clearFilters} />
       )}
 
-      <div className="mt-4 flex items-center justify-between">
-        <button
-          type="button"
-          disabled={page <= 1}
-          onClick={() => goToPage(Math.max(1, page - 1))}
-          className="text-sm px-3 py-1.5 border rounded-md disabled:opacity-50"
-        >
-          Prev
-        </button>
-        <span className="text-sm text-slate-600">Page {page} of {totalPages}</span>
-        <button
-          type="button"
-          disabled={page >= totalPages}
-          onClick={() => goToPage(Math.min(totalPages, page + 1))}
-          className="text-sm px-3 py-1.5 border rounded-md disabled:opacity-50"
-        >
-          Next
-        </button>
+      <div className="mt-4">
+        <PaginationBar
+          total={total}
+          skip={(filters.page - 1) * (filters.limit || 50)}
+          limit={filters.limit || 50}
+          onSkipChange={(skip) => {
+            const nextPage = Math.floor(skip / (filters.limit || 50)) + 1;
+            goToPage(nextPage);
+          }}
+          onLimitChange={(limit) => updateFilter({ limit })}
+          disabled={loading}
+        />
       </div>
 
       <AuditDetailPanel log={selected} onClose={() => setSelected(null)} />

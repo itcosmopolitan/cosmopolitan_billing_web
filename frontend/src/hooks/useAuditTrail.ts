@@ -34,6 +34,8 @@ export function useAuditTrail() {
       const same =
         prev.module === next.module &&
         prev.risk === next.risk &&
+        prev.operation_type === next.operation_type &&
+        prev.operation_type_not === next.operation_type_not &&
         prev.search === next.search &&
         prev.date_from === next.date_from &&
         prev.date_to === next.date_to &&

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false }) {
+export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false, hideHeaderClose = false }) {
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape' && !busy) onClose() }
     if (open) document.addEventListener('keydown', handler)
@@ -19,7 +19,9 @@ export function Modal({ open, onClose, title, children, footer, size = 'md', ico
         <div className="modal-header">
           {icon && <span style={{ fontSize: 20 }}>{icon}</span>}
           <h3 style={{ flex: 1 }}>{title}</h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={busy} style={{ padding: '4px 8px' }}>✕</button>
+          {!hideHeaderClose && (
+            <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={busy} style={{ padding: '4px 8px' }}>✕</button>
+          )}
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}

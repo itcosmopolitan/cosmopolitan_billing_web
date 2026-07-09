@@ -58,6 +58,18 @@ def _to_datetime_bounds(date_from: Optional[date], date_to: Optional[date]) -> T
     return start_dt, end_dt
 
 
+def _build_operation_type_filter(operation_type: str):
+    key = operation_type.strip().lower()
+    action = func.lower(AuditLog.action)
+    if key == "created":
+        return or_(action.ilike("%create%"), action.ilike("%created%"))
+    if key == "deleted":
+        return or_(action.ilike("%delete%"), action.ilike("%deleted%"))
+    if key == "edited" or key == "updated":
+        return or_(action.ilike("%edit%"), action.ilike("%edited%"), action.ilike("%update%"), action.ilike("%updated%"))
+    return action == key
+
+
 @router.get("/", response_model=AuditLogListResponse, dependencies=[Depends(require_perm("audit.view"))])
 async def list_audit_logs(
     module: Optional[str] = Query(None),
@@ -66,6 +78,8 @@ async def list_audit_logs(
     branch_id: Optional[str] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
+    operation_type: Optional[str] = Query(None),
+    operation_type_not: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
@@ -90,6 +104,11 @@ async def list_audit_logs(
         filters.append(AuditLog.created_at >= start_dt)
     if end_dt is not None:
         filters.append(AuditLog.created_at < end_dt)
+
+    if operation_type:
+        filters.append(_build_operation_type_filter(operation_type))
+    if operation_type_not:
+        filters.append(~_build_operation_type_filter(operation_type_not))
 
     if search:
         pattern = f"%{search.strip()}%"
