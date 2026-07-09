@@ -95,18 +95,19 @@ export default function ItemFormPage({ mode = 'create' }) {
   }, [])
 
   useEffect(() => {
+    if (isEdit) return
     let cancelled = false
-    dashAPI.filters()
+    itemsAPI.categories.list()
       .then((data) => {
         if (cancelled) return
-        setCategories(data?.categories || [])
+        setCategories(uniqueCategories(data || []))
       })
       .catch((err) => {
         console.error('Failed to load categories:', err)
         setCategories([])
       })
     return () => { cancelled = true }
-  }, [])
+  }, [isEdit])
 
   useEffect(() => {
     if (!isEdit || !itemId) return

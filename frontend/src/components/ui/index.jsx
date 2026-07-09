@@ -502,7 +502,7 @@ export function CopyableId({ value, label, style, iconOnly = false }) {
 export { PaginationBar } from './PaginationBar'
 export { SortableHeader } from './SortableHeader'
 export { default as RowActionsMenu } from './RowActionsMenu'
-export { default as PageActionsMenu, buildListPageMenuActions } from './PageActionsMenu'
+export { default as PageActionsMenu, buildListPageMenuActions, ListPageActionButtons } from './PageActionsMenu'
 
 // ─── Segmented Toggle ────────────────────────────────────────────────────────
 // Pill-style segmented control. Use when picking between a small number of

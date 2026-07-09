@@ -344,6 +344,34 @@ export default function ItemsPage({ mode = 'branch' }) {
     }
   }
 
+  const handleExport = () => {
+    exportToCSV(filtered.map((item) => ({
+      'Item Name': item.name,
+      SKU: item.sku || '—',
+      Barcode: item.barcode || '—',
+      Category: item.categoryName || '—',
+      Brand: item.brand || '—',
+      Unit: item.unit,
+      'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+      'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
+      'GST (%)': item.tax_rate,
+      ...(isMaster
+        ? { 'Active Branches': item.available_branch_count ?? 0 }
+        : {
+          Stock: item.available_stock,
+          'Reorder Level': item.reorder_level,
+          'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
+        }),
+    })), `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
+    toast.success('Items exported')
+  }
+
+  const handleRefresh = () => {
+    setListVersion((v) => v + 1)
+    if (!isMaster) loadNearExpiry()
+    toast.success('List refreshed')
+  }
+
   if (loading) {
     return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading items...</div></div>
   }
@@ -363,32 +391,8 @@ export default function ItemsPage({ mode = 'branch' }) {
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
-          onExport: () => {
-            exportToCSV(filtered.map((item) => ({
-              'Item Name': item.name,
-              SKU: item.sku || '—',
-              Barcode: item.barcode || '—',
-              Category: item.categoryName || '—',
-              Brand: item.brand || '—',
-              Unit: item.unit,
-              'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
-              'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
-              'GST (%)': item.tax_rate,
-              ...(isMaster
-                ? { 'Active Branches': item.available_branch_count ?? 0 }
-                : {
-                  Stock: item.available_stock,
-                  'Reorder Level': item.reorder_level,
-                  'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
-                }),
-            })), `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
-            toast.success('Items exported')
-          },
-          onRefresh: () => {
-            setListVersion((v) => v + 1)
-            if (!isMaster) loadNearExpiry()
-            toast.success('List refreshed')
-          },
+          onExport: handleExport,
+          onRefresh: handleRefresh,
         })} />
       </SectionHeader>
 

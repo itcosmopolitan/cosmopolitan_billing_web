@@ -4,6 +4,25 @@ import * as Icon from '@/components/ui/Icons'
 
 const VIEWPORT_PAD = 8
 
+export function ListPageActionButtons({ onExport, onRefresh, hideExport = false }) {
+  return (
+    <>
+      {!hideExport && onExport && (
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onExport}>
+          <Icon.Download size={15} />
+          Export
+        </button>
+      )}
+      {onRefresh && (
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onRefresh}>
+          <Icon.RefreshCw size={15} />
+          Refresh
+        </button>
+      )}
+    </>
+  )
+}
+
 /** Standard Export + Refresh actions for list page headers. */
 export function buildListPageMenuActions({ onExport, onRefresh, hideExport = false }) {
   const actions = []

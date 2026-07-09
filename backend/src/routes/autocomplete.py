@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Branch, Category, Customer, Item, ItemBranchConfig, ItemStock, TaxRate, User, Vendor
-from src.security import require_perm
+from src.permissions import BRANCH_PICKER_READ
+from src.routes._serializers import get_user_branch_ids
+from src.security import current_user, require_perm
 
 router = APIRouter()
 
@@ -148,13 +150,14 @@ async def autocomplete_tax_rate(
     return items[:limit]
 
 
-@router.get("/branch", dependencies=[Depends(require_perm("branches.view"))])
+@router.get("/branch", dependencies=[Depends(require_perm(*BRANCH_PICKER_READ))])
 async def autocomplete_branch(
     search_text: Optional[str] = None,
     retail_only: bool = Query(True),
     exclude_id: Optional[str] = None,
     limit: int = Query(30, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Return `{ id, text }` rows for branch dropdowns."""
     q = select(Branch).where(Branch.active.is_(True))
@@ -162,6 +165,11 @@ async def autocomplete_branch(
         q = q.where(Branch.code != "WH")
     if exclude_id:
         q = q.where(Branch.id != exclude_id)
+    if not getattr(user, "all_branches", False):
+        accessible = await get_user_branch_ids(db, user.id)
+        if not accessible:
+            return []
+        q = q.where(Branch.id.in_(accessible))
     if search_text:
         term = f"%{search_text.strip()}%"
         q = q.where(or_(Branch.name.ilike(term), Branch.code.ilike(term)))
