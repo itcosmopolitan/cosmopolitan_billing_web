@@ -166,6 +166,8 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
 
     patch.search = searchTerms.length > 0 ? searchTerms.join(" ") : filters.search ?? "";
     onFilter(patch);
+    setCollapsed(true);
+    setOpenDateDropdown(false);
   };
 
   const handlePresetSelect = (preset: string) => {
@@ -222,24 +224,32 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
   const valueDropdownRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!openFieldDropdownId && !openValueDropdownId) return;
+    if (!openFieldDropdownId && !openValueDropdownId && !openDateDropdown) return;
 
     const handleDown = (e: MouseEvent) => {
       const target = e.target as Node | null;
       const fAnchor = openFieldDropdownId ? dropdownAnchorRefs.current[openFieldDropdownId] : null;
       const vAnchor = openValueDropdownId ? valueAnchorRefs.current[openValueDropdownId] : null;
+      const dateButton = document.getElementById("audit-date-range-button");
+      const dateDropdown = document.getElementById("audit-date-range-dropdown");
+
       if (fAnchor && fAnchor.contains(target)) return;
       if (vAnchor && vAnchor.contains(target)) return;
       if (dropdownRef.current && dropdownRef.current.contains(target)) return;
       if (valueDropdownRef.current && valueDropdownRef.current.contains(target)) return;
+      if (dateButton && dateButton.contains(target)) return;
+      if (dateDropdown && dateDropdown.contains(target)) return;
+
       setOpenFieldDropdownId(null);
       setOpenValueDropdownId(null);
+      setOpenDateDropdown(false);
     };
 
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOpenFieldDropdownId(null);
         setOpenValueDropdownId(null);
+        setOpenDateDropdown(false);
       }
     };
 
@@ -249,7 +259,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
       document.removeEventListener("mousedown", handleDown);
       document.removeEventListener("keydown", handleKey);
     };
-  }, [openFieldDropdownId, openValueDropdownId]);
+  }, [openFieldDropdownId, openValueDropdownId, openDateDropdown]);
 
   const dateLabel = getPresetLabel(filters.date_from, filters.date_to);
 
@@ -292,13 +302,14 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
       </div>
 
       <div
-        className={`overflow-hidden transition-all duration-200 ease-in-out ${collapsed ? "max-h-0 opacity-0" : "max-h-[900px] opacity-100"}`}
+        className={`overflow-visible transition-all duration-200 ease-in-out ${collapsed ? "max-h-0 opacity-0" : "max-h-[900px] opacity-100"}`}
         style={{ transitionProperty: "max-height, opacity" }}
       >
         <div className={collapsed ? "pointer-events-none opacity-0" : "opacity-100"}>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <div className="relative">
               <button
+                id="audit-date-range-button"
                 type="button"
                 onClick={() => setOpenDateDropdown((current) => !current)}
                 className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm"
@@ -306,7 +317,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                 Date Range: {dateLabel}
               </button>
               {openDateDropdown && (
-                <div className="absolute left-0 z-20 mt-2 w-72 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg">
+                <div id="audit-date-range-dropdown" className="absolute left-0 z-50 mt-2 w-72 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg">
                   <div className="space-y-2">
                     {(["Today", "This Week", "This Month", "Last Month", "Custom Range"] as const).map((preset) => (
                       <button
