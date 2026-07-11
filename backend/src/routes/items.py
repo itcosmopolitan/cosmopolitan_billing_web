@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import and_, asc, delete, func, or_, select, text
+from sqlalchemy import String, and_, asc, cast, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -61,6 +61,7 @@ from src.routes._atomic import (
 )
 from src.permissions import ITEM_CATALOG_READ
 from src.routes._approval import can_direct_commit
+from src.routes._approval import user_can
 from src.security import current_user, require_perm
 from src.services.audit_service import build_audit_entry
 
@@ -130,6 +131,21 @@ def _log_item_history(
         risk=risk,
         ip_address=None,
     ))
+
+
+def _resolve_item_status_value(item: Item) -> str:
+    for attr in ("status", "approval_status"):
+        value = getattr(item, attr, None)
+        if value is None:
+            continue
+        if hasattr(value, "value"):
+            value = value.value
+        else:
+            value = str(value)
+        if value in {ItemApprovalStatus.pending.value, ItemApprovalStatus.pending_approval.value}:
+            return ItemApprovalStatus.pending.value
+        return value
+    return "approved"
 
 
 async def _get_config_map(
@@ -706,22 +722,45 @@ async def list_items(
     cq = select(func.count(Item.id))
 
     if master_mode and status == "pending":
-        q = q.where(Item.approval_status == ItemApprovalStatus.pending)
-        cq = cq.where(Item.approval_status == ItemApprovalStatus.pending)
+        pending_filter = or_(
+            cast(Item.approval_status, String) == ItemApprovalStatus.pending.value,
+            cast(Item.approval_status, String) == ItemApprovalStatus.pending_approval.value,
+        )
+        q = q.where(pending_filter)
+        cq = cq.where(pending_filter)
+    elif master_mode and status == "rejected":
+        q = q.where(cast(Item.approval_status, String) == ItemApprovalStatus.rejected.value)
+        cq = cq.where(cast(Item.approval_status, String) == ItemApprovalStatus.rejected.value)
     elif master_mode and status == "inactive":
-        q = q.where(Item.active == False, Item.approval_status != ItemApprovalStatus.pending)  # noqa: E712
-        cq = cq.where(Item.active == False, Item.approval_status != ItemApprovalStatus.pending)  # noqa: E712
+        q = q.where(
+            Item.active.is_(False),
+            cast(Item.approval_status, String) != ItemApprovalStatus.rejected.value,
+            cast(Item.approval_status, String) != ItemApprovalStatus.pending_approval.value,
+            cast(Item.approval_status, String) != ItemApprovalStatus.pending.value,
+        )
+        cq = cq.where(
+            Item.active.is_(False),
+            cast(Item.approval_status, String) != ItemApprovalStatus.rejected.value,
+            cast(Item.approval_status, String) != ItemApprovalStatus.pending_approval.value,
+            cast(Item.approval_status, String) != ItemApprovalStatus.pending.value,
+        )
+    elif master_mode and status in {None, "approved", "all"}:
+        q = q.where(cast(Item.approval_status, String) == ItemApprovalStatus.approved.value)
+        cq = cq.where(cast(Item.approval_status, String) == ItemApprovalStatus.approved.value)
+    elif not master_mode or pos_mode:
+        q = q.where(cast(Item.approval_status, String) == ItemApprovalStatus.approved.value)
+        cq = cq.where(cast(Item.approval_status, String) == ItemApprovalStatus.approved.value)
     # Note: do not pre-filter by `active` here — apply the active/inactive
     # filter later based on the `include_inactive` flag so callers that set
     # `include_inactive=true` actually receive inactive rows. The previous
     # unconditional filter caused the Inactive tab to never show deactivated
     # items.
 
-    if not include_inactive:
+    if not include_inactive and status not in {"pending", "rejected"}:
         q = q.where(Item.active == True)  # noqa: E712
         cq = cq.where(Item.active == True)  # noqa: E712
 
-    if branch_id and (filter_listed or not master_mode):
+    if branch_id:
         listed_join = and_(
             ItemBranchConfig.item_id == Item.id,
             ItemBranchConfig.branch_id == branch_id,
@@ -818,6 +857,7 @@ async def list_items(
         eff_price = effective_selling_price(item.selling_price, cfg.selling_price if cfg else None)
         eff_cost = effective_cost_price(item.cost_price, cfg.cost_price if cfg else None)
         eff_reorder = effective_reorder_level(item.reorder_level, cfg.reorder_level if cfg else None)
+        resolved_status = _resolve_item_status_value(item)
         row = {
             "id": item.id,
             "name": item.name,
@@ -845,16 +885,14 @@ async def list_items(
             "branch_cost_override": cfg.cost_price if cfg else None,
             "branch_price_override": cfg.selling_price if cfg else None,
             "active": bool(item.active),
+            "status": resolved_status,
+            "approval_status": resolved_status,
         }
         if master_mode:
             row["available_branch_count"] = avail_branch_counts.get(item.id, 0)
             row["active"] = bool(item.active)
-            row["approval_status"] = (
-                item.approval_status.value
-                if hasattr(item.approval_status, "value")
-                else str(item.approval_status or "approved")
-            )
             row["created_by"] = item.created_by
+            row["created_at"] = item.created_at.isoformat() if item.created_at else None
         out.append(row)
     if pos_mode and not include_total:
         return paged(
@@ -884,8 +922,9 @@ async def create_item(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    direct = await can_direct_commit(user, db, "item_master.approve")
     await _validate_category_id(data.category_id, db)
+    direct = await can_direct_commit(user, db, "item_master.approve")
+    initial_status = ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
     item = Item(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -902,12 +941,15 @@ async def create_item(
         emoji=data.emoji,
         batch_tracking=data.batch_tracking,
         expiry_tracking=data.expiry_tracking,
-        active=direct,
-        approval_status=(
-            ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
-        ),
+        active=bool(direct),
+        approval_status=initial_status,
+        status=initial_status,
         created_by=user.name,
-        approved_by=user.name if direct else None,
+        approved_by=None,
+        approved_at=None,
+        rejected_by=None,
+        rejected_at=None,
+        rejection_reason=None,
     )
     db.add(item)
     await db.flush()
@@ -978,22 +1020,32 @@ async def create_item(
                 expiry_date=data.opening_expiry_date,
             )
 
+    # If the caller can directly commit (has approve permission), mark
+    # the item approved now and record approver metadata.
+    if direct:
+        item.active = True
+        item.status = ItemApprovalStatus.approved
+        item.approval_status = ItemApprovalStatus.approved
+        item.approved_by = user.name
+        item.approved_at = datetime.utcnow()
+
     await db.commit()
     status = item.approval_status.value if hasattr(item.approval_status, "value") else "approved"
     await _write_post_commit_audit(
         db,
         action="New Item Added",
         reference_id=item.sku or item.id,
-        detail=f"Created item {item.name} ({item.sku})",
+        detail=(f"Created and approved item {item.name} ({item.sku})" if direct else f"Created item {item.name} ({item.sku})"),
         user=user,
         request=request,
         branch_id=data.branch_id,
-        metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name, "status": status},
     )
     return {
         "id": item.id,
-        "message": "Item created" if direct else "Item submitted for approval",
+        "message": ("Item created and approved" if direct else "Item submitted for approval"),
         "approval_status": status,
+        "status": status,
         "active": bool(item.active),
     }
 
@@ -1031,11 +1083,18 @@ async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
         "batch_tracking": item.batch_tracking,
         "expiry_tracking": item.expiry_tracking,
         "active": item.active,
+        "approval_status": _resolve_item_status_value(item),
+        "status": _resolve_item_status_value(item),
+        "created_by": item.created_by,
+        "approved_by": item.approved_by,
+        "rejected_by": item.rejected_by,
+        "rejection_reason": item.rejection_reason,
     }
 
 @router.post("/{item_id}/approve", dependencies=[Depends(require_perm("item_master.approve"))])
 async def approve_item(
     item_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -1043,27 +1102,60 @@ async def approve_item(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
-    if item.created_by and item.created_by == user.name and item.approval_status == ItemApprovalStatus.pending:
+    # Extra guard: ensure the resolved permission set actually grants approve.
+    # This double-check prevents accidental bypasses caused by mismatched
+    # role mappings or demo-mode fallbacks.
+    if not await user_can(user, db, "item_master.approve"):
+        raise HTTPException(403, "Missing permission: item_master.approve")
+    current_status = _resolve_item_status_value(item)
+    if item.created_by and item.created_by == user.name and current_status in {ItemApprovalStatus.pending_approval.value, ItemApprovalStatus.pending.value}:
         raise HTTPException(403, "You cannot approve your own item submission")
-    if item.approval_status == ItemApprovalStatus.approved and item.active:
+    if current_status == ItemApprovalStatus.approved.value and item.active:
         return {"id": item.id, "approval_status": "approved", "already_processed": True}
-    if item.approval_status == ItemApprovalStatus.rejected:
+    if current_status == ItemApprovalStatus.rejected.value:
         raise HTTPException(400, "Rejected items cannot be approved — create a new item")
     item.active = True
+    item.status = ItemApprovalStatus.approved
     item.approval_status = ItemApprovalStatus.approved
     item.approved_by = user.name
+    item.approved_at = datetime.utcnow()
+    item.rejected_by = None
+    item.rejected_at = None
+    item.rejection_reason = None
     await db.commit()
-    return {"id": item.id, "approval_status": "approved", "active": True}
+    await _write_post_commit_audit(
+        db,
+        action="Item Approved",
+        reference_id=item.sku or item.id,
+        detail=f"Approved item {item.name} ({item.sku})",
+        user=user,
+        request=request,
+        branch_id=None,
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
+    )
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_approved",
+        action="Item Approved",
+        detail=f"Approved item {item.name} ({item.sku})",
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
+    )
+    await db.commit()
+    return {"id": item.id, "approval_status": "approved", "status": "approved", "active": True}
 
 
 class ItemReject(BaseModel):
     notes: Optional[str] = None
+    reason: Optional[str] = None
 
 
 @router.post("/{item_id}/reject", dependencies=[Depends(require_perm("item_master.approve"))])
 async def reject_item(
     item_id: str,
     body: ItemReject,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -1071,20 +1163,52 @@ async def reject_item(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
-    if item.approval_status == ItemApprovalStatus.rejected:
-        return {"id": item.id, "approval_status": "rejected", "already_processed": True}
-    if item.approval_status != ItemApprovalStatus.pending:
+    if not await user_can(user, db, "item_master.approve"):
+        raise HTTPException(403, "Missing permission: item_master.approve")
+    current_status = _resolve_item_status_value(item)
+    if current_status == ItemApprovalStatus.rejected.value:
+        return {"id": item.id, "approval_status": "rejected", "status": "rejected", "already_processed": True}
+    if current_status not in {ItemApprovalStatus.pending.value, ItemApprovalStatus.pending_approval.value}:
         raise HTTPException(400, "Only pending items can be rejected")
+    reason = (body.reason or body.notes or "").strip()
+    if not reason:
+        raise HTTPException(400, "Rejection reason is required")
+    item.status = ItemApprovalStatus.rejected
     item.approval_status = ItemApprovalStatus.rejected
     item.active = False
     item.approved_by = None
+    item.rejected_by = user.name
+    item.rejected_at = datetime.utcnow()
+    item.rejection_reason = reason
+    item.approved_at = None
     await db.commit()
-    return {"id": item.id, "approval_status": "rejected", "notes": body.notes}
+    await _write_post_commit_audit(
+        db,
+        action="Item Rejected",
+        reference_id=item.sku or item.id,
+        detail=f"Rejected item {item.name} ({item.sku})",
+        user=user,
+        request=request,
+        branch_id=None,
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name, "reason": reason},
+    )
+    _log_item_history(
+        db,
+        user=user,
+        item=item,
+        event_type="item_rejected",
+        action="Item Rejected",
+        detail=f"Rejected item {item.name} ({item.sku})",
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name, "reason": reason},
+    )
+    await db.commit()
+    return {"id": item.id, "approval_status": "rejected", "status": "rejected", "reason": reason}
 
 @router.put("/{item_id}", dependencies=[Depends(require_perm("item_master.edit"))])
 async def update_item(
     item_id: str,
     data: ItemCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -1147,6 +1271,16 @@ async def update_item(
                 if before.get(key) != getattr(item, key)
             },
         },
+    )
+    await _write_post_commit_audit(
+        db,
+        action="Item Updated",
+        reference_id=item.sku or item.id,
+        detail=f"Updated item {item.name} ({item.sku})",
+        user=user,
+        request=request,
+        branch_id=data.branch_id,
+        metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
     )
 
     await db.commit()

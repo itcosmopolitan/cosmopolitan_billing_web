@@ -25,9 +25,12 @@ class UserRole(str, enum.Enum):
 
 
 class ItemApprovalStatus(str, enum.Enum):
+    draft = "draft"
+    pending = "pending"
+    pending_approval = "pending_approval"
     approved = "approved"
-    pending  = "pending"
     rejected = "rejected"
+    inactive = "inactive"
 
 class InvoiceStatus(str, enum.Enum):
     draft   = "draft"
@@ -276,6 +279,11 @@ class Item(Base):
     batch_tracking  = Column(Boolean, default=False)
     expiry_tracking = Column(Boolean, default=False)
     active          = Column(Boolean, default=True)
+    status = Column(
+        SAEnum(ItemApprovalStatus),
+        default=ItemApprovalStatus.approved,
+        nullable=False,
+    )
     approval_status = Column(
         SAEnum(ItemApprovalStatus),
         default=ItemApprovalStatus.approved,
@@ -283,6 +291,10 @@ class Item(Base):
     )
     created_by      = Column(String)
     approved_by     = Column(String)
+    rejected_by     = Column(String)
+    approved_at     = Column(DateTime)
+    rejected_at     = Column(DateTime)
+    rejection_reason = Column(Text)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
