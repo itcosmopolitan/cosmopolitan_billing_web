@@ -120,6 +120,12 @@
   background: var(--bg-hover) !important;
 }
 
+/* Ensure form labels are visible in dark mode */
+[data-theme='dark'] .form-label {
+  color: #e8ecf4 !important;
+  font-weight: 600;
+}
+
 * { box-sizing: border-box; }
 
 html { font-family: 'DM Sans', system-ui, sans-serif; }
@@ -1170,8 +1176,8 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 .form-label {
   display: block;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
   margin-bottom: 5px;
 }
 
