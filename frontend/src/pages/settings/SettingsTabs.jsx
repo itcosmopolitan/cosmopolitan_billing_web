@@ -607,19 +607,19 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
         <FormGroup label="Item Details to Show" required>
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showAttr} onChange={(e) => setShowAttr(e.target.checked)} disabled={!canEdit} />
               <span>Item attributes (color, size, etc.)</span>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showSize} onChange={(e) => setShowSize(e.target.checked)} disabled={!canEdit} />
               <span>Size column</span>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showDisc} onChange={(e) => setShowDisc(e.target.checked)} disabled={!canEdit} />
               <span>Discount % column</span>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showHsn} onChange={(e) => setShowHsn(e.target.checked)} disabled={!canEdit} />
               <span>HSN codes</span>
             </label>
@@ -636,15 +636,15 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
         <FormGroup label="Header Fields">
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showPrintedDate} onChange={(e) => setShowPrintedDate(e.target.checked)} disabled={!canEdit} />
               <span>Show printed date & time</span>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showStore} onChange={(e) => setShowStore(e.target.checked)} disabled={!canEdit} />
               <span>Show store name</span>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showCashier} onChange={(e) => setShowCashier(e.target.checked)} disabled={!canEdit} />
               <span>Show cashier name</span>
             </label>
@@ -653,11 +653,11 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
         <FormGroup label="Other Options">
           <div style={INVOICE_CHECKBOX_GROUP_STYLE}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showCustomer} onChange={(e) => setShowCustomer(e.target.checked)} disabled={!canEdit} />
               <span>Show customer name / GST Reg No</span>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={showPayment} onChange={(e) => setShowPayment(e.target.checked)} disabled={!canEdit} />
               <span>Show payment method</span>
             </label>
