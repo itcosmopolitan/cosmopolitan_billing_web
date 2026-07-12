@@ -1,10 +1,10 @@
-const styles: Record<string, string> = {
-  sales: "bg-blue-100 text-blue-700",
-  inventory: "bg-emerald-100 text-emerald-700",
-  finance: "bg-amber-100 text-amber-700",
-  cash: "bg-orange-100 text-orange-700",
-  purchases: "bg-pink-100 text-pink-700",
-  auth: "bg-violet-100 text-violet-700",
+const styles: Record<string, { background: string; color: string }> = {
+  sales: { background: "var(--blue-bg)", color: "var(--blue)" },
+  inventory: { background: "var(--green-bg)", color: "var(--green)" },
+  finance: { background: "var(--amber-bg)", color: "var(--amber)" },
+  cash: { background: "var(--purple-bg)", color: "var(--purple)" },
+  purchases: { background: "var(--red-bg)", color: "var(--red)" },
+  auth: { background: "var(--teal-bg)", color: "var(--teal)" },
 };
 
 const toDisplayModule = (module: string) => {
@@ -15,8 +15,9 @@ const toDisplayModule = (module: string) => {
 
 export function ModuleTag({ module }: { module: string }) {
   const key = (module || "").trim().toLowerCase();
+  const tone = styles[key] || { background: "var(--bg-raised)", color: "var(--text-secondary)" };
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full ${styles[key] || "bg-slate-100 text-slate-700"}`}>
+    <span className="chip" style={{ background: tone.background, color: tone.color }}>
       {toDisplayModule(module)}
     </span>
   );

@@ -264,15 +264,15 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
   const dateLabel = getPresetLabel(filters.date_from, filters.date_to);
 
   return (
-    <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="mb-5 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-sm">
+      <div className="filter-bar mb-0">
         <button
           type="button"
           onClick={() => setCollapsed((current) => !current)}
-          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm"
+          className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm"
         >
           <span className={`ti ${collapsed ? "ti-chevron-right" : "ti-chevron-down"} text-base`} />
-          <span className="font-medium text-gray-500">Filters:</span>
+          <span className="text-[var(--text-muted)]">Filters:</span>
         </button>
 
         <div className="flex flex-wrap items-center gap-2 flex-1">
@@ -280,7 +280,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
             summaryFilters.map((filter) => (
               <span
                 key={filter.label}
-                className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-xs text-gray-600"
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-raised)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]"
               >
                 {filter.label}
                 <button
@@ -289,14 +289,14 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                     event.stopPropagation();
                     filter.onRemove();
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
                 >
                   ×
                 </button>
               </span>
             ))
           ) : (
-            <span className="text-sm text-gray-400">No filters applied</span>
+            <span className="text-sm text-[var(--text-muted)]">No filters applied</span>
           )}
         </div>
       </div>
@@ -312,19 +312,19 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                 id="audit-date-range-button"
                 type="button"
                 onClick={() => setOpenDateDropdown((current) => !current)}
-                className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm"
+                className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm"
               >
                 Date Range: {dateLabel}
               </button>
               {openDateDropdown && (
-                <div id="audit-date-range-dropdown" className="absolute left-0 z-50 mt-2 w-72 rounded-2xl border border-gray-200 bg-white p-4 shadow-lg">
+                <div id="audit-date-range-dropdown" className="absolute left-0 z-50 mt-2 w-72 rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-lg">
                   <div className="space-y-2">
                     {(["Today", "This Week", "This Month", "Last Month", "Custom Range"] as const).map((preset) => (
                       <button
                         key={preset}
                         type="button"
                         onClick={() => handlePresetSelect(preset)}
-                        className="w-full rounded-xl px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                        className="w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
                       >
                         {preset}
                       </button>
@@ -332,19 +332,19 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                   </div>
                   {(dateLabel === "Custom Range" || filters.date_from || filters.date_to) && (
                     <div className="mt-3 space-y-3 border-t border-gray-100 pt-3">
-                      <label className="block text-xs font-semibold uppercase text-gray-400">From</label>
+                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)]">From</label>
                       <input
                         type="date"
                         value={filters.date_from ?? ""}
                         onChange={(e) => onFilter({ date_from: e.target.value || undefined })}
-                        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700"
+                        className="form-input w-full"
                       />
-                      <label className="block text-xs font-semibold uppercase text-gray-400">To</label>
+                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)]">To</label>
                       <input
                         type="date"
                         value={filters.date_to ?? ""}
                         onChange={(e) => onFilter({ date_to: e.target.value || undefined })}
-                        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700"
+                        className="form-input w-full"
                       />
                     </div>
                   )}
@@ -355,7 +355,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
             <button
               type="button"
               onClick={() => addRow()}
-              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
+              className="btn btn-primary btn-sm"
             >
               <span className="text-base">+</span>
               More Filters
@@ -368,8 +368,8 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                 const field = FILTER_FIELDS.find((item) => item.key === row.field) ?? FILTER_FIELDS[0];
                 const conditionOptions = field.type === "select" ? SELECT_CONDITIONS : TEXT_CONDITIONS;
                 return (
-                  <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 p-3">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gray-100 text-[11px] font-semibold text-gray-500">
+                  <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-3">
+                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--bg-hover)] text-[11px] font-semibold text-[var(--text-muted)]">
                       {index + 1}
                     </div>
                     <div className="relative min-w-[180px] flex-1">
@@ -377,7 +377,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                         ref={(el) => (dropdownAnchorRefs.current[row.id] = el)}
                         type="button"
                         onClick={() => toggleFieldDropdown(row.id)}
-                        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 text-left"
+                        className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-left text-sm text-[var(--text-secondary)]"
                       >
                         {field.label}
                       </button>
@@ -385,10 +385,10 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                         <Portal>
                           <div
                             ref={dropdownRef}
-                            className="z-50 rounded-2xl border border-gray-200 bg-white shadow-lg"
+                            className="z-50 rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-lg"
                             style={{ width: dropdownAnchorRefs.current[row.id]?.getBoundingClientRect().width ?? 260, position: "absolute", left: dropdownAnchorRefs.current[row.id]?.getBoundingClientRect().left ?? 0, top: (dropdownAnchorRefs.current[row.id]?.getBoundingClientRect().bottom ?? 0) + 8 }}
                           >
-                            <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Fields</div>
+                            <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Fields</div>
                             <div className="max-h-56 overflow-y-auto px-2 pb-2">
                               {fieldOptions.map((option) => (
                                 <button
@@ -398,7 +398,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                                     updateRow(row.id, { field: option.key, condition: option.type === "select" ? "is" : "contains", value: "" });
                                     setOpenFieldDropdownId(null);
                                   }}
-                                  className="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                                  className="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
                                 >
                                   <div className="flex justify-between">
                                     <span>{option.label}</span>
@@ -414,7 +414,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                       <select
                         value={row.condition}
                         onChange={(e) => updateRow(row.id, { condition: e.target.value })}
-                        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700"
+                        className="form-input w-full"
                       >
                         {conditionOptions.map((condition) => (
                           <option key={condition} value={condition}>
@@ -433,7 +433,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                               setOpenValueDropdownId((current) => (current === row.id ? null : row.id));
                               setValueSearch("");
                             }}
-                            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 text-left"
+                            className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-left text-sm text-[var(--text-secondary)]"
                           >
                             {row.value || `Select ${field.label}`}
                           </button>
@@ -441,7 +441,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                             <Portal>
                               <div
                                 ref={valueDropdownRef}
-                                className="z-50 rounded-2xl border border-gray-200 bg-white shadow-lg"
+                                className="z-50 rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-lg"
                                 style={{ width: valueAnchorRefs.current[row.id]?.getBoundingClientRect().width ?? 260, position: "absolute", left: valueAnchorRefs.current[row.id]?.getBoundingClientRect().left ?? 0, top: (valueAnchorRefs.current[row.id]?.getBoundingClientRect().bottom ?? 0) + 8 }}
                               >
                                 <div className="max-h-56 overflow-y-auto px-2 pb-2">
@@ -454,13 +454,13 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                                           updateRow(row.id, { value: option });
                                           setOpenValueDropdownId(null);
                                         }}
-                                        className="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                                        className="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
                                       >
                                         {option}
                                       </button>
                                     ))
                                   ) : (
-                                    <div className="px-3 py-2 text-sm text-gray-500">No options</div>
+                                    <div className="px-3 py-2 text-sm text-[var(--text-muted)]">No options</div>
                                   )}
                                 </div>
                               </div>
@@ -473,14 +473,14 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                           value={row.value}
                           onChange={(e) => updateRow(row.id, { value: e.target.value })}
                           placeholder={`Enter ${field.label}`}
-                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700"
+                          className="form-input w-full"
                         />
                       )}
                     </div>
                     <button
                       type="button"
                       onClick={() => addRow(row)}
-                      className="rounded-lg px-2 py-1 text-gray-400 transition hover:text-gray-600"
+                      className="rounded-lg px-2 py-1 text-[var(--text-muted)] transition hover:text-[var(--text-secondary)]"
                       aria-label="Duplicate filter row"
                     >
                       +
@@ -488,7 +488,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                     <button
                       type="button"
                       onClick={() => removeRow(row.id)}
-                      className="rounded-lg px-2 py-1 text-gray-400 transition hover:text-red-500"
+                      className="rounded-lg px-2 py-1 text-[var(--text-muted)] transition hover:text-[var(--red)]"
                       aria-label="Remove filter row"
                     >
                       🗑
@@ -503,7 +503,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                 <button
                   type="button"
                   onClick={applyFilters}
-                  className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+                  className="btn btn-primary btn-sm"
                 >
                   Apply Filters
                 </button>
@@ -512,7 +512,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
           )}
 
           <div className="relative mt-4">
-            <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400" aria-hidden="true">
+            <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-muted)]" aria-hidden="true">
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="11" cy="11" r="7" />
                 <path d="m20 20-3.5-3.5" />
@@ -523,7 +523,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
               value={searchValue}
               onChange={(e) => setSearchValue(e.target.value)}
               placeholder="Search action, detail, reference, user..."
-              className="w-full border rounded-md pl-10 pr-10 py-2.5 text-sm"
+              className="form-input w-full pl-10 pr-10"
             />
             {searchValue && (
               <button
@@ -532,7 +532,7 @@ export function AuditFiltersBar({ filters, onFilter }: Props) {
                   setSearchValue("");
                   onFilter({ search: "" });
                 }}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
                 aria-label="Clear search"
               >
                 ×

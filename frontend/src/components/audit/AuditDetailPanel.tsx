@@ -256,89 +256,89 @@ export function AuditDetailPanel({ log, onClose }: Props) {
     >
       <div
         style={{ borderTop: `4px solid ${riskColor(log.risk)}`, width: 760, maxWidth: 'calc(100% - 32px)' }}
-        className="rounded-2xl bg-white p-6 shadow-2xl"
+        className="rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-6 shadow-2xl"
       >
         {/* HEADER */}
-        <div className="flex items-start justify-between border-b border-gray-100 pb-4 mb-4">
+        <div className="mb-4 flex items-start justify-between border-b border-[var(--border-subtle)] pb-4">
           <div>
-            <div className="text-base font-semibold text-gray-900">{actionName}</div>
-            <div className="text-sm text-gray-500">{detailString}</div>
+            <div className="text-base font-semibold text-[var(--text-primary)]">{actionName}</div>
+            <div className="text-sm text-[var(--text-muted)]">{detailString}</div>
           </div>
           <div>
-            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm text-gray-600">×</button>
+            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm text-[var(--text-secondary)]">×</button>
           </div>
         </div>
 
         {/* KEY FIELDS GRID */}
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">User</div>
-            <div className="text-sm text-gray-800 font-medium">{log.user_name || '—'}</div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">User</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{log.user_name || '—'}</div>
           </div>
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Role</div>
-            <div className="text-sm text-gray-800 font-medium">{roleLabel}</div>
-          </div>
-
-          <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">IP Address</div>
-            <div className="text-sm text-gray-800 font-medium">{log.ip_address || '—'}</div>
-          </div>
-          <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Device</div>
-            <div className="text-sm text-gray-800 font-medium">{parseDevice(log.device_info)}</div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Role</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{roleLabel}</div>
           </div>
 
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Module</div>
-            <div className="text-sm text-gray-800 font-medium">{moduleLabel}</div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">IP Address</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{log.ip_address || '—'}</div>
           </div>
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Branch</div>
-            <div className="text-sm text-gray-800 font-medium">{branchLabel || '—'}</div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Device</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{parseDevice(log.device_info)}</div>
           </div>
 
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Risk</div>
-            <div className="text-sm text-gray-800 font-medium"><RiskBadge risk={log.risk} /></div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Module</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{moduleLabel}</div>
           </div>
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-0.5">Timestamp</div>
-            <div className="text-sm text-gray-800 font-medium">{formatLocalTimestamp(log.created_at)}</div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Branch</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{branchLabel || '—'}</div>
+          </div>
+
+          <div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Risk</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]"><RiskBadge risk={log.risk} /></div>
+          </div>
+          <div>
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Timestamp</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{formatLocalTimestamp(log.created_at)}</div>
           </div>
         </div>
 
         {/* REFERENCE CHIP */}
         <div className="mb-4">
-          <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-1">Reference</div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 font-mono text-sm text-indigo-600">{log.reference_id || '—'}</div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Reference</div>
+          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-2 font-mono text-sm text-[var(--accent)]">{log.reference_id || '—'}</div>
         </div>
 
         <div className="mb-4">
-          <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-1">Description</div>
-          <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 whitespace-pre-wrap break-words">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Description</div>
+          <div className="whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-4 text-sm text-[var(--text-secondary)]">
             {log.detail || '—'}
           </div>
         </div>
 
         {changeSummary && (
-          <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-700">
+          <div className="mb-4 rounded-2xl border border-[var(--amber)]/20 bg-[var(--amber-bg)] p-4 text-sm text-[var(--amber)]">
             {changeSummary}
           </div>
         )}
 
         {metadataDisplayRows.length > 0 ? (
           <div className="mb-4">
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-2">Metadata</div>
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Metadata</div>
             <div className="grid grid-cols-2 gap-2">
               {metadataDisplayRows.map((row, index) => {
                 const val = String(row.value ?? '');
                 const isLong = val.length > 24;
                 const displayVal = isLong ? `${val.slice(0, 8)}...` : val || '-';
                 return (
-                  <div key={`${row.label}-${index}`} className="bg-gray-50 rounded-lg px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-widest text-gray-400">{row.label}</div>
-                    <div className="text-sm text-gray-700 font-medium truncate" title={isLong ? val : undefined}>{displayVal}</div>
+                  <div key={`${row.label}-${index}`} className="rounded-lg bg-[var(--bg-raised)] px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">{row.label}</div>
+                    <div className="truncate text-sm font-medium text-[var(--text-secondary)]" title={isLong ? val : undefined}>{displayVal}</div>
                   </div>
                 );
               })}
@@ -346,8 +346,8 @@ export function AuditDetailPanel({ log, onClose }: Props) {
           </div>
         ) : rawMetadata ? (
           <div className="mb-4">
-            <div className="text-[11px] uppercase tracking-widest text-gray-400 font-semibold mb-2">Raw Metadata</div>
-            <pre className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 overflow-x-auto whitespace-pre-wrap">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Raw Metadata</div>
+            <pre className="overflow-x-auto whitespace-pre-wrap rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-4 text-sm text-[var(--text-secondary)]">
               {JSON.stringify(rawMetadata, null, 2)}
             </pre>
           </div>

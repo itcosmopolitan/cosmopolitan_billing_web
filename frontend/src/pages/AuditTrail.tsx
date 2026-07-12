@@ -2,8 +2,9 @@ import { auditApi } from "../api/auditApi";
 import { AuditDetailPanel } from "../components/audit/AuditDetailPanel";
 import { AuditFiltersBar } from "../components/audit/AuditFilters";
 import { AuditTable } from "../components/audit/AuditTable";
-import { useAuditTrail } from "../hooks/useAuditTrail";
+import { SectionHeader } from "../components/ui";
 import { PaginationBar } from "../components/ui/PaginationBar";
+import { useAuditTrail } from "../hooks/useAuditTrail";
 
 export default function AuditTrailPage() {
   const { data, filters, loading, error, selected, setSelected, updateFilter, goToPage } = useAuditTrail();
@@ -18,11 +19,7 @@ export default function AuditTrailPage() {
     });
 
   const total = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / (filters.limit || 1)));
-  const page = filters.page;
   const rows = data?.results ?? [];
-  const highCount = rows.filter((log) => log.risk === "HIGH").length;
-  const mediumCount = rows.filter((log) => log.risk === "MEDIUM").length;
   const clearFilters = () => {
     updateFilter({
       search: "",
@@ -34,28 +31,28 @@ export default function AuditTrailPage() {
   };
 
   return (
-    <div className="p-6 bg-slate-50/50 min-h-full">
-      <div className="flex items-start justify-between mb-5 gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Audit Trail</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Complete log of all sensitive actions, edits, and role-sensitive operations
-          </p>
-        </div>
-        <button
-          onClick={handleExport}
-          className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          Export CSV
+    <div className="page-container">
+      <SectionHeader
+        title="Audit Trail"
+        subtitle="Complete log of all sensitive actions, edits, and role-sensitive operations"
+      >
+        <button className="btn btn-secondary btn-sm" onClick={handleExport}>
+          ↓ Export CSV
         </button>
-      </div>
+      </SectionHeader>
 
       <AuditFiltersBar filters={filters} onFilter={updateFilter} />
 
-      {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
+      {error && (
+        <div className="mb-4 rounded-lg border border-[var(--red)]/20 bg-[var(--red-bg)] px-3 py-2 text-sm text-[var(--red)]">
+          {error}
+        </div>
+      )}
 
       {loading ? (
-        <p className="text-gray-400 text-sm">Loading...</p>
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] px-6 py-10 text-sm text-[var(--text-muted)]">
+          Loading audit events...
+        </div>
       ) : (
         <AuditTable logs={rows} selected={selected} onSelect={setSelected} onClearFilters={clearFilters} />
       )}

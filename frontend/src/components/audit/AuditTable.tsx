@@ -1,7 +1,7 @@
 import type { AuditLog } from "../../types/audit";
+import { useAppStore } from "../../store";
 import { ModuleTag } from "./ModuleTag";
 import { RiskBadge } from "./RiskBadge";
-import { useAppStore } from "../../store";
 
 interface Props {
   logs: AuditLog[];
@@ -64,15 +64,9 @@ const isJsonLike = (value: string | null | undefined) => {
   return text.startsWith("{") || text.startsWith("[");
 };
 
-const riskAccent: Record<string, string> = {
-  LOW: "border-l-4 border-l-green-400/30 hover:border-l-green-400",
-  MEDIUM: "border-l-4 border-l-amber-400/30 hover:border-l-amber-400",
-  HIGH: "border-l-4 border-l-red-500/30 hover:border-l-red-500",
-};
-
 function EmptyIcon() {
   return (
-    <svg viewBox="0 0 64 64" className="h-12 w-12 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2">
+    <svg viewBox="0 0 64 64" className="h-12 w-12 text-[var(--text-muted)]" fill="none" stroke="currentColor" strokeWidth="2">
       <circle cx="27" cy="27" r="14" />
       <path d="m39 39 11 11" />
       <path d="M20 27h14" />
@@ -85,17 +79,13 @@ export function AuditTable({ logs, selected, onSelect, onClearFilters }: Props) 
 
   if (logs.length === 0) {
     return (
-      <div className="border rounded-xl py-14 px-6 text-center bg-white">
-        <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-slate-50">
+      <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] px-6 py-14 text-center shadow-sm">
+        <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-[var(--bg-raised)]">
           <EmptyIcon />
         </div>
-        <h3 className="text-base font-semibold text-slate-800">No events found</h3>
-        <p className="mt-1 text-sm text-slate-500">Try adjusting your filters or date range</p>
-        <button
-          type="button"
-          onClick={() => onClearFilters?.()}
-          className="mt-4 inline-flex items-center rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-        >
+        <h3 className="text-base font-semibold text-[var(--text-primary)]">No events found</h3>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">Try adjusting your filters or date range</p>
+        <button type="button" onClick={() => onClearFilters?.()} className="btn btn-secondary btn-sm mt-4">
           Clear filters
         </button>
       </div>
@@ -113,18 +103,18 @@ export function AuditTable({ logs, selected, onSelect, onClearFilters }: Props) 
   };
 
   return (
-    <div className="border rounded-xl overflow-x-auto bg-white">
-      <table className="w-full min-w-[1080px] text-sm">
-        <thead className="bg-slate-50 text-slate-600">
+    <div className="overflow-x-auto rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-sm">
+      <table className="data-table min-w-[1080px]">
+        <thead>
           <tr>
-            <th className="text-left px-4 py-3">Action</th>
-            <th className="text-left px-4 py-3">User</th>
-            <th className="text-left px-4 py-3">Branch</th>
-            <th className="text-left px-4 py-3">Module</th>
-            <th className="text-left px-4 py-3">Reference</th>
-            <th className="text-left px-4 py-3">Detail</th>
-            <th className="text-left px-4 py-3">Risk</th>
-            <th className="text-left px-4 py-3">Time</th>
+            <th>Action</th>
+            <th>User</th>
+            <th>Branch</th>
+            <th>Module</th>
+            <th>Reference</th>
+            <th>Detail</th>
+            <th>Risk</th>
+            <th>Time</th>
           </tr>
         </thead>
         <tbody>
@@ -132,33 +122,32 @@ export function AuditTable({ logs, selected, onSelect, onClearFilters }: Props) 
             const active = selected?.id === log.id;
             const detailIsJson = isJsonLike(log.detail);
             const timeParts = formatTimeParts(log.created_at);
-            const riskKey = (log.risk || "LOW").toUpperCase();
             return (
               <tr
                 key={String(log.id)}
                 onClick={() => onSelect(log)}
                 className={[
-                  "cursor-pointer border-t transition-colors",
-                  riskAccent[riskKey] || "border-l-4 border-l-slate-300/30 hover:border-l-slate-300",
-                  active ? "bg-slate-100" : "hover:bg-slate-50",
-                  index % 2 === 1 && !active ? "bg-slate-50/30" : "",
+                  "cursor-pointer transition-colors",
+                  active ? "bg-[var(--bg-hover)]" : index % 2 === 0 ? "bg-[var(--bg-surface)]" : "bg-[var(--bg-raised)]",
                 ].join(" ")}
                 title={log.detail}
               >
-                <td className="px-4 py-3 font-medium text-slate-800" style={{ padding: "12px 16px" }}>{toDisplayAction(log.action)}</td>
-                <td className="px-4 py-3" style={{ padding: "12px 16px" }}>{log.user_name || "-"}</td>
-                <td className="px-4 py-3" style={{ padding: "12px 16px" }}>{branchLabel(log)}</td>
-                <td className="px-4 py-3" style={{ padding: "12px 16px" }}>{log.module ? <ModuleTag module={log.module} /> : "-"}</td>
-                <td className="px-4 py-3" style={{ padding: "12px 16px" }}>
-                  <span className="font-mono text-xs text-blue-700">{log.reference_id || "-"}</span>
+                <td className="font-semibold text-[var(--text-primary)]">{toDisplayAction(log.action)}</td>
+                <td className="text-[var(--text-secondary)]">{log.user_name || "-"}</td>
+                <td className="text-[var(--text-secondary)]">{branchLabel(log)}</td>
+                <td>{log.module ? <ModuleTag module={log.module} /> : "-"}</td>
+                <td>
+                  <span className="font-mono text-[11px] font-semibold text-[var(--accent)]">{log.reference_id || "-"}</span>
                 </td>
-                <td className="px-4 py-3 max-w-[360px] truncate" style={{ padding: "12px 16px" }}>
-                  {detailIsJson ? <span className="text-slate-400">See full detail ↓</span> : (log.detail || "-")}
+                <td className="max-w-[360px] truncate text-[var(--text-secondary)]">
+                  {detailIsJson ? <span className="text-[var(--text-muted)]">See full detail ↓</span> : log.detail || "-"}
                 </td>
-                <td className="px-4 py-3" style={{ padding: "12px 16px" }}><RiskBadge risk={log.risk} /></td>
-                <td className="px-4 py-3 whitespace-nowrap" style={{ padding: "12px 16px" }}>
-                  <div className="text-[11px] leading-4 text-slate-500">{timeParts.date}</div>
-                  <div className="text-sm font-medium text-slate-700">{timeParts.time}</div>
+                <td>
+                  <RiskBadge risk={log.risk} />
+                </td>
+                <td className="whitespace-nowrap">
+                  <div className="text-[11px] leading-4 text-[var(--text-muted)]">{timeParts.date}</div>
+                  <div className="text-sm font-semibold text-[var(--text-primary)]">{timeParts.time}</div>
                 </td>
               </tr>
             );
