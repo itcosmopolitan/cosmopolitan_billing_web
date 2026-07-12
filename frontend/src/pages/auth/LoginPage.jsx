@@ -51,9 +51,8 @@ const LEDGER_ROWS = [
 ]
 
 const LEDGER_STATS = [
-  { value: '99.8%', label: 'Sync accuracy' },
   { value: '24/7', label: 'Audit logging' },
-  { value: '4', label: 'Active branches' },
+  { value: 'Real-time', label: 'Inventory sync' },
 ]
 
 export default function LoginPage() {

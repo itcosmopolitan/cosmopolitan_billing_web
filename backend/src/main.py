@@ -16,8 +16,10 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from src import config
 from src.database import assert_activity_audit_schema, init_schema
+from src.middleware.audit_middleware import AuditContextMiddleware
 from src.routes import (
     activity,
+    audit,
     auth,
     branches,
     cash,
@@ -60,6 +62,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuditContextMiddleware)
 
 logger = logging.getLogger("cosmopolitan.main")
 logging.basicConfig(level=logging.INFO)
@@ -112,6 +115,7 @@ async def sqlalchemy_timeout_exception_handler(request, exc):
 # ─── Routers ──────────────────────────────────────────────────────────────────
 PREFIX = "/api/v1"
 app.include_router(auth.router,       prefix=f"{PREFIX}/auth",      tags=["Auth"])
+app.include_router(audit.router,      prefix=f"{PREFIX}/audit",     tags=["Audit"])
 app.include_router(activity.router,   prefix=f"{PREFIX}/activity",  tags=["Activity"])
 app.include_router(dashboard.router,  prefix=f"{PREFIX}/dashboard", tags=["Dashboard"])
 app.include_router(branches.router,   prefix=f"{PREFIX}/branches",  tags=["Branches"])

@@ -37,7 +37,7 @@ import CashPage        from '@/pages/cash/CashPage'
 import CashMonitorPage from '@/pages/cash/CashMonitorPage'
 import ReportsPage   from '@/pages/reports/ReportsPage'
 import SettingsPage  from '@/pages/settings/SettingsPage'
-import AuditPage     from '@/pages/settings/AuditPage'
+import AuditTrailPage from '@/pages/AuditTrail'
 import CustomerDisplayPage from '@/pages/display/CustomerDisplayPage'
 
 function AppShell() {
@@ -87,7 +87,7 @@ function AppShell() {
             <Route path="/cash/monitor" element={<RequirePerm perm="cash.monitor"><CashMonitorPage /></RequirePerm>} />
             <Route path="/reports"    element={<RequirePerm perm="reports.view"><ReportsPage /></RequirePerm>} />
             <Route path="/settings"   element={<RequirePerm perm="settings.view"><SettingsPage /></RequirePerm>} />
-            <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditPage /></RequirePerm>} />
+            <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditTrailPage /></RequirePerm>} />
           </Routes>
         </main>
       </div>

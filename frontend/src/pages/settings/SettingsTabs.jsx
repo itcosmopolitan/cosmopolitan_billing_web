@@ -711,7 +711,7 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
           <div style={{ fontWeight: 700, textAlign: 'center', margin: '8px 0', fontSize: 12 }}>TAX INVOICE</div>
           {showCustomer && <div style={{ margin: '6px 0', fontSize: 10 }}><span style={{ fontWeight: 700 }}>Bill To:</span> Sample Customer</div>}
 
-          <div style={{ display: 'grid', gridTemplateColumns: columnGrid, gap: 4, fontWeight: 700, borderBottom: '1px solid #000', paddingBottom: 4, marginBottom: 4, fontSize: 10.5 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: columnGrid, gap: 4, fontWeight: 700, borderBottom: '1px solid var(--text-secondary)', paddingBottom: 4, marginBottom: 4, fontSize: 10.5 }}>
             {columnHeaders.map((h) => (
               <div key={h} style={{ textAlign: h === 'Item Name' ? 'left' : 'right' }}>{h}</div>
             ))}
@@ -734,7 +734,7 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
             </div>
           ))}
 
-          <div style={{ borderTop: '1px solid #000', margin: '8px 0' }} />
+          <div style={{ borderTop: '1px solid var(--text-secondary)', margin: '8px 0' }} />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
             <div>Subtotal</div>
