@@ -83,6 +83,49 @@
   --shadow-lg: 0 8px 40px rgba(0,0,0,0.5);
 }
 
+/* Dark mode adaptations for Tailwind-like utility classes used in older pages */
+[data-theme='dark'] .bg-white,
+[data-theme='dark'] .bg-slate-50,
+[data-theme='dark'] .bg-gray-50,
+[data-theme='dark'] .bg-gray-100,
+[data-theme='dark'] .bg-slate-100 {
+  background: var(--bg-surface) !important;
+}
+
+[data-theme='dark'] .border-gray-200,
+[data-theme='dark'] .border-gray-100,
+[data-theme='dark'] .border-slate-100,
+[data-theme='dark'] .border-slate-300 {
+  border-color: var(--border-default) !important;
+}
+
+[data-theme='dark'] .text-slate-900,
+[data-theme='dark'] .text-slate-800,
+[data-theme='dark'] .text-slate-700,
+[data-theme='dark'] .text-slate-600,
+[data-theme='dark'] .text-slate-500,
+[data-theme='dark'] .text-gray-700,
+[data-theme='dark'] .text-gray-600,
+[data-theme='dark'] .text-gray-500,
+[data-theme='dark'] .text-gray-400 {
+  color: var(--text-secondary) !important;
+}
+
+[data-theme='dark'] .text-slate-300 {
+  color: var(--text-muted) !important;
+}
+
+[data-theme='dark'] .hover\:bg-slate-50:hover,
+[data-theme='dark'] .hover\:bg-gray-100:hover {
+  background: var(--bg-hover) !important;
+}
+
+/* Ensure form labels are visible in dark mode */
+[data-theme='dark'] .form-label {
+  color: #e8ecf4 !important;
+  font-weight: 600;
+}
+
 * { box-sizing: border-box; }
 
 html { font-family: 'DM Sans', system-ui, sans-serif; }
@@ -1237,11 +1280,20 @@ h4 { font-size: 14px; font-weight: 600; }
   opacity: 1;
   box-shadow: none;
 }
-.form-input:disabled::placeholder,
+..form-input:disabled::placeholder,
 .form-input[readonly]::placeholder { color: var(--text-muted); opacity: 0.6; }
 
 select.form-input { cursor: pointer; }
 select.form-input:disabled { cursor: not-allowed; }
+
+/* Adaptive dark/light theme helpers for audit and settings UI */
+.audit-surface { background: var(--bg-surface) !important; }
+.audit-raised { background: var(--bg-raised) !important; }
+.audit-border-default { border-color: var(--border-default) !important; }
+.audit-text-secondary { color: var(--text-secondary) !important; }
+.audit-text-muted { color: var(--text-muted) !important; }
+.audit-hover { transition: background 150ms ease; }
+.audit-hover:hover { background: var(--bg-hover) !important; }
 
 /* 2026-05-24: hide the native number-input spinner buttons on every
  * .form-input[type="number"]. Chrome's default spinner sits ~18px wide
@@ -1384,8 +1436,8 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 .form-label {
   display: block;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
   margin-bottom: 5px;
 }
 

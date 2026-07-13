@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +66,7 @@ from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import get_user_branch_ids
 from src.permissions import SALES_DOCUMENT_READ
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
 
@@ -262,6 +263,38 @@ def _log_sales_return_history(
         risk=risk,
         ip_address=None,
     ))
+
+
+async def _write_post_commit_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    module: str,
+    reference_id: str,
+    detail: str,
+    user: Optional[User],
+    request: Request,
+    branch_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    role = "unknown"
+    if user is not None:
+        role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action=action,
+        module=module,
+        reference_id=reference_id,
+        detail=detail,
+        user_id=user.id if user is not None else "system",
+        user_name=user.name if user is not None else "System",
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
 
 
 class SaleCreate(BaseModel):
@@ -886,7 +919,12 @@ async def update_invoice(
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
-async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("invoices.create")), db: AsyncSession = Depends(get_db)):
+async def create_invoice(
+    data: SaleCreate,
+    request: Request,
+    user: User = Depends(require_perm("invoices.create")),
+    db: AsyncSession = Depends(get_db),
+):
 
     if not data.items:
         raise HTTPException(400, "Invoice must have at least one line item")
@@ -1128,47 +1166,55 @@ async def create_invoice(data: SaleCreate, user: User = Depends(require_perm("in
             db, data.sales_order_id, inv, data.source_order_lines, user=user,
         )
 
-    _log_sales_invoice_history(db, user=user,
-        invoice_id=inv.id,
-        invoice_number=inv.number,
-        event_type="created",
-        action="create_invoice",
-        detail=f"Created sales invoice {inv.number}",
-        metadata={
-            "source": inv_origin,
-            "total": round(float(total or 0), 2),
-            "status": status,
-        },
-    )
-    if is_paid_at_create and paid > 0:
-        _log_sales_invoice_history(db, user=user,
-            invoice_id=inv.id,
-            invoice_number=inv.number,
-            event_type="payment_recorded",
-            action="record_invoice_payment",
-            detail=f"Recorded payment of {round(float(paid), 2)} for {inv.number}",
-            metadata={
-                "amount": round(float(paid), 2),
-                "payment_mode": data.payment_mode,
-            },
-        )
-        _log_sales_invoice_history(db, user=user,
-            invoice_id=inv.id,
-            invoice_number=inv.number,
-            event_type="status_changed",
-            action="update_invoice_status",
-            detail="Status changed: pending -> paid",
-            metadata={"from": "pending", "to": "paid"},
-        )
-
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Invoice Created",
+        module="Sales",
+        reference_id=inv.number,
+        detail=f"Created sales invoice {inv.number}",
+        user=user,
+        request=request,
+        branch_id=data.branch_id,
+        metadata={"invoice_id": inv.id, "total": round(float(total or 0), 2), "status": status},
+    )
+    if float(data.discount or 0) > 0:
+        await _write_post_commit_audit(
+            db,
+            action="Discount Applied",
+            module="Sales",
+            reference_id=inv.number,
+            detail=f"Discount of ₹{round(float(data.discount or 0), 2)} applied to {inv.number}",
+            user=user,
+            request=request,
+            branch_id=data.branch_id,
+            metadata={"invoice_id": inv.id, "discount": round(float(data.discount or 0), 2), "above_threshold": float(data.discount or 0) > 1000},
+        )
+    if is_paid_at_create and paid > 0:
+        await _write_post_commit_audit(
+            db,
+            action="Payment Recorded",
+            module="Sales",
+            reference_id=inv.number,
+            detail=f"Recorded payment of ₹{round(float(paid), 2)} for {inv.number}",
+            user=user,
+            request=request,
+            branch_id=data.branch_id,
+            metadata={"invoice_id": inv.id, "amount": round(float(paid), 2), "payment_mode": data.payment_mode},
+        )
     invalidate_dashboard_cache_for_user(user.id)
     await db.refresh(inv)
     return {"id": inv.id, "number": inv_num, "total": round(total, 2), "status": status}
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/payment", dependencies=[Depends(require_perm("invoices.edit"))])
-async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def record_payment(
+    invoice_id: str,
+    data: PaymentIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Record a payment against an invoice.
 
     Sales Phase 1 (2026-05-23) behavior:
@@ -1390,13 +1436,18 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
 
     next_status = "paid" if balance <= 0 else "partial"
     applied_amount = round(max(0.0, float(data.amount) - float(credit_applied or 0)), 2)
-    _log_sales_invoice_history(db, user=user,
-        invoice_id=invoice_id,
-        invoice_number=pre_row.number,
-        event_type="payment_recorded",
-        action="record_invoice_payment",
-        detail=f"Recorded payment of {round(float(data.amount), 2)} for {pre_row.number}",
+    await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Payment Recorded",
+        module="Sales",
+        reference_id=pre_row.number,
+        detail=f"Recorded payment of ₹{round(float(data.amount), 2)} for {pre_row.number}",
+        user=user,
+        request=request,
+        branch_id=getattr(pre_row, "branch_id", None),
         metadata={
+            "invoice_id": invoice_id,
             "payment_id": pay.id,
             "payment_number": pay.number,
             "amount": round(float(data.amount), 2),
@@ -1404,19 +1455,10 @@ async def record_payment(invoice_id: str, data: PaymentIn, db: AsyncSession = De
             "credit_applied": round(float(credit_applied or 0), 2),
             "payment_mode": data.mode,
             "payment_ref": data.ref or "",
+            "status_from": pre_status,
+            "status_to": next_status,
         },
     )
-    if pre_status != next_status:
-        _log_sales_invoice_history(db, user=user,
-            invoice_id=invoice_id,
-            invoice_number=pre_row.number,
-            event_type="status_changed",
-            action="update_invoice_status",
-            detail=f"Status changed: {pre_status} -> {next_status}",
-            metadata={"from": pre_status, "to": next_status},
-        )
-
-    await db.commit()
     return {
         "status": "paid" if balance <= 0 else "partial",
         "paid_amount": paid,
@@ -2172,7 +2214,12 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/cancel", dependencies=[Depends(require_perm("invoices.cancel"))])
-async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def cancel_invoice(
+    invoice_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     res = await db.execute(
         select(SaleInvoice)
         .options(selectinload(SaleInvoice.line_items))
@@ -2214,25 +2261,18 @@ async def cancel_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), us
     inv.status = "cancelled"
     if inv.customer_id:
         await sync_customer_outstanding(db, inv.customer_id)
-    _log_sales_invoice_history(db, user=user,
-        invoice_id=inv.id,
-        invoice_number=inv.number,
-        event_type="status_changed",
-        action="update_invoice_status",
-        detail=f"Status changed: {prev_status} -> cancelled",
-        metadata={"from": prev_status, "to": "cancelled"},
-        risk="medium",
-    )
-    _log_sales_invoice_history(db, user=user,
-        invoice_id=inv.id,
-        invoice_number=inv.number,
-        event_type="voided",
-        action="void_invoice",
-        detail=f"Voided sales invoice {inv.number}",
-        metadata={"reason": "cancel"},
-        risk="medium",
-    )
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Invoice Cancelled",
+        module="Sales",
+        reference_id=inv.number,
+        detail=f"Cancelled sales invoice {inv.number}",
+        user=user,
+        request=request,
+        branch_id=inv.branch_id,
+        metadata={"invoice_id": inv.id, "status_from": prev_status, "status_to": "cancelled", "stock_restored": stock_restored},
+    )
     return {"status": "cancelled", "stock_restored": stock_restored}
 
 def _quote_dict(quote, items=None):

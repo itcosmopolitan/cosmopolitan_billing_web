@@ -187,7 +187,7 @@ export const itemsAPI = {
   update:  (id, data) => api.put(`/items/${id}`, data),
   patch:   (id, data) => api.patch(`/items/${id}`, data),
   approve: (id)     => api.post(`/items/${id}/approve`),
-  reject:  (id, notes) => api.post(`/items/${id}/reject`, { notes }),
+  reject:  (id, data = {}) => api.post(`/items/${id}/reject`, data),
   adjust:  (data)   => api.post('/items/adjust', data),
   delete:  (id, params) => api.delete(`/items/${id}`, { params }),
   getBranches:    (id) => api.get(`/items/${id}/branches`),
@@ -497,6 +497,14 @@ export const settingsAPI = {
   previewNumber: (docType, branchId) => api.get('/settings/numbering/preview', {
     params: { doc_type: docType, branch_id: branchId || undefined },
   }),
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+export const notificationsAPI = {
+  list:    (params) => api.get('/notifications/', { params }),
+  count:   (params) => api.get('/notifications/count', { params }),
+  read:    (id)     => api.post(`/notifications/${id}/read`),
+  readAll: (params) => api.post('/notifications/read-all', null, { params }),
 }
 
 // ─── Tax rates ───────────────────────────────────────────────────────────────

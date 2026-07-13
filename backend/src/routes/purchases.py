@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,7 @@ from src.routes._serializers import get_user_branch_ids
 from src.routes._approval import can_direct_commit
 from src.permissions import PURCHASE_DOCUMENT_READ
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
 
@@ -70,6 +71,35 @@ router = APIRouter()
 # `RecordedPaymentMode` decision: cheque NOT included even though vendor
 # settlements often use it, because parity with the POS dropdown won out.
 PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
+
+
+async def _write_post_commit_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    reference_id: str,
+    detail: str,
+    user: User,
+    request: Request,
+    branch_id: Optional[str],
+    metadata: Optional[dict] = None,
+) -> None:
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action=action,
+        module="Purchases",
+        reference_id=reference_id,
+        detail=detail,
+        user_id=user.id,
+        user_name=user.name,
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
 
 
 def _coerce_payment_mode_value(v):
@@ -625,7 +655,12 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User 
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
-async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_bill(
+    data: PurchaseCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     if not data.items:
         raise HTTPException(400, "Purchase bill must have at least one line item")
     for i in data.items:
@@ -888,53 +923,33 @@ async def create_bill(data: PurchaseCreate, db: AsyncSession = Depends(get_db), 
     if bill.vendor_id and bill_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
 
-    _log_purchase_bill_history(db, user=user,
-        bill_id=bill.id,
-        bill_number=bill.number,
-        event_type="created",
-        action="create_purchase_bill",
+    await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Purchase Bill Created",
+        reference_id=bill.number,
         detail=f"Created purchase bill {bill.number}",
+        user=user,
+        request=request,
+        branch_id=bill.branch_id,
         metadata={
+            "bill_id": bill.id,
             "source": "grn" if data.grn_id else ("purchase_order" if data.purchase_order_id else "direct"),
             "status": str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status),
             "total": float(bill.total or 0),
         },
     )
-    if getattr(bill, "grn_id", None):
-        _log_purchase_bill_history(db, user=user,
-            bill_id=bill.id,
-            bill_number=bill.number,
-            event_type="grn_linked",
-            action="link_bill_grn",
-            detail=f"Linked bill {bill.number} to GRN",
-            metadata={
-                "target_record_type": "grn",
-                "target_record_id": bill.grn_id,
-            },
+    if float(data.discount or 0) > 0:
+        await _write_post_commit_audit(
+            db,
+            action="Discount Applied",
+            reference_id=bill.number,
+            detail=f"Discount of ₹{round(float(data.discount or 0), 2)} applied to {bill.number}",
+            user=user,
+            request=request,
+            branch_id=bill.branch_id,
+            metadata={"bill_id": bill.id, "discount": round(float(data.discount or 0), 2), "above_threshold": float(data.discount or 0) > 1000},
         )
-    if paid_at_create and paid_amount > 0:
-        _log_purchase_bill_history(db, user=user,
-            bill_id=bill.id,
-            bill_number=bill.number,
-            event_type="payment_recorded",
-            action="record_purchase_payment",
-            detail=f"Recorded payment of {round(float(paid_amount), 2)} for {bill.number}",
-            metadata={
-                "amount": round(float(paid_amount), 2),
-                "payment_mode": data.payment_mode,
-                "payment_ref": data.payment_ref or "",
-            },
-        )
-        _log_purchase_bill_history(db, user=user,
-            bill_id=bill.id,
-            bill_number=bill.number,
-            event_type="status_changed",
-            action="update_purchase_bill_status",
-            detail=f"Status changed: pending -> {bill_status}",
-            metadata={"from": "pending", "to": bill_status},
-        )
-
-    await db.commit()
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
@@ -1151,10 +1166,16 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: Us
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
 @router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit"))])
-async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    """Edit a pending bill with no payments or vendor returns. Replaces line
-    items and recalculates totals. Paid / partial / cancelled bills are
-    locked — use vendor returns or Record Payment to adjust settled bills."""
+async def update_bill(
+    bill_id: str,
+    data: BillUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Edit a pending or partial bill. Replaces line items and recalculates
+    totals. Paid and cancelled bills are locked — use vendor returns or
+    Record Payment to adjust settled bills."""
     from sqlalchemy import delete as sa_delete
     result = await db.execute(
         select(PurchaseBill)
@@ -1242,39 +1263,41 @@ async def update_bill(bill_id: str, data: BillUpdate, db: AsyncSession = Depends
             line_total=round(line_taxable + line_tax, 2),
         ))
 
-    preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {bill.number}"
-    if len(item_changes) > 1:
-        preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
-    _log_purchase_bill_history(db, user=user,
-        bill_id=bill.id,
-        bill_number=bill.number,
-        event_type="item_changed",
-        action="update_purchase_bill_items",
-        detail=preview,
-        metadata={"line_count": len(data.items), "changes": item_changes[:20]},
-    )
-    if prev_due_date != bill.due_date:
-        _log_purchase_bill_history(db, user=user,
-            bill_id=bill.id,
-            bill_number=bill.number,
-            event_type="due_date_changed",
-            action="update_purchase_bill_due_date",
-            detail=f"Due date changed for {bill.number}",
-            metadata={"from": prev_due_date, "to": bill.due_date},
-        )
-    if round(prev_total, 2) != round(float(bill.total or 0), 2):
-        _log_purchase_bill_history(db, user=user,
-            bill_id=bill.id,
-            bill_number=bill.number,
-            event_type="amount_changed",
-            action="update_purchase_bill_amount",
-            detail=f"Amount changed for {bill.number}",
-            metadata={"from": round(prev_total, 2), "to": round(float(bill.total or 0), 2)},
-        )
-
     if bill.vendor_id:
         await sync_vendor_outstanding(db, bill.vendor_id)
     await db.commit()
+    preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {bill.number}"
+    if len(item_changes) > 1:
+        preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
+    await _write_post_commit_audit(
+        db,
+        action="Purchase Bill Edited",
+        reference_id=bill.number,
+        detail=preview,
+        user=user,
+        request=request,
+        branch_id=bill.branch_id,
+        metadata={
+            "bill_id": bill.id,
+            "line_count": len(data.items),
+            "changes": item_changes[:20],
+            "due_date_from": prev_due_date,
+            "due_date_to": bill.due_date,
+            "total_from": round(prev_total, 2),
+            "total_to": round(float(bill.total or 0), 2),
+        },
+    )
+    if float(data.discount or 0) > 0:
+        await _write_post_commit_audit(
+            db,
+            action="Discount Applied",
+            reference_id=bill.number,
+            detail=f"Discount of ₹{round(float(data.discount or 0), 2)} applied to {bill.number}",
+            user=user,
+            request=request,
+            branch_id=bill.branch_id,
+            metadata={"bill_id": bill.id, "discount": round(float(data.discount or 0), 2), "above_threshold": float(data.discount or 0) > 1000},
+        )
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
     return _bill_dict(bill, li_res.scalars().all())
 
@@ -2787,7 +2810,6 @@ async def create_order(
             discount=line.discount or 0,
             line_total=round(line_taxable_amount(line_net, line.tax_rate or 0, tax_mode) + line_tax, 2),
         ))
-
     _log_purchase_order_history(db, user=user,
         order_id=po.id,
         order_number=po.number,
@@ -2800,7 +2822,13 @@ async def create_order(
             "line_count": len(data.items),
         },
     )
+    if not direct:
+        from src.notifications.store import emit_po_pending, notify_refresh
+
+        await emit_po_pending(db, po)
     await db.commit()
+    if not direct:
+        await notify_refresh()
     return {"id": po.id, "number": po_num, "total": total, "status": po.status.value}
 
 
@@ -2894,7 +2922,11 @@ async def approve_order(
     po.status = PurchaseOrderStatus.confirmed
     if body.notes:
         po.notes = (po.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.purchase_order_pending:{order_id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "confirmed", "number": po.number}
 
 
@@ -2920,7 +2952,11 @@ async def reject_order(
     po.status = PurchaseOrderStatus.cancelled
     if body.notes:
         po.notes = (po.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.purchase_order_pending:{order_id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "cancelled", "number": po.number}
 
 

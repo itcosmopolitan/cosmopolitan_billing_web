@@ -274,7 +274,7 @@ export default function ItemFormPage({ mode = 'create' }) {
       } else {
         const res = await itemsAPI.create(buildCreatePayload(form, branchConfigs, defaultBranchId))
         toast.success(
-          res.approval_status === 'pending'
+          res.approval_status === 'pending_approval' || res.approval_status === 'pending'
             ? 'Item submitted for manager approval'
             : 'Item created — add stock per branch from Items & Stock',
         )

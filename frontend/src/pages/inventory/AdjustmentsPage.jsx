@@ -312,7 +312,7 @@ export default function AdjustmentsPage() {
       bumpList()
     } catch (err) {
       console.error(err)
-      toast.error('Failed to submit request')
+      toast.error(err?.response?.data?.detail || 'Failed to submit request')
     } finally {
       setSubmitting(false)
     }

@@ -16,8 +16,10 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from src import config
 from src.database import assert_activity_audit_schema, init_schema
+from src.middleware.audit_middleware import AuditContextMiddleware
 from src.routes import (
     activity,
+    audit,
     auth,
     branches,
     cash,
@@ -38,6 +40,8 @@ from src.routes import (
     vendors,
     summaries,
     autocomplete,
+    notifications,
+    notifications_ws,
 )
 
 # ─── Load Configuration ────────────────────────────────────────────────────
@@ -61,6 +65,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuditContextMiddleware)
 
 logger = logging.getLogger("cosmopolitan.main")
 logging.basicConfig(level=logging.INFO)
@@ -113,6 +118,7 @@ async def sqlalchemy_timeout_exception_handler(request, exc):
 # ─── Routers ──────────────────────────────────────────────────────────────────
 PREFIX = "/api/v1"
 app.include_router(auth.router,       prefix=f"{PREFIX}/auth",      tags=["Auth"])
+app.include_router(audit.router,      prefix=f"{PREFIX}/audit",     tags=["Audit"])
 app.include_router(activity.router,   prefix=f"{PREFIX}/activity",  tags=["Activity"])
 app.include_router(dashboard.router,  prefix=f"{PREFIX}/dashboard", tags=["Dashboard"])
 app.include_router(branches.router,   prefix=f"{PREFIX}/branches",  tags=["Branches"])
@@ -125,6 +131,7 @@ app.include_router(purchases.router,  prefix=f"{PREFIX}/purchases", tags=["Purch
 app.include_router(transfers.router,  prefix=f"{PREFIX}/transfers", tags=["Transfers"])
 app.include_router(adjustments.router, prefix=f"{PREFIX}/adjustments", tags=["Adjustments"])
 app.include_router(summaries.router,    prefix=f"{PREFIX}/summaries",    tags=["Summaries"])
+app.include_router(notifications.router, prefix=f"{PREFIX}/notifications", tags=["Notifications"])
 app.include_router(cash.router,       prefix=f"{PREFIX}/cash",      tags=["Cash"])
 app.include_router(reports.router,    prefix=f"{PREFIX}/reports",   tags=["Reports"])
 app.include_router(users.router,      prefix=f"{PREFIX}/users",     tags=["Users"])
@@ -133,6 +140,32 @@ app.include_router(permissions.router, prefix=f"{PREFIX}/permissions", tags=["Pe
 app.include_router(settings_routes.router, prefix=f"{PREFIX}/settings", tags=["Settings"])
 app.include_router(taxes.router,       prefix=f"{PREFIX}/taxes",       tags=["Taxes"])
 app.include_router(customer_display.router, prefix=f"{PREFIX}/ws", tags=["Customer Display WS"])
+app.include_router(notifications_ws.router, prefix=f"{PREFIX}/ws", tags=["Notifications WS"])
+
+async def _run_notification_scan_once() -> None:
+    from src.database import get_async_session
+    from src.notifications.scanner import run_notification_scan
+
+    settings = config.get()
+    if not settings.notification_scan_enabled:
+        return
+    async_session = get_async_session()
+    async with async_session() as db:
+        await run_notification_scan(db)
+
+
+async def _notification_scan_loop() -> None:
+    settings = config.get()
+    if not settings.notification_scan_enabled:
+        return
+    interval_sec = max(1, settings.notification_scan_interval_hours) * 3600
+    while True:
+        await asyncio.sleep(interval_sec)
+        try:
+            await _run_notification_scan_once()
+        except Exception:
+            logger.exception("Scheduled notification scan failed")
+
 
 @app.on_event("startup")
 async def startup():
@@ -141,6 +174,16 @@ async def startup():
         await init_schema()
         await assert_activity_audit_schema()
         logger.info("FastAPI application startup completed")
+
+        async def _initial_scan() -> None:
+            await asyncio.sleep(2)
+            try:
+                await _run_notification_scan_once()
+            except Exception:
+                logger.exception("Initial notification scan failed")
+
+        asyncio.create_task(_notification_scan_loop())
+        asyncio.create_task(_initial_scan())
     except Exception:
         logger.exception("Application startup failed during database initialization")
         raise

@@ -27,6 +27,7 @@ const BRANCH_TABS = [
 const MASTER_TABS = [
   { id: 'all',      label: 'All Items' },
   { id: 'pending',  label: 'Pending Approval' },
+  { id: 'rejected', label: 'Rejected Items' },
   { id: 'inactive', label: 'Inactive' },
 ]
 
@@ -76,6 +77,8 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [categories, setCategories] = useState([])
   const [confirmAction, setConfirmAction] = useState(null)
   const [actionBusy, setActionBusy] = useState(false)
+  const [rejectTarget, setRejectTarget] = useState(null)
+  const [rejectReason, setRejectReason] = useState('')
 
   // Client-side sort because the page fetches all items at once via
   // fetchAllList and paginates locally. If/when this switches to true
@@ -94,8 +97,16 @@ export default function ItemsPage({ mode = 'branch' }) {
   const fetchItems = useCallback(async () => {
     try {
       setLoading(true)
+      const tabStatus = isMaster
+        ? (tab === 'pending' ? 'pending' : tab === 'rejected' ? 'rejected' : tab === 'inactive' ? 'inactive' : undefined)
+        : undefined
       const params = isMaster
-        ? { master_mode: true, branch_id: branchFilter, include_inactive: tab === 'inactive' }
+        ? {
+            master_mode: true,
+            branch_id: branchFilter,
+            include_inactive: tab === 'inactive',
+            ...(tabStatus ? { status: tabStatus } : {}),
+          }
         : { branch_id: branchFilter, listed_only: tab === 'inactive' ? false : true, include_inactive: tab === 'inactive' }
 
       const data = await fetchAllList(itemsAPI.list, params)
@@ -161,7 +172,8 @@ export default function ItemsPage({ mode = 'branch' }) {
       const ids = new Set(nearExpiry.map((b) => b.itemId))
       list = list.filter((p) => ids.has(p.id))
     }
-    if (tab === 'inactive' && !isMaster) list = list.filter((p) => p.active === false)
+    if (tab === 'inactive') list = list.filter((p) => p.active === false)
+    if (tab === 'rejected') list = list.filter((p) => (p.status || p.approval_status || 'approved') === 'rejected')
     // Sort: numeric columns sort numerically, everything else string-compare.
     // 'category_id' uses the resolved categoryName for a UX that matches what
     // the user sees in the column.
@@ -190,8 +202,10 @@ export default function ItemsPage({ mode = 'branch' }) {
   const totals = useMemo(() => {
     if (isMaster) {
       const listed = items.reduce((sum, p) => sum + (p.available_branch_count || 0), 0)
+      const approvedCount = items.filter((p) => (p.status || p.approval_status || 'approved') === 'approved').length
       return {
-        items: items.length,
+        items: approvedCount,
+        rejected: items.filter((p) => (p.status || p.approval_status || 'approved') === 'rejected').length,
         tracked: items.filter((p) => p.batch_tracking).length,
         avgBranches: items.length ? Math.round(listed / items.length) : 0,
       }
@@ -211,6 +225,8 @@ export default function ItemsPage({ mode = 'branch' }) {
   }
 
   const [itemActionBusy, setItemActionBusy] = useState(null)
+  const [showDetail, setShowDetail] = useState(null)
+  const [actionKind, setActionKind] = useState(null)
 
   const approveItem = async (item) => {
     if (itemActionBusy) return
@@ -231,8 +247,10 @@ export default function ItemsPage({ mode = 'branch' }) {
     if (itemActionBusy) return
     setItemActionBusy(item.id)
     try {
-      await itemsAPI.reject(item.id)
+      await itemsAPI.reject(item.id, { reason: rejectReason.trim() })
       toast.success(`${item.name} rejected`)
+      setRejectTarget(null)
+      setRejectReason('')
       await fetchItems()
     } catch (err) {
       console.error(err)
@@ -240,6 +258,20 @@ export default function ItemsPage({ mode = 'branch' }) {
     } finally {
       setItemActionBusy(null)
     }
+  }
+
+  const approveFromDetail = async () => {
+    if (!showDetail) return
+    setActionKind('approve')
+    await approveItem(showDetail)
+    setActionKind(null)
+    setShowDetail(null)
+  }
+
+  const openRejectFromDetail = () => {
+    if (!showDetail) return
+    setRejectTarget(showDetail)
+    setRejectReason('')
   }
 
   // Open the stock adjustment modal. For batch-tracked items we lazily fetch
@@ -398,13 +430,7 @@ export default function ItemsPage({ mode = 'branch' }) {
 
       {/* KPIs */}
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        {isMaster ? (
-          <>
-            <KPICard label="Total Items" value={totals.items} color="var(--accent)" sub="In central catalog" />
-            <KPICard label="Batch Tracked" value={totals.tracked} color="var(--purple)" sub="FIFO / FEFO items" />
-            <KPICard label="Avg Branch Listing" value={totals.avgBranches} color="var(--green)" sub="Retail branches per item" />
-          </>
-        ) : (
+        {!isMaster && (
           <>
             <KPICard label="Total Items"         value={totals.items}     color="var(--accent)" sub={`${totals.tracked} tracked (FIFO/FEFO)`} />
             <KPICard label="Low Stock Items"     value={totals.low}       color="var(--amber)"   />
@@ -538,7 +564,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                   <SortableHeader label="Category" sortKey="category_id" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
                   <SortableHeader label={isMaster ? 'Default Cost' : 'Cost'} sortKey="cost_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
                   <SortableHeader label={isMaster ? 'Default Price' : 'Price'} sortKey="selling_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  {isMaster && <th>{tab === 'pending' ? 'Raised By' : 'Branches'}</th>}
+                  {isMaster && <th>{tab === 'pending' ? 'Raised By' : tab === 'rejected' ? 'Rejected By' : 'Branches'}</th>}
                   <th>GST</th>
                   {!isMaster && (
                     <SortableHeader label="Stock" sortKey="available_stock" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
@@ -604,7 +630,16 @@ export default function ItemsPage({ mode = 'branch' }) {
                       {isMaster && (
                         <td>
                           {tab === 'pending' ? (
-                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.created_by || '—'}</span>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                              <div>{p.created_by || '—'}</div>
+                              {p.created_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.created_at)}</div> : null}
+                            </div>
+                          ) : tab === 'rejected' ? (
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                              <div>{p.rejected_by || '—'}</div>
+                              {p.rejected_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.rejected_at)}</div> : null}
+                              {p.rejection_reason ? <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{p.rejection_reason}</div> : null}
+                            </div>
                           ) : (
                             <Tag>{p.available_branch_count ?? 0} active</Tag>
                           )}
@@ -618,69 +653,102 @@ export default function ItemsPage({ mode = 'branch' }) {
                       )}
                       {!isMaster && <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>}
                       <td className="text-right">
-                        <RowActionsMenu
-                          busy={!!itemActionBusy}
-                          ariaLabel={`Actions for ${p.name}`}
-                          actions={isMaster ? [
-                            {
-                              label: 'Approve',
-                              hidden: tab !== 'pending' || !can('item_master.approve'),
-                              disabled: itemActionBusy === p.id,
-                              onClick: () => approveItem(p),
-                            },
-                            {
-                              label: 'Reject',
-                              danger: true,
-                              hidden: tab !== 'pending' || !can('item_master.approve'),
-                              disabled: itemActionBusy === p.id,
-                              onClick: () => rejectItem(p),
-                            },
-                            {
-                              label: 'Activity',
-                              hidden: !canActivity,
-                              disabled: itemActionBusy === p.id,
-                              onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
-                            },
-                            {
-                              label: 'Edit item',
-                              hidden: tab === 'pending' || !can('item_master.edit'),
-                              onClick: () => openEdit(p),
-                            },
-                            {
-                              label: p.active ? 'Deactivate item' : 'Reactivate item',
-                              hidden: !can('item_master.edit', 'items.edit'),
-                              onClick: () => setConfirmAction({ type: p.active ? 'deactivate' : 'reactivate', item: p }),
-                            },
-                            {
-                              label: 'Delete item',
-                              hidden: !can('item_master.delete'),
-                              danger: true,
-                              onClick: () => setConfirmAction({ type: 'delete', item: p }),
-                            },
-                          ] : [
-                            {
-                              label: 'Request adjustment',
-                              hidden: !can('adjustments.create'),
-                              onClick: () => openAdj(p),
-                            },
-                            {
-                              label: 'View batches',
-                              hidden: !p.batch_tracking || !can('items.view'),
-                              onClick: () => setBatchesModal(p),
-                            },
-                            {
-                              label: p.active ? 'Deactivate item' : 'Reactivate item',
-                              hidden: !can('item_master.edit', 'items.edit'),
-                              onClick: () => setConfirmAction({ type: p.active ? 'deactivate' : 'reactivate', item: p }),
-                            },
-                            {
-                              label: 'Delete item',
-                              hidden: !can('item_master.delete'),
-                              danger: true,
-                              onClick: () => setConfirmAction({ type: 'delete', item: p }),
-                            },
-                          ]}
-                        />
+                        {isMaster && tab === 'pending' ? (
+                            <RowActionsMenu
+                              busy={!!itemActionBusy}
+                              ariaLabel={`Actions for ${p.name}`}
+                              actions={[
+                                {
+                                  label: 'View details',
+                                  disabled: itemActionBusy === p.id,
+                                  onClick: () => setShowDetail(p),
+                                },
+                                {
+                                  label: 'Activity',
+                                  hidden: !canActivity,
+                                  disabled: itemActionBusy === p.id,
+                                  onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
+                                },
+                                {
+                                  label: 'Edit item',
+                                  hidden: !can('item_master.edit'),
+                                  disabled: itemActionBusy === p.id,
+                                  onClick: () => navigate(`/item-master/${p.id}/edit`),
+                                },
+                                {
+                                  label: itemActionBusy === p.id && actionKind === 'approve' ? 'Approving…' : 'Approve',
+                                  hidden: !can('item_master.approve'),
+                                  disabled: itemActionBusy === p.id,
+                                  onClick: () => { setActionKind('approve'); approveItem(p) },
+                                },
+                                {
+                                  label: itemActionBusy === p.id && actionKind === 'reject' ? 'Rejecting…' : 'Reject',
+                                  danger: true,
+                                  hidden: !can('item_master.approve'),
+                                  disabled: itemActionBusy === p.id,
+                                  onClick: () => { setRejectTarget(p); setRejectReason('') },
+                                },
+                                {
+                                  label: itemActionBusy === p.id && actionKind === 'delete' ? 'Deleting…' : 'Delete',
+                                  danger: true,
+                                  hidden: !can('item_master.delete'),
+                                  disabled: itemActionBusy === p.id,
+                                  onClick: () => setConfirmAction({ type: 'delete', item: p }),
+                                },
+                              ]}
+                            />
+                          ) : (
+                          <RowActionsMenu
+                            busy={!!itemActionBusy}
+                            ariaLabel={`Actions for ${p.name}`}
+                            actions={isMaster ? [
+                              {
+                                label: 'Activity',
+                                hidden: !canActivity,
+                                disabled: itemActionBusy === p.id,
+                                onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
+                              },
+                              {
+                                label: 'Edit item',
+                                hidden: tab === 'pending' || !can('item_master.edit'),
+                                onClick: () => openEdit(p),
+                              },
+                              {
+                                label: p.active ? 'Deactivate item' : 'Reactivate item',
+                                hidden: !can('item_master.edit', 'items.edit'),
+                                onClick: () => setConfirmAction({ type: p.active ? 'deactivate' : 'reactivate', item: p }),
+                              },
+                              {
+                                label: 'Delete item',
+                                hidden: !can('item_master.delete'),
+                                danger: true,
+                                onClick: () => setConfirmAction({ type: 'delete', item: p }),
+                              },
+                            ] : [
+                              {
+                                label: 'Request adjustment',
+                                hidden: !can('adjustments.create'),
+                                onClick: () => openAdj(p),
+                              },
+                              {
+                                label: 'View batches',
+                                hidden: !p.batch_tracking || !can('items.view'),
+                                onClick: () => setBatchesModal(p),
+                              },
+                              {
+                                label: p.active ? 'Deactivate item' : 'Reactivate item',
+                                hidden: !can('item_master.edit', 'items.edit'),
+                                onClick: () => setConfirmAction({ type: p.active ? 'deactivate' : 'reactivate', item: p }),
+                              },
+                              {
+                                label: 'Delete item',
+                                hidden: !can('item_master.delete'),
+                                danger: true,
+                                onClick: () => setConfirmAction({ type: 'delete', item: p }),
+                              },
+                            ]}
+                          />
+                        )}
                       </td>
                     </tr>
                   )
@@ -715,6 +783,110 @@ export default function ItemsPage({ mode = 'branch' }) {
         danger={confirmAction?.type === 'delete'}
       />
 
+      <Modal
+        open={!!rejectTarget}
+        onClose={() => !itemActionBusy && setRejectTarget(null)}
+        title="Reject item"
+        icon="✖"
+        size="sm"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setRejectTarget(null)} disabled={itemActionBusy}>Cancel</button>
+            <button className="btn btn-primary" onClick={() => rejectItem(rejectTarget)} disabled={itemActionBusy || !rejectReason.trim()}>
+              {itemActionBusy ? 'Rejecting…' : 'Reject item'}
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+            Provide a reason for rejecting <strong>{rejectTarget?.name}</strong>.
+          </div>
+          <textarea
+            className="form-input"
+            rows={4}
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            placeholder="Reason for rejection"
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!showDetail}
+        onClose={() => !itemActionBusy && setShowDetail(null)}
+        title={showDetail ? `Item — ${showDetail.name}` : 'Item'}
+        icon="📦"
+        size="md"
+        footer={showDetail?.status === 'pending' && (can('item_master.approve') || can('item_master.delete') || can('item_master.create')) ? (
+          <>
+            {can('item_master.create') && (
+              <button className="btn btn-secondary" style={{ marginRight: can('item_master.delete') ? 0 : 'auto' }} onClick={() => {
+                const id = showDetail.id
+                setShowDetail(null)
+                navigate(`/item-master/${id}/edit`)
+              }} disabled={!!itemActionBusy}>
+                Edit
+              </button>
+            )}
+            {can('item_master.delete') && (
+              <button className="btn btn-secondary" style={{ marginRight: 'auto', color: 'var(--red)', marginLeft: can('item_master.create') ? 8 : 0 }} onClick={() => setConfirmAction({ type: 'delete', item: showDetail })} disabled={!!itemActionBusy}>
+                Delete
+              </button>
+            )}
+            {can('item_master.approve') && (
+              <>
+                <button className="btn btn-secondary" onClick={openRejectFromDetail} disabled={!!itemActionBusy}>
+                  {itemActionBusy && actionKind === 'reject' ? 'Rejecting…' : 'Reject'}
+                </button>
+                <button className="btn btn-primary" onClick={approveFromDetail} disabled={!!itemActionBusy}>
+                  {itemActionBusy && actionKind === 'approve' ? 'Approving…' : 'Approve'}
+                </button>
+              </>
+            )}
+          </>
+        ) : (
+          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
+        )}
+      >
+        {showDetail && (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Item</span>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)', marginTop: 6 }}>{showDetail.name}</div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              {[
+                { label: 'SKU', value: showDetail.sku || '—' },
+                { label: 'Category', value: showDetail.categoryName || '—' },
+                { label: 'Status', value: (() => { const s = (showDetail.status || showDetail.approval_status || 'approved'); return <Chip status={s === 'approved' ? 'active' : s === 'pending' ? 'pending' : s === 'rejected' ? 'draft' : 'draft'} label={s.charAt(0).toUpperCase() + s.slice(1)} /> })() },
+                { label: 'Requested by', value: showDetail.created_by || '—' },
+              ].map((r) => (
+                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Price</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(showDetail.default_selling_price ?? showDetail.selling_price)}</div>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Cost</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(showDetail.default_cost_price ?? showDetail.cost_price)}</div>
+              </div>
+            </div>
+            {showDetail.rejection_reason && (
+              <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8, color: 'var(--red)' }}>
+                <div style={{ fontWeight: 700 }}>Rejection reason</div>
+                <div style={{ marginTop: 6 }}>{showDetail.rejection_reason}</div>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
 
       {!isMaster && (
         <>

@@ -366,8 +366,13 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("audit_logs", "reference_id",   "VARCHAR DEFAULT ''"),
     # Approval workflow: item master pending creates.
     ("items", "approval_status", "VARCHAR DEFAULT 'approved' NOT NULL"),
+    ("items", "status",          "VARCHAR DEFAULT 'approved' NOT NULL"),
     ("items", "created_by",      "VARCHAR"),
     ("items", "approved_by",     "VARCHAR"),
+    ("items", "rejected_by",     "VARCHAR"),
+    ("items", "approved_at",     "VARCHAR"),
+    ("items", "rejected_at",     "VARCHAR"),
+    ("items", "rejection_reason", "TEXT"),
 ]
 
 _REQUIRED_AUDIT_ACTIVITY_COLUMNS = {
@@ -738,6 +743,8 @@ _PG_ENUM_VALUES: list[tuple[str, str]] = [
     ("purchaseorderstatus", "pending_approval"),
     ("salesorderstatus", "partially_invoiced"),
     ("userrole", "branch_supervisor"),
+    ("itemapprovalstatus", "pending"),
+    ("itemapprovalstatus", "pending_approval"),
 ]
 
 

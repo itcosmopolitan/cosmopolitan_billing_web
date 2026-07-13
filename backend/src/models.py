@@ -25,9 +25,12 @@ class UserRole(str, enum.Enum):
 
 
 class ItemApprovalStatus(str, enum.Enum):
+    draft = "draft"
+    pending = "pending"
+    pending_approval = "pending_approval"
     approved = "approved"
-    pending  = "pending"
     rejected = "rejected"
+    inactive = "inactive"
 
 class InvoiceStatus(str, enum.Enum):
     draft   = "draft"
@@ -276,6 +279,11 @@ class Item(Base):
     batch_tracking  = Column(Boolean, default=False)
     expiry_tracking = Column(Boolean, default=False)
     active          = Column(Boolean, default=True)
+    status = Column(
+        SAEnum(ItemApprovalStatus),
+        default=ItemApprovalStatus.approved,
+        nullable=False,
+    )
     approval_status = Column(
         SAEnum(ItemApprovalStatus),
         default=ItemApprovalStatus.approved,
@@ -283,6 +291,10 @@ class Item(Base):
     )
     created_by      = Column(String)
     approved_by     = Column(String)
+    rejected_by     = Column(String)
+    approved_at     = Column(DateTime)
+    rejected_at     = Column(DateTime)
+    rejection_reason = Column(Text)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1362,6 +1374,38 @@ class InvoiceTemplateSettings(Base):
     updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ─── In-App Notifications ─────────────────────────────────────────────────────
+class Notification(Base):
+  __tablename__ = "notifications"
+  __table_args__ = (
+      Index("ix_notifications_active", "resolved_at", "created_at"),
+  )
+
+  id                 = Column(String, primary_key=True)
+  dedupe_key         = Column(String, unique=True, nullable=False)
+  kind               = Column(String, nullable=False)
+  severity           = Column(String, default="info", nullable=False)
+  title              = Column(String, nullable=False)
+  body               = Column(Text)
+  branch_id          = Column(String)
+  module             = Column(String)
+  ref_type           = Column(String)
+  ref_id             = Column(String)
+  href               = Column(String, default="/")
+  exclude_user_name  = Column(String)
+  created_at         = Column(DateTime, default=datetime.utcnow)
+  resolved_at        = Column(DateTime)
+  expires_at         = Column(DateTime)
+
+
+class NotificationRead(Base):
+  __tablename__ = "notification_reads"
+
+  notification_id = Column(String, ForeignKey("notifications.id", ondelete="CASCADE"), primary_key=True)
+  user_id         = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+  read_at         = Column(DateTime, default=datetime.utcnow)
+
+
 # ─── Audit Log ────────────────────────────────────────────────────────────────
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -1379,10 +1423,14 @@ class AuditLog(Base):
     user_name  = Column(String)
     user_role  = Column(String, nullable=False, default="unknown")
     module     = Column(String)
+    reference_id = Column(String)
     ref        = Column(String)
     detail     = Column(Text)
-    risk       = Column(String, default="low")  # low | medium | high
+    risk       = Column(String, default="LOW")  # LOW | MEDIUM | HIGH
     ip_address = Column(String)
+    device_info = Column(String)
+    branch_id  = Column(String)
+    metadata_  = Column("metadata", JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

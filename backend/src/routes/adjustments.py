@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -32,10 +32,12 @@ from src.routes._stock_adjust_apply import apply_stock_adjustment
 from src.routes._approval import can_direct_commit
 from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
 from src.routes._serializers import get_user_branch_ids
+from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
 
 _REF_SEQ_TAIL = re.compile(r"(\d+)$")
+_VALID_STATUSES = {status.value for status in AdjustmentStatus}
 
 
 class AdjustmentCreate(BaseModel):
@@ -105,9 +107,14 @@ def _log_adjustment_history(
     event_type: str,
     action: str,
     detail: str,
+    branch_id: Optional[str] = None,
     metadata: Optional[dict] = None,
     risk: str = "low",
 ) -> None:
+    role = None
+    if user is not None:
+        role = user.role.value if hasattr(user.role, "value") else str(user.role)
+
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         record_type="stock_adjustment",
@@ -117,12 +124,44 @@ def _log_adjustment_history(
         action=action,
         user_id=user.id if user is not None else None,
         user_name=user.name if user is not None else None,
+        user_role=role or "unknown",
         module="inventory",
+        reference_id=adjustment_number,
         ref=adjustment_number,
         detail=detail,
         risk=risk,
+        branch_id=branch_id,
         ip_address=None,
     ))
+
+
+async def _write_post_commit_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    reference_id: str,
+    detail: str,
+    user: User,
+    request: Request,
+    branch_id: Optional[str],
+    metadata: Optional[dict] = None,
+) -> None:
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    payload = build_audit_entry(
+        action=action,
+        module="Inventory",
+        reference_id=reference_id,
+        detail=detail,
+        user_id=user.id,
+        user_name=user.name,
+        user_role=role,
+        ip_address=getattr(request.state, "ip_address", None),
+        device_info=getattr(request.state, "device_info", None),
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))
+    await db.commit()
 
 
 def _max_adj_seq_from_refs(refs: list[str]) -> int:
@@ -232,6 +271,40 @@ async def _snapshot_before_qty(
         )
     )
     return int(row.scalar() or 0)
+
+
+def _raise_adjustment_integrity_error(exc: IntegrityError) -> None:
+    """Map low-level DB integrity errors to actionable API responses."""
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    constraint = (getattr(diag, "constraint_name", "") or "").lower()
+    msg = str(exc).lower()
+
+    if (
+        "uq_adj_branch_ref" in constraint
+        or "uq_adj_branch_ref" in msg
+        or ("unique" in msg and "ref_number" in msg)
+    ):
+        raise HTTPException(
+            409,
+            "Duplicate adjustment reference generated. Please retry.",
+        ) from exc
+
+    if (
+        "adjustment_requests_branch_id_fkey" in constraint
+        or ("foreign key" in msg and "branch_id" in msg)
+    ):
+        raise HTTPException(400, "Branch not found") from exc
+
+    if (
+        "adjustment_requests_item_id_fkey" in constraint
+        or ("foreign key" in msg and "item_id" in msg)
+    ):
+        raise HTTPException(400, "Item not found") from exc
+
+    raise HTTPException(
+        400,
+        "Could not create adjustment request due to invalid data",
+    ) from exc
 
 
 @router.get("/", dependencies=[Depends(require_perm("adjustments.view"))])
@@ -390,9 +463,11 @@ async def create_adjustment(
             event_type="created",
             action="Adjustment request created",
             detail=f"Created adjustment request {ref} for {data.item_name} at branch {branch_name}",
+            branch_id=data.branch_id,
             metadata={
                 "branch_id": data.branch_id,
-                "item_id": data.item_id,
+                "item_name": data.item_name,
+                "branch_name": branch_name,
                 "reason": data.reason,
             },
         )
@@ -404,19 +479,25 @@ async def create_adjustment(
                 )
                 await db.commit()
                 return {"id": rid, "ref_number": ref, **result}
+            from src.notifications.store import emit_adjustment_pending, notify_refresh
+
+            await emit_adjustment_pending(db, ar)
             await db.commit()
+            await notify_refresh()
             return {"id": rid, "ref_number": ref, "status": "pending"}
         except IntegrityError as exc:
             await db.rollback()
             last_err = exc
-            if "ref_number" not in str(exc).lower() and "unique" not in str(
-                exc
-            ).lower():
-                raise HTTPException(409, "Adjustment request already exists") from exc
+            msg = str(exc).lower()
+            if "uq_adj_branch_ref" in msg or (
+                "ref_number" in msg and "unique" in msg
+            ):
+                continue
+            _raise_adjustment_integrity_error(exc)
 
     raise HTTPException(
-        500,
-        "Could not allocate a unique adjustment reference number",
+        409,
+        "Could not allocate a unique adjustment reference number. Please retry.",
     ) from last_err
 
 
@@ -424,6 +505,7 @@ async def create_adjustment(
 async def approve_adjustment(
     request_id: str,
     body: AdjustmentApprove,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -463,14 +545,21 @@ async def approve_adjustment(
     ar.approved_by = body.approved_by
     ar.resolved_at = datetime.utcnow()
 
-    _log_adjustment_history(
+    await db.commit()
+    await _write_post_commit_audit(
         db,
+        action="Stock Adjustment",
+        reference_id=ar.ref_number,
+        detail=f"Adjustment {ar.ref_number} for {ar.item_name} approved by {body.approved_by}",
         user=user,
-        adjustment_id=request_id,
-        adjustment_number=ar.ref_number,
-        event_type="approved",
-        action="Adjustment approved",
-        detail=f"Adjustment {ar.ref_number} approved by {body.approved_by}",
+        request=request,
+        branch_id=ar.branch_id,
+        metadata={
+            "adjustment_id": request_id,
+            "adjustment_number": ar.ref_number,
+            "event_type": "approved",
+            "item_id": ar.item_id,
+        },
     )
     _log_adjustment_history(
         db,
@@ -482,9 +571,12 @@ async def approve_adjustment(
         detail=f"Adjustment {ar.ref_number} qty changed from {ar.before_qty} to {ar.new_qty}",
         metadata={"field": "qty", "old": ar.before_qty, "new": ar.new_qty},
     )
-    result = await _approve_adjustment_record(db, ar, approved_by=body.approved_by or user.name)
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.adjustment_pending:{ar.id}")
     await db.commit()
-    return result
+    await notify_refresh()
+    return {"status": "approved", "ref_number": ar.ref_number, "approved_by": body.approved_by}
 
 
 @router.post("/{request_id}/reject", dependencies=[Depends(require_perm("adjustments.approve"))])
@@ -518,9 +610,20 @@ async def reject_adjustment(
         adjustment_number=ar.ref_number,
         event_type="rejected",
         action="Adjustment rejected",
-        detail=f"Adjustment {ar.ref_number} rejected by {body.rejected_by}",
+        detail=f"Adjustment {ar.ref_number} for {ar.item_name} rejected by {body.rejected_by}",
+        branch_id=ar.branch_id,
+        metadata={
+            "item_name": ar.item_name,
+            "branch_name": ar.branch_name,
+            "reason": ar.reason,
+            "rejection_notes": body.rejection_notes,
+        },
     )
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.adjustment_pending:{ar.id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "rejected", "ref_number": ar.ref_number}
 
 
@@ -557,8 +660,13 @@ async def delete_adjustment(
         adjustment_number=ar.ref_number,
         event_type="cancelled",
         action="delete_adjustment",
-        detail=f"Adjustment {ar.ref_number} deleted",
-        metadata={"reason": "deleted"},
+        detail=f"Adjustment {ar.ref_number} for {ar.item_name} deleted",
+        branch_id=ar.branch_id,
+        metadata={
+            "item_name": ar.item_name,
+            "branch_name": ar.branch_name,
+            "reason": "deleted",
+        },
         risk="medium",
     )
     await db.delete(ar)
