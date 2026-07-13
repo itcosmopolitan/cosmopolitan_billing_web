@@ -447,7 +447,11 @@ async def create_transfer(
         )
         await db.commit()
         return {"id": tid, "ref_number": ref, **result}
+    from src.notifications.store import emit_transfer_pending, notify_refresh
+
+    await emit_transfer_pending(db, t)
     await db.commit()
+    await notify_refresh()
     return {"id": tid, "ref_number": ref, "status": "pending"}
 
 
@@ -546,7 +550,10 @@ async def approve_transfer(
         approved_by=body.approved_by or user.name,
         request=request,
     )
+    from src.notifications.store import notify_refresh
+
     await db.commit()
+    await notify_refresh()
     return result
 
 
@@ -576,6 +583,11 @@ async def _dispatch_transfer(
 
     t.status = TransferStatus.transit
     t.approved_by = approved_by
+
+    from src.notifications.store import emit_transfer_in_transit, resolve_notification
+
+    await resolve_notification(db, f"approval.transfer_pending:{transfer_id}")
+    await emit_transfer_in_transit(db, t)
 
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     for line in lines_result.scalars().all():
@@ -725,7 +737,11 @@ async def reject_transfer(
         action="Transfer rejected",
         detail=f"Transfer rejected by {body.rejected_by}",
     )
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.transfer_pending:{transfer_id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "rejected", "ref_number": t.ref_number}
 
 
@@ -759,6 +775,10 @@ async def receive_transfer(
     if t.status != TransferStatus.transit:
         raise HTTPException(400, "Transfer must be in transit to receive")
     t.status = TransferStatus.received
+
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"ops.transfer_in_transit:{transfer_id}")
 
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     for line in lines_result.scalars().all():
@@ -832,6 +852,7 @@ async def receive_transfer(
         detail=f"Transfer received by {body.received_by}",
     )
     await db.commit()
+    await notify_refresh()
     return {"status": "received", "ref_number": t.ref_number, "received_by": body.received_by}
 
 

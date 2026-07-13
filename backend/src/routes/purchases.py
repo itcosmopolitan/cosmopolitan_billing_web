@@ -2810,7 +2810,6 @@ async def create_order(
             discount=line.discount or 0,
             line_total=round(line_taxable_amount(line_net, line.tax_rate or 0, tax_mode) + line_tax, 2),
         ))
-
     _log_purchase_order_history(db, user=user,
         order_id=po.id,
         order_number=po.number,
@@ -2823,7 +2822,13 @@ async def create_order(
             "line_count": len(data.items),
         },
     )
+    if not direct:
+        from src.notifications.store import emit_po_pending, notify_refresh
+
+        await emit_po_pending(db, po)
     await db.commit()
+    if not direct:
+        await notify_refresh()
     return {"id": po.id, "number": po_num, "total": total, "status": po.status.value}
 
 
@@ -2917,7 +2922,11 @@ async def approve_order(
     po.status = PurchaseOrderStatus.confirmed
     if body.notes:
         po.notes = (po.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.purchase_order_pending:{order_id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "confirmed", "number": po.number}
 
 
@@ -2943,7 +2952,11 @@ async def reject_order(
     po.status = PurchaseOrderStatus.cancelled
     if body.notes:
         po.notes = (po.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.purchase_order_pending:{order_id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "cancelled", "number": po.number}
 
 

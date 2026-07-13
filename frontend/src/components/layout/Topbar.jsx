@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
+import { notificationsAPI } from '@/api'
+import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import * as Icon from '@/components/ui/Icons'
 
 // Topbar is intentionally chrome-only: it carries global context (active
@@ -14,14 +16,119 @@ const NOTIF_TYPE = {
   info:    { color: 'var(--blue)',  bg: 'var(--blue-bg)',  label: 'Info'     },
 }
 
+const POLL_MS = 60_000
+
+function formatRelativeTime(iso) {
+  if (!iso) return ''
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (diffSec < 60) return 'Just now'
+  const mins = Math.floor(diffSec / 60)
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs} hr ago`
+  const days = Math.floor(hrs / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}
+
 export default function Topbar() {
   const { user, activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
   const navigate = useNavigate()
 
   const [notifOpen, setNotifOpen]   = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
+  const [notifications, setNotifications] = useState([])
+  const [unreadCount, setUnreadCount] = useState(0)
   const notifRef  = useRef(null)
   const branchRef = useRef(null)
+  const tabVisibleRef = useRef(typeof document !== 'undefined' ? !document.hidden : true)
+
+  const branchParams = useMemo(
+    () => (activeBranch?.id ? { branch_id: activeBranch.id } : undefined),
+    [activeBranch?.id],
+  )
+
+  const fetchBadge = useCallback(async () => {
+    if (!user?.id || !tabVisibleRef.current) return
+    try {
+      const res = await notificationsAPI.count(branchParams)
+      setUnreadCount(res?.unread_count ?? res?.total ?? 0)
+    } catch {
+      // Silent — bell is non-critical.
+    }
+  }, [user?.id, branchParams])
+
+  const fetchNotifications = useCallback(async () => {
+    if (!user?.id) return
+    try {
+      const res = await notificationsAPI.list(branchParams)
+      const items = res?.items || []
+      setNotifications(items)
+      setUnreadCount(res?.unread_count ?? items.filter((n) => !n.read).length)
+    } catch {
+      // Silent — bell is non-critical.
+    }
+  }, [user?.id, branchParams])
+
+  useNotificationSocket(fetchBadge)
+
+  // Poll badge only while tab is visible; pause in background tabs.
+  useEffect(() => {
+    const onVisibility = () => {
+      tabVisibleRef.current = !document.hidden
+      if (tabVisibleRef.current) fetchBadge()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [fetchBadge])
+
+  useEffect(() => {
+    fetchBadge()
+    const id = setInterval(fetchBadge, POLL_MS)
+    return () => clearInterval(id)
+  }, [fetchBadge])
+
+  // Refresh full list when the panel opens.
+  useEffect(() => {
+    if (notifOpen) fetchNotifications()
+  }, [notifOpen, fetchNotifications])
+
+  const visibleNotifications = useMemo(
+    () => notifications.map((n) => ({
+      ...n,
+      type: n.severity || 'info',
+      text: n.title,
+      time: formatRelativeTime(n.created_at),
+    })),
+    [notifications],
+  )
+
+  const markRead = useCallback(async (id) => {
+    try {
+      await notificationsAPI.read(id)
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
+      setUnreadCount((c) => Math.max(0, c - 1))
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const markAllRead = useCallback(async () => {
+    try {
+      await notificationsAPI.readAll(branchParams)
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+      setUnreadCount(0)
+    } catch {
+      // ignore
+    }
+  }, [branchParams])
+
+  const handleNotifClick = (n) => {
+    if (!n.read) markRead(n.id)
+    setNotifOpen(false)
+    if (n.href) navigate(n.href)
+  }
 
   // Branch picker filtered to the user's assigned branches. Users with
   // all_branches=true or no branch_ids list (legacy super-admin records) see
@@ -42,12 +149,6 @@ export default function Topbar() {
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [notifOpen, branchOpen])
-
-  const notifications = [
-    { id: 1, type: 'warning', text: 'Basmati Rice critical stock at T.Nagar', time: '10 min ago' },
-    { id: 2, type: 'danger',  text: 'INV-2024-1840 overdue by 12 days',       time: '1 hr ago'   },
-    { id: 3, type: 'info',    text: 'TRF-041 stock transfer pending approval', time: '2 hr ago'   },
-  ]
 
   return (
     <header style={{
@@ -205,6 +306,7 @@ export default function Topbar() {
           active={notifOpen}
         >
           <Icon.Bell size={17} />
+          {unreadCount > 0 && (
           <span style={{
             position: 'absolute', top: 5, right: 5,
             minWidth: 15, height: 15, padding: '0 4px',
@@ -215,8 +317,9 @@ export default function Topbar() {
             border: '2px solid var(--bg-surface)',
             lineHeight: 1,
           }}>
-            {notifications.length}
+            {unreadCount > 99 ? '99+' : unreadCount}
           </span>
+          )}
         </IconButton>
 
         {notifOpen && (
@@ -236,7 +339,7 @@ export default function Topbar() {
             }}>
               <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>Notifications</div>
               <button
-                onClick={() => setNotifOpen(false)}
+                onClick={markAllRead}
                 style={{
                   background: 'transparent', border: 'none',
                   color: 'var(--text-muted)', fontSize: 11.5,
@@ -249,22 +352,29 @@ export default function Topbar() {
             </div>
 
             <div style={{ maxHeight: 360, overflowY: 'auto' }}>
-              {notifications.map((n) => {
+              {visibleNotifications.length === 0 && (
+                <div style={{ padding: '24px 16px', textAlign: 'center', fontSize: 12.5, color: 'var(--text-muted)' }}>
+                  No alerts for this branch
+                </div>
+              )}
+              {visibleNotifications.map((n) => {
                 const t = NOTIF_TYPE[n.type] || NOTIF_TYPE.info
                 return (
                   <button
                     key={n.id}
-                    onClick={() => setNotifOpen(false)}
+                    onClick={() => handleNotifClick(n)}
                     style={{
                       width: '100%', padding: '12px 16px',
                       display: 'flex', gap: 12,
-                      background: 'transparent', border: 'none',
+                      background: n.read ? 'transparent' : 'var(--bg-raised)',
+                      border: 'none',
                       borderBottom: '1px solid var(--border-subtle)',
                       cursor: 'pointer', textAlign: 'left',
                       transition: 'background 120ms ease',
+                      opacity: n.read ? 0.72 : 1,
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = n.read ? 'transparent' : 'var(--bg-raised)'}
                   >
                     <span style={{
                       width: 30, height: 30, borderRadius: 8,
@@ -277,10 +387,15 @@ export default function Topbar() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{
                         fontSize: 12.5, color: 'var(--text-primary)',
-                        fontWeight: 500, lineHeight: 1.45,
+                        fontWeight: n.read ? 500 : 600, lineHeight: 1.45,
                       }}>
                         {n.text}
                       </div>
+                      {n.body && (
+                        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                          {n.body}
+                        </div>
+                      )}
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 8,
                         marginTop: 4,
@@ -306,8 +421,12 @@ export default function Topbar() {
               borderTop: '1px solid var(--border-subtle)',
               textAlign: 'center',
             }}>
-              <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }}>
-                View all alerts
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: 12 }}
+                onClick={() => { setNotifOpen(false); navigate('/items') }}
+              >
+                View inventory
               </button>
             </div>
           </div>

@@ -168,6 +168,12 @@ async def adjust_stock_atomic(
         source_ref=source_ref,
         created_by=created_by,
     )
+    try:
+        from src.notifications.stock_alerts import refresh_stock_alerts_for_item
+
+        await refresh_stock_alerts_for_item(db, item_id=item_id, branch_id=branch_id)
+    except Exception:
+        pass
     return after
 
 

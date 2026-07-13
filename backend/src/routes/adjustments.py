@@ -479,7 +479,11 @@ async def create_adjustment(
                 )
                 await db.commit()
                 return {"id": rid, "ref_number": ref, **result}
+            from src.notifications.store import emit_adjustment_pending, notify_refresh
+
+            await emit_adjustment_pending(db, ar)
             await db.commit()
+            await notify_refresh()
             return {"id": rid, "ref_number": ref, "status": "pending"}
         except IntegrityError as exc:
             await db.rollback()
@@ -567,7 +571,11 @@ async def approve_adjustment(
         detail=f"Adjustment {ar.ref_number} qty changed from {ar.before_qty} to {ar.new_qty}",
         metadata={"field": "qty", "old": ar.before_qty, "new": ar.new_qty},
     )
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.adjustment_pending:{ar.id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "approved", "ref_number": ar.ref_number, "approved_by": body.approved_by}
 
 
@@ -611,7 +619,11 @@ async def reject_adjustment(
             "rejection_notes": body.rejection_notes,
         },
     )
+    from src.notifications.store import notify_refresh, resolve_notification
+
+    await resolve_notification(db, f"approval.adjustment_pending:{ar.id}")
     await db.commit()
+    await notify_refresh()
     return {"status": "rejected", "ref_number": ar.ref_number}
 
 
