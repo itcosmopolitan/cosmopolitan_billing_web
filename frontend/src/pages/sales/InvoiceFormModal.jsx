@@ -3,14 +3,15 @@
  * (quotation → invoice, sales order → invoice).
  */
 import { useState } from 'react'
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
 import { emptySaleLine } from './salesFormShared'
+import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 
 export default function InvoiceFormModal({
   open,
@@ -83,6 +84,7 @@ export default function InvoiceFormModal({
   }
 
   const disableLineDiscount = shouldDisableLineDiscount(invoiceForm.discount)
+  const hasBatchLines = invoiceForm.items.some((it) => it.batchTracking)
 
   const formBody = (
     <div className="invoice-form-shell">
@@ -104,24 +106,30 @@ export default function InvoiceFormModal({
             />
           )}
           <FormGroup label="Customer" required>
-            <CustomerPicker
-              value={invoiceForm.customerId
-                ? { id: invoiceForm.customerId, name: invoiceForm.customerName }
-                : null}
-              onPick={(c) => {
-                pif('customerId', c.id)
-                pif('customerName', c.name)
+            <AutocompleteDropdown
+              value={invoiceForm.customerId || ''}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pif('customerId', '')
+                  pif('customerName', '')
+                  return
+                }
+                pif('customerId', opt.id)
+                pif('customerName', opt.label)
               }}
-              onClear={() => {
-                pif('customerId', '')
-                pif('customerName', '')
-              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              selectedLabel={invoiceForm.customerName || undefined}
+              placeholder="Search customers…"
+              searchPlaceholder="Search customers…"
+              emptyLabel="No customers found. Add via the Customers page."
+              style={{ width: '100%' }}
             />
           </FormGroup>
           <FormGroup label="Invoice Date">
-            <input className="form-input" type="date"
+            <DatePicker
               value={invoiceForm.invoiceDate}
-              onChange={(e) => pif('invoiceDate', e.target.value)} />
+              onChange={(v) => pif('invoiceDate', v)} />
           </FormGroup>
         </div>
 
@@ -146,18 +154,15 @@ export default function InvoiceFormModal({
                 <span>Payment received?</span>
               </label>
               {invoiceForm.paymentReceived && (
-                <select
-                  className="form-input"
+                <AutocompleteDropdown
                   value={invoiceForm.paymentMethod || ''}
-                  onChange={(e) => pif('paymentMethod', e.target.value || null)}
+                  onChange={(v) => pif('paymentMethod', v || null)}
+                  options={PAYMENT_METHOD_OPTIONS}
+                  prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
+                  isSearchFieldRequired={false}
+                  placeholder="Select method…"
                   style={{ fontSize: 13 }}
-                >
-                  <option value="" disabled>Select method…</option>
-                  <option value="cash">💵 Cash</option>
-                  <option value="card">💳 Card</option>
-                  <option value="upi">📱 UPI</option>
-                  <option value="bank_transfer">🏦 Bank Transfer</option>
-                </select>
+                />
               )}
             </div>
           </FormGroup>
@@ -185,7 +190,7 @@ export default function InvoiceFormModal({
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 95, textAlign: 'right' }}>Price</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
-              <th style={{ minWidth: 160 }}>Lots</th>
+              {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
               <th style={{ width: 60 }} />
             </tr>
           </thead>
@@ -235,29 +240,38 @@ export default function InvoiceFormModal({
                       </button>
                     </div>
                   </td>
+                  {hasBatchLines && (
+                    <td>
+                      <LineBatchAllocationField
+                        itemId={it.item_id}
+                        branchId={invoiceForm.branchId}
+                        qty={it.qty}
+                        batchTracking={it.batchTracking}
+                        expiryTracking={it.expiryTracking}
+                        allocation={it.batchAllocation}
+                        allocationCustom={it.batchAllocationCustom}
+                        onChange={(alloc, custom) => patchLine(i, {
+                          batchAllocation: alloc,
+                          batchAllocationCustom: custom,
+                        })}
+                        onEdit={({ batches, expiryTracked }) => setAllocEditor({
+                          index: i,
+                          batches,
+                          expiryTracked,
+                        })}
+                      />
+                    </td>
+                  )}
                   <td>
-                    <LineBatchAllocationField
-                      itemId={it.item_id}
-                      branchId={invoiceForm.branchId}
-                      qty={it.qty}
-                      batchTracking={it.batchTracking}
-                      expiryTracking={it.expiryTracking}
-                      allocation={it.batchAllocation}
-                      allocationCustom={it.batchAllocationCustom}
-                      onChange={(alloc, custom) => patchLine(i, {
-                        batchAllocation: alloc,
-                        batchAllocationCustom: custom,
-                      })}
-                      onEdit={({ batches, expiryTracked }) => setAllocEditor({
-                        index: i,
-                        batches,
-                        expiryTracked,
-                      })}
-                    />
-                  </td>
-                  <td>
-                    <button className="btn btn-danger btn-xs"
-                      onClick={() => pif('items', invoiceForm.items.filter((_, j) => j !== i))}>Remove</button>
+                    {invoiceForm.items.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-xs"
+                        onClick={() => pif('items', invoiceForm.items.filter((_, j) => j !== i))}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </td>
                 </tr>
               )
@@ -293,7 +307,7 @@ export default function InvoiceFormModal({
         />
       )}
 
-      {invoiceForm.items.some((it) => it.batchTracking) && (
+      {hasBatchLines && (
         <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
           Batch-tracked items use FIFO/FEFO auto-split. Click <strong>✎ Edit split</strong> to pick specific lots.
         </p>
@@ -307,12 +321,10 @@ export default function InvoiceFormModal({
           onEntityDiscountChange={(v) => pif('discount', v)}
           onEntityDiscountTypeChange={(t) => pif('discountType', t)}
           lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          showWhenEmpty
+          notes={invoiceForm.notes}
+          onNotesChange={(v) => pif('notes', v)}
         />
-
-        <FormGroup label="Notes">
-          <textarea className="form-input" style={{ height: 72 }}
-            value={invoiceForm.notes} onChange={(e) => pif('notes', e.target.value)} />
-        </FormGroup>
       </div>
     </div>
   )

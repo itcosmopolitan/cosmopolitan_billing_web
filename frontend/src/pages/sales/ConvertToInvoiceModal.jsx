@@ -35,7 +35,8 @@
  *   • confirming          — disable submit while parent is awaiting.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Modal, FormGroup, AlertBar } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
+import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
@@ -377,17 +378,14 @@ export default function ConvertToInvoiceModal({
       {paymentReceived && (
         <div style={{ marginTop: 10 }}>
           <FormGroup label="Method" required>
-            <select
-              className="form-input"
+            <AutocompleteDropdown
               value={paymentMethod || ''}
-              onChange={(e) => setPaymentMethod(e.target.value || null)}
-            >
-              <option value="" disabled>Select method…</option>
-              <option value="cash">💵 Cash</option>
-              <option value="card">💳 Card</option>
-              <option value="upi">📱 UPI</option>
-              <option value="bank_transfer">🏦 Bank Transfer</option>
-            </select>
+              onChange={(v) => setPaymentMethod(v || null)}
+              options={PAYMENT_METHOD_OPTIONS}
+              prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
+              isSearchFieldRequired={false}
+              placeholder="Select method…"
+            />
           </FormGroup>
         </div>
       )}

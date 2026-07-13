@@ -21,16 +21,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { purchasesAPI, vendorsAPI } from '@/api'
+import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
-import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
+import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
-import VendorReturnFormModal from './VendorReturnFormModal'
-import VendorPaymentFormModal from './VendorPaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
@@ -114,14 +113,8 @@ export default function PurchasesPage() {
   const [paySortBy, setPaySortBy] = useState('created_at')
   const [paySortOrder, setPaySortOrder] = useState('desc')
   const [payLoading, setPayLoading] = useState(false)
-  const [showPayForm, setShowPayForm] = useState(false)
   const [payDetail, setPayDetail] = useState(null)
   const [activityTarget, setActivityTarget] = useState(null)
-
-  // Masters (only vendors — for the filter dropdown). Items + branches
-  // are no longer loaded as masters; pickers do their own paginated
-  // fetches on demand.
-  const [vendors, setVendors]   = useState([])
 
   const [listVersion, setListVersion] = useState(0)
 
@@ -244,10 +237,10 @@ export default function PurchasesPage() {
       return { label: '+ New GRN', onClick: () => navigate('/purchases/grns/new') }
     }
     if (tab === 'returns' && can('purchases.create')) {
-      return { label: '+ New Return', onClick: () => setShowNewReturn(true) }
+      return { label: '+ New Return', onClick: () => navigate('/purchases/returns/new') }
     }
     if (tab === 'payments' && can('purchases.edit')) {
-      return { label: '+ New Payment', onClick: () => setShowPayForm(true) }
+      return { label: '+ New Payment', onClick: () => navigate('/purchases/payments/new') }
     }
     return null
   }
@@ -258,7 +251,6 @@ export default function PurchasesPage() {
   const [showDetail, setShowDetail] = useState(null)
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
-  const [showNewReturn, setShowNewReturn] = useState(false)
   const [returnDetail, setReturnDetail] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -283,32 +275,6 @@ export default function PurchasesPage() {
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
-
-  const loadMasters = useCallback(async () => {
-    try {
-      const vendorsData = await fetchAllList(vendorsAPI.list).catch(() => [])
-      setVendors(vendorsData || [])
-    } catch (err) {
-      console.error('Failed to fetch masters:', err)
-    }
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!loadMasters) return
-    const key = 'vendors-masters'
-    // simple module-level in-flight guard
-    if (!window.__inFlightPurchasesMasters) window.__inFlightPurchasesMasters = {}
-    if (window.__inFlightPurchasesMasters[key]) return
-    window.__inFlightPurchasesMasters[key] = true
-    ;(async () => {
-      try {
-        await loadMasters()
-      } finally {
-        delete window.__inFlightPurchasesMasters[key]
-      }
-    })()
-  }, [loadMasters])
 
   useEffect(() => {
     setBillSkip(0)
@@ -637,6 +603,65 @@ export default function PurchasesPage() {
     })
   }
 
+  const refreshCurrentTab = () => {
+    setListVersion((v) => v + 1)
+    toast.success('List refreshed')
+  }
+
+  const exportCurrentTab = () => {
+    const stamp = new Date().toISOString().split('T')[0]
+    if (tab === 'bills') {
+      exportToCSV(bills.map((b) => ({
+        'Bill Number': b.number || b.id,
+        Vendor: b.vendorName || '—',
+        'Bill Date': b.date || '—',
+        'Due Date': b.dueDate || '—',
+        'Amount (MVR)': b.total || 0,
+        'Paid (MVR)': b.paidAmount || 0,
+        'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
+        Status: (b.status || '—').toUpperCase(),
+      })), `PurchaseBills_${stamp}.csv`)
+    } else if (tab === 'orders') {
+      exportToCSV(orders.map((o) => ({
+        'PO Number': o.number || o.id,
+        Vendor: o.vendorName || '—',
+        Date: o.date || '—',
+        'Amount (MVR)': o.total || 0,
+        Status: (o.status || '—').toUpperCase(),
+      })), `PurchaseOrders_${stamp}.csv`)
+    } else if (tab === 'grns') {
+      exportToCSV(grns.map((g) => ({
+        'GRN Number': g.number || g.id,
+        Vendor: g.vendorName || '—',
+        Date: g.date || '—',
+        'Amount (MVR)': g.total || 0,
+        Status: (g.status || '—').toUpperCase(),
+      })), `GRNs_${stamp}.csv`)
+    } else if (tab === 'returns') {
+      exportToCSV(returns.map((r) => ({
+        'Return Number': r.number || r.id,
+        Vendor: r.vendorName || '—',
+        Date: r.date || '—',
+        'Amount (MVR)': r.total || 0,
+        Status: (r.status || '—').toUpperCase(),
+      })), `VendorReturns_${stamp}.csv`)
+    } else if (tab === 'payments') {
+      exportToCSV(payments.map((p) => ({
+        'Payment Number': p.number || p.id,
+        Vendor: p.vendorName || '—',
+        Date: p.date || '—',
+        'Amount (MVR)': p.amount || 0,
+        Method: p.paymentMode || '—',
+      })), `VendorPayments_${stamp}.csv`)
+    }
+    toast.success('List exported')
+  }
+
+  const listMenuActions = buildListPageMenuActions({
+    onExport: exportCurrentTab,
+    onRefresh: refreshCurrentTab,
+  })
+
   return (
     <div className="page-container">
       <SectionHeader title="Purchase Management" subtitle="Vendor bills, purchase orders, and payments">
@@ -650,23 +675,10 @@ export default function PurchasesPage() {
             </button>
           </>
         )}
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = bills.map(b => ({
-            'Bill Number': b.number || b.id,
-            'Vendor': b.vendorName || '—',
-            'Bill Date': b.date || '—',
-            'Due Date': b.dueDate || '—',
-            'Amount (MVR)': b.total || 0,
-            'Paid (MVR)': b.paidAmount || 0,
-            'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
-            'Status': (b.status || '—').toUpperCase(),
-          }))
-          exportToCSV(exportData, `Purchases_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Purchases exported')
-        }}>↓ Export</button>
         {createAction && (
           <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
         )}
+        <PageActionsMenu actions={listMenuActions} />
       </SectionHeader>
 
       <Tabs tabs={TABS} active={tab} onChange={(id) => navigate(`/purchases?tab=${id}`)} />
@@ -676,16 +688,27 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search bill #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={billStatusF} onChange={(e) => setBillStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['paid','pending','partial','overdue','cancelled'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={billStatusF}
+              onChange={setBillStatusF}
+              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={billLoading} isEmpty={!billLoading && bills.length === 0} emptyIcon="📋" emptyTitle="No bills found">
@@ -806,16 +829,30 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','pending_approval','confirmed','partially_received','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}</option>)}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={orderStatusF}
+              onChange={setOrderStatusF}
+              options={['draft', 'pending_approval', 'confirmed', 'partially_received', 'converted', 'cancelled'].map((s) => ({
+                id: s,
+                label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+              }))}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📄" emptyTitle="No purchase orders" emptyDesc="POs you create will appear here. Convert one to a Bill to receive goods.">
@@ -969,18 +1006,27 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search GRN #, vendor, PO…" />
-            <select className="form-input" style={{ width: 140 }} value={grnStatusF} onChange={(e) => setGrnStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['received', 'cancelled'].map((s) => (
-                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={grnStatusF}
+              onChange={setGrnStatusF}
+              options={statusOptions(['received', 'cancelled'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={grnLoading} isEmpty={!grnLoading && grns.length === 0} emptyIcon="📦" emptyTitle="No goods receipts" emptyDesc="Receive stock with + New GRN, or create a bill / convert a PO (those also create a GRN).">
@@ -1060,16 +1106,27 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search return #, vendor…" />
-            <select className="form-input" style={{ width: 140 }} value={retStatusF} onChange={(e) => setRetStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','approved','void'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={retStatusF}
+              onChange={setRetStatusF}
+              options={statusOptions(['draft', 'approved', 'void'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩️" emptyTitle="No vendor returns" emptyDesc="Returns to vendors will appear here.">
@@ -1170,12 +1227,18 @@ export default function PurchasesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, vendor…" />
-            <select className="form-input" style={{ width: 180 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)}>
-              <option value="">All Vendors</option>
-              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={vendorF}
+              onChange={setVendorF}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              prependOptions={[{ id: '', label: 'All Vendors' }]}
+              isSearchFieldRequired
+              placeholder="All Vendors"
+              searchPlaceholder="Search vendors…"
+              style={{ width: 180 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💸" emptyTitle="No payments yet" emptyDesc="Record a vendor payment to see it here.">
@@ -1340,11 +1403,12 @@ export default function PurchasesPage() {
               </FormGroup>
               <FormGroup label="Payment Method" required>
                 {/* Same 4 methods as POS — see purchases.py PaymentMode Literal. */}
-                <select className="form-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>
-                  {['cash', 'card', 'upi', 'bank_transfer'].map((m) => (
-                    <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
-                  ))}
-                </select>
+                <AutocompleteDropdown
+                  value={payMode}
+                  onChange={setPayMode}
+                  options={PAYMENT_MODE_LABEL_OPTIONS}
+                  isSearchFieldRequired={false}
+                />
               </FormGroup>
               <FormGroup label="Reference / Transaction ID">
                 <input className="form-input"
@@ -1375,20 +1439,6 @@ export default function PurchasesPage() {
           </>
         )}
       </Modal>
-
-      {/* ── Return Form ───────────────────────────────────────────── */}
-      <VendorReturnFormModal
-        open={showNewReturn}
-        onClose={() => setShowNewReturn(false)}
-        onSaved={() => setListVersion((v) => v + 1)}
-      />
-
-      {/* ── Payment Form ──────────────────────────────────────────── */}
-      <VendorPaymentFormModal
-        open={showPayForm}
-        onClose={() => setShowPayForm(false)}
-        onSaved={() => setListVersion((v) => v + 1)}
-      />
 
       {/* ── Payment Detail (read-only) ────────────────────────────── */}
       <Modal

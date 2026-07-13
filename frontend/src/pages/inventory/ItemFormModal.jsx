@@ -3,7 +3,7 @@ import ItemFormFields from './ItemFormFields'
 
 /** Edit item modal — create flow lives on /item-master/new. */
 export default function ItemFormModal({
-  open, onClose, editing, editWasTracked, form, patchForm, onSave, categories, taxRates = [],
+  open, onClose, editing, editWasTracked, form, patchForm, onSave,
 }) {
   return (
     <Modal
@@ -22,8 +22,6 @@ export default function ItemFormModal({
       <ItemFormFields
         form={form}
         patchForm={patchForm}
-        categories={categories}
-        taxRates={taxRates}
         editing={editing}
         editWasTracked={editWasTracked}
       />

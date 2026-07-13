@@ -9,8 +9,8 @@ import {
 } from '@/utils/documentFormTotals'
 
 /**
- * POS-style discount + totals block for sales/purchase document forms.
- * Line-item discount OR document-level discount — not both at once.
+ * Discount + totals footer for sales/purchase document forms.
+ * Notes left, summary right. Line-item OR document-level discount — not both.
  */
 export default function DocumentTotalsStrip({
   items,
@@ -22,6 +22,11 @@ export default function DocumentTotalsStrip({
   lineGross,
   showWhenEmpty = false,
   taxPricingMode: taxModeProp,
+  notes = '',
+  onNotesChange,
+  notesLabel = 'Notes',
+  notesPlaceholder = 'Thanks for your business.',
+  notesHint = 'Will be displayed on the invoice',
 }) {
   const storeTaxMode = useAppStore((s) => s.taxPricingMode)
   const taxPricingMode = taxModeProp || storeTaxMode || 'inclusive'
@@ -31,7 +36,6 @@ export default function DocumentTotalsStrip({
   const hasLineDiscount = hasLineLevelDiscount(items)
   const hasEntityDiscount = hasEntityLevelDiscount(entityDiscount)
   const disableEntity = readOnly || hasLineDiscount
-  const disableLine = hasEntityDiscount // parent disables line inputs via this flag
 
   const totals = computeDocumentTotals(items, {
     entityDiscount,
@@ -43,122 +47,135 @@ export default function DocumentTotalsStrip({
 
   const showTax = totals.taxTotal > 0
 
-  return (
-    <div style={{ marginTop: 12, marginBottom: 16 }}>
-      {/* Document discount row — mirrors POS bill discount row */}
+  const discountInput = !readOnly && onEntityDiscountChange ? (
+    <div className="document-summary-discount-input">
+      <input
+        className="form-input"
+        type="number"
+        min="0"
+        max={entityDiscountType === '%' ? 100 : undefined}
+        step={entityDiscountType === '%' ? 0.5 : 0.01}
+        placeholder={entityDiscountType === '%' ? '0' : '0.00'}
+        value={entityDiscount || ''}
+        onChange={(e) => onEntityDiscountChange(e.target.value)}
+        disabled={disableEntity}
+      />
+      {onEntityDiscountTypeChange && (
+        <div style={discountToggleStyle}>
+          <button
+            type="button"
+            disabled={disableEntity}
+            onClick={() => onEntityDiscountTypeChange('%')}
+            style={discountToggleBtnStyle(entityDiscountType === '%', disableEntity)}
+          >
+            %
+          </button>
+          <button
+            type="button"
+            disabled={disableEntity}
+            onClick={() => onEntityDiscountTypeChange('MVR')}
+            style={{
+              ...discountToggleBtnStyle(entityDiscountType === 'MVR', disableEntity),
+              borderRight: 'none',
+            }}
+          >
+            MVR
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null
+
+  const summaryCard = (
+    <div className="document-summary-card">
+      {totals.taxMode === 'inclusive' && items.length > 0 && (
+        <div className="document-summary-card__hint">Item amounts include tax</div>
+      )}
+
       {!readOnly && onEntityDiscountChange && (
-        <div style={{ padding: '10px 0', borderTop: '1px solid var(--border-subtle)' }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              className="form-input"
-              style={{
-                flex: 1,
-                minWidth: 160,
-                padding: '7px 10px',
-                fontSize: 12,
-                opacity: disableEntity ? 0.6 : 1,
-                textAlign: 'right',
-              }}
-              type="number"
-              min="0"
-              max={entityDiscountType === '%' ? 100 : undefined}
-              step={entityDiscountType === '%' ? 0.5 : 0.01}
-              placeholder={
-                disableEntity
-                  ? 'Clear line-item discounts to use document discount'
-                  : (entityDiscountType === '%' ? 'Document discount %' : 'Document discount MVR')
-              }
-              value={entityDiscount || ''}
-              onChange={(e) => onEntityDiscountChange(e.target.value)}
-              disabled={disableEntity}
-            />
-            {onEntityDiscountTypeChange && (
-              <div style={discountToggleStyle}>
-                <button
-                  type="button"
-                  disabled={disableEntity}
-                  onClick={() => onEntityDiscountTypeChange('%')}
-                  style={discountToggleBtnStyle(entityDiscountType === '%', disableEntity)}
-                >
-                  %
-                </button>
-                <button
-                  type="button"
-                  disabled={disableEntity}
-                  onClick={() => onEntityDiscountTypeChange('MVR')}
-                  style={{
-                    ...discountToggleBtnStyle(entityDiscountType === 'MVR', disableEntity),
-                    borderRight: 'none',
-                  }}
-                >
-                  MVR
-                </button>
-              </div>
-            )}
-          </div>
-          {(hasLineDiscount || hasEntityDiscount) && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-              {hasLineDiscount
-                ? 'Using line-item discount mode.'
-                : 'Using document-level discount mode.'}
-              {disableLine && hasEntityDiscount && ' Line discounts are disabled while document discount is set.'}
-            </div>
-          )}
+        <div className="document-summary-row document-summary-row--discount">
+          <span className="document-summary-row__label">Discount</span>
+          <div className="document-summary-row__control">{discountInput}</div>
+          <span className="document-summary-row__value mono">
+            {totals.entityDiscount > 0 ? `−${fmt(totals.entityDiscount)}` : fmt(0)}
+          </span>
         </div>
       )}
 
-      {/* Totals panel — mirrors POS checkout totals */}
-      <div style={{
-        padding: '12px 16px',
-        borderTop: '1px solid var(--border-subtle)',
-        background: 'var(--bg-raised)',
-        borderRadius: 'var(--radius-sm)',
-      }}
-      >
-        {totals.taxMode === 'inclusive' && items.length > 0 && (
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-            Item amounts include tax
-          </div>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 5 }}>
-          <span>{showTax ? 'Taxable amount' : 'Subtotal'}</span>
-          <span className="mono">{fmt(showTax ? totals.netSubtotal : totals.gross)}</span>
+      {readOnly && totals.entityDiscount > 0 && (
+        <div className="document-summary-row">
+          <span className="document-summary-row__label">Discount</span>
+          <span className="document-summary-row__spacer" />
+          <span className="document-summary-row__value mono document-summary-row__value--discount">
+            −{fmt(totals.entityDiscount)}
+          </span>
         </div>
+      )}
 
-        {showTax && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 5 }}>
-            <span>Tax amount</span>
-            <span className="mono">{fmt(totals.taxTotal)}</span>
-          </div>
-        )}
-
-        {totals.lineDiscount > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--green)' }}>
-            <span>Line discount</span>
-            <span className="mono">−{fmt(totals.lineDiscount)}</span>
-          </div>
-        )}
-
-        {totals.entityDiscount > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--green)' }}>
-            <span>Document discount</span>
-            <span className="mono">−{fmt(totals.entityDiscount)}</span>
-          </div>
-        )}
-
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 18,
-          fontWeight: 700,
-          paddingTop: 10,
-          borderTop: '1px solid var(--border-default)',
-        }}
-        >
-          <span>Total</span>
-          <span className="mono" style={{ color: 'var(--accent)' }}>{fmt(totals.total)}</span>
+      {totals.lineDiscount > 0 && (
+        <div className="document-summary-row">
+          <span className="document-summary-row__label">Line discount</span>
+          <span className="document-summary-row__spacer" />
+          <span className="document-summary-row__value mono document-summary-row__value--discount">
+            −{fmt(totals.lineDiscount)}
+          </span>
         </div>
+      )}
+
+      <div className="document-summary-row">
+        <span className="document-summary-row__label">Taxable amount</span>
+        <span className="document-summary-row__spacer" />
+        <span className="document-summary-row__value mono">{fmt(totals.netSubtotal)}</span>
+      </div>
+
+      {showTax && (
+        <div className="document-summary-row">
+          <span className="document-summary-row__label">Tax amount</span>
+          <span className="document-summary-row__spacer" />
+          <span className="document-summary-row__value mono">{fmt(totals.taxTotal)}</span>
+        </div>
+      )}
+
+      {(hasLineDiscount || hasEntityDiscount) && !readOnly && (
+        <div className="document-summary-card__mode-hint">
+          {hasLineDiscount
+            ? 'Using line-item discount mode.'
+            : 'Using document-level discount mode.'}
+        </div>
+      )}
+
+      <div className="document-summary-row document-summary-row--total">
+        <span className="document-summary-row__label">Total</span>
+        <span className="document-summary-row__spacer" />
+        <span className="document-summary-row__value mono document-summary-row__value--total">
+          {fmt(totals.total)}
+        </span>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="document-totals-footer">
+      <div className="document-totals-footer__notes">
+        <label className="form-label">{notesLabel}</label>
+        {onNotesChange ? (
+          <textarea
+            className="form-input document-totals-footer__notes-input"
+            value={notes}
+            onChange={(e) => onNotesChange(e.target.value)}
+            placeholder={notesPlaceholder}
+            disabled={readOnly}
+          />
+        ) : (
+          <div className="document-totals-footer__notes-readonly">{notes || '—'}</div>
+        )}
+        {notesHint ? (
+          <div className="document-totals-footer__notes-hint">{notesHint}</div>
+        ) : null}
+      </div>
+      <div className="document-totals-footer__gap" aria-hidden="true" />
+      <div className="document-totals-footer__summary">
+        {summaryCard}
       </div>
     </div>
   )

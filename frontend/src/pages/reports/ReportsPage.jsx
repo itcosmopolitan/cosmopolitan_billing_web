@@ -1,11 +1,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { reportsAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
-import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value, 2))
@@ -413,7 +412,6 @@ const DEFAULT_CATEGORY = REPORT_CATEGORIES[0].id
 const DEFAULT_REPORT = REPORT_CATEGORIES[0].reports[0].id
 
 export default function ReportsPage() {
-  const branches = useAppStore((s) => s.branches)
   const today = new Date().toISOString().slice(0, 10)
   const defaultFrom = useMemo(() => {
     const from = new Date()
@@ -606,38 +604,52 @@ export default function ReportsPage() {
 
   return (
     <div className="page-container">
-      <SectionHeader/>
+      <SectionHeader
+        title="Reports & Analytics"
+        subtitle="Sales, purchases, inventory, tax, and operational reports"
+      >
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: exportExcel,
+          onRefresh: () => {
+            setSkip(0)
+            setRunKey(Date.now())
+            toast.success('Report refreshed')
+          },
+        })} />
+      </SectionHeader>
 
       <div style={{ marginBottom: 18, display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(160px, 1fr))', gap: 12, alignItems: 'end' }}>
           <div>
             <label className="form-label">From</label>
-            <input className="form-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <DatePicker value={dateFrom} onChange={setDateFrom} />
           </div>
           <div>
             <label className="form-label">To</label>
-            <input className="form-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker value={dateTo} onChange={setDateTo} />
           </div>
           <div>
             <label className="form-label">Branch</label>
-            <select className="form-input" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-              <option value="">All Branches</option>
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>{branch.name}</option>
-              ))}
-            </select>
+            <AutocompleteDropdown
+              value={branchId}
+              onChange={setBranchId}
+              fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+              fetchParams={{ retail_only: false }}
+              prependOptions={[{ id: '', label: 'All Branches' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Branches"
+            />
           </div>
           <div>
             <label className="form-label">Report</label>
-            <select className="form-input" value={reportType} onChange={(e) => handleReportTypeChange(e.target.value)}>
-              {reportOptions.map((report) => (
-                <option key={report.id} value={report.id}>{report.label}</option>
-              ))}
-            </select>
+            <AutocompleteDropdown
+              value={reportType}
+              onChange={handleReportTypeChange}
+              options={reportOptions.map((report) => ({ id: report.id, label: report.label }))}
+              isSearchFieldRequired={false}
+            />
           </div>
           {/* <button className="btn btn-primary" style={{ height: 40, marginTop: 6 }} onClick={handleGenerate}>Generate</button> */}
-          <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportExcel}>Export Excel</button>
-          {/* <button className="btn btn-secondary" style={{ height: 40, marginTop: 6 }} onClick={exportPdf}>Export PDF</button> */}
         </div>
         <div>
           <SearchBar value={search} onChange={setSearch} placeholder="Search invoices, products, customers…" style={{ width: '100%' }} />
@@ -696,23 +708,7 @@ export default function ReportsPage() {
       </Card>
       {/* ── STOCK MOVEMENT ──────────────────────────────────────── */}
       {tab === 'stock' && (
-        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} titleRight={
-          <button className="btn btn-secondary btn-sm" onClick={() => {
-            const exportData = stockRows.map(r => ({
-              'Item': r.item_name,
-              'SKU': r.sku,
-              'Opening Stock': r.opening,
-              'Purchased': r.purchases_in,
-              'Sold': r.sales_out,
-              'Transferred': r.transfers_net,
-              'Adjusted': r.adjustments,
-              'Closing Stock': r.closing,
-              'Variance': r.variance,
-            }))
-            exportToCSV(exportData, `Stock_Movement_${dateFrom}_to_${dateTo}.csv`)
-            toast.success('Stock movement report exported')
-          }}>↓ Export</button>
-        } bodyPadding={false}>
+        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} bodyPadding={false}>
           {stockRows.length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
               {stockData ? 'No stock movement in this period.' : 'Click Generate to load stock data.'}

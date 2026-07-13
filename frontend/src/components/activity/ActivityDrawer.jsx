@@ -1,29 +1,53 @@
 import { useEffect, useState } from 'react'
-import { Avatar, ConfirmDialog, Drawer, Spinner, Tag } from '@/components/ui'
+import { ConfirmDialog, Drawer, Spinner, Tag } from '@/components/ui'
+import * as Icon from '@/components/ui/Icons'
 import { activityAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { useAppStore } from '@/store'
 
-function formatEventTimestamp(value) {
-  if (!value) return 'Unknown'
-  let date
+function parseEventDate(value) {
+  if (!value) return null
   try {
     if (typeof value === 'string') {
-      // Treat naive ISO datetimes (no timezone) as UTC by appending 'Z'.
-      // Example: "2026-06-22T12:34:56" -> "2026-06-22T12:34:56Z"
       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)) {
-        date = new Date(value + 'Z')
-      } else {
-        date = new Date(value)
+        return new Date(value + 'Z')
       }
-    } else {
-      date = new Date(value)
+      return new Date(value)
     }
-  } catch (e) {
-    return String(value)
+    return new Date(value)
+  } catch (_) {
+    return null
   }
-  if (Number.isNaN(date.getTime())) return value
+}
+
+function formatEventTimestamp(value) {
+  const date = parseEventDate(value)
+  if (!date || Number.isNaN(date.getTime())) return value ? String(value) : 'Unknown'
   return date.toLocaleString()
+}
+
+function formatRelativeTimestamp(value) {
+  const date = parseEventDate(value)
+  if (!date || Number.isNaN(date.getTime())) return value ? String(value) : 'Unknown'
+
+  const diffMs = Date.now() - date.getTime()
+  if (diffMs < 0) return 'Just now'
+
+  const seconds = Math.floor(diffMs / 1000)
+  if (seconds < 60) return 'Just now'
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`
+
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks} week${weeks === 1 ? '' : 's'} ago`
+
+  return date.toLocaleDateString()
 }
 
 function renderHistoryDetail(detail) {
@@ -69,9 +93,31 @@ function getActorLabel(event) {
   return event.user_name ? `By ${event.user_name}` : 'By unknown user'
 }
 
-function getActorInitials(event) {
-  const name = event.kind === 'comment' ? event.author_name : event.user_name || event.author_name
-  return getInitials(name)
+function getEventTitle(event) {
+  if (event.kind === 'comment') return 'Comment'
+  return getCombinedLabel(event)
+}
+
+function getEventDetail(event) {
+  if (event.kind === 'comment') return event.body || ''
+  const body = getEventBody(event)
+  if (!body || body === 'No detail provided.') return ''
+  return body
+}
+
+function getBadgeClass(event) {
+  const key = resolveEventKey(event) || event.event_type || ''
+  if (['voided', 'cancelled', 'payment_voided', 'payment_deleted', 'rejected', 'quotation_rejected'].includes(key)) {
+    return 'activity-badge--void'
+  }
+  if (key === 'created') return 'activity-badge--created'
+  if (['confirmed', 'verified', 'approved', 'transit', 'sent', 'accepted', 'payment_recorded', 'refund_issued', 'quotation_sent'].includes(key)) {
+    return 'activity-badge--positive'
+  }
+  if (['item_changed', 'amount_changed', 'qty_changed', 'due_date_changed', 'status_changed', 'qty_received_recorded', 'stock_returned', 'expired', 'quotation_expired'].includes(key)) {
+    return 'activity-badge--warning'
+  }
+  return 'activity-badge--neutral'
 }
 
 // Single explicit mapping of generic event_type -> label + color tokens + icon
@@ -246,26 +292,21 @@ function getCategoryForEvent(event_type) {
   return null
 }
 
-function renderCategoryIcon(event) {
+function renderTimelineIcon(event, isLatest) {
   const key = resolveEventKey(event) || event.event_type || event.action
   const def = EVENT_DEFINITIONS[key]
-  const bg = def?.bg || 'var(--bg-hover)'
   const color = def?.text || 'var(--text-secondary)'
   const icon = def?.icon || '•'
   return (
-    <div style={{
-      width: 34,
-      height: 34,
-      borderRadius: '50%',
-      background: bg,
-      border: `1px solid ${color}44`,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontSize: 14,
-      color,
-      flexShrink: 0,
-    }}>{icon}</div>
+    <div
+      className={`activity-timeline__icon ${isLatest ? 'activity-timeline__icon--latest' : 'activity-timeline__icon--past'}`}
+      style={{
+        color,
+        background: isLatest ? (def?.bg || 'var(--bg-hover)') : undefined,
+      }}
+    >
+      {icon}
+    </div>
   )
 }
 
@@ -274,13 +315,11 @@ export default function ActivityDrawer({ open, onClose, recordType, recordId, ti
   const [events, setEvents] = useState([])
   const [error, setError] = useState(null)
   const [commentBody, setCommentBody] = useState('')
-  const [editingCommentId, setEditingCommentId] = useState(null)
-  const [editedCommentBody, setEditedCommentBody] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
   const can = useCan()
   const canAddComment = can('comments.add')
-  const currentUser = useAppStore((s) => s.user)
 
   useEffect(() => {
     if (!open || !recordType || !recordId) return
@@ -331,38 +370,6 @@ export default function ActivityDrawer({ open, onClose, recordType, recordId, ti
     }
   }
 
-  const handleStartEdit = (commentId, body) => {
-    setEditingCommentId(commentId)
-    setEditedCommentBody(body || '')
-    setError(null)
-  }
-
-  const handleCancelEdit = () => {
-    setEditingCommentId(null)
-    setEditedCommentBody('')
-  }
-
-  const handleSaveEdit = async () => {
-    if (!editedCommentBody.trim() || !editingCommentId) return
-    setSubmitting(true)
-    setError(null)
-    try {
-      const updated = await activityAPI.patchComment(editingCommentId, {
-        body: editedCommentBody.trim(),
-      })
-      setEvents((prev) => prev.map((event) => (event.id === editingCommentId ? updated : event)))
-      setEditingCommentId(null)
-      setEditedCommentBody('')
-    } catch (err) {
-      const detail = err?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : 'Unable to save comment')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const [deleteTarget, setDeleteTarget] = useState(null)
-
   const handleDeleteComment = async (commentId) => {
     setDeleteTarget(commentId)
   }
@@ -374,9 +381,6 @@ export default function ActivityDrawer({ open, onClose, recordType, recordId, ti
     try {
       await activityAPI.deleteComment(deleteTarget)
       setEvents((prev) => prev.filter((event) => event.id !== deleteTarget))
-      if (editingCommentId === deleteTarget) {
-        handleCancelEdit()
-      }
       setDeleteTarget(null)
     } catch (err) {
       const detail = err?.response?.data?.detail
@@ -386,60 +390,88 @@ export default function ActivityDrawer({ open, onClose, recordType, recordId, ti
     }
   }
 
-  // Composer styles: single outer wrapper (one border/background applied here)
-  const composerStyle = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    width: '100%',
-    borderRadius: 22,
-    border: '0.5px solid var(--border-default)',
-    background: 'var(--bg-strong)',
-    padding: '6px 10px',
-    boxSizing: 'border-box',
+  // Single combined chronological feed (comments + history), newest first.
+  const feedEvents = [...events].sort((a, b) => {
+    const ta = parseEventDate(a.created_at)?.getTime() ?? 0
+    const tb = parseEventDate(b.created_at)?.getTime() ?? 0
+    return tb - ta
+  })
+
+  const renderFeedIcon = (event) => {
+    if (event.kind === 'comment') {
+      return (
+        <div
+          className="activity-feed__icon"
+          style={{ color: 'var(--blue)', background: 'var(--blue-bg)' }}
+        >
+          💬
+        </div>
+      )
+    }
+    const key = resolveEventKey(event) || event.event_type || event.action
+    const def = EVENT_DEFINITIONS[key]
+    return (
+      <div
+        className="activity-feed__icon"
+        style={{ color: def?.text || 'var(--text-secondary)', background: def?.bg || 'var(--bg-hover)' }}
+      >
+        {def?.icon || '•'}
+      </div>
+    )
   }
 
-  const composerTextareaStyle = {
-    flex: 1,
-    border: 'none',
-    background: 'transparent',
-    outline: 'none',
-    color: 'var(--text-primary)',
-    resize: 'none',
-    maxHeight: 80,
-    minHeight: 28,
-    lineHeight: '18px',
-    padding: 0,
-    margin: 0,
-  }
+  const renderFeedItem = (event, index, total) => {
+    const isComment = event.kind === 'comment'
+    const name = isComment
+      ? (event.author_name || 'Unknown author')
+      : (event.user_name || 'System')
+    const badge = isComment ? null : getEventBadge(event)
+    const body = isComment ? (event.body || '') : getEventDetail(event)
 
-  const sendBtnStyle = {
-    width: 34,
-    height: 34,
-    borderRadius: '50%',
-    border: 'none',
-    background: 'var(--blue)',
-    color: '#fff',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    flexShrink: 0,
-  }
+    return (
+      <div key={event.id} className="activity-feed__item">
+        <div className="activity-feed__rail">
+          {renderFeedIcon(event)}
+          {index < total - 1 && <div className="activity-feed__line" />}
+        </div>
+        <div className="activity-feed__content">
+          <div className="activity-feed__meta">
+            <span className="activity-feed__author">{name}</span>
+            <span className="activity-feed__dot">•</span>
+            <time title={formatEventTimestamp(event.created_at)}>
+              {formatEventTimestamp(event.created_at)}
+            </time>
+            {badge && (
+              <span className={`activity-badge ${getBadgeClass(event)}`}>{badge.label}</span>
+            )}
+            {isComment && event.is_pinned && <Tag color="var(--blue)">Pinned</Tag>}
+          </div>
 
-  const clearStyle = {
-    background: 'transparent',
-    border: 'none',
-    color: 'var(--text-muted)',
-    fontSize: 12,
-    cursor: 'pointer',
-    padding: 0,
-    lineHeight: '18px',
+          {body && (
+            <div className={`activity-feed__body ${isComment ? 'activity-feed__body--comment' : ''}`}>
+              <div className="activity-feed__body-text">{body}</div>
+              {isComment && event.can_delete && (
+                <button
+                  type="button"
+                  className="activity-feed__delete"
+                  onClick={() => handleDeleteComment(event.id)}
+                  disabled={submitting}
+                  aria-label="Delete comment"
+                  title="Delete comment"
+                >
+                  <Icon.Trash2 size={16} />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    )
   }
 
   return (
-    <Drawer open={open} onClose={onClose} title={title || 'Activity'} icon="⏱">
-      <div style={{ minHeight: 260, maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
+    <Drawer open={open} onClose={onClose} title={title || 'Comments & History'} icon="⏱">
+      <div className="activity-drawer">
         {loading && (
           <div style={{ padding: 28, display: 'flex', justifyContent: 'center' }}>
             <Spinner size={28} />
@@ -452,146 +484,49 @@ export default function ActivityDrawer({ open, onClose, recordType, recordId, ti
           </div>
         )}
 
-        {!loading && !error && events.length === 0 && (
-          <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 13 }}>
-            No activity records were found for this document.
-          </div>
-        )}
-
-        {!loading && !error && events.length > 0 && (
+        {!loading && !error && (
           <>
-            <div style={{ padding: 12, borderBottom: '1px solid var(--border-default)', marginBottom: 12 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={composerStyle}>
-                  <Avatar initials={getInitials(currentUser?.name)} size={28} color={'var(--accent)'} />
-                  <textarea
-                    className="form-input"
-                    rows={1}
-                    value={commentBody}
-                    onChange={(e) => setCommentBody(e.target.value)}
-                    onInput={(e) => {
-                      const ta = e.target
-                      ta.style.height = 'auto'
-                      const h = Math.min(80, ta.scrollHeight)
-                      ta.style.height = h + 'px'
-                    }}
-                    placeholder={canAddComment ? 'Write a comment...' : 'You cannot add comments.'}
-                    disabled={!canAddComment || submitting}
-                    style={composerTextareaStyle}
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                    <button type="button" onClick={() => setCommentBody('')} disabled={submitting} style={clearStyle}>
-                      Clear
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSubmitComment}
-                      disabled={!canAddComment || submitting || !commentBody.trim()}
-                      style={sendBtnStyle}
-                      aria-label="Post comment"
-                    >
-                      ➤
-                    </button>
-                  </div>
-                </div>
-                {!canAddComment && (
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    You need comments.add permission to post.
-                  </span>
-                )}
+            <div className="activity-drawer__composer">
+              <textarea
+                className="activity-composer__field"
+                rows={3}
+                value={commentBody}
+                onChange={(e) => setCommentBody(e.target.value)}
+                placeholder={canAddComment ? 'Add a note…' : 'You cannot add comments.'}
+                disabled={!canAddComment || submitting}
+              />
+              <div className="activity-composer__footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleSubmitComment}
+                  disabled={!canAddComment || submitting || !commentBody.trim()}
+                >
+                  {submitting ? 'Adding…' : 'Add Comment'}
+                </button>
               </div>
+              {!canAddComment && (
+                <div className="activity-composer__hint">
+                  You need comments.add permission to post.
+                </div>
+              )}
             </div>
 
-            <div style={{ display: 'grid', gap: 12, padding: '8px 0' }}>
-              {events.map((event) => {
-                const badge = getEventBadge(event)
-                return (
-                  <div
-                    key={event.id}
-                    style={{
-                      padding: 14,
-                      borderRadius: 16,
-                      border: '1px solid var(--border-default)',
-                      background: 'var(--bg-strong)',
-                      boxShadow: '0 0 0 1px rgba(255,255,255,0.04)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-                      {renderCategoryIcon(event)}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 6, alignItems: 'center' }}>
-                          <div style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, minWidth: 0, flex: '1 1 0%' }}>
-                            <span style={{ display: 'inline-flex', flex: '1 1 0%', minWidth: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                              {getEventBody(event)}
-                            </span>
-                            <span className="tag" style={{ flex: '0 0 auto', display: 'inline-flex', background: badge.bg, color: badge.text, fontSize: 12, padding: '2px 8px' }}>{badge.label}</span>
-                          </div>
-                          {event.kind === 'comment' && event.is_pinned && <Tag color="var(--blue)">Pinned</Tag>}
-                        </div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 2, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                          <span>{getActorLabel(event)}</span>
-                          <span>{formatEventTimestamp(event.created_at)}</span>
-                        </div>
-                      </div>
-                    </div>
+            <div className="activity-drawer__feed">
+              <div className="activity-comments__heading">
+                <span>All Comments</span>
+                <span className="activity-comments__count">{feedEvents.length}</span>
+              </div>
 
-                    {event.kind === 'comment' && editingCommentId === event.id ? (
-                      <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
-                        <textarea
-                          className="form-input"
-                          value={editedCommentBody}
-                          onChange={(e) => setEditedCommentBody(e.target.value)}
-                          disabled={submitting}
-                          style={{ width: '100%', minHeight: 96, resize: 'vertical' }}
-                        />
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                          <button type="button" className="btn btn-secondary" onClick={handleCancelEdit} disabled={submitting}>
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            onClick={handleSaveEdit}
-                            disabled={submitting || !editedCommentBody.trim()}
-                          >
-                            {submitting ? 'Saving…' : 'Save'}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        {event.can_delete && (
-                          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12, justifyContent: 'flex-end' }}>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-xs"
-                              onClick={() => handleDeleteComment(event.id)}
-                              disabled={submitting}
-                              style={{
-                                minWidth: 40,
-                                width: 40,
-                                height: 32,
-                                borderRadius: 8,
-                                background: 'transparent',
-                                color: 'var(--text-danger)',
-                                border: '1px solid var(--border-default)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: 0,
-                              }}
-                              aria-label="Delete comment"
-                              title="Delete comment"
-                            >
-                              🗑
-                            </button>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )
-              })}
+              {feedEvents.length === 0 ? (
+                <div className="activity-comments__empty">
+                  No activity records were found for this document.
+                </div>
+              ) : (
+                <div className="activity-feed__list">
+                  {feedEvents.map((event, index) => renderFeedItem(event, index, feedEvents.length))}
+                </div>
+              )}
             </div>
           </>
         )}

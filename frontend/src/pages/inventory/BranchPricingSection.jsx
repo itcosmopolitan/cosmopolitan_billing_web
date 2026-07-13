@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
-import { AlertBar, EmptyState } from '@/components/ui'
+import { AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import { createBranchRow, retailBranches } from './itemFormShared'
 
 /**
@@ -167,23 +167,21 @@ export default function BranchPricingSection({
                 return (
                 <tr key={r._rowId}>
                   <td>
-                    <select
-                      className="form-input"
-                      style={{ minWidth: 140 }}
-                      value={r.branch_id}
-                      onChange={(e) => patchRow(r._rowId, 'branch_id', e.target.value)}
-                    >
-                      <option value="">Select branch…</option>
-                      {options.map((b) => (
-                        <option
-                          key={b.id}
-                          value={b.id}
-                          disabled={usedBranchIds.has(b.id) && b.id !== r.branch_id}
-                        >
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
+                    <AutocompleteDropdown
+                      value={r.branch_id || ''}
+                      onSelectOption={(opt) => patchRow(r._rowId, 'branch_id', opt?.id || '')}
+                      options={options.map((b) => ({
+                        id: b.id,
+                        label: b.name,
+                        disabled: usedBranchIds.has(b.id) && b.id !== r.branch_id,
+                      }))}
+                      isSearchFieldRequired={false}
+                      selectedLabel={r.branch_name || undefined}
+                      placeholder="Select branch…"
+                      searchPlaceholder="Search branches…"
+                      emptyLabel="No branches found"
+                      style={{ minWidth: 140, width: '100%' }}
+                    />
                   </td>
                   <td className="text-right">
                     <input

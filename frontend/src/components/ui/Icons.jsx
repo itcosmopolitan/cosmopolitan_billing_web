@@ -190,10 +190,25 @@ export const RefreshCw = make(
     <path d="M5.5 15A7 7 0 0 0 17.6 18.4L20 16" />
   </>
 )
+export const Trash2 = make(
+  <>
+    <path d="M3 6h18" />
+    <path d="M8 6V4h8v2" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+  </>
+)
 export const Clock = make(
   <>
     <circle cx="12" cy="12" r="9" />
     <path d="M12 7v5l3 2" />
+  </>
+)
+export const Calendar = make(
+  <>
+    <rect x="4" y="5" width="16" height="15" rx="2" />
+    <path d="M8 3v4M16 3v4M4 10h16" />
   </>
 )
 export const LogOut  = make(

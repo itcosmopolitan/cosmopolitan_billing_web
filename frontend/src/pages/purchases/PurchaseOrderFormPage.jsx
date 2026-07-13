@@ -128,7 +128,6 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
       subtitle="Purchase Orders"
       icon="📋"
       onBack={goBack}
-      backLabel="← Back to Purchase Orders"
       onSave={readOnly ? null : save}
       saveLabel={isEdit ? 'Save Changes' : 'Create PO'}
       saving={saving}

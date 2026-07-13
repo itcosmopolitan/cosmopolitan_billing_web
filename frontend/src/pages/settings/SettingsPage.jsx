@@ -4,7 +4,8 @@ import { roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel, AutocompleteDropdown } from '@/components/ui'
+import { FINANCIAL_YEAR_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
@@ -572,7 +573,7 @@ export default function SettingsPage() {
             <FormRow><FormGroup label="Phone"><input className="form-input" value={orgForm.phone} onChange={e=>pof('phone',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
             <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
-            <FormGroup label="Financial Year"><select className="form-input" value={orgForm.financial_year} onChange={e=>pof('financial_year',e.target.value)} disabled={!can('settings.edit')}><option value="Jan-Dec">Jan–Dec</option><option value="Jul-Jun">Jul–Jun</option></select></FormGroup></FormRow>
+            <FormGroup label="Financial Year"><AutocompleteDropdown value={orgForm.financial_year} onChange={(v) => pof('financial_year', v)} options={FINANCIAL_YEAR_OPTIONS} isSearchFieldRequired={false} disabled={!can('settings.edit')} /></FormGroup></FormRow>
             <FormGroup label="Inventory">
               <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
                 <input
@@ -894,10 +895,17 @@ export default function SettingsPage() {
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={userForm.name} onChange={e=>puf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Email" required><input className="form-input" type="email" value={userForm.email} onChange={e=>puf('email',e.target.value)}/></FormGroup></FormRow>
             <FormGroup label="Role" required>
-              <select className="form-input" value={userForm.role_id} onChange={e=>puf('role_id',e.target.value)}>
-                <option value="">— Select role —</option>
-                {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={userForm.role_id}
+                onChange={(v) => puf('role_id', v)}
+                options={roles.filter((r) => r.active !== false).map((r) => ({
+                  id: r.id,
+                  label: `${r.label}${r.is_system ? '' : ' (custom)'}`,
+                }))}
+                prependOptions={[{ id: '', label: '— Select role —' }]}
+                isSearchFieldRequired={false}
+                placeholder="— Select role —"
+              />
             </FormGroup>
             <FormGroup label="Branches" required>
               <MultiSelect
@@ -945,10 +953,17 @@ export default function SettingsPage() {
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={editUserForm.name} onChange={e=>peuf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Email" required><input className="form-input" type="email" value={editUserForm.email} onChange={e=>peuf('email',e.target.value)}/></FormGroup></FormRow>
             <FormGroup label="Role" required>
-              <select className="form-input" value={editUserForm.role_id} onChange={e=>peuf('role_id',e.target.value)}>
-                <option value="">— Select role —</option>
-                {roles.filter(r=>r.active!==false).map(r=><option key={r.id} value={r.id}>{r.label}{r.is_system?'':' (custom)'}</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={editUserForm.role_id}
+                onChange={(v) => peuf('role_id', v)}
+                options={roles.filter((r) => r.active !== false).map((r) => ({
+                  id: r.id,
+                  label: `${r.label}${r.is_system ? '' : ' (custom)'}`,
+                }))}
+                prependOptions={[{ id: '', label: '— Select role —' }]}
+                isSearchFieldRequired={false}
+                placeholder="— Select role —"
+              />
             </FormGroup>
             <FormGroup label="Branches" required>
               <MultiSelect

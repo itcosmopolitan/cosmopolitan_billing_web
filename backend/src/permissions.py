@@ -76,6 +76,36 @@ VENDOR_PICKER_READ: tuple[str, ...] = (
     "purchases.edit",
 )
 
+# Branch picker in customer, stock, cash, transfer, and report forms.
+BRANCH_PICKER_READ: tuple[str, ...] = (
+    "settings.view",
+    "customers.view",
+    "customers.create",
+    "customers.edit",
+    "items.view",
+    "items.adjust",
+    "item_master.view",
+    "adjustments.view",
+    "adjustments.create",
+    "cash.view",
+    "cash.entry",
+    "cash.edit",
+    "cash.close",
+    "transfers.view",
+    "transfers.create",
+    "transfers.approve",
+    "transfers.receive",
+    "reports.view",
+    "dashboard.view",
+    "pos.use",
+    "invoices.view",
+    "invoices.create",
+    "invoices.edit",
+    "purchases.view",
+    "purchases.create",
+    "purchases.edit",
+)
+
 # Organisation profile and invoice print template (POS, receipts, billing).
 BILLING_SETTINGS_READ: tuple[str, ...] = (
     "settings.view",

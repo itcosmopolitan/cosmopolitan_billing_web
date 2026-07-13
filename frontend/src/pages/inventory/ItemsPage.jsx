@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { itemsAPI, adjustmentsAPI } from '@/api'
+import { itemsAPI, adjustmentsAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
@@ -9,7 +9,8 @@ import { batchExpiryStatus } from '@/utils/batchExpiry'
 import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
   FormGroup, KPICard, EmptyState, Tag, PaginationBar,
-  SortableHeader, AlertBar, ConfirmDialog,
+  SortableHeader, AlertBar, ConfirmDialog, AutocompleteDropdown,
+  PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import BatchesModal from './BatchesModal'
@@ -72,6 +73,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [itemSortBy, setItemSortBy] = useState('name')
   const [itemSortOrder, setItemSortOrder] = useState('asc')
   const [loading, setLoading]   = useState(true)
+  const [listVersion, setListVersion] = useState(0)
   const [categories, setCategories] = useState([])
   const [confirmAction, setConfirmAction] = useState(null)
   const [actionBusy, setActionBusy] = useState(false)
@@ -109,16 +111,6 @@ export default function ItemsPage({ mode = 'branch' }) {
 
       const data = await fetchAllList(itemsAPI.list, params)
       setItems(data || [])
-      if (data && data.length > 0) {
-        const uniqueCats = [...new Set(data.map((item) => item.categoryId))]
-        const cats = uniqueCats.map((catId) => ({
-          id: catId,
-          name: data.find((item) => item.categoryId === catId)?.categoryName || catId,
-        }))
-        setCategories(cats)
-      } else {
-        setCategories([])
-      }
     } catch (err) {
       console.error('Failed to fetch items:', err)
       toast.error('Failed to load items')
@@ -126,7 +118,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     } finally {
       setLoading(false)
     }
-  }, [branchFilter, isMaster, tab])
+  }, [branchFilter, isMaster, tab, listVersion])
 
   useEffect(() => {
     fetchItems()
@@ -384,6 +376,34 @@ export default function ItemsPage({ mode = 'branch' }) {
     }
   }
 
+  const handleExport = () => {
+    exportToCSV(filtered.map((item) => ({
+      'Item Name': item.name,
+      SKU: item.sku || '—',
+      Barcode: item.barcode || '—',
+      Category: item.categoryName || '—',
+      Brand: item.brand || '—',
+      Unit: item.unit,
+      'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
+      'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
+      'GST (%)': item.tax_rate,
+      ...(isMaster
+        ? { 'Active Branches': item.available_branch_count ?? 0 }
+        : {
+          Stock: item.available_stock,
+          'Reorder Level': item.reorder_level,
+          'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
+        }),
+    })), `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
+    toast.success('Items exported')
+  }
+
+  const handleRefresh = () => {
+    setListVersion((v) => v + 1)
+    if (!isMaster) loadNearExpiry()
+    toast.success('List refreshed')
+  }
+
   if (loading) {
     return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading items...</div></div>
   }
@@ -396,34 +416,16 @@ export default function ItemsPage({ mode = 'branch' }) {
           ? 'Central product catalog — create items, defaults, and branch listing'
           : 'Branch inventory — request stock corrections (manager approval required)'}
       >
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = filtered.map(item => ({
-            'Item Name': item.name,
-            'SKU': item.sku || '—',
-            'Barcode': item.barcode || '—',
-            'Category': item.categoryName || '—',
-            'Brand': item.brand || '—',
-            'Unit': item.unit,
-            'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
-            'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
-            'GST (%)': item.tax_rate,
-            ...(isMaster
-              ? { 'Active Branches': item.available_branch_count ?? 0 }
-              : {
-                'Stock': item.available_stock,
-                'Reorder Level': item.reorder_level,
-                'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
-              }),
-          }))
-          exportToCSV(exportData, `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Items exported')
-        }}>↓ Export</button>
         {!isMaster && can('adjustments.create') && (
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Request Adjustment</button>
         )}
         {isMaster && can('item_master.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: handleExport,
+          onRefresh: handleRefresh,
+        })} />
       </SectionHeader>
 
       {/* KPIs */}
@@ -443,14 +445,30 @@ export default function ItemsPage({ mode = 'branch' }) {
       {/* Filters */}
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, SKU, barcode…" />
-        <select className="form-input" style={{ width: 180 }} value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
-          <option value="">All Categories</option>
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <AutocompleteDropdown
+          value={catFilter}
+          onChange={setCatFilter}
+          onSelectOption={(opt) => setCatFilter(opt?.id || '')}
+          fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
+          prependOptions={[{ id: '', label: 'All Categories' }]}
+          isSearchFieldRequired
+          placeholder="All Categories"
+          searchPlaceholder="Search categories…"
+          emptyLabel="No categories"
+          style={{ width: 180 }}
+        />
         {!isMaster && (
-          <select className="form-input" style={{ width: 150 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
+          <AutocompleteDropdown
+            value={branchFilter}
+            onChange={setBranchFilter}
+            onSelectOption={(opt) => opt?.id && setBranchFilter(opt.id)}
+            fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+            fetchParams={{ retail_only: true }}
+            isSearchFieldRequired={false}
+            placeholder="Select branch…"
+            emptyLabel="No branches"
+            style={{ width: 150 }}
+          />
         )}
       </div>
 
@@ -470,9 +488,13 @@ export default function ItemsPage({ mode = 'branch' }) {
           titleRight={
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Within</span>
-              <select className="form-input" style={{ width: 90, padding: '4px 8px', fontSize: 12 }} value={nearExpiryDays} onChange={(e) => setNearExpiryDays(Number(e.target.value))}>
-                {[7, 15, 30, 60, 90, 180].map((d) => <option key={d} value={d}>{d} days</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={nearExpiryDays}
+                onChange={(v) => setNearExpiryDays(Number(v))}
+                options={[7, 15, 30, 60, 90, 180].map((d) => ({ id: d, label: `${d} days` }))}
+                isSearchFieldRequired={false}
+                style={{ width: 90, fontSize: 12 }}
+              />
             </div>
           }
           bodyPadding={false}
@@ -934,9 +956,12 @@ export default function ItemsPage({ mode = 'branch' }) {
               <input className="form-input" type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} autoFocus />
             </FormGroup>
             <FormGroup label="Reason">
-              <select className="form-input" value={adjReason} onChange={(e) => setAdjReason(e.target.value)}>
-                {['Physical count', 'Damaged / Spoilage', 'Theft / Shrinkage', 'Data correction', 'Expiry removal', 'Other'].map((r) => <option key={r}>{r}</option>)}
-              </select>
+              <AutocompleteDropdown
+                value={adjReason}
+                onChange={setAdjReason}
+                options={['Physical count', 'Damaged / Spoilage', 'Theft / Shrinkage', 'Data correction', 'Expiry removal', 'Other'].map((r) => ({ id: r, label: r }))}
+                isSearchFieldRequired={false}
+              />
             </FormGroup>
             <FormGroup label="Notes">
               <textarea className="form-input" placeholder="Optional notes for the approver" style={{ height: 60 }} value={adjNotes} onChange={(e) => setAdjNotes(e.target.value)} />

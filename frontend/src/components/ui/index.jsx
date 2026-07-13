@@ -1,5 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import AutocompleteDropdown from './AutocompleteDropdown'
+import DatePicker from './DatePicker'
+export { default as AutocompleteDropdown } from './AutocompleteDropdown'
+export { default as DatePicker } from './DatePicker'
+
+function mapSelectOptions(options = []) {
+  return options.map((o) => {
+    if (typeof o === 'string' || typeof o === 'number') {
+      const v = String(o)
+      return { id: v, label: v }
+    }
+    const id = o.value ?? o.id ?? ''
+    return {
+      id: String(id),
+      label: o.label ?? String(id),
+      disabled: Boolean(o.disabled),
+    }
+  })
+}
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
 export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false, hideHeaderClose = false }) {
@@ -184,14 +203,46 @@ export function FormRow({ children, cols = 2 }) {
 }
 
 // ─── Select Input ─────────────────────────────────────────────────────────────
-export function Select({ label, value, onChange, options, required, error }) {
+/** Form-group wrapper around `AutocompleteDropdown`. Options use `{ value, label }`. */
+export function Select({
+  label,
+  value,
+  onChange,
+  options = [],
+  required,
+  error,
+  placeholder = 'Select…',
+  isSearchFieldRequired = false,
+  searchPlaceholder = 'Search…',
+  fetchUrl,
+  fetchParams,
+  disabled = false,
+  clearable = false,
+  onClear,
+  style,
+}) {
+  const dropdownOptions = mapSelectOptions(options)
+  const stringValue = value != null && value !== '' ? String(value) : ''
+  const selectedLabel = dropdownOptions.find((o) => o.id === stringValue)?.label
+
   return (
     <FormGroup label={label} required={required} error={error}>
-      <select className="form-input" value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => (
-          <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
-        ))}
-      </select>
+      <AutocompleteDropdown
+        value={stringValue}
+        onChange={onChange}
+        onSelectOption={(opt) => onChange(opt?.id ?? '')}
+        options={fetchUrl ? [] : dropdownOptions}
+        fetchUrl={fetchUrl}
+        fetchParams={fetchParams}
+        isSearchFieldRequired={isSearchFieldRequired}
+        searchPlaceholder={searchPlaceholder}
+        selectedLabel={selectedLabel}
+        placeholder={placeholder}
+        disabled={disabled}
+        clearable={clearable}
+        onClear={onClear}
+        style={{ width: '100%', ...style }}
+      />
     </FormGroup>
   )
 }
@@ -453,6 +504,7 @@ export function CopyableId({ value, label, style, iconOnly = false }) {
 export { PaginationBar } from './PaginationBar'
 export { SortableHeader } from './SortableHeader'
 export { default as RowActionsMenu } from './RowActionsMenu'
+export { default as PageActionsMenu, buildListPageMenuActions, ListPageActionButtons } from './PageActionsMenu'
 
 // ─── Segmented Toggle ────────────────────────────────────────────────────────
 // Pill-style segmented control. Use when picking between a small number of

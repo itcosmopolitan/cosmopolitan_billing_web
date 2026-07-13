@@ -154,7 +154,7 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
       <button
         ref={triggerRef}
         type="button"
-        className="btn btn-ghost btn-xs"
+        className="btn btn-secondary btn-sm page-actions-menu__trigger"
         aria-label={ariaLabel}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -164,7 +164,7 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
           if (menuBusy) return
           setOpen((v) => !v)
         }}
-        style={{ padding: '4px 8px', lineHeight: 1, opacity: menuBusy ? 0.5 : 1 }}
+        style={{ opacity: menuBusy ? 0.5 : 1 }}
       >
         {menuBusy && pendingLabel ? <MiniSpinner size={14} /> : <Icon.MoreVertical size={16} />}
       </button>

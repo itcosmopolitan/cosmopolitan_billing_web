@@ -1,19 +1,26 @@
 /**
- * Purchases > Payments > "+ New Payment" modal.
+ * Purchases > Payments > "+ New Payment" full page.
  *
- * Mirror of sales/PaymentFormModal. Overpayment routes to vendor.credit_balance;
- * credit mode settles bills from stored vendor advance.
+ * Mirrors the Invoice creation page UX (DocumentFormShell): pick the vendor
+ * first, then the vendor's outstanding bills load and the rest of the form
+ * becomes actionable. Overpayment routes to vendor.credit_balance; credit mode
+ * settles bills from stored vendor advance.
  */
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Modal, FormGroup, AlertBar, EmptyState } from '@/components/ui'
-import { purchasesAPI } from '@/api'
+import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
+import DocumentFormShell from '@/components/DocumentFormShell'
+import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI } from '@/api'
+import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
-import VendorPicker from './VendorPicker'
+import { PAYMENT_METHOD_WITH_CREDIT_OPTIONS } from '@/utils/dropdownOptions'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
-export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
+export default function VendorPaymentFormPage() {
+  const navigate = useNavigate()
+  const can = useCan()
   const [vendor, setVendor] = useState(null)
   const [bills, setBills] = useState([])
   const [loading, setLoading] = useState(false)
@@ -25,16 +32,18 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
   const [notes, setNotes] = useState('')
 
   useEffect(() => {
-    if (open) {
-      setVendor(null)
-      setBills([])
-      setCheckedIds(new Set())
-      setApplyById({})
-      setPaymentMode('bank_transfer')
-      setPaymentRef('')
-      setNotes('')
+    if (!can('purchases.edit')) {
+      navigate('/purchases?tab=payments', { replace: true })
     }
-  }, [open])
+  }, [can, navigate])
+
+  const goBack = () => navigate('/purchases?tab=payments')
+
+  const resetVendorState = () => {
+    setBills([])
+    setCheckedIds(new Set())
+    setApplyById({})
+  }
 
   useEffect(() => {
     if (!vendor?.id) return
@@ -151,8 +160,7 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
       } else {
         toast.success(`Payment ${res.number} recorded`)
       }
-      onSaved?.(res)
-      onClose()
+      goBack()
     } catch (err) {
       console.error('Failed to record payment:', err)
     } finally {
@@ -160,71 +168,88 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
     }
   }
 
-  const buttonDisabled = submitting || !vendor || totals.count === 0 || !paymentMode || creditInsufficient
+  const saveDisabled = !vendor || totals.count === 0 || !paymentMode || creditInsufficient
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      busy={submitting}
-      title="Record Vendor Payment"
+    <DocumentFormShell
+      title="Create Vendor Payment"
+      subtitle="Payments"
       icon="💸"
-      size="lg"
-      footer={
-        <>
-          <button className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={buttonDisabled}>
-            {submitting ? 'Recording…' : 'Record Payment'}
-          </button>
-        </>
-      }
+      onBack={goBack}
+      onSave={handleSubmit}
+      saveLabel="Record Payment"
+      saving={submitting}
+      saveDisabled={saveDisabled}
     >
-      <FormGroup label="Vendor" required>
-        <VendorPicker
-          value={vendor}
-          onPick={(v) => setVendor({
-            id: v.id,
-            name: v.name,
-            credit: v.credit_balance || v.creditBalance || 0,
-          })}
-          onClear={() => {
-            setVendor(null)
-            setBills([])
-            setCheckedIds(new Set())
-            setApplyById({})
-          }}
-        />
-      </FormGroup>
+      <div style={{ display: 'grid', gap: 18 }}>
+        <FormGroup label="Vendor" required>
+          <AutocompleteDropdown
+            value={vendor?.id || ''}
+            clearable
+            onClear={() => {
+              setVendor(null)
+              resetVendorState()
+            }}
+            onSelectOption={async (opt) => {
+              if (!opt) {
+                setVendor(null)
+                resetVendorState()
+                return
+              }
+              try {
+                const v = await vendorsAPI.get(opt.id)
+                setVendor({
+                  id: v.id,
+                  name: v.name,
+                  credit: Number(v.credit_balance || v.creditBalance || 0),
+                })
+              } catch {
+                setVendor({ id: opt.id, name: opt.label, credit: 0 })
+              }
+            }}
+            fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+            isSearchFieldRequired
+            selectedLabel={vendor?.name}
+            placeholder="Search vendors…"
+            searchPlaceholder="Search vendors…"
+            emptyLabel="No vendors found. Add via the Vendors page."
+            style={{ width: '100%', maxWidth: 420 }}
+          />
+        </FormGroup>
 
-      {vendor && (
-        <>
-          {loading ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              Loading bills…
-            </div>
-          ) : bills.length === 0 ? (
-            <EmptyState
-              icon="📋"
-              title="No outstanding bills"
-              desc={`${vendor.name} has no pending, partial, or overdue bills.`}
-            />
-          ) : (
-            <>
-              {(() => {
-                const totalBalance = bills.reduce((acc, b) =>
-                  acc + Math.max(0, (b.total || 0) - (b.paidAmount || 0)), 0)
-                return (
-                  <AlertBar type="blue" icon="ℹ">
-                    {bills.length} pending {bills.length === 1 ? 'bill' : 'bills'} ·{' '}
-                    <strong>{fmt(totalBalance)}</strong> outstanding
-                    {avail > 0 && (
-                      <> · <strong>{fmt(avail)}</strong> vendor credit available</>
-                    )}
-                  </AlertBar>
-                )
-              })()}
-              <div style={{ height: 14 }} />
+        {!vendor ? (
+          <EmptyState
+            icon="🏷️"
+            title="Choose a vendor to begin"
+            desc="Pick a vendor above to load their outstanding bills and record a payment."
+          />
+        ) : loading ? (
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            Loading bills…
+          </div>
+        ) : bills.length === 0 ? (
+          <EmptyState
+            icon="📋"
+            title="No outstanding bills"
+            desc={`${vendor.name} has no pending, partial, or overdue bills.`}
+          />
+        ) : (
+          <>
+            {(() => {
+              const totalBalance = bills.reduce((acc, b) =>
+                acc + Math.max(0, (b.total || 0) - (b.paidAmount || 0)), 0)
+              return (
+                <AlertBar type="blue" icon="ℹ">
+                  {bills.length} pending {bills.length === 1 ? 'bill' : 'bills'} ·{' '}
+                  <strong>{fmt(totalBalance)}</strong> outstanding
+                  {avail > 0 && (
+                    <> · <strong>{fmt(avail)}</strong> vendor credit available</>
+                  )}
+                </AlertBar>
+              )
+            })()}
 
+            <div>
               <div style={{
                 display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6,
               }}>
@@ -310,7 +335,7 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                 </tbody>
               </table>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
                 <div style={{ minWidth: 280 }}>
                   <div style={totalsRowStyle}>
                     <span style={totalsLabelStyle}>Total Selected</span>
@@ -328,51 +353,47 @@ export default function VendorPaymentFormModal({ open, onClose, onSaved }) {
                   </div>
                 </div>
               </div>
+            </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
-                <FormGroup label="Method" required>
-                  <select
-                    className="form-input"
-                    value={paymentMode}
-                    onChange={(e) => {
-                      const mode = e.target.value
-                      setPaymentMode(mode)
-                      if (mode === 'credit') seedApplyToBalances()
-                    }}
-                  >
-                    {['cash', 'card', 'upi', 'bank_transfer', 'credit'].map((m) => (
-                      <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>
-                    ))}
-                  </select>
-                </FormGroup>
-                <FormGroup label="Reference">
-                  <input
-                    className="form-input"
-                    value={paymentRef}
-                    onChange={(e) => setPaymentRef(e.target.value)}
-                    placeholder="UTR / NEFT / cheque #"
-                    disabled={creditMode}
-                  />
-                </FormGroup>
-              </div>
-              {creditMode && creditInsufficient && (
-                <AlertBar type="red" icon="⚠">
-                  Insufficient vendor credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
-                </AlertBar>
-              )}
-              <FormGroup label="Notes (optional)">
-                <textarea
-                  className="form-input"
-                  style={{ height: 60 }}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <FormGroup label="Method" required>
+                <AutocompleteDropdown
+                  value={paymentMode}
+                  onChange={setPaymentMode}
+                  onSelectOption={(opt) => {
+                    if (opt?.id === 'credit') seedApplyToBalances()
+                  }}
+                  options={PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
+                  isSearchFieldRequired={false}
                 />
               </FormGroup>
-            </>
-          )}
-        </>
-      )}
-    </Modal>
+              <FormGroup label="Reference">
+                <input
+                  className="form-input"
+                  value={paymentRef}
+                  onChange={(e) => setPaymentRef(e.target.value)}
+                  placeholder="UTR / NEFT / cheque #"
+                  disabled={creditMode}
+                />
+              </FormGroup>
+            </div>
+            {creditMode && creditInsufficient && (
+              <AlertBar type="red" icon="⚠">
+                Insufficient vendor credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
+              </AlertBar>
+            )}
+            <FormGroup label="Notes (optional)">
+              <textarea
+                className="form-input"
+                style={{ height: 60 }}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </FormGroup>
+          </>
+        )}
+      </div>
+    </DocumentFormShell>
   )
 }
 

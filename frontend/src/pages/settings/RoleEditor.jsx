@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Modal, FormGroup, FormRow, AlertBar } from '@/components/ui'
+import { Modal, FormGroup, FormRow, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { rolesAPI } from '@/api'
 
 const COLOR_OPTIONS = ['blue', 'teal', 'amber', 'green', 'coral', 'purple', 'gray']
@@ -270,9 +270,12 @@ export default function RoleEditor({
           <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
         </FormGroup>
         <FormGroup label="Color">
-          <select className="form-input" value={color} onChange={(e) => setColor(e.target.value)}>
-            {COLOR_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+          <AutocompleteDropdown
+            value={color}
+            onChange={setColor}
+            options={COLOR_OPTIONS.map((c) => ({ id: c, label: c }))}
+            isSearchFieldRequired={false}
+          />
         </FormGroup>
       </FormRow>
 

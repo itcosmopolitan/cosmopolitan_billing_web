@@ -5,12 +5,15 @@ import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
+import {
+  QUOTE_STATUS_FILTER_OPTIONS,
+  PAYMENT_MODE_LABEL_OPTIONS,
+  statusOptions,
+} from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { Receipt } from '@/components/Receipt'
-import ReturnFormModal from './ReturnFormModal'
-import PaymentFormModal from './PaymentFormModal'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
@@ -24,7 +27,7 @@ const TABS = [
   { id: 'returns',   label: 'Credit Notes / Returns' },
   // 2026-05-24: standalone Payments record — lists every payment ever
   // recorded (single-invoice via the row Pay button OR multi-invoice
-  // via + New Payment). See PaymentFormModal for the create flow.
+  // via + New Payment). See PaymentFormPage for the create flow.
   { id: 'payments',  label: 'Payments' },
 ]
 
@@ -32,9 +35,8 @@ const VALID_TABS = new Set(TABS.map((t) => t.id))
 
 // Source-of-truth for renderable payment-method values — mirrors the
 // PaymentMode Literal in backend/src/routes/sales.py AND the POS payment
-// dropdown in POSPage.jsx. The three lists (this Set, the POS <select>,
-// and the record-payment <select> below) must stay aligned — there's no
-// shared constant yet, so when you change one, change all three.
+// dropdown in POSPage.jsx. Keep these aligned with PAYMENT_METHOD_OPTIONS
+// in @/utils/dropdownOptions.js when payment methods change.
 //
 // Legacy rows in the DB may still carry "credit" / "partial" / "cheque" /
 // "" / null from pre-2026-05-23 seeds; we explicitly DON'T fabricate a
@@ -119,9 +121,6 @@ export default function SalesPage() {
   const [payLoading, setPayLoading] = useState(false)
   const [branches, setBranches] = useState([])
 
-  // New Return modal — fully self-contained (manages its own state); we
-  // only flip the open flag.
-  const [showReturnForm, setShowReturnForm] = useState(false)
   // 2026-05-25: bulk-delete state. One shared selection map keyed by
   // the tab name (so switching tabs doesn't bleed selections). The
   // modal opens against the CURRENT tab when "Delete N" is clicked.
@@ -291,8 +290,7 @@ export default function SalesPage() {
     return [`${plural('item')} removed`]
   }
 
-  // Payments tab state + new-payment modal trigger.
-  const [showPayForm, setShowPayForm] = useState(false)
+  // Payments tab state.
   const [payments, setPayments] = useState([])
   const [payTotal, setPayTotal] = useState(0)
   const [paySkip, setPaySkip] = useState(0)
@@ -674,15 +672,77 @@ export default function SalesPage() {
       return { label: '+ Create Quotation', onClick: () => navigate('/sales/quotations/new') }
     }
     if (tab === 'returns' && can('invoices.create')) {
-      return { label: '+ New Return', onClick: () => setShowReturnForm(true) }
+      return { label: '+ New Return', onClick: () => navigate('/sales/returns/new') }
     }
     if (tab === 'payments' && can('invoices.edit')) {
-      return { label: '+ New Payment', onClick: () => setShowPayForm(true) }
+      return { label: '+ New Payment', onClick: () => navigate('/sales/payments/new') }
     }
     return null
   }
 
   const createAction = tabCreateAction()
+
+  const refreshCurrentTab = () => {
+    if (tab === 'invoices') setSalesListVersion((v) => v + 1)
+    else if (tab === 'orders') setOrderListVersion((v) => v + 1)
+    else if (tab === 'quotes') setQuoteListVersion((v) => v + 1)
+    else if (tab === 'returns') setRetListVersion((v) => v + 1)
+    else if (tab === 'payments') setPayListVersion((v) => v + 1)
+    toast.success('List refreshed')
+  }
+
+  const exportCurrentTab = () => {
+    const stamp = new Date().toISOString().split('T')[0]
+    if (tab === 'invoices') {
+      exportToCSV(invoices.map((i) => ({
+        'Invoice Number': i.number || i.id,
+        Customer: i.customerName || 'Walk-in',
+        Date: i.date || '—',
+        'Amount (MVR)': i.total || 0,
+        'Paid (MVR)': i.paidAmount || 0,
+        'Outstanding (MVR)': (i.total || 0) - (i.paidAmount || 0),
+        Status: statusLabel(i.status),
+      })), `Invoices_${stamp}.csv`)
+    } else if (tab === 'orders') {
+      exportToCSV(orders.map((o) => ({
+        'Order Number': o.number || o.id,
+        Customer: o.customerName || '—',
+        Date: o.date || '—',
+        'Amount (MVR)': o.total || 0,
+        Status: statusLabel(o.status),
+      })), `SalesOrders_${stamp}.csv`)
+    } else if (tab === 'quotes') {
+      exportToCSV(quotations.map((q) => ({
+        'Quote Number': q.number || q.id,
+        Customer: q.customerName || '—',
+        Date: q.date || '—',
+        'Amount (MVR)': q.total || 0,
+        Status: statusLabel(q.status),
+      })), `Quotations_${stamp}.csv`)
+    } else if (tab === 'returns') {
+      exportToCSV(returns.map((r) => ({
+        'Return Number': r.number || r.id,
+        Customer: r.customerName || '—',
+        Date: r.date || '—',
+        'Amount (MVR)': r.total || 0,
+        Status: statusLabel(r.status),
+      })), `Returns_${stamp}.csv`)
+    } else if (tab === 'payments') {
+      exportToCSV(payments.map((p) => ({
+        'Payment Number': p.number || p.id,
+        Customer: p.customerName || '—',
+        Date: p.date || '—',
+        'Amount (MVR)': p.amount || 0,
+        Method: p.paymentMode || '—',
+      })), `Payments_${stamp}.csv`)
+    }
+    toast.success('List exported')
+  }
+
+  const listMenuActions = buildListPageMenuActions({
+    onExport: exportCurrentTab,
+    onRefresh: refreshCurrentTab,
+  })
 
   return (
     <div className="page-container">
@@ -700,22 +760,10 @@ export default function SalesPage() {
             </button>
           </>
         )}
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = invoices.map(i => ({
-            'Invoice Number': i.number || i.id,
-            'Customer': i.customerName || 'Walk-in',
-            'Date': i.date || '—',
-            'Amount (MVR)': i.total || 0,
-            'Paid (MVR)': i.paidAmount || 0,
-            'Outstanding (MVR)': (i.total || 0) - (i.paidAmount || 0),
-            'Status': statusLabel(i.status),
-          }))
-          exportToCSV(exportData, `Sales_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Sales exported')
-        }}>↓ Export</button>
         {createAction && (
           <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
         )}
+        <PageActionsMenu actions={listMenuActions} />
       </SectionHeader>
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
@@ -724,15 +772,20 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search invoice #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={invStatusF} onChange={(e) => setInvStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['paid', 'pending', 'partial', 'overdue', 'draft'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
+            <AutocompleteDropdown
+              value={invStatusF}
+              onChange={setInvStatusF}
+              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'draft'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
             {/* Branch filter removed 2026-05-23 — Topbar active-branch
                 picker scopes things globally; a second filter here was
                 duplicative. */}
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} placeholder="From" />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo}   onChange={(e) => setDateTo(e.target.value)} placeholder="To" />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} placeholder="From" />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} placeholder="To" />
           </div>
 
           <Card bodyPadding={false}>
@@ -856,12 +909,17 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search quote #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={quoteStatusF} onChange={(e) => setQuoteStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','sent','accepted','rejected','converted'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={quoteStatusF}
+              onChange={setQuoteStatusF}
+              options={QUOTE_STATUS_FILTER_OPTIONS}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={quoteLoading} isEmpty={!quoteLoading && quotations.length === 0} emptyIcon="📄" emptyTitle="No quotations" emptyDesc="No quotations created yet">
@@ -992,21 +1050,6 @@ export default function SalesPage() {
         </>
       )}
 
-      <ReturnFormModal
-        open={showReturnForm}
-        onClose={() => setShowReturnForm(false)}
-        onSaved={() => { setRetListVersion((v) => v + 1); setSalesListVersion((v) => v + 1) }}
-      />
-
-      <PaymentFormModal
-        open={showPayForm}
-        onClose={() => setShowPayForm(false)}
-        onSaved={() => {
-          setPayListVersion((v) => v + 1)
-          setSalesListVersion((v) => v + 1)   // invoices may have flipped to paid/partial
-        }}
-      />
-
       {/* 2026-05-25: bulk-delete confirm modal — single instance,
           re-rendered per tab. The submit handler routes to the right
           API based on the current tab. */}
@@ -1101,12 +1144,17 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search return #, customer…" />
-            <select className="form-input" style={{ width: 140 }} value={retStatusF} onChange={(e) => setRetStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['pending','processed','void'].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={retStatusF}
+              onChange={setRetStatusF}
+              options={statusOptions(['pending', 'processed', 'void'])}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩" emptyTitle="No credit notes" emptyDesc="Process a return to generate a credit note">
@@ -1215,8 +1263,8 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, customer…" />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💰" emptyTitle="No payments yet" emptyDesc="Record a payment to see it here.">
@@ -1313,12 +1361,20 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search SO #, customer…" />
-            <select className="form-input" style={{ width: 160 }} value={orderStatusF} onChange={(e) => setOrderStatusF(e.target.value)}>
-              <option value="">All Status</option>
-              {['draft','confirmed','partially_invoiced','converted','cancelled'].map((s) => <option key={s} value={s}>{s.replace(/_/g,' ').replace(/\b\w/g,(c)=>c.toUpperCase())}</option>)}
-            </select>
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            <input type="date" className="form-input" style={{ width: 140 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <AutocompleteDropdown
+              value={orderStatusF}
+              onChange={setOrderStatusF}
+              options={['draft', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
+                id: s,
+                label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+              }))}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 160 }}
+            />
+            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
+            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📦" emptyTitle="No sales orders" emptyDesc="Create one directly or convert a quotation.">
@@ -1559,14 +1615,19 @@ export default function SalesPage() {
                     Credit (2026-05-30) draws from the customer's stored
                     credit_balance; hidden for walk-ins, disabled when the
                     balance can't cover the invoice. */}
-                <select className="form-input" value={payMode} onChange={(e) => setPayMode(e.target.value)}>
-                  {['cash', 'card', 'upi', 'bank_transfer'].map((m) => <option key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</option>)}
-                  {!isWalkin && (
-                    <option value="credit" disabled={creditInsufficient}>
-                      CREDIT{avail != null ? ` (${fmt(avail)} available)` : ''}{creditInsufficient ? ' — insufficient' : ''}
-                    </option>
-                  )}
-                </select>
+                <AutocompleteDropdown
+                  value={payMode}
+                  onChange={setPayMode}
+                  options={[
+                    ...PAYMENT_MODE_LABEL_OPTIONS,
+                    ...(!isWalkin ? [{
+                      id: 'credit',
+                      label: `CREDIT${avail != null ? ` (${fmt(avail)} available)` : ''}${creditInsufficient ? ' — insufficient' : ''}`,
+                      disabled: creditInsufficient,
+                    }] : []),
+                  ]}
+                  isSearchFieldRequired={false}
+                />
                 {creditMode && creditInsufficient && (
                   <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
                     Available credit ({fmt(avail)}) is less than the balance ({fmt(balance)}). Pick another method.

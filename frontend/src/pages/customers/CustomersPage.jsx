@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { customersAPI, branchesAPI } from '@/api'
+import { customersAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { CUSTOMER_TYPE_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
 export default function CustomersPage() {
@@ -170,24 +171,29 @@ export default function CustomersPage() {
   return (
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
-        <button className="btn btn-secondary btn-sm" onClick={() => {
-          const exportData = customers.map(c => ({
-            'Name': c.name,
-            'Phone': c.phone || '—',
-            'Email': c.email || '—',
-            'Address': c.address || '—',
-            'GST Reg No': c.gstIn || '—',
-            'Type': (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
-            'Credit Limit (MVR)': c.creditLimit || 0,
-            'Outstanding (MVR)': c.outstanding || 0,
-            'Total Purchases (MVR)': c.totalPurchases || 0,
-          }))
-          exportToCSV(exportData, `Customers_${new Date().toISOString().split('T')[0]}.csv`)
-          toast.success('Customers exported')
-        }}>↓ Export</button>
         {can('customers.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>+ Add Customer</button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          onExport: () => {
+            exportToCSV(customers.map((c) => ({
+              Name: c.name,
+              Phone: c.phone || '—',
+              Email: c.email || '—',
+              Address: c.address || '—',
+              'GST Reg No': c.gstIn || '—',
+              Type: (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
+              'Credit Limit (MVR)': c.creditLimit || 0,
+              'Outstanding (MVR)': c.outstanding || 0,
+              'Total Purchases (MVR)': c.totalPurchases || 0,
+            })), `Customers_${new Date().toISOString().split('T')[0]}.csv`)
+            toast.success('Customers exported')
+          },
+          onRefresh: () => {
+            setListVersion((v) => v + 1)
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       <div className="grid-kpi" style={{ marginBottom: 20 }}>
@@ -199,11 +205,15 @@ export default function CustomersPage() {
 
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, phone, email…" />
-        <select className="form-input" style={{ width: 140 }} value={typeF} onChange={e => setTypeF(e.target.value)}>
-          <option value="">All Types</option>
-          <option value="retail">Retail</option>
-          <option value="wholesale">Wholesale / B2B</option>
-        </select>
+        <AutocompleteDropdown
+          value={typeF}
+          onChange={setTypeF}
+          options={CUSTOMER_TYPE_OPTIONS}
+          prependOptions={[{ id: '', label: 'All Types' }]}
+          isSearchFieldRequired={false}
+          placeholder="All Types"
+          style={{ width: 140 }}
+        />
       </div>
 
       <Card bodyPadding={false}>
@@ -287,8 +297,8 @@ export default function CustomersPage() {
         <FormGroup label="GST Reg No"><input className="form-input" value={form.gst_in} onChange={e=>pf('gst_in',e.target.value)} placeholder="For business customers" /></FormGroup></FormRow>
         <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
         <FormRow>
-          <FormGroup label="Primary Branch" required><select className="form-input" value={form.branch_id} onChange={e=>pf('branch_id',e.target.value)}><option value="">Select branch…</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></FormGroup>
-          <FormGroup label="Type"><select className="form-input" value={form.customer_type} onChange={e=>pf('customer_type',e.target.value)}><option value="retail">Retail</option><option value="wholesale">Wholesale / B2B</option></select></FormGroup>
+          <FormGroup label="Primary Branch" required><AutocompleteDropdown value={form.branch_id} onChange={(v) => pf('branch_id', v)} fetchUrl={AUTOCOMPLETE_BRANCH_URL} fetchParams={{ retail_only: true }} prependOptions={[{ id: '', label: 'Select branch…' }]} isSearchFieldRequired={false} placeholder="Select branch…" /></FormGroup>
+          <FormGroup label="Type"><AutocompleteDropdown value={form.customer_type} onChange={(v) => pf('customer_type', v)} options={CUSTOMER_TYPE_OPTIONS} isSearchFieldRequired={false} /></FormGroup>
         </FormRow>
         <FormGroup label="Credit Limit (MVR)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
       </Modal>

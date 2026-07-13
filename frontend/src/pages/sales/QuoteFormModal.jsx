@@ -16,11 +16,12 @@
  * OrderFormModal for the rationale + legacy-row handling notes — the
  * implementation here is the same.
  */
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { emptySaleLine } from './salesFormShared'
 
 export default function QuoteFormModal({
   open,
@@ -101,24 +102,30 @@ export default function QuoteFormModal({
           readOnly={readOnly}
         />
         <FormGroup label="Customer" required>
-          <CustomerPicker
+          <AutocompleteDropdown
             disabled={readOnly}
-            value={quoteForm.customerId
-              ? { id: quoteForm.customerId, name: quoteForm.customerName }
-              : null}
-            onPick={(c) => {
-              pqf('customerId', c.id)
-              pqf('customerName', c.name)
+            value={quoteForm.customerId || ''}
+            onSelectOption={(opt) => {
+              if (!opt) {
+                pqf('customerId', '')
+                pqf('customerName', '')
+                return
+              }
+              pqf('customerId', opt.id)
+              pqf('customerName', opt.label)
             }}
-            onClear={() => {
-              pqf('customerId', '')
-              pqf('customerName', '')
-            }}
+            fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+            isSearchFieldRequired
+            selectedLabel={quoteForm.customerName || undefined}
+            placeholder="Search customers…"
+            searchPlaceholder="Search customers…"
+            emptyLabel="No customers found. Add via the Customers page."
+            style={{ width: '100%' }}
           />
         </FormGroup>
         <FormGroup label="Valid Until">
-          <input className="form-input" type="date" disabled={readOnly}
-            value={quoteForm.validUntil} onChange={e => pqf('validUntil', e.target.value)} />
+          <DatePicker disabled={readOnly}
+            value={quoteForm.validUntil} onChange={(v) => pqf('validUntil', v)} />
         </FormGroup>
       </div>
       <FormGroup label="Items" required>
@@ -176,8 +183,12 @@ export default function QuoteFormModal({
                     </div>
                   </td>
                   {!readOnly && (
-                    <td><button className="btn btn-danger btn-xs"
-                      onClick={() => pqf('items', quoteForm.items.filter((_, j) => j !== i))}>Remove</button></td>
+                    <td>
+                      {quoteForm.items.length > 1 && (
+                        <button type="button" className="btn btn-danger btn-xs"
+                          onClick={() => pqf('items', quoteForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      )}
+                    </td>
                   )}
                 </tr>
               )
@@ -186,24 +197,25 @@ export default function QuoteFormModal({
         </table>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
-            onClick={() => pqf('items', [...quoteForm.items, { item_id: null, name: '', qty: 1, price: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>+ Add Item</button>
+            onClick={() => pqf('items', [...quoteForm.items, emptySaleLine()])}>+ Add Item</button>
         )}
       </FormGroup>
 
-      <DocumentTotalsStrip
-        items={quoteForm.items}
-        entityDiscount={quoteForm.discount}
-        entityDiscountType={quoteForm.discountType || '%'}
-        onEntityDiscountChange={readOnly ? undefined : (v) => pqf('discount', v)}
-        onEntityDiscountTypeChange={readOnly ? undefined : (t) => pqf('discountType', t)}
-        readOnly={readOnly}
-        lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
-      />
-
-      <FormGroup label="Notes">
-        <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-          value={quoteForm.notes} onChange={e => pqf('notes', e.target.value)} />
-      </FormGroup>
+      <div className="invoice-form-panel invoice-form-panel--muted">
+        <DocumentTotalsStrip
+          items={quoteForm.items}
+          entityDiscount={quoteForm.discount}
+          entityDiscountType={quoteForm.discountType || '%'}
+          onEntityDiscountChange={readOnly ? undefined : (v) => pqf('discount', v)}
+          onEntityDiscountTypeChange={readOnly ? undefined : (t) => pqf('discountType', t)}
+          readOnly={readOnly}
+          lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          showWhenEmpty
+          notes={quoteForm.notes}
+          onNotesChange={readOnly ? undefined : (v) => pqf('notes', v)}
+          notesHint="Will be displayed on the quotation"
+        />
+      </div>
     </>
   )
 

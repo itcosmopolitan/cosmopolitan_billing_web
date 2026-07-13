@@ -14,11 +14,12 @@
  * branch picker, matching the sales SO modal. Vendor uses the strict
  * VendorPicker; items use the shared InventoryItemPicker.
  */
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
-import VendorPicker from './VendorPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { emptyPurchaseLine } from './purchaseFormShared'
 
 // Per-row discount via lineDiscountType. Backend stores percent only.
 
@@ -105,25 +106,31 @@ export default function PurchaseOrderFormModal({
           readOnly={readOnly}
         />
         <FormGroup label="Vendor" required>
-          <VendorPicker
+          <AutocompleteDropdown
             disabled={readOnly}
-            value={poForm.vendorId
-              ? { id: poForm.vendorId, name: poForm.vendorName }
-              : null}
-            onPick={(v) => {
-              ppof('vendorId', v.id)
-              ppof('vendorName', v.name)
+            value={poForm.vendorId || ''}
+            onSelectOption={(opt) => {
+              if (!opt) {
+                ppof('vendorId', '')
+                ppof('vendorName', '')
+                return
+              }
+              ppof('vendorId', opt.id)
+              ppof('vendorName', opt.label)
             }}
-            onClear={() => {
-              ppof('vendorId', '')
-              ppof('vendorName', '')
-            }}
+            fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+            isSearchFieldRequired
+            selectedLabel={poForm.vendorName || undefined}
+            placeholder="Search vendors…"
+            searchPlaceholder="Search vendors…"
+            emptyLabel="No vendors found. Add via the Vendors page."
+            style={{ width: '100%' }}
           />
         </FormGroup>
         <FormGroup label="Expected Date">
-          <input className="form-input" type="date" disabled={readOnly}
+          <DatePicker disabled={readOnly}
             value={poForm.expectedDate}
-            onChange={e => ppof('expectedDate', e.target.value)} />
+            onChange={(v) => ppof('expectedDate', v)} />
         </FormGroup>
       </div>
 
@@ -188,8 +195,15 @@ export default function PurchaseOrderFormModal({
                   </td>
                   {!readOnly && (
                     <td>
-                      <button className="btn btn-danger btn-xs"
-                        onClick={() => ppof('items', poForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      {poForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => ppof('items', poForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -199,26 +213,27 @@ export default function PurchaseOrderFormModal({
         </table>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
-            onClick={() => ppof('items', [...poForm.items, { item_id: null, name: '', qty: 1, cost: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>
+            onClick={() => ppof('items', [...poForm.items, emptyPurchaseLine()])}>
             + Add Item
           </button>
         )}
       </FormGroup>
 
-      <DocumentTotalsStrip
-        items={poForm.items}
-        entityDiscount={poForm.discount}
-        entityDiscountType={poForm.discountType || '%'}
-        onEntityDiscountChange={readOnly ? undefined : (v) => ppof('discount', v)}
-        onEntityDiscountTypeChange={readOnly ? undefined : (t) => ppof('discountType', t)}
-        readOnly={readOnly}
-        lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
-      />
-
-      <FormGroup label="Notes">
-        <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-          value={poForm.notes} onChange={e => ppof('notes', e.target.value)} />
-      </FormGroup>
+      <div className="invoice-form-panel invoice-form-panel--muted">
+        <DocumentTotalsStrip
+          items={poForm.items}
+          entityDiscount={poForm.discount}
+          entityDiscountType={poForm.discountType || '%'}
+          onEntityDiscountChange={readOnly ? undefined : (v) => ppof('discount', v)}
+          onEntityDiscountTypeChange={readOnly ? undefined : (t) => ppof('discountType', t)}
+          readOnly={readOnly}
+          lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+          showWhenEmpty
+          notes={poForm.notes}
+          onNotesChange={readOnly ? undefined : (v) => ppof('notes', v)}
+          notesHint="Will be displayed on the purchase order"
+        />
+      </div>
     </>
   )
 

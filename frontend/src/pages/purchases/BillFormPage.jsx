@@ -213,7 +213,6 @@ export default function BillFormPage({ mode = 'bill' }) {
       icon={isGrn ? '📦' : '📋'}
       hideHeader
       onBack={goBack}
-      backLabel="← Back"
       onSave={save}
       saveLabel={isGrn ? 'Receive Stock' : 'Save Bill'}
       saving={saving}

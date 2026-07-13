@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { itemsAPI, taxRatesAPI, dashAPI } from '@/api'
+import { itemsAPI, taxRatesAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fetchAllList } from '@/utils/pagination'
+import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { Card, FormGroup, Modal } from '@/components/ui'
 import ItemFormFields from './ItemFormFields'
 import {
@@ -92,21 +92,22 @@ export default function ItemFormPage({ mode = 'create' }) {
     fetchAllList((p) => taxRatesAPI.list({ ...p, ...params }))
       .then((data) => setTaxRates(Array.isArray(data) ? data : []))
       .catch((err) => console.error('Failed to load tax rates:', err))
-  }, [form.tax_rate, isEdit, loading])
+  }, [])
 
   useEffect(() => {
+    if (isEdit) return
     let cancelled = false
-    dashAPI.filters()
+    itemsAPI.categories.list()
       .then((data) => {
         if (cancelled) return
-        setCategories(data?.categories || [])
+        setCategories(uniqueCategories(data || []))
       })
       .catch((err) => {
         console.error('Failed to load categories:', err)
         setCategories([])
       })
     return () => { cancelled = true }
-  }, [])
+  }, [isEdit])
 
   useEffect(() => {
     if (!isEdit || !itemId) return
@@ -322,9 +323,6 @@ export default function ItemFormPage({ mode = 'create' }) {
           <ItemFormFields
             form={form}
             patchForm={patchForm}
-            categories={categories}
-            unitOptions={unitOptions}
-            taxRates={taxRates}
             editing={isEdit}
             editWasTracked={editWasTracked}
             branches={branches}
@@ -389,11 +387,11 @@ export default function ItemFormPage({ mode = 'create' }) {
       </Modal>
 
       <div className="page-footer-bar" style={{ left: footerLeft }}>
-        <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>
-          ← Back to Item Master
-        </button>
         <button type="button" className="btn btn-primary" onClick={saveItem} disabled={saving}>
           {saving ? 'Saving…' : (isEdit ? 'Update Item' : 'Save Item')}
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={goBack} disabled={saving}>
+          Cancel
         </button>
       </div>
     </>

@@ -1,13 +1,11 @@
-import { FormGroup, AlertBar } from '@/components/ui'
+import { FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_CATEGORY_URL, AUTOCOMPLETE_UNIT_URL, AUTOCOMPLETE_TAX_RATE_URL } from '@/api'
 import BranchPricingSection from './BranchPricingSection'
 
 /** Shared catalog + branch fields for New / Edit Item pages. */
 export default function ItemFormFields({
   form,
   patchForm,
-  categories,
-  unitOptions = [],
-  taxRates = [],
   editing = false,
   editWasTracked = false,
   branches = [],
@@ -21,21 +19,13 @@ export default function ItemFormFields({
   categoryActionBusy = false,
 }) {
   const showBranchSection = Boolean(onBranchConfigsChange) && branchSectionMode !== 'hidden'
-  const currentRate = form.tax_rate
-  const selectableTaxes = taxRates.length > 0
-    ? taxRates.filter(
-        (t) => t.is_active !== false || String(t.rate) === String(currentRate),
-      )
-    : [{ rate: 0, is_active: true }, { rate: 8, is_active: true }]
-  const resolvedUnitOptions = unitOptions.length > 0
-    ? unitOptions
-    : ['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Pack', 'Box', 'Dozen']
   const strategyHint = !form.batch_tracking
     ? 'Untracked — set stock per branch from Items & Stock.'
     : form.expiry_tracking
       ? 'FEFO — add batches per branch from Items & Stock; nearest expiry consumed first.'
       : 'FIFO — add batches per branch from Items & Stock; oldest received consumed first.'
   const compactSelectStyle = { width: '100%', maxWidth: 420 }
+  const dropdownStyle = { flex: 1, width: '100%', minWidth: 0 }
 
   return (
     <>
@@ -56,10 +46,16 @@ export default function ItemFormFields({
             <div className="item-form-grid">
               <FormGroup label="Category">
                 <div className="item-form-select-action" style={compactSelectStyle}>
-                  <select className="form-input" value={form.categoryId} onChange={(e) => patchForm('categoryId', e.target.value)}>
-                    <option value="">Select Category</option>
-                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
+                  <AutocompleteDropdown
+                    value={form.categoryId || ''}
+                    onSelectOption={(opt) => patchForm('categoryId', opt?.id || '')}
+                    fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
+                    isSearchFieldRequired
+                    placeholder="Select category…"
+                    searchPlaceholder="Search categories…"
+                    emptyLabel="No categories found"
+                    style={dropdownStyle}
+                  />
                   {onAddCategory && (
                     <button type="button" className="btn btn-ghost btn-sm item-form-add-btn" onClick={onAddCategory} disabled={categoryActionBusy}>
                       {categoryActionBusy ? '…' : '+'}
@@ -69,9 +65,16 @@ export default function ItemFormFields({
               </FormGroup>
               <FormGroup label="Unit">
                 <div className="item-form-select-action" style={compactSelectStyle}>
-                  <select className="form-input" value={form.unit} onChange={(e) => patchForm('unit', e.target.value)}>
-                    {resolvedUnitOptions.map((u) => <option key={u}>{u}</option>)}
-                  </select>
+                  <AutocompleteDropdown
+                    value={form.unit || ''}
+                    onSelectOption={(opt) => patchForm('unit', opt?.id || '')}
+                    fetchUrl={AUTOCOMPLETE_UNIT_URL}
+                    isSearchFieldRequired
+                    placeholder="Select unit…"
+                    searchPlaceholder="Search units…"
+                    emptyLabel="No units found"
+                    style={dropdownStyle}
+                  />
                   {onAddUnit && (
                     <button type="button" className="btn btn-ghost btn-sm item-form-add-btn" onClick={onAddUnit}>
                       +
@@ -80,13 +83,16 @@ export default function ItemFormFields({
                 </div>
               </FormGroup>
               <FormGroup label="GST Rate">
-                <select className="form-input" style={compactSelectStyle} value={form.tax_rate} onChange={(e) => patchForm('tax_rate', e.target.value)}>
-                  {selectableTaxes.map((t) => (
-                    <option key={t.tax_id || t.id || t.rate} value={t.rate}>
-                      {t.rate}%{t.is_active === false ? ' (inactive)' : ''}
-                    </option>
-                  ))}
-                </select>
+                <AutocompleteDropdown
+                  value={form.tax_rate != null && form.tax_rate !== '' ? String(form.tax_rate) : ''}
+                  onSelectOption={(opt) => patchForm('tax_rate', opt?.id ?? '')}
+                  fetchUrl={AUTOCOMPLETE_TAX_RATE_URL}
+                  fetchParams={{ include_rate: form.tax_rate }}
+                  isSearchFieldRequired={false}
+                  placeholder="Select GST rate…"
+                  emptyLabel="No tax rates found"
+                  style={compactSelectStyle}
+                />
               </FormGroup>
               <FormGroup label="HSN Code"><input className="form-input" value={form.hsn_code} onChange={(e) => patchForm('hsn_code', e.target.value)} placeholder="e.g. 1006" /></FormGroup>
             </div>

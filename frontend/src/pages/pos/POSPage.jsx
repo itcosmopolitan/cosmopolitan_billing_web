@@ -8,18 +8,18 @@ import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
 import { useDisplaySocket } from '@/hooks/useDisplaySocket'
 import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/displayShared'
-import { fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
-import { PRODUCTS, CUSTOMERS } from '@/utils/seedData'
-import { Modal } from '@/components/ui'
+import { PRODUCTS } from '@/utils/seedData'
+import { Modal, AutocompleteDropdown } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
 import POSRefundModal from './POSRefundModal'
 import PanelDragHandle from './PanelDragHandle'
-import PosPaymentMethodSelect from './PosPaymentMethodSelect'
 import {
   POS_STORAGE_SPLIT,
   POS_STORAGE_LEADING,
@@ -47,8 +47,6 @@ const mapSeedProductsForBranch = (branchId) =>
     available_stock: p.stock?.[branchId] ?? 0,
   }))
 
-const mapSeedCustomersForBranch = (branchId) =>
-  (CUSTOMERS || []).filter((c) => c.active !== false && (!c.branchId || c.branchId === branchId))
 
 export default function POSPage() {
   const can = useCan()
@@ -64,7 +62,6 @@ export default function POSPage() {
   const [productTotal, setProductTotal] = useState(null)
   const [hasMoreProducts, setHasMoreProducts] = useState(false)
   const [loadingMoreProducts, setLoadingMoreProducts] = useState(false)
-  const [customers, setCustomers] = useState([])
   const [categories, setCategories] = useState([{ id: 'all', name: 'All', icon: '⊞' }])
   const [loading, setLoading] = useState(true)
   const [completing, setCompleting] = useState(false)
@@ -90,7 +87,6 @@ export default function POSPage() {
   const productPaneRef = useRef(null)
   const skipSearchEffectRef = useRef(true)
   const lastProductsBranchRef = useRef(null)
-  const lastCustomersBranchRef = useRef(null)
 
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
@@ -178,10 +174,6 @@ export default function POSPage() {
     })
   }
 
-  const fetchCustomers = async () => {
-    const customersData = await fetchAllList(customersAPI.list)
-    setCustomers(customersData || [])
-  }
 
   const resetProducts = async (branchId, resetCategories = false) => {
     try {
@@ -278,17 +270,6 @@ export default function POSPage() {
     resetProducts(branchId, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch, activeCat])
-
-  useEffect(() => {
-    const branchId = activeBranch?.id || 'br-001'
-    if (lastCustomersBranchRef.current === branchId) return
-    lastCustomersBranchRef.current = branchId
-    fetchCustomers().catch((err) => {
-      console.error('Failed to fetch customers:', err)
-      setCustomers(mapSeedCustomersForBranch(branchId))
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBranch?.id])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -436,11 +417,6 @@ export default function POSPage() {
       if (paymentReceived && paymentMethod === 'credit' && customer?.id) {
         const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
         store.setCustomer({ ...customer, credit_balance: newBalance })
-        // Also refresh the master customers list so the dropdown reflects
-        // the new balance for subsequent cart selections.
-        setCustomers((prev) => prev.map((c) =>
-          c.id === customer.id ? { ...c, credit_balance: newBalance } : c
-        ))
       }
       store.clearCart()
       // Drop cached batch lists for sold lines — quantities changed server-side.
@@ -886,15 +862,31 @@ export default function POSPage() {
               </div>
             </div>
             <div style={{ flex: 1 }} />
-            <select
-              className="form-input"
-              style={{ padding: '6px 8px', fontSize: 12, width: 148, maxWidth: '36vw' }}
+            <AutocompleteDropdown
               value={customer?.id || ''}
-              onChange={(e) => { const c = customers.find((x) => x.id === e.target.value); store.setCustomer(c || null) }}
-            >
-              <option value="">Walk-in Customer</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+              onChange={(id) => {
+                if (!id) store.setCustomer(null)
+              }}
+              onSelectOption={async (opt) => {
+                if (!opt?.id) {
+                  store.setCustomer(null)
+                  return
+                }
+                try {
+                  const c = await customersAPI.get(opt.id)
+                  store.setCustomer(c)
+                } catch {
+                  store.setCustomer({ id: opt.id, name: opt.label })
+                }
+              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
+              selectedLabel={customer?.name}
+              placeholder="Walk-in Customer"
+              searchPlaceholder="Customer…"
+              style={{ width: 148, maxWidth: '36vw' }}
+            />
             {customer?.id && Number(customer.credit_balance || 0) > 0 && (
               <span
                 style={{
@@ -1119,11 +1111,14 @@ export default function POSPage() {
                   <span>Payment received?</span>
                 </label>
                 {paymentReceived && (
-                  <PosPaymentMethodSelect
+                  <AutocompleteDropdown
                     value={paymentMethod || ''}
                     onChange={(id) => store.setPaymentMethod(id || null)}
                     options={paymentMethodOptions}
+                    isSearchFieldRequired={false}
                     placeholder="Method…"
+                    direction="up"
+                    style={{ width: 152, minWidth: 132, maxWidth: '100%' }}
                   />
                 )}
               </div>

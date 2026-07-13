@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
-import { FormGroup, Modal } from '@/components/ui'
+import { FormGroup, Modal, AutocompleteDropdown, DatePicker } from '@/components/ui'
 
 const DEFAULT_FORM = {
   type: 'out',
@@ -111,13 +111,15 @@ export default function CashEntryModal({ open, onClose, branchId, onSaved, editE
       )}
 
       <FormGroup label="Category" required>
-        <select className="form-input" value={form.category} onChange={(e) => pf('category', e.target.value)}>
-          <option value="">— Select —</option>
-          {filteredCats.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-          {filteredCats.length === 0 && (
-            <option disabled>No categories for this type</option>
-          )}
-        </select>
+        <AutocompleteDropdown
+          value={form.category}
+          onChange={(v) => pf('category', v)}
+          options={filteredCats.map((c) => ({ id: c.name, label: c.name }))}
+          prependOptions={[{ id: '', label: '— Select —' }]}
+          isSearchFieldRequired={false}
+          placeholder="— Select —"
+          emptyLabel={filteredCats.length === 0 ? 'No categories for this type' : 'No items found'}
+        />
       </FormGroup>
 
       <FormGroup label="Amount (MVR)" required>
@@ -153,11 +155,9 @@ export default function CashEntryModal({ open, onClose, branchId, onSaved, editE
 
       {!editEntry && (
         <FormGroup label="Date">
-          <input
-            className="form-input"
-            type="date"
+          <DatePicker
             value={form.date}
-            onChange={(e) => pf('date', e.target.value)}
+            onChange={(v) => pf('date', v)}
           />
         </FormGroup>
       )}

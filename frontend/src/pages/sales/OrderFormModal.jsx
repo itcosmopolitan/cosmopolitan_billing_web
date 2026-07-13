@@ -19,11 +19,12 @@
  * load fine; their picker shows the cached name as "selected" so the
  * operator can still review or × out and re-pick.
  */
-import { Modal, FormGroup } from '@/components/ui'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
-import CustomerPicker from './CustomerPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { emptySaleLine } from './salesFormShared'
 
 // Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
 
@@ -121,25 +122,31 @@ export default function OrderFormModal({
             readOnly={readOnly}
           />
           <FormGroup label="Customer" required>
-            <CustomerPicker
+            <AutocompleteDropdown
               disabled={readOnly}
-              value={orderForm.customerId
-                ? { id: orderForm.customerId, name: orderForm.customerName }
-                : null}
-              onPick={(c) => {
-                pof('customerId', c.id)
-                pof('customerName', c.name)
+              value={orderForm.customerId || ''}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pof('customerId', '')
+                  pof('customerName', '')
+                  return
+                }
+                pof('customerId', opt.id)
+                pof('customerName', opt.label)
               }}
-              onClear={() => {
-                pof('customerId', '')
-                pof('customerName', '')
-              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              selectedLabel={orderForm.customerName || undefined}
+              placeholder="Search customers…"
+              searchPlaceholder="Search customers…"
+              emptyLabel="No customers found. Add via the Customers page."
+              style={{ width: '100%' }}
             />
           </FormGroup>
           <FormGroup label="Expected Date">
-            <input className="form-input" type="date" disabled={readOnly}
+            <DatePicker disabled={readOnly}
               value={orderForm.expectedDate}
-              onChange={e => pof('expectedDate', e.target.value)} />
+              onChange={(v) => pof('expectedDate', v)} />
           </FormGroup>
         </div>
       </div>
@@ -229,8 +236,15 @@ export default function OrderFormModal({
                   </td>
                   {!readOnly && (
                     <td>
-                      <button className="btn btn-danger btn-xs"
-                        onClick={() => pof('items', orderForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      {orderForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => pof('items', orderForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -241,7 +255,7 @@ export default function OrderFormModal({
         </div>
         {!readOnly && (
           <button className="btn btn-secondary btn-sm"
-            onClick={() => pof('items', [...orderForm.items, { item_id: null, name: '', qty: 1, price: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%' }])}>
+            onClick={() => pof('items', [...orderForm.items, emptySaleLine()])}>
             + Add Item
           </button>
         )}
@@ -256,12 +270,11 @@ export default function OrderFormModal({
           onEntityDiscountTypeChange={readOnly ? undefined : (t) => pof('discountType', t)}
           readOnly={readOnly}
           lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          showWhenEmpty
+          notes={orderForm.notes}
+          onNotesChange={readOnly ? undefined : (v) => pof('notes', v)}
+          notesHint="Will be displayed on the sales order"
         />
-
-        <FormGroup label="Notes">
-          <textarea className="form-input" style={{ height: 72 }} disabled={readOnly}
-            value={orderForm.notes} onChange={e => pof('notes', e.target.value)} />
-        </FormGroup>
       </div>
     </div>
   )

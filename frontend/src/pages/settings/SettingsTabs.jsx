@@ -10,7 +10,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { settingsAPI, taxRatesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { Card, AlertBar, Tag, Modal, FormGroup, FormRow, PaginationBar, SortableHeader, Chip, RowActionsMenu } from '@/components/ui'
+import { Card, AlertBar, Tag, Modal, FormGroup, FormRow, PaginationBar, SortableHeader, Chip, RowActionsMenu, AutocompleteDropdown } from '@/components/ui'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import {
   apiToConfig,
@@ -448,10 +448,15 @@ export function NumberingTab({ refreshKey = 0 }) {
             <input className="form-input" value={form.prefix} onChange={(e) => pf('prefix', e.target.value)} />
           </FormGroup>
           <FormGroup label="Scope" required>
-            <select className="form-input" value={form.scope} onChange={(e) => pf('scope', e.target.value)}>
-              <option value="per_branch">Per Branch</option>
-              <option value="centralised">Centralised</option>
-            </select>
+            <AutocompleteDropdown
+              value={form.scope}
+              onChange={(v) => pf('scope', v)}
+              options={[
+                { id: 'per_branch', label: 'Per Branch' },
+                { id: 'centralised', label: 'Centralised' },
+              ]}
+              isSearchFieldRequired={false}
+            />
           </FormGroup>
         </FormRow>
         <FormGroup label="Format" required>
@@ -597,11 +602,17 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
         ) : (
           <>
         <FormGroup label="Header Style">
-          <select className="form-input" value={headerStyle} onChange={(e) => setHeaderStyle(e.target.value)} disabled={!canEdit}>
-            <option value="full">Full (name, address, GST, phone)</option>
-            <option value="nameonly">Name only</option>
-            <option value="logo">Logo only</option>
-          </select>
+          <AutocompleteDropdown
+            value={headerStyle}
+            onChange={setHeaderStyle}
+            options={[
+              { id: 'full', label: 'Full (name, address, GST, phone)' },
+              { id: 'nameonly', label: 'Name only' },
+              { id: 'logo', label: 'Logo only' },
+            ]}
+            isSearchFieldRequired={false}
+            disabled={!canEdit}
+          />
           <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>Company name, address, GST ID, and phone</div>
         </FormGroup>
 
@@ -627,10 +638,16 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
         </FormGroup>
 
         <FormGroup label="Tax Display Mode">
-          <select className="form-input" value={taxMode} onChange={(e) => setTaxMode(e.target.value)} disabled={!canEdit}>
-            <option value="total">Total only</option>
-            <option value="itemized">Show itemized tax breakdown</option>
-          </select>
+          <AutocompleteDropdown
+            value={taxMode}
+            onChange={setTaxMode}
+            options={[
+              { id: 'total', label: 'Total only' },
+              { id: 'itemized', label: 'Show itemized tax breakdown' },
+            ]}
+            isSearchFieldRequired={false}
+            disabled={!canEdit}
+          />
           <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>Display tax information at bottom of receipt</div>
         </FormGroup>
 

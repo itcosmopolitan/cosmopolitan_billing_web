@@ -1,4 +1,6 @@
-import { FormGroup, FormRow, AlertBar } from '@/components/ui'
+import { FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { TRANSFER_PRIORITY_OPTIONS } from '@/utils/dropdownOptions'
+import { AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import {
   allocationSum,
@@ -9,7 +11,6 @@ import {
 export default function TransferFormFields({
   form,
   patchForm,
-  branches = [],
   items = [],
   itemsLoading = false,
   batchOptions = {},
@@ -46,32 +47,31 @@ export default function TransferFormFields({
           <div className="transfer-form__section-label">Route</div>
           <div className="transfer-form__route-grid transfer-form__route-grid--inputs">
             <FormGroup label="From Branch" required>
-              <select
-                className="form-input"
-                style={compactSelectStyle}
-                value={form.from_branch_id}
-                onChange={(e) => patchForm('from_branch_id', e.target.value)}
+              <AutocompleteDropdown
+                value={form.from_branch_id || ''}
+                onSelectOption={(opt) => patchForm('from_branch_id', opt?.id || '')}
+                fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+                fetchParams={{ retail_only: true }}
+                isSearchFieldRequired={false}
+                placeholder="Select source…"
                 disabled={disabled}
-              >
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
+                style={compactSelectStyle}
+              />
             </FormGroup>
 
             <div className="transfer-form__route-arrow transfer-form__route-arrow--inputs">→</div>
 
             <FormGroup label="To Branch" required>
-              <select
-                className="form-input"
-                style={compactSelectStyle}
-                value={form.to_branch_id}
-                onChange={(e) => patchForm('to_branch_id', e.target.value)}
+              <AutocompleteDropdown
+                value={form.to_branch_id || ''}
+                onSelectOption={(opt) => patchForm('to_branch_id', opt?.id || '')}
+                fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+                fetchParams={{ retail_only: true, exclude_id: form.from_branch_id }}
+                isSearchFieldRequired={false}
+                placeholder="Select destination"
                 disabled={disabled || !form.from_branch_id}
-              >
-                <option value="">Select destination</option>
-                {branches
-                  .filter((b) => b.id !== form.from_branch_id)
-                  .map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
+                style={compactSelectStyle}
+              />
             </FormGroup>
           </div>
         </div>
@@ -80,21 +80,20 @@ export default function TransferFormFields({
           <div className="transfer-form__section-label">Dispatch</div>
           <div className="transfer-form__meta-grid">
             <FormGroup label="Priority">
-              <select
-                className="form-input"
-                value={form.priority}
-                onChange={(e) => patchForm('priority', e.target.value)}
+              <AutocompleteDropdown
+                value={form.priority || ''}
+                onSelectOption={(opt) => patchForm('priority', opt?.id || '')}
+                options={TRANSFER_PRIORITY_OPTIONS}
+                isSearchFieldRequired={false}
+                selectedLabel={form.priority || undefined}
+                placeholder="Select priority…"
                 disabled={disabled}
-              >
-                {['Normal', 'Urgent', 'Planned'].map((p) => <option key={p}>{p}</option>)}
-              </select>
+              />
             </FormGroup>
             <FormGroup label="Expected dispatch date">
-              <input
-                className="form-input"
-                type="date"
+              <DatePicker
                 value={form.expected_date}
-                onChange={(e) => patchForm('expected_date', e.target.value)}
+                onChange={(v) => patchForm('expected_date', v)}
                 disabled={disabled}
               />
             </FormGroup>

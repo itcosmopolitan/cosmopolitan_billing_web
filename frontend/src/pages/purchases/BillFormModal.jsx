@@ -20,11 +20,13 @@
  */
 import { Fragment } from 'react'
 import { todayISO } from '@/utils/batchDates'
-import { Modal, FormGroup, AlertBar } from '@/components/ui'
+import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
-import VendorPicker from './VendorPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
+import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
+import { emptyPurchaseLine } from './purchaseFormShared'
 
 export default function BillFormModal({
   open,
@@ -111,33 +113,39 @@ export default function BillFormModal({
             />
           )}
           <FormGroup label="Vendor" required>
-            <VendorPicker
-              value={billForm.vendorId
-                ? { id: billForm.vendorId, name: billForm.vendorName }
-                : null}
-              onPick={(v) => {
-                pbf('vendorId', v.id)
-                pbf('vendorName', v.name)
+            <AutocompleteDropdown
+              value={billForm.vendorId || ''}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pbf('vendorId', '')
+                  pbf('vendorName', '')
+                  return
+                }
+                pbf('vendorId', opt.id)
+                pbf('vendorName', opt.label)
               }}
-              onClear={() => {
-                pbf('vendorId', '')
-                pbf('vendorName', '')
-              }}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              isSearchFieldRequired
+              selectedLabel={billForm.vendorName || undefined}
+              placeholder="Search vendors…"
+              searchPlaceholder="Search vendors…"
+              emptyLabel="No vendors found. Add via the Vendors page."
+              style={{ width: '100%' }}
             />
           </FormGroup>
           <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
-            <input className="form-input" type="date"
+            <DatePicker
               value={billForm.billDate || todayISO()}
-              onChange={(e) => pbf('billDate', e.target.value)} />
+              onChange={(v) => pbf('billDate', v)} />
           </FormGroup>
         </div>
 
         {!isGrn && !editMode && (
           <div className="bill-form-meta-grid">
             <FormGroup label="Due Date">
-              <input className="form-input" type="date"
+              <DatePicker
                 value={billForm.dueDate || ''}
-                onChange={(e) => pbf('dueDate', e.target.value)} />
+                onChange={(v) => pbf('dueDate', v)} />
             </FormGroup>
             <FormGroup label="Payment">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -159,18 +167,15 @@ export default function BillFormModal({
                   <span>Payment paid?</span>
                 </label>
                 {billForm.paymentReceived && (
-                  <select
-                    className="form-input"
+                  <AutocompleteDropdown
                     value={billForm.paymentMethod || ''}
-                    onChange={(e) => pbf('paymentMethod', e.target.value || null)}
+                    onChange={(v) => pbf('paymentMethod', v || null)}
+                    options={PAYMENT_METHOD_OPTIONS}
+                    prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
+                    isSearchFieldRequired={false}
+                    placeholder="Select method…"
                     style={{ fontSize: 13 }}
-                  >
-                    <option value="" disabled>Select method…</option>
-                    <option value="cash">💵 Cash</option>
-                    <option value="card">💳 Card</option>
-                    <option value="upi">📱 UPI</option>
-                    <option value="bank_transfer">🏦 Bank Transfer</option>
-                  </select>
+                  />
                 )}
               </div>
             </FormGroup>
@@ -181,9 +186,9 @@ export default function BillFormModal({
       {editMode && (
         <div style={{ marginBottom: 16 }}>
           <FormGroup label="Due Date">
-            <input className="form-input" type="date"
+            <DatePicker
               value={billForm.dueDate || ''}
-              onChange={(e) => pbf('dueDate', e.target.value)} />
+              onChange={(v) => pbf('dueDate', v)} />
           </FormGroup>
         </div>
       )}
@@ -268,8 +273,15 @@ export default function BillFormModal({
                       </div>
                     </td>
                     <td>
-                      <button className="btn btn-danger btn-xs"
-                        onClick={() => pbf('items', billForm.items.filter((_, j) => j !== i))}>Remove</button>
+                      {billForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => pbf('items', billForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                   </tr>
                   {it.batchTracking && (
@@ -291,7 +303,7 @@ export default function BillFormModal({
                           </label>
                           <label style={{ ...batchFieldStyle, flex: '0 0 145px' }}>
                             <span style={batchLabelStyle}>Mfg date</span>
-                            <input className="form-input" type="date"
+                            <DatePicker
                               value={it.mfgDate || ''}
                               onChange={(e) => { const n = [...billForm.items]; n[i].mfgDate = e.target.value; pbf('items', n) }}
                               style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
@@ -300,9 +312,9 @@ export default function BillFormModal({
                             <span style={batchLabelStyle}>
                               Expiry date{it.expiryTracking && <span style={{ color: 'var(--red)' }}> *</span>}
                             </span>
-                            <input className="form-input" type="date"
+                            <DatePicker
                               value={it.expiryDate || ''}
-                              onChange={(e) => { const n = [...billForm.items]; n[i].expiryDate = e.target.value; pbf('items', n) }}
+                              onChange={(v) => { const n = [...billForm.items]; n[i].expiryDate = v; pbf('items', n) }}
                               style={{ width: '100%', fontSize: 12, padding: '6px 8px' }} />
                           </label>
                         </div>
@@ -316,7 +328,7 @@ export default function BillFormModal({
         </table>
         </div>
         <button className="btn btn-secondary btn-sm"
-          onClick={() => pbf('items', [...billForm.items, { item_id: null, name: '', qty: 1, cost: 0, taxRate: 0, lineDiscount: 0, lineDiscountType: '%', batchTracking: false, expiryTracking: false, batchNumber: '', mfgDate: '', expiryDate: '' }])}>
+          onClick={() => pbf('items', [...billForm.items, emptyPurchaseLine()])}>
           + Add Item
         </button>
         </FormGroup>
@@ -330,13 +342,11 @@ export default function BillFormModal({
           onEntityDiscountChange={(v) => pbf('discount', v)}
           onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
           lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+          showWhenEmpty
+          notes={billForm.notes || ''}
+          onNotesChange={(v) => pbf('notes', v)}
+          notesHint={isGrn ? 'Will be displayed on the goods receipt' : 'Will be displayed on the bill'}
         />
-
-        <FormGroup label="Notes">
-          <textarea className="form-input" style={{ height: 72 }}
-            value={billForm.notes || ''}
-            onChange={(e) => pbf('notes', e.target.value)} />
-        </FormGroup>
       </div>
     </div>
   )

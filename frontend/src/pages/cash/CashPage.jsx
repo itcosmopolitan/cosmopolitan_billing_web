@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { cashAPI } from '@/api'
+import { cashAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
-import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs } from '@/components/ui'
+import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
@@ -123,22 +123,18 @@ export default function CashPage() {
         title="Cash Control"
         subtitle="Daily petty cash register, entries, and day-close reconciliation"
       >
-        <select
-          className="form-input"
-          style={{ width: 160 }}
+        <AutocompleteDropdown
           value={branchId}
-          onChange={(e) => setBranchId(e.target.value)}
-        >
-          {branches.filter((b) => (b.code || '').toUpperCase() !== 'WH').map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </select>
+          onChange={setBranchId}
+          fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+          fetchParams={{ retail_only: true }}
+          isSearchFieldRequired={false}
+          style={{ width: 160 }}
+        />
 
-        <input
-          className="form-input"
-          type="date"
+        <DatePicker
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={setDate}
           style={{ width: 148 }}
         />
 
@@ -168,6 +164,13 @@ export default function CashPage() {
             Close Day
           </button>
         )}
+        <PageActionsMenu actions={buildListPageMenuActions({
+          hideExport: true,
+          onRefresh: () => {
+            refresh()
+            toast.success('List refreshed')
+          },
+        })} />
       </SectionHeader>
 
       {/* ── Variance alert ── */}
