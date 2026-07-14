@@ -16,7 +16,7 @@ from src.models import AuditLog, Branch, CashCategory, CashDayClose, CashEntry, 
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
 from src.permissions import CASH_CATEGORIES_READ
-from src.security import enforce_branch_access, current_user, require_perm
+from src.security import enforce_branch_access, current_user, require_perm, get_allowed_branch_ids
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -160,6 +160,29 @@ async def _next_entry_number(db: AsyncSession, branch_id: str, date: str) -> str
     )
     seq = (result.scalar() or 0) + 1
     return f"{prefix}{seq}"
+
+
+async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optional[str]) -> Optional[list[str]]:
+    """Return allowed branch ids list for the user or None when user has all branches.
+
+    Mirrors the pattern used in dashboard/reports: returns `None` when the
+    user has access to all branches, an empty list when the user has no
+    branch access, or a list of branch ids. Callers that accept an explicit
+    `branch_id` should validate it against this list (403 on mismatch).
+    """
+    if not getattr(user, "id", None):
+        try:
+            user = await current_user(authorization=None, db=db)
+        except RuntimeError:
+            return None
+    if getattr(user, "all_branches", False):
+        return None
+    branch_ids = await get_allowed_branch_ids(user, db)
+    if branch_ids:
+        return branch_ids
+    if getattr(user, "branch_id", None):
+        return [user.branch_id]
+    return []
 
 
 def _build_summary(entries: list, opening: float, close: Optional[CashDayClose]) -> dict:
@@ -316,7 +339,10 @@ async def get_entries(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
+    # Validate supplied branch against user's scope
+    await _resolve_branch_scope(current_user, db, branch_id)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     q = select(CashEntry).where(CashEntry.branch_id == branch_id, CashEntry.date == target_date)
     cq = select(func.count(CashEntry.id)).where(CashEntry.branch_id == branch_id, CashEntry.date == target_date)
@@ -356,6 +382,8 @@ async def add_entry(
     current_user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Ensure supplied branch is in user's allowed branches
+    await _resolve_branch_scope(current_user, db, branch_id)
     target_date = data.date or datetime.now().strftime("%Y-%m-%d")
     close = await _get_day_close(db, branch_id, target_date)
     if close and close.is_locked:
@@ -407,7 +435,9 @@ async def update_entry(
     data: CashEntryUpdate,
     branch_id: str = Depends(enforce_branch_access),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     entry = (await db.execute(select(CashEntry).where(CashEntry.id == entry_id, CashEntry.branch_id == branch_id))).scalar_one_or_none()
     if not entry:
         raise HTTPException(404, "Entry not found")
@@ -435,7 +465,9 @@ async def delete_entry(
     entry_id: str,
     branch_id: str = Depends(enforce_branch_access),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     entry = (await db.execute(select(CashEntry).where(CashEntry.id == entry_id, CashEntry.branch_id == branch_id))).scalar_one_or_none()
     if not entry:
         raise HTTPException(404, "Entry not found")
@@ -459,6 +491,7 @@ async def void_entry(
     current_user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     entry = (await db.execute(select(CashEntry).where(CashEntry.id == entry_id, CashEntry.branch_id == branch_id))).scalar_one_or_none()
     if not entry:
         raise HTTPException(404, "Entry not found")
@@ -502,7 +535,9 @@ async def get_summary(
     branch_id: str = Depends(enforce_branch_access),
     date: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     branch = await _get_branch(db, branch_id)
     entries = (await db.execute(
@@ -535,6 +570,7 @@ async def close_day(
     current_user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     target_date = data.date or datetime.now().strftime("%Y-%m-%d")
     existing = await _get_day_close(db, branch_id, target_date)
     if existing and existing.is_locked:
@@ -613,6 +649,7 @@ async def unlock_day(
     current_user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     close = (await db.execute(select(CashDayClose).where(CashDayClose.id == close_id, CashDayClose.branch_id == branch_id))).scalar_one_or_none()
     if not close:
         raise HTTPException(404, "Day close record not found")
@@ -646,7 +683,9 @@ async def get_history(
     skip: int = Query(0, ge=0),
     limit: int = Query(30, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     q = select(CashDayClose).where(CashDayClose.branch_id == branch_id)
     cq = select(func.count(CashDayClose.id)).where(CashDayClose.branch_id == branch_id)
     if from_date:
@@ -668,7 +707,9 @@ async def get_history_day(
     date: str,
     branch_id: str = Depends(enforce_branch_access),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
+    await _resolve_branch_scope(current_user, db, branch_id)
     branch = await _get_branch(db, branch_id)
     close = await _get_day_close(db, branch_id, date)
     entries = (await db.execute(

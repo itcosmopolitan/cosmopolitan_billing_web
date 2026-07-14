@@ -21,24 +21,32 @@ export default function CategoryPieChart({
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) minmax(140px, 220px)', gap: 12, alignItems: 'center' }}>
-      <ResponsiveContainer width="100%" height={220}>
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey={valueKey}
-            nameKey={nameKey}
-            innerRadius={donut ? 54 : 0}
-            outerRadius={86}
-            paddingAngle={2}
-          >
-            {data.map((_, index) => (
-              <Cell key={index} fill={seriesPalette[index % seriesPalette.length]} />
-            ))}
-          </Pie>
-          <Tooltip content={<CustomTooltip valueFormatter={valueFormatter} nameKey={nameKey} itemsKey="items" />} contentStyle={tooltipStyle} />
-        </PieChart>
-      </ResponsiveContainer>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(120px, 220px)', gap: 12, alignItems: 'center', minWidth: 0 }}>
+      <div style={{ minWidth: 0, width: '100%', height: 220 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+            <Pie
+              data={data}
+              dataKey={valueKey}
+              nameKey={nameKey}
+              cx="50%"
+              cy="50%"
+              innerRadius={donut ? '40%' : '0%'}
+              outerRadius="80%"
+              paddingAngle={1}
+            >
+              {data.map((_, index) => (
+                <Cell key={index} fill={seriesPalette[index % seriesPalette.length]} />
+              ))}
+            </Pie>
+            <Tooltip
+              content={<CustomTooltip valueFormatter={valueFormatter} nameKey={nameKey} itemsKey="items" />}
+              contentStyle={tooltipStyle}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+
       <div style={{ display: 'grid', gap: 8, maxHeight: 220, overflowY: 'auto', paddingRight: 8 }}>
         {data.map((entry, index) => {
           const value = Number(entry[valueKey] || 0)

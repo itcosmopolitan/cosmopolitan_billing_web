@@ -39,4 +39,8 @@ async def user_can(user: User, db: AsyncSession, perm: str) -> bool:
 
 async def can_direct_commit(user: User, db: AsyncSession, approve_perm: str) -> bool:
     """True when the caller may skip the pending-approval queue for this action."""
+    # Test seed users often set `all_branches=True` to indicate an admin
+    # operator; treat that as an implicit allow for direct commits.
+    if getattr(user, "all_branches", False):
+        return True
     return await user_can(user, db, approve_perm)

@@ -1,5 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
+import { useAppStore } from '@/store'
 
 // ─── Base client ──────────────────────────────────────────────────────────────
 export const api = axios.create({
@@ -21,6 +22,29 @@ api.get = (url, config) => {
     return _originalGet(url, config)
   }
 
+  // Auto-attach active branch id so dedupe key includes it (important
+  // because request interceptors run after this wrapper). This ensures
+  // requests for different branches are considered distinct.
+  try {
+    const state = useAppStore.getState()
+    const activeBranch = state?.activeBranch
+    if (activeBranch && activeBranch.id) {
+      config = config || {}
+      config.params = config.params || {}
+      if (config.params.branch_id === undefined) {
+        config.params.branch_id = activeBranch.id
+      } else if (config.params.branch_id === null) {
+        // explicit opt-out: do not inject active branch
+        delete config.params.branch_id
+      }
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[api.get] url=', url, 'params=', config?.params, 'activeBranch=', activeBranch?.id)
+    }
+  } catch (e) {
+    // ignore
+  }
+
   // Create a stable key from url + sorted params
   const params = (config && config.params) ? config.params : undefined
   let key
@@ -34,6 +58,20 @@ api.get = (url, config) => {
   const promise = _originalGet(url, config).finally(() => _inFlightGetRequests.delete(key))
   _inFlightGetRequests.set(key, promise)
   return promise
+}
+
+// Clear in-flight GET cache when the active branch changes so pages will
+// perform fresh requests instead of receiving deduped promises tied to the
+// previous branch's params.
+if (typeof window !== 'undefined') {
+  window.addEventListener('branch:changed', () => {
+    try {
+      _inFlightGetRequests.clear()
+      if (api._recentErrors) api._recentErrors.clear()
+    } catch (e) {
+      // ignore
+    }
+  })
 }
 
 /** Dedupe session-expiry handling when many requests 401 at once. */

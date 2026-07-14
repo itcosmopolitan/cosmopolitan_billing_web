@@ -35,6 +35,7 @@ from src.models import (
     User,
     UserBranch,
 )
+from src.security import current_user, get_allowed_branch_ids
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.dashboard")
 _DASHBOARD_CACHE: dict[str, tuple[datetime, dict]] = {}
@@ -140,16 +141,24 @@ def _filters_dict(filters: DashboardFilters, period: Period) -> dict:
     return payload
 
 
-async def _allowed_branch_ids(db: AsyncSession, user: User) -> Optional[list[str]]:
+async def _resolve_branch_scope(user: User, db: AsyncSession) -> Optional[list[str]]:
+    if not getattr(user, "id", None):
+        try:
+            user = await current_user(authorization=None, db=db)
+        except RuntimeError:
+            return None
     if getattr(user, "all_branches", False):
         return None
-    result = await db.execute(select(UserBranch.branch_id).where(UserBranch.user_id == user.id))
-    ids = [row[0] for row in result.fetchall()]
-    if ids:
-        return ids
-    if user.branch_id:
+    branch_ids = await get_allowed_branch_ids(user, db)
+    if branch_ids:
+        return branch_ids
+    if getattr(user, "branch_id", None):
         return [user.branch_id]
     return []
+
+
+async def _allowed_branch_ids(db: AsyncSession, user: User) -> Optional[list[str]]:
+    return await _resolve_branch_scope(user, db)
 
 
 def _branch_condition(column, filters: DashboardFilters, allowed_branch_ids: Optional[list[str]]):
@@ -237,7 +246,7 @@ def _stock_conditions(filters: DashboardFilters, allowed_branch_ids: Optional[li
 
 
 def _inventory_mv_conds(filters: DashboardFilters, allowed_branch_ids: Optional[list[str]]):
-    conds = []
+    conds = [Item.active == True]
     branch_cond = _branch_condition(InventorySnapshot.branch_id, filters, allowed_branch_ids)
     if branch_cond is not None:
         conds.append(branch_cond)
@@ -809,9 +818,9 @@ async def _period_sales_totals(
 async def _sales_dashboard_payload(
     db: AsyncSession,
     filters: DashboardFilters,
+    allowed: Optional[list[str]] = None,
 ) -> dict:
     period = _parse_period(filters)
-    allowed = None
     daily_sales, weekly_sales, monthly_sales = await _period_sales_totals(db, filters, allowed, period)
 
     invoice_summary = await _invoice_summary(db, filters, allowed, period)
@@ -869,9 +878,8 @@ async def _sales_dashboard_payload(
     }
 
 
-async def _inventory_payload(db: AsyncSession, filters: DashboardFilters) -> dict:
+async def _inventory_payload(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]] = None) -> dict:
     period = _parse_period(filters)
-    allowed = None
     stock_conds = _stock_conditions(filters, allowed)
 
     if not _database_supports_materialized_views(db):
@@ -1216,8 +1224,15 @@ async def _dead_stock(
 
 async def _expiry_near(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], limit: int = 20) -> dict:
     today = date.today()
+    today_s = today.isoformat()
     until = (today + timedelta(days=30)).isoformat()
-    conds = [ItemBatch.quantity > 0, ItemBatch.expiry_date != None, ItemBatch.expiry_date != "", ItemBatch.expiry_date <= until]
+    conds = [
+        ItemBatch.quantity > 0,
+        ItemBatch.active == True,
+        ItemBatch.expiry_date != None,
+        ItemBatch.expiry_date != "",
+        ItemBatch.expiry_date <= until,
+    ]
     branch_cond = _branch_condition(ItemBatch.branch_id, filters, allowed)
     if branch_cond is not None:
         conds.append(branch_cond)
@@ -1427,7 +1442,7 @@ def _sampled_dates(start: date, end: date, max_points: int = 60) -> list[date]:
 
 
 async def _fifo_fefo(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]], near_expiry_count: int = 0) -> dict:
-    batch_conds = [ItemBatch.quantity > 0]
+    batch_conds = [Item.active == True, ItemBatch.quantity > 0, ItemBatch.active == True]
     branch_cond = _branch_condition(ItemBatch.branch_id, filters, allowed)
     if branch_cond is not None:
         batch_conds.append(branch_cond)
@@ -1455,9 +1470,8 @@ async def _fifo_fefo(db: AsyncSession, filters: DashboardFilters, allowed: Optio
     }
 
 
-async def _billing_payload(db: AsyncSession, filters: DashboardFilters) -> dict:
+async def _billing_payload(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]] = None) -> dict:
     period = _parse_period(filters)
-    allowed = None
     conds = _invoice_conditions(filters, allowed, period)
     previous_conds = _invoice_conditions(filters, allowed, period.previous)
 
@@ -1756,9 +1770,8 @@ async def _discounted_bills(
     return _page(items, page_size=limit)
 
 
-async def _operations_payload(db: AsyncSession, filters: DashboardFilters) -> dict:
+async def _operations_payload(db: AsyncSession, filters: DashboardFilters, allowed: Optional[list[str]] = None) -> dict:
     period = _parse_period(filters)
-    allowed = None
     conds = _invoice_conditions(filters, allowed, period)
     today_period = Period(period.end, period.end)
 
@@ -1897,8 +1910,15 @@ async def _activity_logs(db: AsyncSession, filters: DashboardFilters, period: Pe
 @router.get("/filters")
 async def dashboard_filters(
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
+    allowed = await _resolve_branch_scope(user, db)
     branch_query = select(Branch).where(Branch.active == True).order_by(Branch.name)
+    if allowed is not None:
+        if allowed:
+            branch_query = branch_query.where(Branch.id.in_(allowed))
+        else:
+            branch_query = branch_query.where(Branch.id == "__no_branch_access__")
     branches = (await db.execute(branch_query)).scalars().all()
     staff_rows = (await db.execute(select(User).where(User.active == True).order_by(User.name))).scalars().all()
     categories = (await db.execute(select(Category).order_by(Category.name))).scalars().all()
@@ -1913,9 +1933,10 @@ async def dashboard_filters(
 async def dashboard_summary(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
-    allowed = None
+    allowed = await _resolve_branch_scope(user, db)
     total_revenue = await _invoice_total_for_period(db, filters, allowed, period)
     return {
         "filters": _filters_dict(filters, period),
@@ -1929,23 +1950,27 @@ async def dashboard_summary(
 async def sales_dashboard(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
-    return await _sales_dashboard_payload(db, filters)
+    allowed = await _resolve_branch_scope(user, db)
+    return await _sales_dashboard_payload(db, filters, allowed=allowed)
 
 
 @router.get("/inventory")
 async def inventory_dashboard(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
+    allowed = await _resolve_branch_scope(user, db)
     return await _cached_dashboard_payload(
         "inventory",
-        PUBLIC_DASHBOARD_USER_ID,
+        user.id,
         _filters_dict(filters, period),
         ttl_seconds=300,
-        loader=lambda: _inventory_payload(db, filters),
+        loader=lambda: _inventory_payload(db, filters, allowed=allowed),
     )
 
 
@@ -1953,14 +1978,16 @@ async def inventory_dashboard(
 async def billing_dashboard(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
+    allowed = await _resolve_branch_scope(user, db)
     return await _cached_dashboard_payload(
         "billing",
-        PUBLIC_DASHBOARD_USER_ID,
+        user.id,
         _filters_dict(filters, period),
         ttl_seconds=120,
-        loader=lambda: _billing_payload(db, filters),
+        loader=lambda: _billing_payload(db, filters, allowed=allowed),
     )
 
 
@@ -1968,14 +1995,16 @@ async def billing_dashboard(
 async def operations_dashboard(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
+    allowed = await _resolve_branch_scope(user, db)
     return await _cached_dashboard_payload(
         "operations",
-        PUBLIC_DASHBOARD_USER_ID,
+        user.id,
         _filters_dict(filters, period),
         ttl_seconds=120,
-        loader=lambda: _operations_payload(db, filters),
+        loader=lambda: _operations_payload(db, filters, allowed=allowed),
     )
 
 
@@ -1983,51 +2012,63 @@ async def operations_dashboard(
 async def sales_top_products(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
-    return await _top_products(db, filters, None, period, limit=filters.limit)
+    allowed = await _resolve_branch_scope(user, db)
+    return await _top_products(db, filters, allowed, period, limit=filters.limit)
 
 
 @router.get("/sales/recent-sales")
 async def sales_recent_sales(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
-    return await _recent_sales(db, filters, None, period, limit=filters.limit)
+    allowed = await _resolve_branch_scope(user, db)
+    return await _recent_sales(db, filters, allowed, period, limit=filters.limit)
 
 
 @router.get("/inventory/low-stock")
 async def inventory_low_stock(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
-    return await _low_stock(db, filters, None, limit=filters.limit)
+    allowed = await _resolve_branch_scope(user, db)
+    return await _low_stock(db, filters, allowed, limit=filters.limit)
 
 
 @router.get("/inventory/expiry-near")
 async def inventory_expiry_near(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
-    return await _expiry_near(db, filters, None, limit=filters.limit)
+    allowed = await _resolve_branch_scope(user, db)
+    return await _expiry_near(db, filters, allowed, limit=filters.limit)
 
 
 @router.get("/billing/pending-payments")
 async def billing_pending_payments(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
-    return await _pending_payments(db, filters, None, period, limit=filters.limit)
+    allowed = await _resolve_branch_scope(user, db)
+    return await _pending_payments(db, filters, allowed, period, limit=filters.limit)
 
 
 @router.get("/operations/activity-logs")
 async def operations_activity_logs(
     filters: DashboardFilters = Depends(),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     period = _parse_period(filters)
+    allowed = await _resolve_branch_scope(user, db)
     return await _activity_logs(db, filters, period, limit=filters.limit)
 
 

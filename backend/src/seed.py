@@ -120,11 +120,11 @@ async def seed():
 
         # ── Branches ──────────────────────────────────────────────────────────
         branches = [
-            Branch(id="br-001", name="Male",        code="ML", manager="Kavitha R.",  phone="+960-330 1234", address="12, Orchid Magu, Male - 20001", gstin="33AAZCS1429R1Z1", active=True),
-            Branch(id="br-002", name="Addu",        code="AD", manager="Mohan K.",    phone="+960-688 5678", address="45, Equatorial Road, Addu City - 20001", gstin="33AAZCS1429R1Z2", active=True),
-            Branch(id="br-003", name="Hulhumalé",   code="HM", manager="Ravi S.",     phone="+960-664 3456", address="8, Central Plaza, Hulhumalé - 20001", gstin="33AAZCS1429R1Z3", active=True),
-            Branch(id="br-004", name="Felidhoo",    code="FD", manager="Anitha M.",   phone="+960-684 7890", address="22, Island Road, Felidhoo - 20001", gstin="33AAZCS1429R1Z4", active=True),
-            Branch(id="br-005", name="Warehouse",   code="WH", manager="Central",     phone="+960-330 0001", address="Plot 14, Industrial Zone, Hulhumalé - 20001", gstin="", active=True),
+            Branch(id="br-001", name="Male",        code="ML", phone="+960-330 1234", address="12, Orchid Magu, Male - 20001", gstin="33AAZCS1429R1Z1", active=True),
+            Branch(id="br-002", name="Addu",        code="AD", phone="+960-688 5678", address="45, Equatorial Road, Addu City - 20001", gstin="33AAZCS1429R1Z2", active=True),
+            Branch(id="br-003", name="Hulhumalé",   code="HM", phone="+960-664 3456", address="8, Central Plaza, Hulhumalé - 20001", gstin="33AAZCS1429R1Z3", active=True),
+            Branch(id="br-004", name="Felidhoo",    code="FD", phone="+960-684 7890", address="22, Island Road, Felidhoo - 20001", gstin="33AAZCS1429R1Z4", active=True),
+            Branch(id="br-005", name="Warehouse",   code="WH", phone="+960-330 0001", address="Plot 14, Industrial Zone, Hulhumalé - 20001", gstin="", active=True),
         ]
         for b in branches:
             db.add(b)

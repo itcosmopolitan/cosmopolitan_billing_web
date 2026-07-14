@@ -30,10 +30,26 @@ from src.models import (
     Vendor,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.security import require_perm
+from src.security import current_user, get_allowed_branch_ids, require_perm
 
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.reports")
+
+
+async def _resolve_branch_scope(user, db: AsyncSession, branch_id: Optional[str]) -> Optional[list[str]]:
+    if not getattr(user, "id", None):
+        try:
+            user = await current_user(authorization=None, db=db)
+        except RuntimeError:
+            return None
+    if getattr(user, "all_branches", False):
+        return None
+    branch_ids = await get_allowed_branch_ids(user, db)
+    if branch_ids:
+        return branch_ids
+    if getattr(user, "branch_id", None):
+        return [user.branch_id]
+    return []
 
 
 def _normalize_date_range(
@@ -51,15 +67,29 @@ def _normalize_date_range(
     return start, end
 
 
+def _branch_condition(column, branch_id: Optional[str], allowed_branch_ids: Optional[list[str]]):
+    if branch_id:
+        if allowed_branch_ids is not None and branch_id not in allowed_branch_ids:
+            raise HTTPException(403, "Branch is outside your report scope")
+        return column == branch_id
+    if allowed_branch_ids is not None:
+        if not allowed_branch_ids:
+            return column == "__no_branch_access__"
+        return column.in_(allowed_branch_ids)
+    return None
+
+
 def _sale_filters(
     branch_id: Optional[str],
     search: Optional[str],
     date_from: Optional,
     date_to: Optional,
+    allowed_branch_ids: Optional[list[str]] = None,
 ):
     conds = []
-    if branch_id:
-        conds.append(SaleInvoice.branch_id == branch_id)
+    branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
     if date_from:
         conds.append(SaleInvoice.date >= (date_from.isoformat() if hasattr(date_from, 'isoformat') else date_from))
     if date_to:
@@ -78,10 +108,12 @@ def _purchase_filters(
     search: Optional[str],
     date_from: Optional[str],
     date_to: Optional[str],
+    allowed_branch_ids: Optional[list[str]] = None,
 ):
     conds = []
-    if branch_id:
-        conds.append(PurchaseBill.branch_id == branch_id)
+    branch_cond = _branch_condition(PurchaseBill.branch_id, branch_id, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
     if vendor_id:
         conds.append(PurchaseBill.vendor_id == vendor_id)
     if date_from:
@@ -199,9 +231,11 @@ async def sales_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _sale_filters(branch_id, None, start, end)
+    conds = _sale_filters(branch_id, None, start, end, allowed_branch_ids=branch_scope)
     base = and_(*conds) if conds else True
     start, end = parse_date_range(
         date_from,
@@ -263,9 +297,11 @@ async def purchase_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _purchase_filters(branch_id, None, None, start, end)
+    conds = _purchase_filters(branch_id, None, None, start, end, allowed_branch_ids=branch_scope)
     base = and_(*conds) if conds else True
 
     total_purchases = float(
@@ -312,10 +348,12 @@ async def tax_summary(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, None)
     start, end = _normalize_date_range(date_from, date_to)
-    sale_conds = _sale_filters(None, None, start, end)
-    purchase_conds = _purchase_filters(None, None, None, start, end)
+    sale_conds = _sale_filters(None, None, start, end, allowed_branch_ids=branch_scope)
+    purchase_conds = _purchase_filters(None, None, None, start, end, allowed_branch_ids=branch_scope)
     sale_base = and_(*sale_conds) if sale_conds else True
     purchase_base = and_(*purchase_conds) if purchase_conds else True
 
@@ -384,9 +422,11 @@ async def sales_register(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _sale_filters(branch_id, search, start, end)
+    conds = _sale_filters(branch_id, search, start, end, allowed_branch_ids=branch_scope)
     query = select(
         SaleInvoice.number.label("invoice_number"),
         SaleInvoice.date.label("invoice_date"),
@@ -437,11 +477,14 @@ async def daily_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
     conds = [DailySalesSummary.sale_date >= start, DailySalesSummary.sale_date <= end]
-    if branch_id:
-        conds.append(DailySalesSummary.branch_id == branch_id)
+    branch_cond = _branch_condition(DailySalesSummary.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
     if search:
         conds.append(DailySalesSummary.cashier.ilike(f"%{search}%"))
 
@@ -466,8 +509,9 @@ async def daily_sales(
     if total == 0:
         date_expr = func.to_date(SaleInvoice.date, "YYYY-MM-DD")
         si_conds = []
-        if branch_id:
-            si_conds.append(SaleInvoice.branch_id == branch_id)
+        branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
+        if branch_cond is not None:
+            si_conds.append(branch_cond)
         si_conds.append(date_expr >= start)
         si_conds.append(date_expr <= end)
         if search:
@@ -536,11 +580,14 @@ async def product_sales(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
     conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
-    if branch_id:
-        conds.append(ProductSalesSummary.branch_id == branch_id)
+    branch_cond = _branch_condition(ProductSalesSummary.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
     if search:
         conds.append(ProductSalesSummary.product_name.ilike(f"%{search}%"))
 

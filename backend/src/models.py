@@ -145,7 +145,6 @@ class Branch(Base):
     id         = Column(String, primary_key=True)
     name       = Column(String, nullable=False)
     code       = Column(String, nullable=False, unique=True)
-    manager    = Column(String)
     phone      = Column(String)
     address    = Column(Text)
     gstin      = Column(String)

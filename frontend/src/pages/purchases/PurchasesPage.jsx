@@ -22,6 +22,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
+import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
@@ -59,6 +60,7 @@ export default function PurchasesPage() {
   const tabParam = searchParams.get('tab')
   const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
   const can = useCan()
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const [search, setSearch]       = useState('')
   const [billStatusF, setBillStatusF]   = useState('')
   const [orderStatusF, setOrderStatusF] = useState('')
@@ -284,10 +286,24 @@ export default function PurchasesPage() {
     setPaySkip(0)
   }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, vendorF, dateFrom, dateTo])
 
+  // Re-fetch when active branch changes
+  useEffect(() => {
+    const unsub = subscribeToBranchChanged(() => {
+      setBillSkip(0)
+      setOrderSkip(0)
+      setGrnSkip(0)
+      setRetSkip(0)
+      setPaySkip(0)
+      setSelectedIds(new Set())
+      setListVersion((v) => v + 1)
+    })
+    return () => unsub()
+  }, [])
+
   // Bills list
   useEffect(() => {
     if (tab !== 'bills') return
-    const key = `bills|${billSkip}|${billLimit}|${billSortBy}|${billSortOrder}|${search}|${billStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
+    const key = `bills|${activeBranch?.id || ''}|${billSkip}|${billLimit}|${billSortBy}|${billSortOrder}|${search}|${billStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
     let cancelled = false
     const run = async () => {
       try {
@@ -327,12 +343,12 @@ export default function PurchasesPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, billSkip, billLimit, search, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
+  }, [tab, activeBranch?.id, billSkip, billLimit, search, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
 
   // Orders list — same no-branch-filter policy as bills (see above).
   useEffect(() => {
     if (tab !== 'orders') return
-    const key = `orders|${orderSkip}|${orderLimit}|${orderSortBy}|${orderSortOrder}|${search}|${orderStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
+    const key = `orders|${activeBranch?.id || ''}|${orderSkip}|${orderLimit}|${orderSortBy}|${orderSortOrder}|${search}|${orderStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
     let cancelled = false
     const run = async () => {
       try {
@@ -371,7 +387,7 @@ export default function PurchasesPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, orderSkip, orderLimit, search, orderStatusF, vendorF, dateFrom, dateTo, listVersion, orderSortBy, orderSortOrder])
+  }, [tab, activeBranch?.id, orderSkip, orderLimit, search, orderStatusF, vendorF, dateFrom, dateTo, listVersion, orderSortBy, orderSortOrder])
 
   // GRNs list
   useEffect(() => {
@@ -407,7 +423,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, grnSkip, grnLimit, search, grnStatusF, vendorF, dateFrom, dateTo, listVersion, grnSortBy, grnSortOrder])
+  }, [tab, activeBranch?.id, grnSkip, grnLimit, search, grnStatusF, vendorF, dateFrom, dateTo, listVersion, grnSortBy, grnSortOrder])
 
   // Returns list
   useEffect(() => {
@@ -442,7 +458,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, retSkip, retLimit, listVersion, retSortBy, retSortOrder, search, retStatusF, vendorF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, retSkip, retLimit, listVersion, retSortBy, retSortOrder, search, retStatusF, vendorF, dateFrom, dateTo])
 
   // Payments list
   useEffect(() => {
@@ -476,7 +492,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, dateFrom, dateTo])
 
   // Prefill payment amount when the modal opens — same UX as
   // SalesPage's record-payment flow.

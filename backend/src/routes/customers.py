@@ -11,7 +11,8 @@ from src.models import Customer, CustomerCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_customer
 from src.permissions import CUSTOMER_PICKER_READ
-from src.security import require_perm
+from src.security import require_perm, current_user, enforce_branch_access
+from src.models import User
 
 router = APIRouter()
 
@@ -221,7 +222,8 @@ async def customer_credit_ledger(
     return paged(items, total, sk, lim)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create"))])
-async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db)):
+async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    await enforce_branch_access(data.branch_id, user=user, db=db)
     c = Customer(id=str(uuid.uuid4()), name=data.name, phone=data.phone,
                  email=data.email, address=data.address, gstin=data.gst_in,
                  branch_id=data.branch_id, credit_limit=data.credit_limit,
@@ -231,12 +233,15 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     return {"id": c.id, "message": "Customer created"}
 
 @router.put("/{customer_id}", dependencies=[Depends(require_perm("customers.edit"))])
-async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSession = Depends(get_db)):
+async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(Customer).where(Customer.id == customer_id))
     c = result.scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Customer not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    items = data.model_dump(exclude_unset=True)
+    if "branch_id" in items:
+        await enforce_branch_access(items["branch_id"], user=user, db=db)
+    for k, v in items.items():
         setattr(c, _FIELD_TO_COLUMN.get(k, k), v)
     await db.commit()
     return {"message": "Updated"}

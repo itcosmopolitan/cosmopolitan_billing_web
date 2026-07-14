@@ -17,7 +17,6 @@ router = APIRouter()
 class BranchCreate(BaseModel):
     name: str
     code: str
-    manager: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
     gstin: Optional[str] = None
@@ -28,7 +27,6 @@ class BranchUpdate(BaseModel):
     """Typed update body — restricts client-writeable fields."""
     name: Optional[str] = None
     code: Optional[str] = None
-    manager: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
     gstin: Optional[str] = None
@@ -63,7 +61,6 @@ async def list_branches(
         {
             "name": Branch.name,
             "code": Branch.code,
-            "manager": Branch.manager,
             "phone": Branch.phone,
             "active": Branch.active,
             "created_at": Branch.created_at,
@@ -94,7 +91,7 @@ async def get_branch(branch_id: str = Depends(enforce_branch_access), db: AsyncS
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("settings.edit"))])
 async def create_branch(data: BranchCreate, db: AsyncSession = Depends(get_db)):
     b = Branch(id=str(uuid.uuid4()), name=data.name, code=data.code,
-               manager=data.manager, phone=data.phone, address=data.address,
+               phone=data.phone, address=data.address,
                gstin=data.gstin, active=data.active)
     db.add(b)
     await db.commit()

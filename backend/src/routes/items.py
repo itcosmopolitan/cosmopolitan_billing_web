@@ -62,7 +62,13 @@ from src.routes._atomic import (
 from src.permissions import ITEM_CATALOG_READ
 from src.routes._approval import can_direct_commit
 from src.routes._approval import user_can
-from src.security import current_user, require_perm
+from src.security import (
+    current_user,
+    enforce_branch_access_optional,
+    enforce_branch_access,
+    get_allowed_branch_ids,
+    require_perm,
+)
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -75,7 +81,7 @@ async def _write_post_commit_audit(
     reference_id: str,
     detail: str,
     user: Optional[User],
-    request: Request,
+    request: Request = None,
     branch_id: Optional[str],
     metadata: Optional[dict] = None,
 ) -> None:
@@ -121,8 +127,8 @@ def _log_item_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         user_role=role,
         module="inventory",
         reference_id=item.sku or item.name,
@@ -693,7 +699,7 @@ async def create_category(data: InventoryCategoryCreate, db: AsyncSession = Depe
 async def list_items(
     search: Optional[str] = None,
     category_id: Optional[str] = None,
-    branch_id: Optional[str] = "br-001",
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     include_inactive: bool = False,
     sort_by: Optional[str] = None,
@@ -707,6 +713,7 @@ async def list_items(
     master_mode: bool = False,
     listed_only: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     if page_no is not None or per_page is not None:
         pn, pp, sk, lim = pagination_from_page(page_no, per_page)
@@ -717,6 +724,12 @@ async def list_items(
         pp = lim
 
     filter_listed = listed_only if listed_only is not None else (pos_mode or not master_mode)
+
+    if branch_id is None and not getattr(user, "all_branches", False) and not master_mode:
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        branch_id = branch_ids[0]
 
     q = select(Item).options(selectinload(Item.category))
     cq = select(func.count(Item.id))
@@ -918,7 +931,7 @@ async def _validate_category_id(category_id: Optional[str], db: AsyncSession) ->
 @router.post("/", dependencies=[Depends(require_perm("item_master.create"))])
 async def create_item(
     data: ItemCreate,
-    request: Request,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -960,6 +973,8 @@ async def create_item(
         seeded_any = False
         for bc in configs:
             branch_cost = effective_cost_price(data.cost_price, bc.cost_price)
+            # Enforce that the operator may access the branch they're configuring
+            await enforce_branch_access(bc.branch_id, user=user, db=db)
             await _upsert_branch_config(
                 db,
                 item_id=item.id,
@@ -987,6 +1002,7 @@ async def create_item(
             # Listed branches exist at zero stock; legacy top-level opening still
             # supported when every branch row has opening_stock = 0.
             if data.opening_stock and data.opening_stock > 0:
+                await enforce_branch_access(data.branch_id, user=user, db=db)
                 await _seed_opening_stock(
                     db,
                     item=item,
@@ -998,6 +1014,7 @@ async def create_item(
                     expiry_date=data.opening_expiry_date,
                 )
     else:
+        await enforce_branch_access(data.branch_id, user=user, db=db)
         await _upsert_branch_config(
             db,
             item_id=item.id,
@@ -1797,10 +1814,11 @@ def _batch_dict(b: ItemBatch, *, item_name: Optional[str] = None) -> dict:
 )
 async def list_item_batches(
     item_id: str,
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     include_empty: bool = False,
     include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """List batches for an item. Default sort is FEFO-friendly (nearest expiry
     first, NULL expiries last, ties broken by received_date) which is also a
@@ -1813,6 +1831,12 @@ async def list_item_batches(
     item = item_res.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
+
+    if branch_id is None and not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return []
+        branch_id = branch_ids[0]
 
     q = select(ItemBatch).where(ItemBatch.item_id == item_id)
     if branch_id:
@@ -1853,6 +1877,7 @@ async def create_item_batch(
     item_id: str,
     data: BatchCreate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Manually add a batch (e.g. correcting historical receipts, opening new
     stock for an existing item). Flips `batch_tracking` on as a side-effect
@@ -1863,6 +1888,8 @@ async def create_item_batch(
         raise HTTPException(404, "Item not found")
     if data.qty <= 0:
         raise HTTPException(400, "qty must be > 0")
+
+    await enforce_branch_access_optional(data.branch_id, user=user, db=db)
 
     _raise_batch_date_errors(validate_batch_dates(
         mfg_date=data.mfg_date,
@@ -1901,6 +1928,7 @@ async def patch_batch(
     batch_id: str,
     data: BatchPatch,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """Edit batch metadata (dates, notes, number, active flag). Quantity
     changes must go through the stock-adjust endpoint so item_stock stays
@@ -1909,6 +1937,7 @@ async def patch_batch(
     b = res.scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Batch not found")
+    await enforce_branch_access_optional(b.branch_id, user=user, db=db)
     updates = data.model_dump(exclude_unset=True)
     if any(k in updates for k in ("mfg_date", "expiry_date")):
         exp_flag = await db.execute(
@@ -1947,9 +1976,10 @@ async def patch_batch(
     dependencies=[Depends(require_perm("items.view", "item_master.view"))],
 )
 async def near_expiry_batches(
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     within_days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     """List active batches whose expiry_date falls within the next N days
     (default 30). Drives the "Near Expiry" tab on the Items page so the
@@ -1969,6 +1999,11 @@ async def near_expiry_batches(
             ItemBatch.expiry_date <= horizon_str,
         )
     )
+    if branch_id is None and not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return {"items": [], "total": 0, "within_days": within_days, "today": today_str}
+        branch_id = branch_ids[0]
     if branch_id:
         q = q.where(ItemBatch.branch_id == branch_id)
     q = q.order_by(asc(ItemBatch.expiry_date), asc(ItemBatch.received_date))

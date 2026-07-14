@@ -1,4 +1,6 @@
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useAppStore } from '@/store'
 import {
   getBillingDashboard,
   getInventoryDashboard,
@@ -15,9 +17,18 @@ const endpoints = {
 }
 
 export function useDashboardQuery(tab, filters, { autoRefresh = false, enabled = true } = {}) {
+  const activeBranchId = useAppStore((s) => s.activeBranch?.id)
+  const requestFilters = useMemo(
+    () => ({
+      ...filters,
+      ...(filters?.branch_id ? {} : activeBranchId ? { branch_id: activeBranchId } : {}),
+    }),
+    [filters, activeBranchId],
+  )
+
   return useQuery({
-    queryKey: dashboardKeys[tab](filters),
-    queryFn: () => endpoints[tab](filters),
+    queryKey: dashboardKeys[tab](requestFilters),
+    queryFn: () => endpoints[tab](requestFilters),
     staleTime: 2 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
     keepPreviousData: true,

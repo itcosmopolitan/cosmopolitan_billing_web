@@ -47,10 +47,10 @@ export default function ItemsPage({ mode = 'branch' }) {
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const user = useAppStore((s) => s.user)
+  const branchId = activeBranch?.id
   const [tab, setTab]           = useState('all')
   const [search, setSearch]     = useState('')
   const [catFilter, setCatFilter] = useState('')
-  const [branchFilter, setBranchFilter] = useState(() => activeBranch?.id || 'br-001')
   const [showAdj, setShowAdj]   = useState(null)
   const [showAdjSelect, setShowAdjSelect] = useState(false)
   const [adjSelectSearch, setAdjSelectSearch] = useState('')
@@ -103,11 +103,11 @@ export default function ItemsPage({ mode = 'branch' }) {
       const params = isMaster
         ? {
             master_mode: true,
-            branch_id: branchFilter,
+            branch_id: null,
             include_inactive: tab === 'inactive',
             ...(tabStatus ? { status: tabStatus } : {}),
           }
-        : { branch_id: branchFilter, listed_only: tab === 'inactive' ? false : true, include_inactive: tab === 'inactive' }
+        : { branch_id: branchId, listed_only: tab === 'inactive' ? false : true, include_inactive: tab === 'inactive' }
 
       const data = await fetchAllList(itemsAPI.list, params)
       setItems(data || [])
@@ -118,22 +118,15 @@ export default function ItemsPage({ mode = 'branch' }) {
     } finally {
       setLoading(false)
     }
-  }, [branchFilter, isMaster, tab, listVersion])
+  }, [branchId, isMaster, tab, listVersion])
 
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
 
   useEffect(() => {
-    if (activeBranch?.id && activeBranch.id !== branchFilter) {
-      setBranchFilter(activeBranch.id)
-    }
-  }, [activeBranch?.id])
-
-
-  useEffect(() => {
     setItemSkip(0)
-  }, [search, catFilter, tab, branchFilter, isMaster])
+  }, [search, catFilter, tab, branchId, isMaster])
 
   // Refresh the near-expiry roll-up when the relevant filters change. We
   // keep it on a separate effect so toggling tabs doesn't re-fetch the full
@@ -142,7 +135,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     try {
       setNearExpiryLoading(true)
       const data = await itemsAPI.batches.nearExpiry({
-        branch_id: branchFilter,
+        branch_id: branchId,
         within_days: nearExpiryDays,
       })
       setNearExpiry(data?.items || [])
@@ -152,7 +145,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     } finally {
       setNearExpiryLoading(false)
     }
-  }, [branchFilter, nearExpiryDays])
+  }, [branchId, nearExpiryDays])
 
   useEffect(() => {
     if (!isMaster) {
@@ -287,7 +280,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     if (item.batch_tracking) {
       try {
         setAdjLoading(true)
-        const data = await itemsAPI.batches.list(item.id, { branch_id: branchFilter })
+        const data = await itemsAPI.batches.list(item.id, { branch_id: branchId })
         setAdjBatches(data?.items || [])
       } catch (err) {
         console.error('Failed to fetch batches:', err)
@@ -308,7 +301,7 @@ export default function ItemsPage({ mode = 'branch' }) {
     setAdjSubmitting(true)
     try {
       const res = await adjustmentsAPI.create({
-        branch_id: branchFilter,
+        branch_id: branchId,
         item_id: showAdj.id,
         item_name: showAdj.name,
         new_qty: Number(adjQty),
@@ -343,11 +336,11 @@ export default function ItemsPage({ mode = 'branch' }) {
         if (isMaster) {
           await itemsAPI.delete(item.id)
         } else {
-          await itemsAPI.delete(item.id, { branch_id: branchFilter })
+          await itemsAPI.delete(item.id, { branch_id: branchId })
           // Notify any open Item Master edit page to remove this branch row
           try {
             window.dispatchEvent(new CustomEvent('item-branch-removed', {
-              detail: { item_id: item.id, branch_id: branchFilter },
+              detail: { item_id: item.id, branch_id: branchId },
             }))
           } catch (e) {
             // ignore in environments where window/custom events are unavailable
@@ -355,10 +348,10 @@ export default function ItemsPage({ mode = 'branch' }) {
         }
         toast.success(`Deleted ${item.name}`)
       } else {
-        // Pass branchFilter in body for branch-specific deactivate check
+        // Pass current branch in body for branch-specific deactivate/reactivate check
         await itemsAPI.patch(item.id, { 
           active: type === 'reactivate',
-          branch_id: branchFilter,
+          branch_id: branchId,
         })
         toast.success(`${item.name} ${type === 'reactivate' ? 'reactivated' : 'deactivated'}`)
       }
@@ -404,10 +397,6 @@ export default function ItemsPage({ mode = 'branch' }) {
     toast.success('List refreshed')
   }
 
-  if (loading) {
-    return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading items...</div></div>
-  }
-
   return (
     <div className="page-container">
       <SectionHeader
@@ -429,17 +418,7 @@ export default function ItemsPage({ mode = 'branch' }) {
       </SectionHeader>
 
       {/* KPIs */}
-      <div className="grid-kpi" style={{ marginBottom: 20 }}>
-        {!isMaster && (
-          <>
-            <KPICard label="Total Items"         value={totals.items}     color="var(--accent)" sub={`${totals.tracked} tracked (FIFO/FEFO)`} />
-            <KPICard label="Low Stock Items"     value={totals.low}       color="var(--amber)"   />
-            <KPICard label="Near Expiry"         value={totals.expiring}  color="var(--red)" sub={`within ${nearExpiryDays} days`} onClick={() => setTab('expiry')} />
-            <KPICard label="Stock Value"         value={fmt(totals.stockVal)} color="var(--green)" />
-          </>
-        )}
-      </div>
-
+      
       <Tabs tabs={isMaster ? MASTER_TABS : BRANCH_TABS} active={tab} onChange={setTab} />
 
       {/* Filters */}
@@ -457,19 +436,6 @@ export default function ItemsPage({ mode = 'branch' }) {
           emptyLabel="No categories"
           style={{ width: 180 }}
         />
-        {!isMaster && (
-          <AutocompleteDropdown
-            value={branchFilter}
-            onChange={setBranchFilter}
-            onSelectOption={(opt) => opt?.id && setBranchFilter(opt.id)}
-            fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-            fetchParams={{ retail_only: true }}
-            isSearchFieldRequired={false}
-            placeholder="Select branch…"
-            emptyLabel="No branches"
-            style={{ width: 150 }}
-          />
-        )}
       </div>
 
       {!isMaster && tab === 'expiry' && (
@@ -1055,7 +1021,7 @@ export default function ItemsPage({ mode = 'branch' }) {
       {/* Per-item batch viewer / quick-add */}
       <BatchesModal
         item={batchesModal}
-        branchId={branchFilter}
+        branchId={branchId}
         onClose={() => setBatchesModal(null)}
         onChanged={async () => {
           await fetchItems()

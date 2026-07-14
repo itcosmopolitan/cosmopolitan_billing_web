@@ -9,8 +9,8 @@ export default function BranchComparisonChart({ data = [], valueKey = 'sales' })
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
         <XAxis type="number" tick={axisStyle} tickFormatter={formatCompactCurrency} axisLine={false} tickLine={false} />
         <YAxis type="category" dataKey="branch" tick={axisStyle} axisLine={false} tickLine={false} width={86} />
-        <Tooltip formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
-        <Bar dataKey={valueKey} fill={chartColors.emerald} radius={[0, 4, 4, 0]} />
+        <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
+        <Bar dataKey={valueKey} fill={chartColors.emerald} radius={[0, 4, 4, 0]} cursor={{ fill: 'transparent' }} />
       </BarChart>
     </ResponsiveContainer>
   )

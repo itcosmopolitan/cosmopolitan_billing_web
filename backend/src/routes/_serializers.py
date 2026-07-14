@@ -66,7 +66,6 @@ def serialize_branch(b) -> dict:
         "id": b.id,
         "name": b.name,
         "code": b.code,
-        "manager": b.manager,
         "phone": b.phone,
         "address": b.address,
         "gstin": b.gstin,

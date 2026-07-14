@@ -3,7 +3,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
@@ -16,7 +16,7 @@ from src.models import (
     User,
 )
 from src.permissions import MODULE_SUMMARY_READ, expand
-from src.security import current_user
+from src.security import current_user, enforce_branch_access_optional
 
 router = APIRouter()
 
@@ -39,9 +39,11 @@ async def _user_grants(user: User, db: AsyncSession) -> set[str]:
     return expand(granted)
 
 
-async def _transfer_summary(db: AsyncSession) -> dict[str, int]:
+async def _transfer_summary(db: AsyncSession, *, branch_id: Optional[str] = None) -> dict[str, int]:
     async def _count(status: Optional[TransferStatus]) -> int:
         q = select(func.count(StockTransfer.id))
+        if branch_id:
+            q = q.where(StockTransfer.from_branch_id == branch_id)
         if status is not None:
             q = q.where(StockTransfer.status == status)
         return int((await db.execute(q)).scalar() or 0)
@@ -86,7 +88,7 @@ async def _adjustment_summary(
 @router.get("/")
 async def get_module_summary(
     module: str = Query(..., min_length=1),
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -104,7 +106,7 @@ async def get_module_summary(
         raise HTTPException(403, f"Missing permission: {' or '.join(allowed)}")
 
     if key == "transfers":
-        return await _transfer_summary(db)
+        return await _transfer_summary(db, branch_id=branch_id)
     if key == "adjustments":
         return await _adjustment_summary(db, branch_id=branch_id)
 

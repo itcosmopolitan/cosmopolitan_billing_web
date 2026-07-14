@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_ITEM_URL, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { useAppStore } from '@/store'
+import { useAppStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
@@ -99,7 +99,7 @@ export default function AdjustmentsPage() {
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
   useEffect(() => {
-    const key = `${tab}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
+    const key = `${tab}|${activeBranch?.id || ''}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
     let cancelled = false
     const run = async () => {
       try {
@@ -140,7 +140,18 @@ export default function AdjustmentsPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, skip, limit, sortBy, sortOrder, listVersion])
+  }, [tab, activeBranch?.id, skip, limit, sortBy, sortOrder, listVersion])
+
+  // Re-fetch list when active branch changes; also update newForm.branch_id
+  useEffect(() => {
+    const unsub = subscribeToBranchChanged((newBranch) => {
+      setNewForm((f) => ({ ...f, branch_id: newBranch?.id || 'br-001' }))
+      setSelectedIds(new Set())
+      setSkip(0)
+      setListVersion((v) => v + 1)
+    })
+    return () => unsub()
+  }, [])
 
   useEffect(() => {
     setSelectedIds(new Set())

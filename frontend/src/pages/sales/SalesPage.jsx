@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
@@ -83,6 +83,7 @@ export default function SalesPage() {
   // doesn't carry credit_balance, so we pull it from customersAPI.get to
   // gate + label the new "credit" payment method. null = not loaded yet.
   const [payCustCredit, setPayCustCredit] = useState(null)
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const [invoices, setInvoices] = useState([])
   const [invoiceTotal, setInvoiceTotal] = useState(0)
   const [invSkip, setInvSkip] = useState(0)
@@ -334,6 +335,24 @@ export default function SalesPage() {
     setPaySkip(0)
   }, [search, invStatusF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
 
+  // Re-fetch lists when active branch changes.
+  useEffect(() => {
+    const unsub = subscribeToBranchChanged(() => {
+      setInvSkip(0)
+      setQuoteSkip(0)
+      setOrderSkip(0)
+      setRetSkip(0)
+      setPaySkip(0)
+      setSelectedIds(new Set())
+      setSalesListVersion((v) => v + 1)
+      setQuoteListVersion((v) => v + 1)
+      setOrderListVersion((v) => v + 1)
+      setRetListVersion((v) => v + 1)
+      setPayListVersion((v) => v + 1)
+    })
+    return () => unsub()
+  }, [])
+
   // Prefill the Record-Payment amount with the invoice's outstanding
   // balance whenever the modal opens. This single source of truth
   // replaces ad-hoc setPayAmt() calls scattered across each "Pay"
@@ -386,7 +405,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, invSkip, invLimit, search, invStatusF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
+  }, [tab, activeBranch?.id, invSkip, invLimit, search, invStatusF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
 
   useEffect(() => {
     if (tab !== 'quotes') return
@@ -419,7 +438,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, dateFrom, dateTo])
 
   // Credit Purchases tab was removed 2026-05-23 (Sales Phase 1). No
   // separate data-fetch effect — same invoices are available via the main
@@ -455,7 +474,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'returns') return
@@ -488,7 +507,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, search, retStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, search, retStatusF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'payments') return
@@ -520,7 +539,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, dateFrom, dateTo])
 
   // Tab-aware sort handler for the four list tabs in this page. Each tab
   // owns its own sortBy/sortOrder pair; the closure picks them up.
