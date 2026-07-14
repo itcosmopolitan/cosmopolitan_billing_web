@@ -13,7 +13,7 @@ const toParams = (filters: Record<string, unknown>): URLSearchParams => {
 
 export const auditApi = {
   list: async (filters: AuditFilters): Promise<AuditLogListResponse> => {
-    return api.get("/audit/", { params: toParams(filters) });
+    return api.get("/audit/", { params: filters, noBranchScope: true });
   },
 
   get: async (id: number | string): Promise<AuditLog> => {
@@ -21,9 +21,9 @@ export const auditApi = {
   },
 
   exportCsv: async (filters: Omit<AuditFilters, "page" | "limit">): Promise<void> => {
-    const params = toParams(filters);
     const blob = await api.get("/audit/export/csv", {
-      params,
+      params: filters,
+      noBranchScope: true,
       responseType: "blob",
     });
     const url = window.URL.createObjectURL(blob);

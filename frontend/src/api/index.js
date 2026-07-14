@@ -28,7 +28,13 @@ api.get = (url, config) => {
   try {
     const state = useAppStore.getState()
     const activeBranch = state?.activeBranch
-    if (activeBranch && activeBranch.id) {
+    const explicitNoBranch = config?.noBranchScope || (typeof url === 'string' && url.startsWith('/audit'))
+
+    if (config?.noBranchScope) {
+      delete config.noBranchScope
+    }
+
+    if (!explicitNoBranch && activeBranch && activeBranch.id) {
       config = config || {}
       config.params = config.params || {}
       if (config.params.branch_id === undefined) {
@@ -39,7 +45,7 @@ api.get = (url, config) => {
       }
     }
     if (process.env.NODE_ENV !== 'production') {
-      console.debug('[api.get] url=', url, 'params=', config?.params, 'activeBranch=', activeBranch?.id)
+      console.debug('[api.get] url=', url, 'params=', config?.params, 'activeBranch=', activeBranch?.id, 'explicitNoBranch=', explicitNoBranch)
     }
   } catch (e) {
     // ignore
