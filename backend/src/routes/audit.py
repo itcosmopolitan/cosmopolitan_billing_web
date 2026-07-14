@@ -75,7 +75,6 @@ async def list_audit_logs(
     module: Optional[str] = Query(None),
     risk: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
-    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     operation_type: Optional[str] = Query(None),
@@ -97,13 +96,6 @@ async def list_audit_logs(
         filters.append(func.upper(AuditLog.risk) == risk.upper())
     if user_id:
         filters.append(AuditLog.user_id == user_id)
-    if branch_id:
-        filters.append(AuditLog.branch_id == branch_id)
-    elif not getattr(user, "all_branches", False):
-        branch_ids = await get_allowed_branch_ids(user, db)
-        if not branch_ids:
-            return AuditLogListResponse(total=0, page=page, limit=limit, results=[])
-        filters.append(AuditLog.branch_id.in_(branch_ids))
 
     start_dt, end_dt = _to_datetime_bounds(date_from, date_to)
     if start_dt is not None:
