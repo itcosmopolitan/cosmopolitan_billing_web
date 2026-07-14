@@ -24,7 +24,13 @@ from src.routes.items import _upsert_branch_config
 from src.routes._serializers import get_user_branch_ids, serialize_transfer
 from src.routes._approval import can_direct_commit
 from src.permissions import TRANSFER_DOCUMENT_READ
-from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.security import (
+    current_user,
+    enforce_branch_access,
+    enforce_branch_access_optional,
+    get_allowed_branch_ids,
+    require_perm,
+)
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -108,8 +114,9 @@ async def _lock_transfer(
 @router.get("/", dependencies=[Depends(require_perm(*TRANSFER_DOCUMENT_READ))])
 async def list_transfers(
     status: Optional[str] = None,
-    from_branch: Optional[str] = Depends(enforce_branch_access_optional),
-    to_branch: Optional[str] = Depends(enforce_branch_access_optional),
+    branch_id: Optional[str] = Query(None),
+    from_branch: Optional[str] = Query(None, alias="from_branch_id"),
+    to_branch: Optional[str] = Query(None, alias="to_branch_id"),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -119,6 +126,9 @@ async def list_transfers(
 ):
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
+    branch_id = await enforce_branch_access_optional(branch_id, user=user, db=db)
+    from_branch = await enforce_branch_access_optional(from_branch, user=user, db=db)
+    to_branch = await enforce_branch_access_optional(to_branch, user=user, db=db)
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -138,14 +148,17 @@ async def list_transfers(
     if status:
         q = q.where(StockTransfer.status == status)
         cq = cq.where(StockTransfer.status == status)
+    if branch_id:
+        q = q.where(StockTransfer.from_branch_id == branch_id)
+        cq = cq.where(StockTransfer.from_branch_id == branch_id)
     if from_branch:
         q = q.where(StockTransfer.from_branch_id == from_branch)
         cq = cq.where(StockTransfer.from_branch_id == from_branch)
     if to_branch:
         q = q.where(StockTransfer.to_branch_id == to_branch)
         cq = cq.where(StockTransfer.to_branch_id == to_branch)
-    if not from_branch and not to_branch and not getattr(user, "all_branches", False):
-        branch_ids = await get_user_branch_ids(db, user.id)
+    if not branch_id and not from_branch and not to_branch and not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
         if not branch_ids:
             return paged([], 0, sk, lim)
         q = q.where(
@@ -218,6 +231,28 @@ async def _branch_names(
     )
 
 
+async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optional[str]) -> Optional[list[str]]:
+    if not getattr(user, "id", None):
+        try:
+            user = await current_user(authorization=None, db=db)
+        except RuntimeError:
+            return None
+    if getattr(user, "all_branches", False):
+        return None
+    branch_ids = await get_allowed_branch_ids(user, db)
+    if branch_ids:
+        if branch_id and branch_id not in branch_ids:
+            raise HTTPException(403, "Branch is outside your transfers scope")
+        return branch_ids
+    if getattr(user, "branch_id", None):
+        if branch_id and branch_id != user.branch_id:
+            raise HTTPException(403, "Branch is outside your transfers scope")
+        return [user.branch_id]
+    if branch_id:
+        raise HTTPException(403, "Branch is outside your transfers scope")
+    return []
+
+
 def _add_transfer_lines(transfer_id: str, items: List[TransferLine]) -> None:
     import json as _json
 
@@ -259,8 +294,8 @@ def _log_transfer_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         module="inventory",
         ref=transfer_number,
         detail=detail,
@@ -377,24 +412,30 @@ async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), use
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Transfer not found")
-    if not getattr(user, "all_branches", False):
-        branch_ids = await get_user_branch_ids(db, user.id)
-        if t.from_branch_id not in branch_ids and t.to_branch_id not in branch_ids:
-            raise HTTPException(403, "Access denied for transfer")
+    await _ensure_user_can_view_transfer(user, db, t)
     return await _serialize_transfer_detail(db, t)
+
+
+async def _ensure_user_can_view_transfer(user: User, db: AsyncSession, t: StockTransfer) -> None:
+    if getattr(user, "all_branches", False):
+        return
+    branch_ids = await get_allowed_branch_ids(user, db)
+    if t.from_branch_id not in branch_ids and t.to_branch_id not in branch_ids:
+        raise HTTPException(403, "Access denied for transfer")
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("transfers.create"))])
 async def create_transfer(
     data: TransferCreate,
-    request: Request,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
     if data.from_branch_id == data.to_branch_id:
         raise HTTPException(400, "Source and destination branches must differ")
-    await enforce_branch_access(data.from_branch_id, user=user, db=db)
-    await enforce_branch_access(data.to_branch_id, user=user, db=db)
+    # Validate requested branches are within the user's scope
+    await _resolve_branch_scope(user, db, data.from_branch_id)
+    await _resolve_branch_scope(user, db, data.to_branch_id)
     if not data.items:
         raise HTTPException(400, "At least one line item is required")
     tid = str(uuid.uuid4())
@@ -478,6 +519,10 @@ async def update_transfer(
             400,
             f"Only pending transfers can be edited; this transfer is {t.status.value}",
         )
+
+    # Validate the requested branches are within the user's scope
+    await _resolve_branch_scope(user, db, data.from_branch_id)
+    await _resolve_branch_scope(user, db, data.to_branch_id)
 
     from_name, to_name = await _branch_names(db, data.from_branch_id, data.to_branch_id)
     t.from_branch_id = data.from_branch_id

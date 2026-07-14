@@ -59,7 +59,13 @@ from src.routes._atomic import (
 from src.routes._serializers import get_user_branch_ids
 from src.routes._approval import can_direct_commit
 from src.permissions import PURCHASE_DOCUMENT_READ
-from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.security import (
+    current_user,
+    enforce_branch_access,
+    enforce_branch_access_optional,
+    get_allowed_branch_ids,
+    require_perm,
+)
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -80,7 +86,7 @@ async def _write_post_commit_audit(
     reference_id: str,
     detail: str,
     user: User,
-    request: Request,
+    request: Request = None,
     branch_id: Optional[str],
     metadata: Optional[dict] = None,
 ) -> None:
@@ -93,8 +99,8 @@ async def _write_post_commit_audit(
         user_id=user.id,
         user_name=user.name,
         user_role=role,
-        ip_address=getattr(request.state, "ip_address", None),
-        device_info=getattr(request.state, "device_info", None),
+        ip_address=(getattr(request.state, "ip_address", None) if request is not None else None),
+        device_info=(getattr(request.state, "device_info", None) if request is not None else None),
         branch_id=branch_id,
         metadata=metadata,
     )
@@ -151,8 +157,8 @@ def _log_purchase_bill_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action or event_type,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         user_role=_audit_log_user_role(user),
         module="purchases",
         ref=bill_number,
@@ -294,8 +300,8 @@ def _log_purchase_order_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action or event_type,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         module="purchases",
         ref=order_number,
         detail=detail,
@@ -436,8 +442,8 @@ def _log_grn_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action or event_type,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         module="purchases",
         ref=grn_number,
         detail=detail,
@@ -466,8 +472,8 @@ def _log_vendor_return_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action or event_type,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         module="purchases",
         ref=return_number,
         detail=detail,
@@ -605,7 +611,7 @@ async def list_bills(
     await db.commit()
     conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to)
     if branch_id is None and not getattr(user, "all_branches", False):
-        branch_ids = await get_user_branch_ids(db, user.id)
+        branch_ids = await get_allowed_branch_ids(user, db)
         if not branch_ids:
             return paged([], 0, sk, lim)
         conds.append(PurchaseBill.branch_id.in_(branch_ids))
@@ -657,7 +663,7 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
 async def create_bill(
     data: PurchaseCreate,
-    request: Request,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -1169,7 +1175,7 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: Us
 async def update_bill(
     bill_id: str,
     data: BillUpdate,
-    request: Request,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -1269,6 +1275,16 @@ async def update_bill(
     preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {bill.number}"
     if len(item_changes) > 1:
         preview = f"{preview}; +{len(item_changes) - 1} more item change(s)"
+    # Record an explicit `item_changed` activity for audit catalogue expectations
+    _log_purchase_bill_history(db, user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="item_changed",
+        action="update_purchase_bill_items",
+        detail=preview,
+        metadata={"changes": item_changes[:20], "line_count": len(data.items)},
+    )
+
     await _write_post_commit_audit(
         db,
         action="Purchase Bill Edited",
@@ -1365,6 +1381,7 @@ async def list_payments(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     vendor_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     payment_mode: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -1380,6 +1397,13 @@ async def list_payments(
         conds.append(VendorPayment.date >= date_from)
     if date_to:
         conds.append(VendorPayment.date <= date_to)
+    if branch_id is not None:
+        conds.append(VendorPayment.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return paged([], 0, normalize_skip(skip), normalize_limit(limit))
+        conds.append(VendorPayment.branch_id.in_(branch_ids))
     if search:
         s = f"%{search}%"
         conds.append(or_(
@@ -1426,6 +1450,7 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user:
     p = res.scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Payment not found")
+    await enforce_branch_access(p.branch_id, user=user, db=db)
     return _vendor_payment_dict(p, p.allocations)
 
 
@@ -1440,6 +1465,7 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
     pay = res.unique().scalar_one_or_none()
     if not pay:
         raise HTTPException(404, "Payment not found")
+    await enforce_branch_access(pay.branch_id, user=user, db=db)
     if getattr(pay, "voided", False):
         return {"status": "voided", "number": pay.number}
 
@@ -1503,8 +1529,8 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action="void_vendor_payment",
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         module="purchases",
         ref=pay.number,
         detail=f"Voided vendor payment {pay.number} (MVR{pay.total_amount})",
@@ -1539,6 +1565,11 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
     if len(bill_rows) != len(bill_ids):
         raise HTTPException(400, "One or more bills not found")
     bill_by_id = {b.id: b for b in bill_rows}
+    branch_ids = {b.branch_id for b in bill_rows if b.branch_id}
+    for branch_id in branch_ids:
+        await enforce_branch_access(branch_id, user=user, db=db)
+    if data.branch_id is not None:
+        await enforce_branch_access(data.branch_id, user=user, db=db)
     for b in bill_rows:
         if b.vendor_id != data.vendor_id:
             raise HTTPException(
@@ -1601,8 +1632,8 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             action="vendor_credit",
-            user_id=user.id if user is not None else None,
-            user_name=user.name if user is not None else None,
+            user_id=getattr(user, "id", None),
+            user_name=getattr(user, "name", None),
             module="purchases",
             ref=None,
             detail=(
@@ -1797,7 +1828,7 @@ async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) ->
 @router.get("/returns/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
 async def list_returns(
     vendor_id: Optional[str] = None,
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -1813,8 +1844,6 @@ async def list_returns(
     conds = []
     if vendor_id:
         conds.append(VendorReturn.vendor_id == vendor_id)
-    if branch_id:
-        conds.append(VendorReturn.branch_id == branch_id)
     if status:
         conds.append(VendorReturn.status == status)
     if search:
@@ -1823,6 +1852,13 @@ async def list_returns(
         conds.append(VendorReturn.date >= date_from)
     if date_to:
         conds.append(VendorReturn.date <= date_to)
+    if branch_id is not None:
+        conds.append(VendorReturn.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return paged([], 0, sk, lim)
+        conds.append(VendorReturn.branch_id.in_(branch_ids))
     sort_expr = resolve_sort(
         sort_by,
         sort_order,
@@ -1863,6 +1899,7 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db), user: U
     r = result.scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Return not found")
+    await enforce_branch_access(r.branch_id, user=user, db=db)
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == return_id))
     return _return_dict(r, li_res.scalars().all())
 
@@ -1888,6 +1925,7 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
     bill = bill_result.scalar_one_or_none()
     if not bill:
         raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
     bill_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
     if bill_status == "cancelled":
         raise HTTPException(400, "Bill is cancelled — cannot return against it")
@@ -2116,6 +2154,7 @@ async def approve_return(return_id: str, db: AsyncSession = Depends(get_db), use
     ret = result.scalar_one_or_none()
     if not ret:
         raise HTTPException(404, "Return not found")
+    await enforce_branch_access(ret.branch_id, user=user, db=db)
     ret.status = "paid"
     await db.commit()
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == return_id))
@@ -2133,6 +2172,7 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db), user: 
     ret = res.unique().scalar_one_or_none()
     if not ret:
         raise HTTPException(404, "Return not found")
+    await enforce_branch_access(ret.branch_id, user=user, db=db)
     if getattr(ret, "voided", False):
         return {"status": "void", "number": ret.number}
 
@@ -2178,6 +2218,7 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
     ret = res.unique().scalar_one_or_none()
     if not ret:
         raise HTTPException(404, "Return not found")
+    await enforce_branch_access(ret.branch_id, user=user, db=db)
     if not getattr(ret, "voided", False):
         return {"status": "active", "number": ret.number}
 
@@ -2494,7 +2535,8 @@ async def _create_grn_received(
     vendor_name: str,
     branch_id: str,
     branch_name: str,
-    date: str,
+    date: Optional[str] = None,
+    request: Request = None,
     line_rows: list,
     discount: float = 0,
     notes: Optional[str] = None,
@@ -2683,7 +2725,7 @@ async def list_orders(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     vendor_id: Optional[str] = None,
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -2693,8 +2735,6 @@ async def list_orders(
     conds = []
     if vendor_id:
         conds.append(PurchaseOrder.vendor_id == vendor_id)
-    if branch_id:
-        conds.append(PurchaseOrder.branch_id == branch_id)
     if status:
         conds.append(PurchaseOrder.status == status)
     if date_from:
@@ -2708,6 +2748,13 @@ async def list_orders(
                 PurchaseOrder.vendor_name.ilike(f"%{search}%"),
             )
         )
+    if branch_id is not None:
+        conds.append(PurchaseOrder.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return paged([], 0, normalize_skip(skip), normalize_limit(limit))
+        conds.append(PurchaseOrder.branch_id.in_(branch_ids))
     base = and_(*conds) if conds else True
     total = int((await db.execute(select(func.count(PurchaseOrder.id)).where(base))).scalar() or 0)
     sk = normalize_skip(skip)
@@ -2750,6 +2797,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
     po = res.scalar_one_or_none()
     if not po:
         raise HTTPException(404, "Purchase order not found")
+    await enforce_branch_access(po.branch_id, user=user, db=db)
     return _po_dict(po, po.line_items)
 
 
@@ -2779,6 +2827,9 @@ async def create_order(
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
+
+    # Enforce operator may create POs for this branch
+    await enforce_branch_access(data.branch_id, user=user, db=db)
 
     po = PurchaseOrder(
         id=str(uuid.uuid4()), number=po_num,
@@ -2863,6 +2914,8 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
 
     po.vendor_id = data.vendor_id
     po.vendor_name = data.vendor_name
+    # Enforce operator may assign this branch
+    await enforce_branch_access(data.branch_id, user=user, db=db)
     po.branch_id = data.branch_id
     po.branch_name = data.branch_name or data.branch_id
     po.expected_date = data.expected_date
@@ -3250,7 +3303,7 @@ async def list_grns(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     vendor_id: Optional[str] = None,
-    branch_id: Optional[str] = None,
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     search: Optional[str] = None,
     db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
@@ -3258,8 +3311,6 @@ async def list_grns(
     conds = []
     if vendor_id:
         conds.append(GoodsReceiptNote.vendor_id == vendor_id)
-    if branch_id:
-        conds.append(GoodsReceiptNote.branch_id == branch_id)
     if status:
         conds.append(GoodsReceiptNote.status == status)
     if search:
@@ -3270,6 +3321,13 @@ async def list_grns(
                 GoodsReceiptNote.po_number.ilike(f"%{search}%"),
             )
         )
+    if branch_id is not None:
+        conds.append(GoodsReceiptNote.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return paged([], 0, normalize_skip(skip), normalize_limit(limit))
+        conds.append(GoodsReceiptNote.branch_id.in_(branch_ids))
     where = and_(*conds) if conds else True
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
@@ -3301,6 +3359,7 @@ async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = 
     grn = res.scalar_one_or_none()
     if not grn:
         raise HTTPException(404, "GRN not found")
+    await enforce_branch_access(grn.branch_id, user=user, db=db)
     li = (await db.execute(
         select(GRNLineItem).where(GRNLineItem.grn_id == grn_id)
     )).scalars().all()
@@ -3312,6 +3371,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
     """Direct goods receipt (no PO). Stock moves immediately."""
     if not data.items:
         raise HTTPException(400, "GRN must have at least one line")
+    await enforce_branch_access(data.branch_id, user=user, db=db)
     today = datetime.now().strftime("%Y-%m-%d")
 
     po = None
@@ -3685,6 +3745,7 @@ async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User
     grn = res.scalar_one_or_none()
     if not grn:
         raise HTTPException(404, "GRN not found")
+    await enforce_branch_access(grn.branch_id, user=user, db=db)
     grn_status = str(grn.status.value) if hasattr(grn.status, "value") else str(grn.status)
     if grn_status == "cancelled":
         return {"status": "cancelled"}
@@ -3711,6 +3772,7 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User 
     b = result.scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(b.branch_id, user=user, db=db)
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
     return _bill_dict(b, li_res.scalars().all())
 
@@ -3752,8 +3814,8 @@ def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict, us
     db.add(AuditLog(
         id=str(uuid.uuid4()),
         action=action,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         module="purchases",
         ref=ref,
         detail=_json.dumps(snapshot, default=str),
@@ -3828,6 +3890,10 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
         .where(PurchaseBill.id.in_(data.ids))
     )
     bills = res.unique().scalars().all()
+    if bills:
+        branch_ids = {b.branch_id for b in bills if b.branch_id}
+        for branch_id in branch_ids:
+            await enforce_branch_access(branch_id, user=user, db=db)
     found_ids = {b.id for b in bills}
     blocked = []
     for bid in data.ids:
@@ -3985,6 +4051,10 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
         .where(VendorReturn.id.in_(data.ids))
     )
     returns = res.unique().scalars().all()
+    if returns:
+        branch_ids = {r.branch_id for r in returns if r.branch_id}
+        for branch_id in branch_ids:
+            await enforce_branch_access(branch_id, user=user, db=db)
     found_ids = {r.id for r in returns}
     blocked = []
     for rid in data.ids:

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { useAppStore } from '@/store'
+import { useAppStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
@@ -44,6 +44,7 @@ export default function TransfersPage() {
   const can = useCan()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const user = useAppStore((s) => s.user)
   const tab = tabFromSearchParams(searchParams)
   const [showDetail, setShowDetail] = useState(null)
@@ -70,6 +71,15 @@ export default function TransfersPage() {
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
+  useEffect(() => {
+    const unsub = subscribeToBranchChanged(() => {
+      setTrSkip(0)
+      setSelectedIds(new Set())
+      bumpList()
+    })
+    return () => unsub()
+  }, [bumpList])
+
   const onTabChange = useCallback((next) => {
     setTrSkip(0)
     const params = new URLSearchParams(searchParams)
@@ -79,22 +89,34 @@ export default function TransfersPage() {
   }, [searchParams, setSearchParams])
 
   useEffect(() => {
-      const key = `${tab}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
+      const key = `${activeBranch?.id || ''}|${tab}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
       let cancelled = false
       const run = async () => {
         try {
+          if (process.env.NODE_ENV !== 'production') {
+            console.debug('TransfersPage fetch', {
+              activeBranchId: activeBranch?.id,
+              tab,
+              trSkip,
+              trLimit,
+              trSortBy,
+              trSortOrder,
+              listVersion,
+            })
+          }
           setListLoading(true)
           let promise = inFlightTransfersRequests.get(key)
           if (!promise) {
             promise = Promise.all([
               transfersAPI.list({
+                branch_id: activeBranch?.id,
                 skip: trSkip,
                 limit: trLimit,
                 sort_by: trSortBy,
                 sort_order: trSortOrder,
                 status: tab === 'all' ? undefined : tab,
               }),
-              summariesAPI.get('transfers'),
+              summariesAPI.get('transfers', { branch_id: activeBranch?.id }),
             ])
             inFlightTransfersRequests.set(key, promise)
           }
@@ -120,7 +142,7 @@ export default function TransfersPage() {
       }
       run()
       return () => { cancelled = true }
-  }, [tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
+  }, [activeBranch?.id, tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
 
   useEffect(() => {
     setSelectedIds(new Set())

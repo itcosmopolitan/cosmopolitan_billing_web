@@ -112,6 +112,21 @@ export default function BranchPricingSection({
   const openingStockPlaceholder = '0'
   const reorderPlaceholder = String(defaultReorder || 10)
 
+  const getProfitPercentage = (row) => {
+    const cost = row.cost_price === '' || row.cost_price == null
+      ? Number(defaultCost ?? 0)
+      : Number(row.cost_price)
+    const price = row.selling_price === '' || row.selling_price == null
+      ? Number(defaultPrice ?? 0)
+      : Number(row.selling_price)
+
+    if (!Number.isFinite(cost) || !Number.isFinite(price) || cost === 0) {
+      return ''
+    }
+
+    return `${((price - cost) / cost * 100).toFixed(1)}%`
+  }
+
   if (!options.length) return null
 
   return (
@@ -155,6 +170,7 @@ export default function BranchPricingSection({
                 <th>Branch</th>
                 <th className="text-right">Cost Price (MVR)</th>
                 <th className="text-right">Selling Price (MVR)</th>
+                <th className="text-right">Profit %</th>
                 {(showCreateOpeningStock || showEditOpeningStock) && <th className="text-right">Opening Qty</th>}
                 <th className="text-right">Reorder</th>
                 {isEdit && <th className="text-right">Stock</th>}
@@ -203,6 +219,16 @@ export default function BranchPricingSection({
                       placeholder={pricePlaceholder(r.selling_price)}
                       value={r.selling_price}
                       onChange={(e) => patchRow(r._rowId, 'selling_price', e.target.value)}
+                    />
+                  </td>
+                  <td className="text-right">
+                    <input
+                      className="form-input"
+                      type="text"
+                      style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
+                      value={getProfitPercentage(r)}
+                      readOnly
+                      disabled
                     />
                   </td>
                   {(showCreateOpeningStock || showEditOpeningStock) && (

@@ -111,15 +111,44 @@ export const useAppStore = create(
       roles: [],
 
       // Actions
-      setActiveBranch: (branch) => set({ activeBranch: branch }),
+      setActiveBranch: (branch) => set((s) => {
+        const list = Array.isArray(s.branches) ? s.branches : []
+        const normalized = branch && typeof branch === 'object' ? branch : list.find((b) => b.id === branch) || null
+        const allowedIds = s.user?.all_branches || !s.user?.branch_ids?.length
+          ? null
+          : new Set(s.user.branch_ids)
+        const allowed = !normalized
+          ? null
+          : (!allowedIds || allowedIds.has(normalized.id) ? normalized : null)
+        const fallback = allowedIds
+          ? list.find((b) => allowedIds.has(b.id)) || null
+          : list[0] || null
+        const newActive = allowed || fallback
+        // Notify other parts of the app that the active branch changed so
+        // they can re-fetch data immediately (avoids forcing a full reload).
+        if (typeof window !== 'undefined') {
+          try {
+            window.dispatchEvent(new CustomEvent('branch:changed', { detail: newActive }))
+          } catch (e) {
+            // ignore
+          }
+        }
+        return { activeBranch: newActive }
+      }),
       setBranches: (branches) => set((s) => {
         // Keep the persisted activeBranch if it still exists in the new list,
-        // otherwise default to the first one (or null if the list is empty).
+        // otherwise default to the first allowed branch (or null if empty).
         const list = Array.isArray(branches) ? branches : []
+        const allowedIds = s.user?.all_branches || !s.user?.branch_ids?.length
+          ? null
+          : new Set(s.user.branch_ids)
         const stillThere = list.find((b) => b.id === s.activeBranch?.id)
+        const fallback = allowedIds
+          ? list.find((b) => allowedIds.has(b.id)) || null
+          : list[0] || null
         return {
           branches: list,
-          activeBranch: stillThere || list[0] || null,
+          activeBranch: (stillThere && (!allowedIds || allowedIds.has(stillThere.id))) ? stillThere : (fallback || null),
         }
       }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -148,11 +177,26 @@ export const useAppStore = create(
           ...(permCatalog ? { permCatalog } : {}),
         }
       }),
-      clearSession: () => set({ user: null, permissions: [], roles: [] }),
+      clearSession: () => set({ user: null, permissions: [], roles: [], activeBranch: null }),
     }),
     { name: 'retailos-app', partialize: (s) => ({ activeBranch: s.activeBranch, theme: s.theme, sidebarCollapsed: s.sidebarCollapsed }) }
   )
 )
+
+    // React-friendly subscription helper: components can call this to receive
+    // updates when the active branch changes. Returns an unsubscribe function.
+    export function subscribeToBranchChanged(cb) {
+      return useAppStore.subscribe(
+        (s) => s.activeBranch,
+        (newVal, oldVal) => {
+          try {
+            cb(newVal, oldVal)
+          } catch (e) {
+            // swallow listener errors
+          }
+        }
+      )
+    }
 
 // ─── POS Store ────────────────────────────────────────────────────────────────
 export const usePOSStore = create((set, get) => ({

@@ -166,7 +166,7 @@ export default function ItemFormPage({ mode = 'create' }) {
   useEffect(() => {
     if (isEdit) return
     Promise.all([
-      fetchAllList(itemsAPI.list, { master_mode: true, branch_id: defaultBranchId }),
+      fetchAllList(itemsAPI.list, { master_mode: true, branch_id: null }),
       itemsAPI.categories.list(),
     ])
       .then(([data, apiCategories]) => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { notificationsAPI } from '@/api'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
@@ -35,6 +35,7 @@ function formatRelativeTime(iso) {
 export default function Topbar() {
   const { user, activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [notifOpen, setNotifOpen]   = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
@@ -139,6 +140,16 @@ export default function Topbar() {
     ? branches
     : branches.filter((b) => user.branch_ids.includes(b.id))
 
+  const activeAllowed = allowedBranches.some((b) => b.id === activeBranch?.id)
+  const hideBranchSwitcher = location.pathname.startsWith('/item-master')
+
+  useEffect(() => {
+    if (!allowedBranches.length) return
+    if (!activeAllowed && allowedBranches[0]) {
+      setActiveBranch(allowedBranches[0])
+    }
+  }, [activeAllowed, allowedBranches, setActiveBranch])
+
   // Single click-outside handler that closes whichever menu is open.
   useEffect(() => {
     if (!notifOpen && !branchOpen) return
@@ -164,9 +175,9 @@ export default function Topbar() {
       </IconButton>
 
       {/* Branch picker — the only persistent context the topbar carries.
-          Hidden entirely if the user has no branches at all (defensive — the
-          seed always gives every active user at least one branch). */}
-      {allowedBranches.length > 0 && (
+          Hidden entirely on Item Master pages and if the user has no branches.
+          The seed always gives every active user at least one branch. */}
+      {!hideBranchSwitcher && allowedBranches.length > 0 && (
       <div style={{ position: 'relative' }} ref={branchRef}>
         <button
           onClick={() => setBranchOpen((v) => !v)}

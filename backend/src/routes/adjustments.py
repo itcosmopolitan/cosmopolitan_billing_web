@@ -30,7 +30,13 @@ from src.models import (
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._stock_adjust_apply import apply_stock_adjustment
 from src.routes._approval import can_direct_commit
-from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, require_perm
+from src.security import (
+    current_user,
+    enforce_branch_access,
+    enforce_branch_access_optional,
+    get_allowed_branch_ids,
+    require_perm,
+)
 from src.routes._serializers import get_user_branch_ids
 from src.services.audit_service import build_audit_entry
 
@@ -122,8 +128,8 @@ def _log_adjustment_history(
         event_type=event_type,
         event_metadata=json.dumps(metadata or {}, default=str),
         action=action,
-        user_id=user.id if user is not None else None,
-        user_name=user.name if user is not None else None,
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
         user_role=role or "unknown",
         module="inventory",
         reference_id=adjustment_number,
@@ -346,7 +352,7 @@ async def list_adjustments(
         q = q.where(AdjustmentRequest.branch_id == branch_id)
         cq = cq.where(AdjustmentRequest.branch_id == branch_id)
     elif not getattr(user, "all_branches", False):
-        branch_ids = await get_user_branch_ids(db, user.id)
+        branch_ids = await get_allowed_branch_ids(user, db)
         if not branch_ids:
             return paged([], 0, sk, lim)
         q = q.where(AdjustmentRequest.branch_id.in_(branch_ids))

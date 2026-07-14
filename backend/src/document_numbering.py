@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import DocumentNumberCounter, DocumentNumbering, SaleInvoice
@@ -180,9 +181,12 @@ async def allocate_number(
     """Reserve and return the next document number for *doc_type*."""
     cfg = await get_config(db, doc_type)
     if not cfg:
-        # Fallback for unknown types — keeps legacy behaviour alive.
-        year = (when or datetime.utcnow()).year
-        return f"{doc_type.upper()}-{year}-0001"
+        # Use in-code defaults when DB-backed numbering isn't configured
+        default = next((c for c in DEFAULT_NUMBERING if c["doc_type"] == doc_type), None)
+        if not default:
+            year = (when or datetime.utcnow()).year
+            return f"{doc_type.upper()}-{year}-0001"
+        cfg = SimpleNamespace(**default)
 
     scope = cfg.scope or "per_branch"
     key = _counter_key(doc_type, scope, branch_id)

@@ -83,7 +83,7 @@ export default function SettingsPage() {
   // confirmation modal (with copy). Cleared on close. null while the modal
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', manager:'', phone:'', address:'' })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'' })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -514,7 +514,6 @@ export default function SettingsPage() {
       await branchesAPI.create({
         name: branchForm.name,
         code: branchForm.code,
-        manager: branchForm.manager,
         phone: branchForm.phone,
         address: branchForm.address,
         gstin: '',
@@ -536,7 +535,6 @@ export default function SettingsPage() {
       await branchesAPI.update(editBranchForm.id, {
         name: editBranchForm.name,
         code: editBranchForm.code,
-        manager: editBranchForm.manager,
         phone: editBranchForm.phone,
         address: editBranchForm.address,
         gstin: editBranchForm.gstin || '',
@@ -563,7 +561,7 @@ export default function SettingsPage() {
       {tab === 'org' && (loading ? (
         <TableLoadingPanel label="Loading organisation profile…" />
       ) : (
-        <div className="grid-2" style={{alignItems:'start'}}>
+        <div style={{alignItems:'start'}}>
           <Card title="Organisation Profile">
             <FormRow><FormGroup label="Company Name" required><input className="form-input" value={orgForm.name} onChange={e=>pof('name',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             <FormGroup label="GST Reg No"><input className="form-input" value={orgForm.gstin} onChange={e=>pof('gstin',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
@@ -596,6 +594,7 @@ export default function SettingsPage() {
               </div>
             )}
           </Card>
+          {false && (
           <div style={{display:'flex',flexDirection:'column',gap:16}}>
             <Card title="Branding">
               <div style={{border:'2px dashed var(--border-default)',borderRadius:12,padding:28,textAlign:'center',cursor:'pointer',color:'var(--text-muted)'}} onClick={()=>toast('File picker…')}>
@@ -619,6 +618,7 @@ export default function SettingsPage() {
               ))}
             </Card>
           </div>
+          )}
         </div>
       ))}
 
@@ -643,7 +643,7 @@ export default function SettingsPage() {
                   <tr>
                     <SortableHeader label="Branch" sortKey="name" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
                     <SortableHeader label="Code" sortKey="code" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
-                    <SortableHeader label="Manager" sortKey="manager" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
+
                     <SortableHeader label="Phone" sortKey="phone" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
                     <th>Address</th>
                     <SortableHeader label="Status" sortKey="active" sortBy={branchSortBy} sortOrder={branchSortOrder} onSort={onBranchSort} />
@@ -655,7 +655,6 @@ export default function SettingsPage() {
                     <tr key={b.id}>
                       <td><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{b.name}</div></td>
                       <td><span className="mono" style={{fontSize:12,color:'var(--accent)'}}>{b.code}</span></td>
-                      <td style={{fontSize:12.5}}>{b.manager}</td>
                       <td style={{fontSize:12,color:'var(--text-muted)'}}>{b.phone}</td>
                       <td style={{fontSize:12,color:'var(--text-muted)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{b.address}</td>
                       <td><Chip status={b.active?'active':'inactive'}/></td>
@@ -689,16 +688,14 @@ export default function SettingsPage() {
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
             <FormRow><FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)}/></FormGroup>
             <FormGroup label="Branch Code"><input className="form-input" value={branchForm.code} onChange={e=>pbf('code',e.target.value)} placeholder="e.g. KK"/></FormGroup></FormRow>
-            <FormRow><FormGroup label="Manager"><input className="form-input" value={branchForm.manager} onChange={e=>pbf('manager',e.target.value)}/></FormGroup>
-            <FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)}/></FormGroup></FormRow>
+            <FormRow><FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)}/></FormGroup></FormRow>
             <FormGroup label="Address"><textarea className="form-input" style={{height:72}} value={branchForm.address} onChange={e=>pbf('address',e.target.value)}/></FormGroup>
           </Modal>
           <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="md"
               footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
               <FormRow><FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)}/></FormGroup>
               <FormGroup label="Branch Code"><input className="form-input" value={editBranchForm.code || ""} onChange={e => pbfEdit('code', e.target.value)} /></FormGroup></FormRow>
-              <FormRow><FormGroup label="Manager"><input className="form-input" value={editBranchForm.manager || ""} onChange={e => pbfEdit('manager', e.target.value)}/></FormGroup>
-              <FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)}/></FormGroup></FormRow>
+              <FormRow><FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)}/></FormGroup></FormRow>
               <FormGroup label="Address"><textarea className="form-input" style={{ height: 72 }} value={editBranchForm.address || ""} onChange={e => pbfEdit('address', e.target.value)}/></FormGroup>
           </Modal>
         </>

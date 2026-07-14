@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.models import AuditLog, User
 from src.schemas.audit import AuditLogCreate, AuditLogListResponse, AuditLogRead
-from src.security import current_user, require_perm
+from src.security import current_user, enforce_branch_access, enforce_branch_access_optional, get_allowed_branch_ids, require_perm
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -75,7 +75,7 @@ async def list_audit_logs(
     module: Optional[str] = Query(None),
     risk: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
-    branch_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     operation_type: Optional[str] = Query(None),
@@ -84,6 +84,7 @@ async def list_audit_logs(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     stmt = select(AuditLog)
     count_stmt = select(func.count()).select_from(AuditLog)
@@ -98,6 +99,11 @@ async def list_audit_logs(
         filters.append(AuditLog.user_id == user_id)
     if branch_id:
         filters.append(AuditLog.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return AuditLogListResponse(total=0, page=page, limit=limit, results=[])
+        filters.append(AuditLog.branch_id.in_(branch_ids))
 
     start_dt, end_dt = _to_datetime_bounds(date_from, date_to)
     if start_dt is not None:
@@ -152,11 +158,12 @@ async def export_csv(
     module: Optional[str] = Query(None),
     risk: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
-    branch_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     # Reuse the same server-side filtering semantics as list endpoint.
     response = await list_audit_logs(
@@ -170,6 +177,7 @@ async def export_csv(
         page=1,
         limit=200,
         db=db,
+        user=user,
     )
 
     def _iter_csv_rows():
@@ -222,11 +230,12 @@ async def export_csv(
 
 
 @router.get("/{log_id}", response_model=AuditLogRead, dependencies=[Depends(require_perm("audit.view"))])
-async def get_audit_log(log_id: str, db: AsyncSession = Depends(get_db)):
+async def get_audit_log(log_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     row = (await db.execute(select(AuditLog).where(AuditLog.id == log_id))).scalars().first()
     if row is None:
         raise HTTPException(status_code=404, detail="Audit log not found")
-
+    if row.branch_id:
+        await enforce_branch_access(row.branch_id, user=user, db=db)
     return _as_read_model(row)
 
 
@@ -241,6 +250,9 @@ async def create_audit_log(
     user_role = actor.role.value if hasattr(actor.role, "value") else str(actor.role)
     if user_role not in {"super_admin", "branch_manager", "finance", "purchase_admin"}:
         raise HTTPException(status_code=403, detail="Not allowed to write audit entries")
+
+    if payload.branch_id:
+        await enforce_branch_access(payload.branch_id, user=actor, db=db)
 
     entry_data = build_audit_entry(
         action=payload.action,

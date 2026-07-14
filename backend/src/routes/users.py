@@ -14,7 +14,7 @@ from src.database import get_db
 from src.models import Branch, Role, User, UserBranch
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import attach_branch_ids, serialize_user
-from src.security import hash_password_async, require_perm
+from src.security import hash_password_async, require_perm, current_user, enforce_branch_access
 
 router = APIRouter()
 
@@ -200,7 +200,7 @@ async def list_users(
     return paged_list(items, total, sk, lim)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("users.create"))])
-async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
+async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     normalized_email = data.email.lower()
     existing = (await db.execute(select(User).where(User.email == normalized_email))).scalar_one_or_none()
     if existing:
@@ -223,6 +223,14 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
         must_change_password=True,
     )
     db.add(u)
+    # Validate the admin may assign the requested branches before flushing
+    if not data.all_branches:
+        if data.branch_ids:
+            for bid in data.branch_ids:
+                await enforce_branch_access(bid, user=user, db=db)
+        elif data.branch_id:
+            await enforce_branch_access(data.branch_id, user=user, db=db)
+
     # Need to flush so the FK in user_branches can reference u.id without
     # committing the half-built record.
     await db.flush()
@@ -259,7 +267,7 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/{user_id}", dependencies=[Depends(require_perm("users.edit"))])
-async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends(get_db)):
+async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(User).where(User.id == user_id))
     u = result.scalar_one_or_none()
     if not u:
@@ -286,6 +294,17 @@ async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends
         "branch_ids" in payload or "all_branches" in payload or "branch_id" in payload
     )
     if branch_fields_sent:
+        # Enforce the operator may assign the requested branches
+        all_branches_val = bool(payload.get("all_branches", False))
+        branch_ids_val = payload.get("branch_ids", None)
+        legacy_branch_id = payload.get("branch_id", None)
+        if not all_branches_val:
+            if branch_ids_val:
+                for bid in branch_ids_val:
+                    await enforce_branch_access(bid, user=user, db=db)
+            elif legacy_branch_id:
+                await enforce_branch_access(legacy_branch_id, user=user, db=db)
+
         await _assign_branches(
             db, u,
             all_branches=bool(payload.pop("all_branches", False)),
