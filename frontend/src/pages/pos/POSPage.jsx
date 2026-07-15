@@ -12,7 +12,7 @@ import { unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
 import { PRODUCTS } from '@/utils/seedData'
-import { Modal, AutocompleteDropdown } from '@/components/ui'
+import { Modal, AutocompleteDropdown, Spinner } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
@@ -632,8 +632,8 @@ export default function POSPage() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 56px)' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
-          <div>Loading POS...</div>
+          <Spinner size={40} />
+          <div style={{ marginTop: 12 }}>Loading POS...</div>
         </div>
       </div>
     )

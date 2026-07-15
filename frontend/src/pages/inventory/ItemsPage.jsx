@@ -10,7 +10,7 @@ import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
   FormGroup, KPICard, EmptyState, Tag, PaginationBar,
   SortableHeader, AlertBar, ConfirmDialog, AutocompleteDropdown,
-  PageActionsMenu, buildListPageMenuActions,
+  TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import BatchesModal from './BatchesModal'
@@ -520,7 +520,11 @@ export default function ItemsPage({ mode = 'branch' }) {
       )}
 
       <Card bodyPadding={false}>
-        {filtered.length === 0 ? <EmptyState icon="📦" title="No items found" desc="Try a different search or filter" /> : (
+        {loading ? (
+          <TableLoadingPanel label="Loading items…" />
+        ) : filtered.length === 0 ? (
+          <EmptyState icon="📦" title="No items found" desc="Try a different search or filter" />
+        ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">
               <thead>

@@ -284,12 +284,12 @@ export function Receipt({ sale, branch }) {
 
       <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
         <button className="btn btn-primary" onClick={printReceipt}>🖨 Print Receipt</button>
-        <button className="btn btn-success" onClick={shareWhatsApp}>💬 WhatsApp</button>
+        {/* <button className="btn btn-success" onClick={shareWhatsApp}>💬 WhatsApp</button>
         <button className="btn btn-secondary" onClick={() => {
           const text = `${sale.number} | ${fmt(sale.total)} | ${billToName}`
           navigator.clipboard?.writeText(text)
           window.open(`mailto:?subject=Invoice ${sale.number}&body=Dear Customer,%0A%0APlease find your invoice details:%0A${encodeURIComponent(`Invoice: ${sale.number}\nTotal: ${fmt(sale.total)}`)}`)
-        }}>📧 Email</button>
+        }}>📧 Email</button> */}
       </div>
     </div>
   )

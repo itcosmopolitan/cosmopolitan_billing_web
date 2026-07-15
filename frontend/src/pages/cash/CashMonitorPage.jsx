@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
-import { SectionHeader, EmptyState, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, EmptyState, DatePicker, PageActionsMenu, buildListPageMenuActions, TableLoadingPanel } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
 
 function VarianceBadge({ variance, threshold = 500 }) {
@@ -168,7 +168,7 @@ export default function CashMonitorPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+        <TableLoadingPanel label="Loading branches…" />
       ) : branches.length === 0 ? (
         <EmptyState icon="🏪" title="No branches found" />
       ) : (

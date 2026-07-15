@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 
@@ -182,7 +182,11 @@ export default function VendorsPage() {
     return 'var(--text-primary)'
   }
 
-  if (loading) return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading vendors...</div></div>
+  if (loading) return (
+    <div className="page-container">
+      <TableLoadingPanel label="Loading vendors…" />
+    </div>
+  )
 
   return (
     <div className="page-container">

@@ -6,7 +6,7 @@ import { useAppStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
-  EmptyState, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown,
+  EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, AutocompleteDropdown,
   PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
@@ -444,9 +444,7 @@ export default function AdjustmentsPage() {
           )}
           <Card bodyPadding={false}>
             {listLoading ? (
-              <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                Loading adjustments…
-              </div>
+              <TableLoadingPanel label="Loading adjustments…" />
             ) : requests.length === 0 ? (
               <EmptyState icon="⚖" title="No requests" desc="No adjustment requests match this filter" />
             ) : (

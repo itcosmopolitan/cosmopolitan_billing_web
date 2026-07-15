@@ -5,7 +5,7 @@ import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
-import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate } from '@/utils/helpers'
@@ -392,9 +392,7 @@ export default function TransfersPage() {
           )}
           <Card bodyPadding={false}>
             {listLoading ? (
-              <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                Loading transfers…
-              </div>
+              <TableLoadingPanel label="Loading transfers…" />
             ) : transfers.length === 0 ? (
               <EmptyState icon="↔" title="No transfers" desc="No transfers match this filter" />
             ) : (

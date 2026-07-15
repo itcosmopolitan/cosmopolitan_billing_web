@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
-import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value, 2))
@@ -681,7 +681,9 @@ export default function ReportsPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={selectedReport.columns.length} style={{ textAlign: 'center', padding: 28 }}>Loading report data…</td>
+                  <td colSpan={selectedReport.columns.length} style={{ padding: 0 }}>
+                    <TableLoadingPanel label="Loading report data…" />
+                  </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>

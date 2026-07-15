@@ -4094,6 +4094,7 @@ async def list_returns(
     status: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    branch_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     """List sales returns."""
