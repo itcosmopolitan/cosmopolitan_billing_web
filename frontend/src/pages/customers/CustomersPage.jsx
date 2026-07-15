@@ -4,7 +4,7 @@ import { customersAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 
@@ -139,7 +139,11 @@ export default function CustomersPage() {
   }
 
   if (loading) {
-    return <div className="page-container"><div style={{padding: 40, textAlign: 'center'}}>Loading customers...</div></div>
+    return (
+      <div className="page-container">
+        <TableLoadingPanel label="Loading customers…" />
+      </div>
+    )
   }
 
   const creditUsedPct = (c) => c.creditLimit > 0 ? Math.min(100, (c.outstanding / c.creditLimit) * 100) : 0
