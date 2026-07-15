@@ -625,6 +625,7 @@ async def _top_customers(
     limit: int = 20,
 ) -> dict:
     conds = _invoice_conditions(filters, allowed_branch_ids, period)
+    conds.append(SaleInvoice.customer_id.isnot(None))
     result = await db.execute(
         select(
             func.coalesce(SaleInvoice.customer_id, SaleInvoice.customer_name).label("customer_id"),
