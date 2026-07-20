@@ -7,7 +7,7 @@ import time
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -437,21 +437,27 @@ async def init_schema() -> None:
         # PG requires new enum labels to be committed before they can be referenced.
         await _ensure_pg_enum_values(autocommit_conn)
     async with engine.begin() as conn:
-        await _ensure_columns(conn)
-        await _ensure_audit_log_indexes(conn)
-        await _ensure_nullable_columns(conn)
-        await _bootstrap_system_roles(conn)
-        await _ensure_activity_seed_markers_table(conn)
-        await _bootstrap_activity_role_defaults(conn)
-        await _migrate_item_master_permissions(conn)
-        await _purge_legacy_system_roles(conn)
-        await _bootstrap_document_numbering(conn)
-        await _bootstrap_default_tax_rates(conn)
-        await _bootstrap_invoice_template(conn)
-        await _backfill_role_ids(conn)
-        await _backfill_item_branch_config(conn)
-        await _migrate_adjustment_requests_per_branch_ref(conn)
-        await _repair_return_invoice_totals(conn)
+        try:
+            await _ensure_columns(conn)
+            await _ensure_audit_log_indexes(conn)
+            await _ensure_nullable_columns(conn)
+            await _bootstrap_system_roles(conn)
+            await _ensure_activity_seed_markers_table(conn)
+            await _bootstrap_activity_role_defaults(conn)
+            await _migrate_item_master_permissions(conn)
+            await _purge_legacy_system_roles(conn)
+            await _bootstrap_document_numbering(conn)
+            await _bootstrap_default_tax_rates(conn)
+            await _bootstrap_invoice_template(conn)
+            await _backfill_role_ids(conn)
+            await _backfill_item_branch_config(conn)
+            await _migrate_adjustment_requests_per_branch_ref(conn)
+            await _repair_return_invoice_totals(conn)
+        except DBAPIError as e:
+            if "deadlock detected" in str(e):
+                logger.info("Schema initialization encountered deadlock (expected with concurrent workers), continuing...")
+            else:
+                raise
     logger.info("Schema initialization completed in %.2f seconds", time.perf_counter() - start)
 
 
@@ -725,22 +731,35 @@ async def _ensure_columns(conn) -> None:
 
 async def _ensure_audit_log_indexes(conn) -> None:
     """Create timeline read indexes for audit logs (idempotent)."""
-    if conn.dialect.name == "postgresql":
-        await conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_audit_logs_record_created "
-                "ON audit_logs (record_type, record_id, created_at DESC)"
-            )
-        )
-        return
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if conn.dialect.name == "postgresql":
+                await conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_audit_logs_record_created "
+                        "ON audit_logs (record_type, record_id, created_at DESC)"
+                    )
+                )
+                return
 
-    # SQLite path used in local dev. IF NOT EXISTS is supported.
-    await conn.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_audit_logs_record_created "
-            "ON audit_logs (record_type, record_id, created_at DESC)"
-        )
-    )
+            # SQLite path used in local dev. IF NOT EXISTS is supported.
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_audit_logs_record_created "
+                    "ON audit_logs (record_type, record_id, created_at DESC)"
+                )
+            )
+            return
+        except DBAPIError as e:
+            # Retry on deadlock, which can happen with concurrent workers
+            if "deadlock detected" in str(e):
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5 * (2 ** attempt))  # exponential backoff
+                    continue
+                else:
+                    logger.warning(f"Failed to create audit index after {max_retries} retries: {e}")
+            raise
 
 
 # PostgreSQL enums are created at first table migration; new Python enum
