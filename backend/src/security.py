@@ -215,12 +215,7 @@ def require_perm(*needed: str):
 
 
 async def get_allowed_branch_ids(user: User, db: AsyncSession) -> list[str]:
-    """Return the list of branches the user may access.
-
-    For legacy users without explicit UserBranch rows, fall back to the
-    single `user.branch_id` FK so branch checks keep working until the data is
-    fully backfilled to the multi-branch table.
-    """
+    """Return the list of branches the user may access."""
     if getattr(user, "all_branches", False):
         return []
     from src.routes._serializers import get_user_branch_ids
@@ -228,8 +223,6 @@ async def get_allowed_branch_ids(user: User, db: AsyncSession) -> list[str]:
     branch_ids = await get_user_branch_ids(db, user.id)
     if branch_ids:
         return list(dict.fromkeys(branch_ids))
-    if getattr(user, "branch_id", None):
-        return [user.branch_id]
     return []
 
 
@@ -312,10 +305,6 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         "email": user.email,
         "role": user.role.value if hasattr(user.role, "value") else user.role,
         "role_id": user.role_id,
-        # Legacy single-branch field; mirrors branch_ids[0] purely for
-        # backwards compat. New frontend code reads branch_ids + all_branches
-        # instead; this is here only so older reads don't break.
-        "branch_id": user.branch_id,
         # Multi-branch list (2026-05-18). Empty when all_branches=True; in
         # that case the frontend treats the user as having every branch.
         "branch_ids": branch_ids,

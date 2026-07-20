@@ -100,7 +100,6 @@ async def _assign_branches(
     """
     if all_branches:
         user.all_branches = True
-        user.branch_id = None
         await db.execute(delete(UserBranch).where(UserBranch.user_id == user.id))
         return
 
@@ -131,10 +130,8 @@ async def _assign_branches(
         raise HTTPException(400, f"Unknown branch_id(s): {', '.join(missing)}")
 
     user.all_branches = False
-    # users.branch_id is mirrored from the first entry purely for backwards
-    # compat with legacy reads (see User.branch_id docstring). Any consumer
-    # is expected to use user_branches instead.
-    user.branch_id = ids[0]
+    # Keep the new multi-branch assignment source of truth in user_branches.
+    # The legacy users.branch_id column is no longer written for new/updated users.
     # Replace the join rows wholesale (small table, simpler than diffing).
     await db.execute(delete(UserBranch).where(UserBranch.user_id == user.id))
     for bid in ids:

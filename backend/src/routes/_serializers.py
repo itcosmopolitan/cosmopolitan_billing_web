@@ -184,17 +184,13 @@ def serialize_transfer(t) -> dict:
 def serialize_user(u) -> dict:
     """Sync serializer — does NOT include `branch_ids` (which lives in a
     separate table). List endpoints follow this up with `attach_branch_ids`;
-    single-user paths (login, /me) follow up with `get_user_branch_ids`.
-    The `branch_id` field below is the legacy single-branch FK, mirrored
-    from `user_branches[0]` for backwards compat with code that pre-dates
-    the multi-branch feature."""
+    single-user paths (login, /me) follow up with `get_user_branch_ids`."""
     return {
         "id": u.id,
         "name": u.name,
         "email": u.email,
         "role": _enum_value(u.role),
         "role_id": u.role_id,
-        "branch_id": u.branch_id,
         "all_branches": bool(getattr(u, "all_branches", False)),
         "active": u.active,
         "last_login": u.last_login.isoformat() if u.last_login else None,

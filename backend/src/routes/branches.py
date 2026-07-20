@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Optional
 
@@ -13,6 +14,43 @@ from src.routes._serializers import get_user_branch_ids, serialize_branch
 from src.security import current_user, enforce_branch_access, require_perm
 
 router = APIRouter()
+
+
+def _normalize_branch_code(value: str) -> str:
+    letters = re.sub(r"[^A-Z]", "", (value or "").upper())
+    if len(letters) >= 2:
+        return letters[:2]
+    if letters:
+        return letters + letters[-1]
+    return "BR"
+
+
+def _build_branch_code(name: str, existing_codes: Optional[list[str]] = None, existing_code: Optional[str] = None) -> str:
+    base_code = _normalize_branch_code(name if name else "Branch")
+    if existing_code and existing_code.upper() == base_code:
+        return existing_code.upper()
+
+    candidate = re.sub(r"[^A-Z]", "", base_code.upper())
+    used_codes = {re.sub(r"[^A-Z]", "", code.upper()) for code in (existing_codes or []) if code}
+    if existing_code:
+        used_codes.discard(re.sub(r"[^A-Z]", "", existing_code.upper()))
+
+    if candidate not in used_codes:
+        return candidate
+
+    first_start = ord(candidate[0]) if len(candidate) > 0 else ord("A")
+    second_start = ord(candidate[1]) if len(candidate) > 1 else ord("A")
+
+    for first_offset in range(0, 26):
+        first_letter = chr((first_start - ord("A") + first_offset) % 26 + ord("A"))
+        for second_offset in range(0, 26):
+            second_letter = chr((second_start - ord("A") + second_offset) % 26 + ord("A"))
+            alt = f"{first_letter}{second_letter}"
+            if alt not in used_codes:
+                return alt
+
+    return "ZZ"
+
 
 class BranchCreate(BaseModel):
     name: str
@@ -90,7 +128,9 @@ async def get_branch(branch_id: str = Depends(enforce_branch_access), db: AsyncS
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("settings.edit"))])
 async def create_branch(data: BranchCreate, db: AsyncSession = Depends(get_db)):
-    b = Branch(id=str(uuid.uuid4()), name=data.name, code=data.code,
+    existing_codes = [row[0] for row in (await db.execute(select(Branch.code))).all() if row[0]]
+    code = _build_branch_code(data.name, existing_codes=existing_codes)
+    b = Branch(id=str(uuid.uuid4()), name=data.name, code=code,
                phone=data.phone, address=data.address,
                gstin=data.gstin, active=data.active)
     db.add(b)
@@ -103,8 +143,15 @@ async def update_branch(branch_id: str, data: BranchUpdate, db: AsyncSession = D
     b = result.scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Branch not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "code" in payload:
+        payload.pop("code")
+    if "name" in payload:
+        b.name = payload.pop("name")
+    for k, v in payload.items():
         setattr(b, k, v)
+    existing_codes = [row[0] for row in (await db.execute(select(Branch.code))).all() if row[0]]
+    b.code = _build_branch_code(b.name, existing_codes=existing_codes, existing_code=b.code)
     await db.commit()
     return {"message": "Updated"}
 

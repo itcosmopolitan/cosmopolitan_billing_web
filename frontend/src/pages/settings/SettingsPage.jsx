@@ -78,7 +78,9 @@ export default function SettingsPage() {
   // The legacy "all_branches" implicit-all mode was removed from the UI on
   // 2026-05-18 sixth session (see WORKSHEET); the backend still accepts
   // all_branches=True for older clients but nothing in this UI sends it.
-  const [userForm, setUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[], active:true, password:'' })
+  // Add an explicit `all_branches` flag so super_admin selection can toggle
+  // the branches UI and submit the explicit value to the server.
+  const [userForm, setUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[], all_branches:false, active:true, password:'' })
   // After a successful create, holds the temp password to display in a
   // confirmation modal (with copy). Cleared on close. null while the modal
   // isn't open.
@@ -104,7 +106,7 @@ export default function SettingsPage() {
   const [editBranchForm, setEditBranchForm] = useState({})
   const [showEditUser, setShowEditUser] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
-  const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[] })
+  const [editUserForm, setEditUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[], all_branches:false })
   const peuf = (k,v) => setEditUserForm(f=>({...f,[k]:v}))
 
   // RBAC: roles + permission catalog (Phase 1 of Users & Roles)
@@ -395,8 +397,8 @@ export default function SettingsPage() {
     if (!userForm.name || !userForm.email) { toast.error('Name and email required'); return }
     if (!isValidEmail(userForm.email)) { toast.error('Enter a valid email (e.g. name@example.com)'); return }
     if (!userForm.role_id) { toast.error('Select a role'); return }
-    // Mirror backend _assign_branches: caller must pick at least one branch.
-    if (!userForm.branch_ids || userForm.branch_ids.length === 0) {
+    // Mirror backend _assign_branches: caller must pick at least one branch OR set all_branches.
+    if (!userForm.all_branches && (!userForm.branch_ids || userForm.branch_ids.length === 0)) {
       toast.error('Pick at least one branch')
       return
     }
@@ -418,6 +420,7 @@ export default function SettingsPage() {
         email: userForm.email.trim().toLowerCase(),
         role_id: userForm.role_id,
         branch_ids: userForm.branch_ids,
+        all_branches: !!userForm.all_branches,
         password: userForm.password,
       }
       const result = await usersAPI.create(payload)
@@ -428,7 +431,7 @@ export default function SettingsPage() {
         name: userForm.name,
         email: userForm.email,
       })
-      setUserForm({ name:'', email:'', role_id:'', branch_ids:[], active:true, password:'' })
+      setUserForm({ name:'', email:'', role_id:'', branch_ids:[], all_branches:false, active:true, password:'' })
     } catch (err) {
       console.error(err)
       // toast already fired by global axios interceptor on non-2xx
@@ -478,6 +481,7 @@ export default function SettingsPage() {
       email: user.email,
       role_id: user.role_id || roleForUser(user)?.id || '',
       branch_ids: initialBranchIds,
+      all_branches: !!user.all_branches,
     })
     setShowEditUser(true)
   }
@@ -486,7 +490,7 @@ export default function SettingsPage() {
     if (!editUserForm.name || !editUserForm.email) { toast.error('Name and email required'); return }
     if (!isValidEmail(editUserForm.email)) { toast.error('Enter a valid email (e.g. name@example.com)'); return }
     if (!editUserForm.role_id) { toast.error('Select a role'); return }
-    if (!editUserForm.branch_ids || editUserForm.branch_ids.length === 0) {
+    if (!editUserForm.all_branches && (!editUserForm.branch_ids || editUserForm.branch_ids.length === 0)) {
       toast.error('Pick at least one branch')
       return
     }
@@ -497,6 +501,7 @@ export default function SettingsPage() {
         email: editUserForm.email.trim().toLowerCase(),
         role_id: editUserForm.role_id,
         branch_ids: editUserForm.branch_ids,
+        all_branches: !!editUserForm.all_branches,
       }
       await usersAPI.update(editingUser.id, payload)
       setUserListVersion((v) => v + 1)
@@ -519,11 +524,10 @@ export default function SettingsPage() {
         gstin: '',
         active: true,
       })
-      setShowBranch(false)
-      setBrSkip(0)
-      setBrListVersion((v) => v + 1)
-      loadAllBranches()
       toast.success('Branch added')
+      // Full application refresh — branch changes affect branch selectors,
+      // user branch assignments, dashboards, etc. across the app.
+      setTimeout(() => window.location.reload(), 500)
     } catch (err) {
       console.error(err)
       // Toast already fired by global axios interceptor.
@@ -541,10 +545,9 @@ export default function SettingsPage() {
         active: editBranchForm.active ?? true,
       })
       toast.success('Branch updated')
-      setShowEditBranch(false)
-      setBrSkip(0)
-      setBrListVersion((v) => v + 1)
-      loadAllBranches()
+      // Full application refresh — branch changes affect branch selectors,
+      // user branch assignments, dashboards, etc. across the app.
+      setTimeout(() => window.location.reload(), 500)
     } catch (err) {
       console.error(err)
       // Toast already fired by global axios interceptor.
@@ -687,14 +690,16 @@ export default function SettingsPage() {
           <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
             <FormRow><FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)}/></FormGroup>
-            <FormGroup label="Branch Code"><input className="form-input" value={branchForm.code} onChange={e=>pbf('code',e.target.value)} placeholder="e.g. KK"/></FormGroup></FormRow>
+            {/* <FormGroup label="Branch Code"><input className="form-input" value={branchForm.code} onChange={e=>pbf('code',e.target.value)} placeholder="e.g. KK"/></FormGroup> */}
+            </FormRow>
             <FormRow><FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)}/></FormGroup></FormRow>
             <FormGroup label="Address"><textarea className="form-input" style={{height:72}} value={branchForm.address} onChange={e=>pbf('address',e.target.value)}/></FormGroup>
           </Modal>
           <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="md"
               footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
               <FormRow><FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)}/></FormGroup>
-              <FormGroup label="Branch Code"><input className="form-input" value={editBranchForm.code || ""} onChange={e => pbfEdit('code', e.target.value)} /></FormGroup></FormRow>
+              {/* <FormGroup label="Branch Code"><input className="form-input" value={editBranchForm.code || ""} onChange={e => pbfEdit('code', e.target.value)} /></FormGroup>*/}
+              </FormRow>
               <FormRow><FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)}/></FormGroup></FormRow>
               <FormGroup label="Address"><textarea className="form-input" style={{ height: 72 }} value={editBranchForm.address || ""} onChange={e => pbfEdit('address', e.target.value)}/></FormGroup>
           </Modal>
@@ -894,7 +899,17 @@ export default function SettingsPage() {
             <FormGroup label="Role" required>
               <AutocompleteDropdown
                 value={userForm.role_id}
-                onChange={(v) => puf('role_id', v)}
+                onChange={(v) => {
+                  puf('role_id', v)
+                  const r = roleById(v)
+                  const isSuper = !!(r && r.key === 'super_admin')
+                  if (isSuper) {
+                    puf('branch_ids', [])
+                    puf('all_branches', true)
+                  } else {
+                    puf('all_branches', false)
+                  }
+                }}
                 options={roles.filter((r) => r.active !== false).map((r) => ({
                   id: r.id,
                   label: `${r.label}${r.is_system ? '' : ' (custom)'}`,
@@ -904,14 +919,16 @@ export default function SettingsPage() {
                 placeholder="— Select role —"
               />
             </FormGroup>
-            <FormGroup label="Branches" required>
-              <MultiSelect
-                options={storeBranches.map(b => ({ id: b.id, label: b.name }))}
-                value={userForm.branch_ids}
-                onChange={(ids) => puf('branch_ids', ids)}
-                placeholder="Choose branches…"
-              />
-            </FormGroup>
+            {!userForm.all_branches && (
+              <FormGroup label="Branches" required>
+                <MultiSelect
+                  options={storeBranches.map(b => ({ id: b.id, label: b.name }))}
+                  value={userForm.branch_ids}
+                  onChange={(ids) => puf('branch_ids', ids)}
+                  placeholder="Choose branches…"
+                />
+              </FormGroup>
+            )}
             <AlertBar type="blue" icon="ℹ">
               A temporary password will be emailed to the new user automatically.
               They must change it on first login for security.
@@ -948,11 +965,21 @@ export default function SettingsPage() {
           <Modal open={showEditUser} onClose={()=>setShowEditUser(false)} title="Edit User" icon="✏️" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowEditUser(false)}>Cancel</button><button className="btn btn-primary" onClick={saveEditUser}>Update User</button></>}>
             <FormRow><FormGroup label="Full Name" required><input className="form-input" value={editUserForm.name} onChange={e=>peuf('name',e.target.value)}/></FormGroup>
-            <FormGroup label="Email" required><input className="form-input" type="email" value={editUserForm.email} onChange={e=>peuf('email',e.target.value)}/></FormGroup></FormRow>
+            <FormGroup label="Email" required><input className="form-input" type="email" value={editUserForm.email} disabled={true} title="Email cannot be changed after user creation" style={{cursor:'not-allowed',opacity:0.6}}/></FormGroup></FormRow>
             <FormGroup label="Role" required>
               <AutocompleteDropdown
                 value={editUserForm.role_id}
-                onChange={(v) => peuf('role_id', v)}
+                onChange={(v) => {
+                  peuf('role_id', v)
+                  const r = roleById(v)
+                  const isSuper = !!(r && r.key === 'super_admin')
+                  if (isSuper) {
+                    peuf('branch_ids', [])
+                    peuf('all_branches', true)
+                  } else {
+                    peuf('all_branches', false)
+                  }
+                }}
                 options={roles.filter((r) => r.active !== false).map((r) => ({
                   id: r.id,
                   label: `${r.label}${r.is_system ? '' : ' (custom)'}`,
@@ -962,14 +989,16 @@ export default function SettingsPage() {
                 placeholder="— Select role —"
               />
             </FormGroup>
-            <FormGroup label="Branches" required>
-              <MultiSelect
-                options={storeBranches.map(b => ({ id: b.id, label: b.name }))}
-                value={editUserForm.branch_ids}
-                onChange={(ids) => peuf('branch_ids', ids)}
-                placeholder="Choose branches…"
-              />
-            </FormGroup>
+            {!editUserForm.all_branches && (
+              <FormGroup label="Branches" required>
+                <MultiSelect
+                  options={storeBranches.map(b => ({ id: b.id, label: b.name }))}
+                  value={editUserForm.branch_ids}
+                  onChange={(ids) => peuf('branch_ids', ids)}
+                  placeholder="Choose branches…"
+                />
+              </FormGroup>
+            )}
           </Modal>
         </>
       )}
