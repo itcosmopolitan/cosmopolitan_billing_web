@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useDisplaySocket } from '@/hooks/useDisplaySocket'
+import { settingsAPI } from '@/api'
 import { EMPTY_POS_DISPLAY, isValidDisplayCode, normalizeDisplayCode } from './displayShared'
 import { fmt } from '@/utils/helpers'
 
@@ -91,7 +92,17 @@ function DisplayCodeEntry() {
 
 function CustomerDisplayLive({ roomId }) {
   const [display, setDisplay] = useState(EMPTY_POS_DISPLAY)
+  const [organisation, setOrganisation] = useState(null)
   const { connected } = useDisplaySocket(roomId, 'viewer', setDisplay)
+
+  useEffect(() => {
+    settingsAPI.getOrganisation()
+      .then((res) => {
+        const data = res?.data ?? res
+        if (data?.name) setOrganisation(data)
+      })
+      .catch(() => null)
+  }, [])
 
   const { customer, branchName, cashierName, items, subtotal, tax, discount, total, taxMode } = display
   const code = normalizeDisplayCode(display.displayCode || roomId)
@@ -114,7 +125,7 @@ function CustomerDisplayLive({ roomId }) {
       }}>
         <div>
           <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 4 }}>Your order</div>
-          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>Sri Murugan Traders</h1>
+          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>{organisation?.name || 'Sri Murugan Traders'}</h1>
           {branchName && (
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>{branchName}</div>
           )}

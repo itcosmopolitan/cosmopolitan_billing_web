@@ -199,6 +199,11 @@ export const authAPI = {
     api.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
 }
 
+export const setupAPI = {
+  status: () => api.get('/setup/status'),
+  initialize: (data) => api.post('/setup/initialize', data),
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const dashAPI = {
   filters:          (params) => api.get('/dashboard/filters', { params }),

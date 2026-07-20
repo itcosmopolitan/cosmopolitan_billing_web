@@ -33,6 +33,7 @@ from src.routes import (
     roles,
     sales,
     settings as settings_routes,
+    setup,
     taxes,
     transfers,
     adjustments,
@@ -138,6 +139,7 @@ app.include_router(users.router,      prefix=f"{PREFIX}/users",     tags=["Users
 app.include_router(roles.router,       prefix=f"{PREFIX}/roles",       tags=["Roles"])
 app.include_router(permissions.router, prefix=f"{PREFIX}/permissions", tags=["Permissions"])
 app.include_router(settings_routes.router, prefix=f"{PREFIX}/settings", tags=["Settings"])
+app.include_router(setup.router,       prefix=f"{PREFIX}/setup",       tags=["Setup"])
 app.include_router(taxes.router,       prefix=f"{PREFIX}/taxes",       tags=["Taxes"])
 app.include_router(customer_display.router, prefix=f"{PREFIX}/ws", tags=["Customer Display WS"])
 app.include_router(notifications_ws.router, prefix=f"{PREFIX}/ws", tags=["Notifications WS"])

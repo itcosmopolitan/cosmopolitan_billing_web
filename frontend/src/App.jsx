@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '@/store'
+import { setupAPI } from '@/api'
 import {
   applyBootstrapToStore,
   bootstrapAuthenticatedData,
@@ -10,6 +11,7 @@ import { RequireAuth, RequirePasswordSet, RequirePerm } from '@/auth/guards'
 import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
 import LoginPage from '@/pages/auth/LoginPage'
+import SetupPage from '@/pages/auth/SetupPage'
 import ChangePasswordPage from '@/pages/auth/ChangePasswordPage'
 
 import Dashboard     from '@/features/dashboard/DashboardPage'
@@ -121,7 +123,10 @@ export default function App() {
   const setSession = useAppStore((s) => s.setSession)
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
+  const location = useLocation()
   const [booting, setBooting] = useState(true)
+  const [setupStatusResolved, setSetupStatusResolved] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
 
   useEffect(() => {
     const nextTheme = theme === 'dark' ? 'dark' : 'light'
@@ -135,25 +140,39 @@ export default function App() {
     ;(async () => {
       try {
         const token = localStorage.getItem('retailos_token')
+        const setupStatus = await setupAPI.status().catch(() => ({ required: false }))
+        if (cancelled) return
+        const required = Boolean(setupStatus?.required)
+        setSetupRequired(required)
+        if (required && !token) {
+          setBooting(false)
+          return
+        }
+
         const data = token
           ? await bootstrapAuthenticatedData()
           : { ...(await bootstrapPublicData()), branches: [], user: null, permissions: [] }
         if (cancelled) return
         applyBootstrapToStore(data, { setSession, setPermCatalog, setBranches })
       } finally {
-        if (!cancelled) setBooting(false)
+        if (!cancelled) {
+          setBooting(false)
+          setSetupStatusResolved(true)
+        }
       }
     })()
     return () => { cancelled = true }
-  }, [setSession, setPermCatalog, setBranches])
+  }, [setSession, setPermCatalog, setBranches, location.pathname])
 
-  if (booting) return <BootSplash />
+  if (!setupStatusResolved || booting) return <BootSplash />
+  if (setupRequired && location.pathname !== '/setup') return <Navigate to="/setup" replace />
 
   return (
     <Routes>
       {/* Public live display routes — no login; open on second device/monitor. */}
       <Route path="/customer-view" element={<CustomerDisplayPage />} />
       <Route path="/customer-view/:roomId" element={<CustomerDisplayPage />} />
+      <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       {/* /change-password sits OUTSIDE the RequirePasswordSet wrap on purpose
           — that's the one route users with must_change_password=true need to
