@@ -2,16 +2,17 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, ItemStock
+from src.models import Branch, ItemStock, User
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import get_user_branch_ids, serialize_branch
 from src.security import current_user, enforce_branch_access, require_perm
+from src.services.audit_service import add_audit_log
 
 router = APIRouter()
 
@@ -127,18 +128,46 @@ async def get_branch(branch_id: str = Depends(enforce_branch_access), db: AsyncS
     return serialize_branch(b)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("settings.edit"))])
-async def create_branch(data: BranchCreate, db: AsyncSession = Depends(get_db)):
+async def create_branch(
+    data: BranchCreate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     existing_codes = [row[0] for row in (await db.execute(select(Branch.code))).all() if row[0]]
     code = _build_branch_code(data.name, existing_codes=existing_codes)
     b = Branch(id=str(uuid.uuid4()), name=data.name, code=code,
                phone=data.phone, address=data.address,
                gstin=data.gstin, active=data.active)
     db.add(b)
+    add_audit_log(
+        db,
+        action="Branch created",
+        module="Settings",
+        reference_id=b.id,
+        detail=f"Created branch {b.name} ({b.code})",
+        user=user,
+        request=request,
+        metadata={
+            "name": b.name,
+            "code": b.code,
+            "phone": b.phone,
+            "address": b.address,
+            "gstin": b.gstin,
+            "active": b.active,
+        },
+    )
     await db.commit()
     return {"id": b.id, "message": "Branch created"}
 
 @router.put("/{branch_id}", dependencies=[Depends(require_perm("settings.edit"))])
-async def update_branch(branch_id: str, data: BranchUpdate, db: AsyncSession = Depends(get_db)):
+async def update_branch(
+    branch_id: str,
+    data: BranchUpdate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     result = await db.execute(select(Branch).where(Branch.id == branch_id))
     b = result.scalar_one_or_none()
     if not b:
@@ -152,6 +181,16 @@ async def update_branch(branch_id: str, data: BranchUpdate, db: AsyncSession = D
         setattr(b, k, v)
     existing_codes = [row[0] for row in (await db.execute(select(Branch.code))).all() if row[0]]
     b.code = _build_branch_code(b.name, existing_codes=existing_codes, existing_code=b.code)
+    add_audit_log(
+        db,
+        action="Branch updated",
+        module="Settings",
+        reference_id=b.id,
+        detail=f"Updated branch {b.name} ({b.code})",
+        user=user,
+        request=request,
+        metadata=payload,
+    )
     await db.commit()
     return {"message": "Updated"}
 

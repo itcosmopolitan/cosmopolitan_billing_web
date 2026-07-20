@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any, Optional
+
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models import AuditLog, User
 
 
 _SENSITIVE_KEYS = {
@@ -85,3 +91,36 @@ def build_audit_entry(
         "metadata_": safe_metadata,
         "risk": risk,
     }
+
+def _get_user_role(user: Optional[User]) -> str:
+    if user is None:
+        return "unknown"
+    return user.role.value if hasattr(user.role, "value") else str(user.role)
+
+
+def add_audit_log(
+    db: AsyncSession,
+    *,
+    action: str,
+    module: str,
+    reference_id: str,
+    detail: str,
+    user: Optional[User],
+    request: Optional[Request] = None,
+    branch_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    payload = build_audit_entry(
+        action=action,
+        module=module,
+        reference_id=reference_id,
+        detail=detail,
+        user_id=getattr(user, "id", "system"),
+        user_name=getattr(user, "name", "System"),
+        user_role=_get_user_role(user),
+        ip_address=getattr(request.state, "ip_address", None) if request else None,
+        device_info=getattr(request.state, "device_info", None) if request else None,
+        branch_id=branch_id,
+        metadata=metadata,
+    )
+    db.add(AuditLog(id=str(uuid.uuid4()), **payload))

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import AutocompleteDropdown from './AutocompleteDropdown'
-import DatePicker from './DatePicker'
+import { humanizeValue } from '@/utils/helpers'
 export { default as AutocompleteDropdown } from './AutocompleteDropdown'
 export { default as DatePicker } from './DatePicker'
 
@@ -98,6 +98,18 @@ export function Tabs({ tabs, active, onChange }) {
 
 // ─── Status Chip ──────────────────────────────────────────────────────────────
 export function Chip({ status, label, custom }) {
+  const normalized = String(status || '').trim().toLowerCase()
+  const statusKey = {
+    intransit: 'transit',
+    in_progress: 'transit',
+    inprogress: 'transit',
+    receive: 'received',
+    canceled: 'cancelled',
+    approved: 'active',
+    accepted: 'active',
+    rejected: 'draft',
+  }[normalized] ?? normalized
+
   const map = {
     paid:     { cls: 'chip-paid',     lbl: 'Paid' },
     active:   { cls: 'chip-active',   lbl: 'Active' },
@@ -117,7 +129,7 @@ export function Chip({ status, label, custom }) {
   if (custom) {
     return <span className="chip" style={{ background: custom.bg, color: custom.color }}>{label}</span>
   }
-  const { cls, lbl } = map[status] || { cls: 'chip-draft', lbl: status }
+  const { cls, lbl } = map[statusKey] || { cls: 'chip-draft', lbl: humanizeValue(statusKey) }
   return <span className={`chip ${cls}`}>{label || lbl}</span>
 }
 

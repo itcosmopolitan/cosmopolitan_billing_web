@@ -3,7 +3,7 @@ import secrets
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
 
 from src.email_utils import send_temp_password_email
@@ -15,6 +15,7 @@ from src.models import Branch, Role, User, UserBranch
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import attach_branch_ids, serialize_user
 from src.security import hash_password_async, require_perm, current_user, enforce_branch_access
+from src.services.audit_service import add_audit_log
 
 router = APIRouter()
 
@@ -197,7 +198,12 @@ async def list_users(
     return paged_list(items, total, sk, lim)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("users.create"))])
-async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_user(
+    data: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     normalized_email = data.email.lower()
     existing = (await db.execute(select(User).where(User.email == normalized_email))).scalar_one_or_none()
     if existing:
@@ -240,6 +246,25 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db), user
     await db.commit()
     await db.refresh(u)
 
+    add_audit_log(
+        db,
+        action="User created",
+        module="Settings",
+        reference_id=u.id,
+        detail=f"Created user {u.name} ({u.email})",
+        user=user,
+        request=request,
+        metadata={
+            "name": u.name,
+            "email": u.email,
+            "role": u.role,
+            "role_id": u.role_id,
+            "branch_ids": data.branch_ids,
+            "all_branches": data.all_branches,
+        },
+    )
+    await db.commit()
+
     payload = serialize_user(u)
     await attach_branch_ids(db, [payload])
 
@@ -264,7 +289,13 @@ async def create_user(data: UserCreate, db: AsyncSession = Depends(get_db), user
 
 
 @router.patch("/{user_id}", dependencies=[Depends(require_perm("users.edit"))])
-async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def update_user(
+    user_id: str,
+    data: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     result = await db.execute(select(User).where(User.id == user_id))
     u = result.scalar_one_or_none()
     if not u:
@@ -323,16 +354,42 @@ async def update_user(user_id: str, data: UserUpdate, db: AsyncSession = Depends
     for k, v in payload.items():
         setattr(u, k, v)
 
+    add_audit_log(
+        db,
+        action="User updated",
+        module="Settings",
+        reference_id=u.id,
+        detail=f"Updated user {u.name} ({u.email})",
+        user=user,
+        request=request,
+        metadata=payload,
+    )
+
     await db.commit()
     return {"message": "Updated"}
 
 
 @router.patch("/{user_id}/toggle", dependencies=[Depends(require_perm("users.edit"))])
-async def toggle_user(user_id: str, db: AsyncSession = Depends(get_db)):
+async def toggle_user(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     result = await db.execute(select(User).where(User.id == user_id))
     u = result.scalar_one_or_none()
     if not u:
         raise HTTPException(404, "User not found")
     u.active = not u.active
+    add_audit_log(
+        db,
+        action="User status toggled",
+        module="Settings",
+        reference_id=u.id,
+        detail=f"Set user {u.name} ({u.email}) active={u.active}",
+        user=user,
+        request=request,
+        metadata={"active": u.active},
+    )
     await db.commit()
     return {"active": u.active}

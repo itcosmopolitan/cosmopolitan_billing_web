@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
-import { roleColors } from '@/utils/helpers'
+import { humanizeLabel, roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
@@ -762,7 +762,7 @@ export default function SettingsPage() {
                   {users.map(u=>{
                     const initials = u.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()
                     const r = roleForUser(u)
-                    const rLabel = r?.label || u.role
+                    const rLabel = r?.label || humanizeLabel(u.role) || '—'
                     const rColor = roleColors[u.role] || roleColors[r?.key] || 'var(--accent)'
                     // Branches column: "All branches" badge when all_branches=true,
                     // otherwise a flat chip list of branch names. All chips look

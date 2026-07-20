@@ -6,15 +6,16 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Item, Organisation, TaxRate
+from src.models import Item, Organisation, TaxRate, User
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
-from src.security import require_perm
+from src.security import require_perm, current_user
+from src.services.audit_service import add_audit_log
 from src.tax_calc import VALID_TAX_PRICING_MODES, normalize_tax_pricing_mode
 
 router = APIRouter()
@@ -172,12 +173,24 @@ async def get_tax_settings(db: AsyncSession = Depends(get_db)):
 async def update_tax_settings(
     data: TaxSettingsUpdate,
     db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
 ):
     mode = data.tax_pricing_mode.strip().lower()
     if mode not in VALID_TAX_PRICING_MODES:
         raise HTTPException(400, "tax_pricing_mode must be 'inclusive' or 'exclusive'")
     org = await _get_organisation(db)
     org.tax_pricing_mode = mode
+    add_audit_log(
+        db,
+        action="Tax settings updated",
+        module="Settings",
+        reference_id=org.id,
+        detail=f"Updated tax pricing mode to {mode}",
+        user=user,
+        request=request,
+        metadata={"tax_pricing_mode": mode},
+    )
     await db.commit()
     return {
         "tax_pricing_mode": mode,
@@ -194,7 +207,12 @@ async def get_tax_rate(tax_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("settings.edit"))])
-async def create_tax_rate(data: TaxRateCreate, db: AsyncSession = Depends(get_db)):
+async def create_tax_rate(
+    data: TaxRateCreate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     existing = (await db.execute(
         select(TaxRate).where(TaxRate.rate == data.rate, TaxRate.active == True)
     )).scalar_one_or_none()
@@ -209,16 +227,37 @@ async def create_tax_rate(data: TaxRateCreate, db: AsyncSession = Depends(get_db
         is_system=False,
     )
     db.add(tax)
+    add_audit_log(
+        db,
+        action="Tax rate created",
+        module="Settings",
+        reference_id=tax.id,
+        detail=f"Created tax rate {tax.rate}% ({tax.label})",
+        user=user,
+        request=request,
+        metadata={
+            "rate": tax.rate,
+            "label": tax.label,
+            "examples": tax.examples,
+        },
+    )
     await db.commit()
     await db.refresh(tax)
     return _serialize(tax)
 
 
 @router.put("/{tax_id}", dependencies=[Depends(require_perm("settings.edit"))])
-async def update_tax_rate(tax_id: str, data: TaxRateUpdate, db: AsyncSession = Depends(get_db)):
+async def update_tax_rate(
+    tax_id: str,
+    data: TaxRateUpdate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     tax = (await db.execute(select(TaxRate).where(TaxRate.id == tax_id))).scalar_one_or_none()
     if not tax:
         raise HTTPException(404, "Tax rate not found")
+    old_rate = tax.rate
     new_rate = data.rate if data.rate is not None else tax.rate
     if data.rate is not None and data.rate != tax.rate and tax.is_system:
         raise HTTPException(400, "Default tax rates cannot change their percentage")
@@ -240,19 +279,55 @@ async def update_tax_rate(tax_id: str, data: TaxRateUpdate, db: AsyncSession = D
                 "Create a new rate instead.",
             )
         tax.rate = new_rate
-    if data.label is not None:
+    changed_fields = {}
+    if data.label is not None and data.label.strip() != tax.label:
+        changed_fields['label'] = {
+            'old': tax.label,
+            'new': data.label.strip(),
+        }
         tax.label = data.label.strip()
-    if data.examples is not None:
+    if data.examples is not None and (data.examples.strip() != (tax.examples or '')):
+        changed_fields['examples'] = {
+            'old': tax.examples or '',
+            'new': data.examples.strip(),
+        }
         tax.examples = data.examples.strip()
-    if data.is_active is not None:
+    if data.is_active is not None and data.is_active != bool(tax.active):
+        changed_fields['is_active'] = {
+            'old': bool(tax.active),
+            'new': data.is_active,
+        }
         tax.active = data.is_active
+
+    if data.rate is not None and data.rate != old_rate:
+        changed_fields['rate'] = {
+            'old': old_rate,
+            'new': data.rate,
+        }
     await db.commit()
     await db.refresh(tax)
+
+    if changed_fields:
+        add_audit_log(
+            db,
+            action="Tax rate updated",
+            module="Settings",
+            reference_id=tax.id,
+            detail=f"Updated tax rate {tax.rate}% ({tax.label})",
+            user=user,
+            request=request,
+            metadata=changed_fields,
+        )
     return _serialize(tax)
 
 
 @router.delete("/{tax_id}", dependencies=[Depends(require_perm("settings.edit"))])
-async def delete_tax_rate(tax_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_tax_rate(
+    tax_id: str,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     tax = (await db.execute(select(TaxRate).where(TaxRate.id == tax_id))).scalar_one_or_none()
     if not tax:
         raise HTTPException(404, "Tax rate not found")
@@ -264,6 +339,19 @@ async def delete_tax_rate(tax_id: str, db: AsyncSession = Depends(get_db)):
             409,
             f"Tax rate is used by {in_use} item(s). Reassign those items first.",
         )
+    add_audit_log(
+        db,
+        action="Tax rate deleted",
+        module="Settings",
+        reference_id=tax.id,
+        detail=f"Deleted tax rate {tax.rate}% ({tax.label})",
+        user=user,
+        request=request,
+        metadata={
+            "rate": tax.rate,
+            "label": tax.label,
+        },
+    )
     await db.delete(tax)
     await db.commit()
     return {"message": "Tax rate deleted"}

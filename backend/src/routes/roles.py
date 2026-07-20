@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,8 @@ from src.database import get_db
 from src.models import Role, User
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page
 from src.permissions import filter_valid
-from src.security import require_perm
+from src.security import require_perm, current_user
+from src.services.audit_service import add_audit_log
 
 router = APIRouter()
 
@@ -111,7 +112,12 @@ async def get_role(role_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("users.manage_roles"))])
-async def create_role(data: RoleCreate, db: AsyncSession = Depends(get_db)):
+async def create_role(
+    data: RoleCreate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     if not data.permissions:
         raise HTTPException(422, "A role must have at least one permission.")
     perms = _normalize_perms(data.key, data.permissions)
@@ -133,11 +139,33 @@ async def create_role(data: RoleCreate, db: AsyncSession = Depends(get_db)):
     db.add(role)
     await db.commit()
     await db.refresh(role)
+    add_audit_log(
+        db,
+        action="Role created",
+        module="Settings",
+        reference_id=role.id,
+        detail=f"Created role {role.label} ({role.key})",
+        user=user,
+        request=request,
+        metadata={
+            "key": role.key,
+            "label": role.label,
+            "permissions": list(role.permissions or []),
+            "color": role.color,
+        },
+    )
+    await db.commit()
     return _serialize(role, 0)
 
 
 @router.put("/{role_id}", dependencies=[Depends(require_perm("users.manage_roles"))])
-async def update_role(role_id: str, data: RoleUpdate, db: AsyncSession = Depends(get_db)):
+async def update_role(
+    role_id: str,
+    data: RoleUpdate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
     if not role:
         raise HTTPException(404, "Role not found")
@@ -160,12 +188,33 @@ async def update_role(role_id: str, data: RoleUpdate, db: AsyncSession = Depends
         role.active = data.active
     await db.commit()
     await db.refresh(role)
+    add_audit_log(
+        db,
+        action="Role updated",
+        module="Settings",
+        reference_id=role.id,
+        detail=f"Updated role {role.label} ({role.key})",
+        user=user,
+        request=request,
+        metadata={
+            "label": role.label,
+            "description": role.description,
+            "permissions": list(role.permissions or []),
+            "active": role.active,
+        },
+    )
+    await db.commit()
     counts = await _user_counts(db, [role.id])
     return _serialize(role, counts.get(role.id, 0))
 
 
 @router.delete("/{role_id}", dependencies=[Depends(require_perm("users.manage_roles"))])
-async def delete_role(role_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_role(
+    role_id: str,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
     role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
     if not role:
         raise HTTPException(404, "Role not found")
@@ -174,6 +223,20 @@ async def delete_role(role_id: str, db: AsyncSession = Depends(get_db)):
     counts = await _user_counts(db, [role.id])
     if counts.get(role.id, 0) > 0:
         raise HTTPException(409, f"Role is in use by {counts[role.id]} user(s); reassign them first")
+    add_audit_log(
+        db,
+        action="Role deleted",
+        module="Settings",
+        reference_id=role.id,
+        detail=f"Deleted role {role.label} ({role.key})",
+        user=user,
+        request=request,
+        metadata={
+            "label": role.label,
+            "description": role.description,
+            "permissions": list(role.permissions or []),
+        },
+    )
     await db.delete(role)
     await db.commit()
     return {"message": "Role deleted"}

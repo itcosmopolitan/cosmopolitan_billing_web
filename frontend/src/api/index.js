@@ -485,7 +485,6 @@ export const reportsAPI = {
   vendorPurchases:       (params) => api.get('/reports/vendor-purchases',   { params }),
   productPurchases:      (params) => api.get('/reports/product-purchases',  { params }),
   currentStock:          (params) => api.get('/reports/current-stock',      { params }),
-  stockMovement:         (params) => api.get('/reports/stock-movement',     { params }),
   lowStock:              (params) => api.get('/reports/low-stock',         { params }),
   outOfStock:            (params) => api.get('/reports/out-of-stock',       { params }),
   stockTransfers:        (params) => api.get('/reports/stock-transfers',    { params }),
@@ -500,10 +499,7 @@ export const reportsAPI = {
   vendorOutstanding:     (params) => api.get('/reports/vendor-outstanding', { params }),
   branchCompare:         (params) => api.get('/reports/branch-comparison',{ params }),
   marginAnalysis:        (params) => api.get('/reports/margin-analysis',  { params }),
-
   documentTrail:   (params) => api.get('/reports/document-trail',   { params }),
-  branchCompare:   (params) => api.get('/reports/branch-comparison',{ params }),
-  marginAnalysis:  (params) => api.get('/reports/margin-analysis',  { params }),
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -541,6 +537,8 @@ export const settingsAPI = {
   previewNumber: (docType, branchId) => api.get('/settings/numbering/preview', {
     params: { doc_type: docType, branch_id: branchId || undefined },
   }),
+  getTaxSettings: (config) => api.get('/taxes/settings', config),
+  updateTaxSettings: (data) => api.patch('/taxes/settings', data),
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────

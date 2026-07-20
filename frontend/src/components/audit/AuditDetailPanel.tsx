@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import type { AuditLog } from "../../types/audit";
 import { RiskBadge } from "./RiskBadge";
 import { useAppStore } from "../../store";
+import { humanizeLabel, humanizeValue } from "@/utils/helpers";
 
 interface Props {
   log: AuditLog | null;
@@ -61,33 +62,11 @@ export function AuditDetailPanel({ log, onClose }: Props) {
     return `${shortened}...`;
   };
 
-  const toTitleCase = (value: string) =>
-    value
-      .split(/[_\s-]+/)
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(" ");
+  const toTitleCase = (value: string) => humanizeLabel(value) || value
 
   const formatSimpleValue = (value: unknown): string => {
     if (value === null || value === undefined || value === "") return "-";
-    if (typeof value === "string") return value;
-    if (typeof value === "number" || typeof value === "boolean") return String(value);
-    if (Array.isArray(value)) {
-      if (value.length === 0) return "[]";
-      const items = value.map(formatSimpleValue);
-      if (value.every((item) => item === null || item === undefined || typeof item !== "object")) {
-        return items.join(", ");
-      }
-      return `[${items.join(", ")}]`;
-    }
-    if (typeof value === "object") {
-      try {
-        return JSON.stringify(value);
-      } catch {
-        return String(value);
-      }
-    }
-    return String(value);
+    return humanizeValue(value);
   };
 
   const resolveBranchName = (branchId: unknown) => {
@@ -113,6 +92,28 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         return "Approver ID";
       case "requester_id":
         return "Requester ID";
+      case "tax_pricing_mode":
+        return "Tax Pricing Mode";
+      case "tax_pricing_label":
+        return "Tax Pricing Label";
+      case "allow_overselling":
+        return "Allow Overselling";
+      case "is_active":
+        return "Active";
+      case "branch_id":
+        return "Branch";
+      case "approval_status":
+        return "Approval Status";
+      case "payment_mode":
+        return "Payment Mode";
+      case "user_id":
+        return "User";
+      case "role_id":
+        return "Role";
+      case "invoice_id":
+        return "Invoice ID";
+      case "bill_id":
+        return "Bill ID";
       default:
         return toTitleCase(key);
     }
@@ -139,17 +140,17 @@ export function AuditDetailPanel({ log, onClose }: Props) {
   const formatChangeSummary = (metadata: Record<string, unknown>) => {
     const updatedFields = metadata.updated_fields;
     if (Array.isArray(updatedFields) && updatedFields.length > 0) {
-      return `Updated fields: ${updatedFields.map((item) => toTitleCase(String(item))).join(", ")}`;
+      return `Updated fields: ${updatedFields.map((item) => humanizeLabel(String(item))).join(", ")}`;
     }
 
     const beforeQty = metadata.before_qty ?? metadata.old_qty ?? metadata.prev_qty;
     const newQty = metadata.new_qty ?? metadata.qty ?? metadata.quantity;
     if (beforeQty !== undefined && newQty !== undefined) {
-      return `Quantity changed from ${formatSimpleValue(beforeQty)} to ${formatSimpleValue(newQty)}`;
+      return `Quantity changed from ${humanizeValue(beforeQty)} to ${humanizeValue(newQty)}`;
     }
 
     if (metadata.before_value !== undefined && metadata.after_value !== undefined) {
-      return `Value changed from ${formatSimpleValue(metadata.before_value)} to ${formatSimpleValue(metadata.after_value)}`;
+      return `Value changed from ${humanizeValue(metadata.before_value)} to ${humanizeValue(metadata.after_value)}`;
     }
 
     return null;
@@ -163,13 +164,13 @@ export function AuditDetailPanel({ log, onClose }: Props) {
       return changes
         .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object" && !Array.isArray(item))
         .map((change, index) => {
-          const fieldName = change.field ? toTitleCase(String(change.field)) : `Change ${index + 1}`;
+          const fieldName = change.field ? humanizeLabel(String(change.field)) : `Change ${index + 1}`;
           const itemName = typeof change.item_name === "string" ? `${change.item_name}: ` : "";
-          const before = formatSimpleValue(change.before ?? change.old);
-          const after = formatSimpleValue(change.after ?? change.new);
+          const before = humanizeValue(change.before ?? change.old);
+          const after = humanizeValue(change.after ?? change.new);
           const value = before !== "-" || after !== "-"
             ? `${before} → ${after}`
-            : formatSimpleValue(change.detail ?? change);
+            : humanizeValue(change.detail ?? change);
           return {
             label: `${itemName}${fieldName}`,
             value,
@@ -183,8 +184,8 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) return null;
         const value = rawValue as Record<string, unknown>;
         return {
-          label: toTitleCase(field),
-          value: `${formatSimpleValue(value.before)} → ${formatSimpleValue(value.after)}`,
+          label: humanizeLabel(field),
+          value: `${humanizeValue(value.before)} → ${humanizeValue(value.after)}`,
         };
       })
       .filter((item): item is { label: string; value: string } => item !== null);
@@ -317,7 +318,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         <div className="mb-4">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Description</div>
           <div className="whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-4 text-sm text-[var(--text-secondary)]">
-            {log.detail || '—'}
+            {humanizeValue(log.detail) || '—'}
           </div>
         </div>
 

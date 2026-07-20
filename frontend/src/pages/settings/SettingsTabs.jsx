@@ -57,6 +57,9 @@ export function TaxConfigTab({ refreshKey = 0 }) {
   const [taxSortOrder, setTaxSortOrder] = useState('asc')
   const [taxListVersion, setTaxListVersion] = useState(0)
   const [taxHasMorePage, setTaxHasMorePage] = useState(false)
+  const [taxPricingMode, setTaxPricingMode] = useState('exclusive')
+  const [taxPricingLabel, setTaxPricingLabel] = useState('Tax exclusive')
+  const [taxSettingsSaving, setTaxSettingsSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -85,19 +88,25 @@ export function TaxConfigTab({ refreshKey = 0 }) {
     ;(async () => {
       try {
         setLoading(true)
-        const raw = await taxRatesAPI.list({
+        const taxPromise = taxRatesAPI.list({
           skip: taxSkip,
           limit: taxLimit,
           sort_by: taxSortBy,
           sort_order: taxSortOrder,
           active_only: false,
         }, { signal: controller.signal })
-        const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
+        const settingsPromise = settingsAPI.getTaxSettings({ signal: controller.signal })
+        const [raw, taxSettings] = await Promise.all([taxPromise, settingsPromise])
         if (!cancelled) {
+          const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
           setRates(items || [])
           setTaxTotal(total)
           setTaxHasMorePage(hasMorePage)
           syncPageLimit(perPage, limit)
+          if (taxSettings) {
+            setTaxPricingMode(taxSettings.tax_pricing_mode || 'exclusive')
+            setTaxPricingLabel(taxSettings.tax_pricing_label || 'Tax exclusive')
+          }
         }
       } catch (err) {
         if (err?.code === 'ERR_CANCELED') return
@@ -106,6 +115,7 @@ export function TaxConfigTab({ refreshKey = 0 }) {
           setRates([])
           setTaxTotal(0)
           setTaxHasMorePage(false)
+          toast.error('Failed to load tax configuration')
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -169,6 +179,21 @@ export function TaxConfigTab({ refreshKey = 0 }) {
     }
   }
 
+  const saveTaxSettings = async () => {
+    if (taxSettingsSaving) return
+    setTaxSettingsSaving(true)
+    try {
+      const saved = await settingsAPI.updateTaxSettings({ tax_pricing_mode: taxPricingMode })
+      setTaxPricingMode(saved.tax_pricing_mode || taxPricingMode)
+      setTaxPricingLabel(saved.tax_pricing_label || taxPricingLabel)
+      toast.success('Tax settings saved')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setTaxSettingsSaving(false)
+    }
+  }
+
   const toggleTaxActive = async (tax) => {
     if (taxRowBusy || taxSaving) return
     const nextActive = !tax.is_active
@@ -189,6 +214,28 @@ export function TaxConfigTab({ refreshKey = 0 }) {
       <AlertBar type="blue" icon="ℹ" style={{ marginBottom: 16 }}>
         Tax rates are used for invoice calculations and GST reports only. Cosmopolitan Pro does not file returns or integrate with government portals.
       </AlertBar>
+      <Card title="Tax Pricing" style={{ marginBottom: 16 }}>
+        <FormGroup label="Pricing Mode">
+          <AutocompleteDropdown
+            value={taxPricingMode}
+            onChange={setTaxPricingMode}
+            options={[
+              { id: 'inclusive', label: 'Tax inclusive' },
+              { id: 'exclusive', label: 'Tax exclusive' },
+            ]}
+            isSearchFieldRequired={false}
+            disabled={!can('settings.edit')}
+          />
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>
+            {taxPricingLabel || 'Choose whether prices on invoices include tax or add tax on top.'}
+          </div>
+        </FormGroup>
+        {can('settings.edit') && (
+          <button className="btn btn-primary btn-sm" onClick={saveTaxSettings} disabled={taxSettingsSaving || loading}>
+            {taxSettingsSaving ? 'Saving…' : 'Save Tax Settings'}
+          </button>
+        )}
+      </Card>
       <Card
         title="GST Rate Configuration"
         titleRight={

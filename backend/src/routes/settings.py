@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
@@ -31,8 +31,10 @@ from src.models import (
     Organisation,
     PurchaseOrder,
     SalesOrder,
+    User,
 )
 from src.routes._numbering import parse_numbering_config, serialize_numbering_config
+from src.services.audit_service import add_audit_log
 from src.permissions import BILLING_SETTINGS_READ
 from src.security import current_user, require_perm
 
@@ -124,9 +126,12 @@ async def get_organisation(db: AsyncSession = Depends(get_db)):
 async def update_organisation(
     data: OrganisationUpdate,
     db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
 ):
     org = await _get_organisation(db)
     payload = data.model_dump(exclude_unset=True)
+    is_create = org is None
 
     if "financial_year" in payload:
         fy = (payload["financial_year"] or "").strip()
@@ -153,6 +158,16 @@ async def update_organisation(
         setattr(org, key, val if val is not None else "")
 
     await _apply_organisation_update(org, data)
+    add_audit_log(
+        db,
+        action="Organisation profile created" if is_create else "Organisation profile updated",
+        module="Settings",
+        reference_id=org.id,
+        detail=("Created organisation profile" if is_create else "Updated organisation profile"),
+        user=user,
+        request=request,
+        metadata=payload,
+    )
     await db.commit()
     await db.refresh(org)
     return _serialize_organisation(org)
@@ -198,11 +213,24 @@ async def _apply_organisation_update(org: Organisation, data: OrganisationUpdate
 async def patch_organisation(
     data: OrganisationUpdate,
     db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
 ):
     org = await _get_organisation(db)
     if not org:
         raise HTTPException(404, "Organisation not configured")
+    payload = data.model_dump(exclude_unset=True)
     await _apply_organisation_update(org, data)
+    add_audit_log(
+        db,
+        action="Organisation profile updated",
+        module="Settings",
+        reference_id=org.id,
+        detail="Updated organisation profile",
+        user=user,
+        request=request,
+        metadata=payload,
+    )
     await db.commit()
     await db.refresh(org)
     return _serialize_organisation(org)
@@ -266,6 +294,8 @@ async def update_numbering(
     doc_type: str,
     data: NumberingUpdate,
     db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
 ):
     row = (
         await db.execute(
@@ -309,6 +339,16 @@ async def update_numbering(
         for c in counters:
             await db.delete(c)
 
+    add_audit_log(
+        db,
+        action="Document numbering updated",
+        module="Settings",
+        reference_id=doc_type,
+        detail=f"Updated document numbering for {doc_type}",
+        user=user,
+        request=request,
+        metadata={"old_scope": old_scope, **payload},
+    )
     await db.commit()
     await db.refresh(row)
     seq = await get_counter_seq(db, row.doc_type, row.scope or "per_branch", None)
@@ -401,6 +441,8 @@ async def get_invoice_template(db: AsyncSession = Depends(get_db)):
 async def update_invoice_template(
     data: InvoiceTemplateUpdate,
     db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
 ):
     row = await _get_invoice_template(db)
     payload = data.model_dump(exclude_unset=True)
@@ -443,6 +485,16 @@ async def update_invoice_template(
         else:
             setattr(row, key, val)
 
+    add_audit_log(
+        db,
+        action="Invoice template updated",
+        module="Settings",
+        reference_id=row.id or DEFAULT_INVOICE_TEMPLATE_ID,
+        detail="Updated invoice template settings",
+        user=user,
+        request=request,
+        metadata=payload,
+    )
     await db.commit()
     await db.refresh(row)
     return _serialize_invoice_template(row)

@@ -36,6 +36,81 @@ export const fmtRelative = (d) => {
   catch { return d }
 }
 
+export const humanizeLabel = (value) => {
+  if (value === null || value === undefined || value === '') return ''
+  const text = String(value).trim()
+  if (text === '') return ''
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b(id)\b/gi, 'ID')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+export const humanizeValue = (value) => {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    if (normalized === '') return '—'
+
+    const map = {
+      true: 'Yes',
+      false: 'No',
+      yes: 'Yes',
+      no: 'No',
+      on: 'On',
+      off: 'Off',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      intransit: 'In Transit',
+      in_progress: 'In Progress',
+      inprogress: 'In Progress',
+      transit: 'In Transit',
+      receive: 'Receive',
+      received: 'Received',
+      pending_approval: 'Pending Approval',
+      pendingapproval: 'Pending Approval',
+      approved: 'Approved',
+      rejected: 'Rejected',
+      cancelled: 'Cancelled',
+      canceled: 'Cancelled',
+      draft: 'Draft',
+      partial: 'Partial',
+      overdue: 'Overdue',
+      active: 'Active',
+      inactive: 'Inactive',
+      paid: 'Paid',
+      unpaid: 'Unpaid',
+      pending: 'Pending',
+      confirmed: 'Confirmed',
+      low: 'Low',
+      out: 'Out',
+      low_stock: 'Low Stock',
+      out_of_stock: 'Out of Stock',
+    }
+
+    const lower = normalized.toLowerCase()
+    if (Object.prototype.hasOwnProperty.call(map, lower)) return map[lower]
+
+    return normalized
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b(id)\b/gi, 'ID')
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]'
+    return value.map(humanizeValue).join(', ')
+  }
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value) }
+    catch { return String(value) }
+  }
+  return String(value)
+}
+
 // ─── Status ───────────────────────────────────────────────────────────────────
 export const statusChip = (status) => {
   const map = {
@@ -46,10 +121,16 @@ export const statusChip = (status) => {
     draft:    'chip-draft',
     partial:  'chip-partial',
     transit:  'chip-transit',
+    intransit:'chip-transit',
+    in_progress: 'chip-transit',
+    inprogress: 'chip-transit',
     received: 'chip-paid',
+    receive:  'chip-paid',
     low:      'chip-low',
     out:      'chip-out',
     cancelled:'chip-out',
+    canceled: 'chip-out',
+    inactive: 'chip-out',
     pending_approval: 'chip-pending',
     confirmed: 'chip-active',
   }
@@ -59,11 +140,11 @@ export const statusChip = (status) => {
 export const statusLabel = (status) => {
   const map = {
     paid: 'Paid', active: 'Active', pending: 'Pending', overdue: 'Overdue',
-    draft: 'Draft', partial: 'Partial', transit: 'In Transit', received: 'Received',
-    low: 'Low Stock', out: 'Out of Stock', cancelled: 'Cancelled',
+    draft: 'Draft', partial: 'Partial', transit: 'In Transit', intransit: 'In Transit', in_progress: 'In Progress', inprogress: 'In Progress', receive: 'Receive', received: 'Received',
+    low: 'Low Stock', out: 'Out of Stock', cancelled: 'Cancelled', canceled: 'Cancelled', inactive: 'Inactive',
     pending_approval: 'Pending Approval', confirmed: 'Confirmed',
   }
-  return map[status] || status
+  return map[status] || humanizeValue(status)
 }
 
 // ─── Stock status ─────────────────────────────────────────────────────────────
