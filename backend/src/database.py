@@ -426,7 +426,7 @@ async def init_schema() -> None:
     logger.info("Starting schema initialization")
     async with engine.connect() as ddl_conn:
         autocommit_conn = await ddl_conn.execution_options(isolation_level="AUTOCOMMIT")
-        await autocommit_conn.run_sync(Base.metadata.create_all)
+        await autocommit_conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True))
         # PG requires new enum labels to be committed before they can be referenced.
         await _ensure_pg_enum_values(autocommit_conn)
     async with engine.begin() as conn:
