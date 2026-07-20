@@ -7,6 +7,7 @@ import time
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -426,7 +427,13 @@ async def init_schema() -> None:
     logger.info("Starting schema initialization")
     async with engine.connect() as ddl_conn:
         autocommit_conn = await ddl_conn.execution_options(isolation_level="AUTOCOMMIT")
-        await autocommit_conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True))
+        try:
+            await autocommit_conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True))
+        except ProgrammingError as e:
+            # Tables already exist in the database, which is fine
+            if "already exists" not in str(e):
+                raise
+            logger.info("Schema tables already exist in database, skipping table creation")
         # PG requires new enum labels to be committed before they can be referenced.
         await _ensure_pg_enum_values(autocommit_conn)
     async with engine.begin() as conn:
