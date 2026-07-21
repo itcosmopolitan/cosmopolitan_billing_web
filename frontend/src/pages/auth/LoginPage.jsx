@@ -41,7 +41,7 @@ const ClockIcon = (props) => (
   </svg>
 )
 
-const LEDGER_BADGES = ['GST verified', 'Live audit trail', 'Branch secure']
+const LEDGER_BADGES = ['Live audit trail', 'Branch secure']
 
 const LEDGER_ROWS = [
   { name: 'Invoice reconciliation', id: 'INV-2026-1048', amount: '₹42,860', status: 'ok', label: 'Matched' },
@@ -248,7 +248,7 @@ export default function LoginPage() {
           </div>
 
           <div className="hero-copy">
-            <h2>Close books faster with <span>verified ledgers.</span></h2>
+            <h2>Close books faster and <span>verified.</span></h2>
             <p>Track invoices, purchases, branch cash, and stock changes with a clear record of every approval.</p>
           </div>
 
