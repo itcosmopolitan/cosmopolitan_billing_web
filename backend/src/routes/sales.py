@@ -64,6 +64,7 @@ from src.routes._atomic import (
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import get_user_branch_ids
+from src.routes._approval import can_direct_commit
 from src.permissions import SALES_DOCUMENT_READ
 from src.security import (
     current_user,
@@ -980,6 +981,7 @@ async def create_invoice(
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
+    direct = await can_direct_commit(user, db, "invoices.approve")
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     tax_mode = normalize_tax_pricing_mode(
         org_row.tax_pricing_mode if org_row else None
@@ -1003,8 +1005,13 @@ async def create_invoice(
     else:
         total = round(subtotal + tax_total - data.discount, 2)
     is_paid_at_create = data.payment_mode is not None
-    paid      = total if is_paid_at_create else 0.0
-    status    = "paid" if paid >= total else "pending"
+    if direct:
+        paid   = total if is_paid_at_create else 0.0
+        status = "paid" if paid >= total else "pending"
+    else:
+        # Pending approval — land as draft; stock + payment deferred to approve step.
+        paid   = 0.0
+        status = InvoiceStatus.draft.value
     due_date = None
     if status in ("pending", "partial"):
         due_date = compute_due_date(data.date or today, None)
@@ -1019,8 +1026,9 @@ async def create_invoice(
     # an AuditLog row is written. The debit happens BELOW after the
     # invoice is added, so it can be rolled back together with the
     # invoice insert if anything later in the txn fails.
+    # Draft invoices skip the credit validation — the debit runs on approval.
     credit_customer = None
-    if data.payment_mode == "credit":
+    if direct and data.payment_mode == "credit":
         if not data.customer_id:
             raise HTTPException(400, "Credit-mode sale requires a customer (walk-ins can't draw credit)")
         cust_row = await db.execute(
@@ -1060,6 +1068,7 @@ async def create_invoice(
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
         cashier=(user.name if user is not None else data.cashier),
+        created_by=(user.name if user is not None else data.cashier),
         date=data.date or today,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
@@ -1075,6 +1084,9 @@ async def create_invoice(
         due_date=due_date,
         origin=inv_origin,
         notes=data.notes,
+        # Draft invoices: remember SO/quotation link; applied on approval.
+        pending_order_id=(data.sales_order_id if not direct else None),
+        pending_quote_id=(data.quotation_id if not direct else None),
     )
     db.add(inv)
 
@@ -1089,7 +1101,7 @@ async def create_invoice(
             line_total=line_taxable,
         )
         db.add(li)
-        if item.item_id:
+        if direct and item.item_id:
             await _consume_sale_line_stock(
                 db,
                 item=item,
@@ -1104,7 +1116,8 @@ async def create_invoice(
     # The validation above already confirmed sufficient balance + a
     # real customer; this just commits the debit + writes the audit
     # trail. Same commit as the invoice insert so failure rolls back.
-    if data.payment_mode == "credit" and credit_customer is not None:
+    # Draft invoices skip this — the debit runs on approval.
+    if direct and data.payment_mode == "credit" and credit_customer is not None:
         prev_balance, new_balance = await adjust_customer_credit(
             db,
             credit_customer.id,
@@ -1164,7 +1177,8 @@ async def create_invoice(
     # is a complete ledger — parity with record_payment + multi-invoice
     # payments. Previously these settled the invoice but left no payment row,
     # so cash-paid POS invoices were missing from the Payments tab.
-    if is_paid_at_create and data.payment_mode != "credit":
+    # Draft invoices skip this — the payment runs on approval.
+    if direct and is_paid_at_create and data.payment_mode != "credit":
         pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
         pos_pay = CustomerPayment(
             id=str(uuid.uuid4()),
@@ -1204,17 +1218,25 @@ async def create_invoice(
                 recorded_by=data.cashier or "POS",
             )
 
-    if data.customer_id and status in ("pending", "partial"):
+    if direct and data.customer_id and status in ("pending", "partial"):
         await sync_customer_outstanding(db, data.customer_id)
 
-    if data.quotation_id:
-        await _link_quotation_to_invoice(db, data.quotation_id, inv, user=user)
-    elif data.sales_order_id:
-        await _link_sales_order_to_invoice(
-            db, data.sales_order_id, inv, data.source_order_lines, user=user,
-        )
+    # For direct-commit invoices, link to source document immediately.
+    # Draft invoices store pending_order_id / pending_quote_id and apply the link on approval.
+    if direct:
+        if data.quotation_id:
+            await _link_quotation_to_invoice(db, data.quotation_id, inv, user=user)
+        elif data.sales_order_id:
+            await _link_sales_order_to_invoice(
+                db, data.sales_order_id, inv, data.source_order_lines, user=user,
+            )
 
+    if not direct:
+        from src.notifications.store import emit_invoice_pending, notify_refresh
+        await emit_invoice_pending(db, inv)
     await db.commit()
+    if not direct:
+        await notify_refresh()
 
     # Record a lightweight `created` activity for catalogue expectations
     _log_sales_invoice_history(db, user=user,
@@ -1315,7 +1337,7 @@ async def record_payment(
     # credit_applied = amount (since balance was already 0) and silently
     # credit the customer — surprising behavior.
     pre = await db.execute(
-        select(SaleInvoice.id, SaleInvoice.total, SaleInvoice.paid_amount, SaleInvoice.customer_id, SaleInvoice.number, SaleInvoice.branch_id)
+        select(SaleInvoice.id, SaleInvoice.total, SaleInvoice.paid_amount, SaleInvoice.customer_id, SaleInvoice.number, SaleInvoice.branch_id, SaleInvoice.status)
         .where(SaleInvoice.id == invoice_id)
     )
     pre_row = pre.first()
@@ -1323,6 +1345,8 @@ async def record_payment(
         raise HTTPException(404, "Invoice not found")
     # Validate user may write payments for this invoice's branch
     await _resolve_branch_scope(user, db, pre_row.branch_id)
+    if str(getattr(pre_row, "status", "")) == InvoiceStatus.draft.value:
+        raise HTTPException(400, "Invoice is pending approval — payment cannot be recorded until approved")
     pre_total = float(pre_row.total or 0)
     pre_paid = float(pre_row.paid_amount or 0)
     pre_balance = max(0.0, pre_total - pre_paid)
@@ -1546,6 +1570,241 @@ async def record_payment(
         "credit_applied": credit_applied,
         "customer_credit_balance": customer_credit_after,
     }
+
+# ─── INVOICE APPROVAL ─────────────────────────────────────────────────────────
+class InvoiceApproveReject(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/{invoice_id}/approve", dependencies=[Depends(require_perm("invoices.approve"))])
+async def approve_invoice(
+    invoice_id: str,
+    body: InvoiceApproveReject,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Approve a draft invoice: apply stock, apply payment, update ledgers."""
+    res = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items))
+        .where(SaleInvoice.id == invoice_id)
+    )
+    inv = res.unique().scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    inv_status = inv.status.value if hasattr(inv.status, "value") else str(inv.status)
+    if inv_status == InvoiceStatus.draft.value:
+        pass  # proceed
+    elif inv_status in ("paid", "pending", "partial"):
+        return {"status": inv_status, "number": inv.number, "already_processed": True}
+    else:
+        raise HTTPException(400, f"Only draft invoices can be approved (status={inv_status})")
+    if inv.created_by and inv.created_by == user.name:
+        raise HTTPException(403, "You cannot approve your own invoice")
+
+    allow_oversell = await get_allow_overselling(db)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # Apply stock for each tracked line item
+    for li in inv.line_items:
+        if not li.item_id:
+            continue
+        tracked, expiry_tracked = await is_tracked(db, li.item_id)
+        if tracked:
+            strategy = "fefo" if expiry_tracked else "fifo"
+            try:
+                consumed_ledger = await consume_batches_atomic(
+                    db, item_id=li.item_id, branch_id=inv.branch_id,
+                    qty=li.qty, strategy=strategy,
+                    movement_type="sale", source_type="sale_invoice", source_ref=inv.id,
+                )
+                if consumed_ledger:
+                    li.batch_allocation = json.dumps([
+                        {"batch_id": e["batch_id"], "batch_number": e.get("batch_number"),
+                         "consumed": e["consumed"], "expiry_date": e.get("expiry_date")}
+                        for e in consumed_ledger
+                    ])
+            except ValueError:
+                if not allow_oversell:
+                    raise HTTPException(400, f"Insufficient batch stock for {li.name}")
+                await clamp_stock_to_zero_with_ledger(
+                    db, item_id=li.item_id, branch_id=inv.branch_id,
+                    movement_type="sale", source_type="sale_invoice", source_ref=inv.id,
+                    notes=f"Oversell clamp on approval of {inv.number}",
+                )
+        else:
+            try:
+                await adjust_stock_atomic(
+                    db, item_id=li.item_id, branch_id=inv.branch_id,
+                    delta=-li.qty, movement_type="sale",
+                    source_type="sale_invoice", source_ref=inv.id,
+                )
+            except ValueError:
+                if not allow_oversell:
+                    raise HTTPException(400, f"Insufficient stock for {li.name}")
+                await clamp_stock_to_zero_with_ledger(
+                    db, item_id=li.item_id, branch_id=inv.branch_id,
+                    movement_type="sale", source_type="sale_invoice", source_ref=inv.id,
+                    notes=f"Oversell clamp on approval of {inv.number}",
+                )
+
+    total = float(inv.total or 0)
+    payment_mode = inv.payment_mode
+
+    # Apply payment recorded at create time
+    if payment_mode == "credit":
+        if inv.customer_id:
+            cust_res = await db.execute(select(Customer).where(Customer.id == inv.customer_id))
+            cust = cust_res.scalar_one_or_none()
+            if cust:
+                available = float(cust.credit_balance or 0)
+                if available < total:
+                    raise HTTPException(
+                        400,
+                        f"Insufficient credit — customer has MVR{round(available, 2)} available, invoice total is MVR{total}",
+                    )
+                prev_bal, new_bal = await adjust_customer_credit(
+                    db, cust.id, -total,
+                    entry_type="sale_debit", source_type="sale_invoice",
+                    source_ref=inv.id, source_number=inv.number, created_by=user.name,
+                )
+                db.add(AuditLog(
+                    id=str(uuid.uuid4()), action="customer_credit_debit",
+                    user_id=getattr(user, "id", None), user_name=getattr(user, "name", None),
+                    module="sales", ref=inv.number,
+                    detail=(f"Credit-mode invoice {inv.number} approved: −MVR{total} from "
+                            f"{cust.name}'s credit (was MVR{prev_bal:.2f}, now MVR{new_bal:.2f})"),
+                    risk="low", ip_address=None,
+                ))
+                pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+                pay = CustomerPayment(
+                    id=str(uuid.uuid4()),
+                    number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+                    customer_id=cust.id, customer_name=cust.name,
+                    branch_id=inv.branch_id, branch_name=inv.branch_name,
+                    date=today_str, total_amount=total, payment_mode="credit",
+                    payment_ref="", notes="Approved credit-mode invoice", credit_applied=0.0,
+                    created_by=user.name,
+                )
+                db.add(pay)
+                db.add(CustomerPaymentAllocation(
+                    id=str(uuid.uuid4()), payment_id=pay.id,
+                    invoice_id=inv.id, invoice_number=inv.number, amount=total,
+                ))
+                await record_customer_payment(db, pay)
+                inv.paid_amount = total
+    elif payment_mode is not None:
+        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
+        pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            customer_id=inv.customer_id, customer_name=inv.customer_name or "Walk-in",
+            branch_id=inv.branch_id, branch_name=inv.branch_name,
+            date=today_str, total_amount=total, payment_mode=payment_mode,
+            payment_ref="", notes="Invoice approved", credit_applied=0.0,
+            created_by=user.name,
+        )
+        db.add(pay)
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()), payment_id=pay.id,
+            invoice_id=inv.id, invoice_number=inv.number, amount=total,
+        ))
+        await record_customer_payment(db, pay)
+        if payment_mode == "cash":
+            await record_cash_in(
+                db, branch_id=inv.branch_id, amount=total, date=today_str,
+                description=f"Sale {inv.number}", category="Sale — Cash",
+                source_type="sale_invoice", source_id=pay.id, source_ref=inv.number,
+                recorded_by=user.name,
+            )
+        inv.paid_amount = total
+
+    # Determine new status
+    paid_amount = float(inv.paid_amount or 0)
+    new_status = "paid" if paid_amount >= total else "pending"
+    inv.status = new_status
+    if new_status in ("pending", "partial") and not inv.due_date:
+        inv.due_date = compute_due_date(inv.date, None)
+
+    # Link to SO / quotation deferred from draft creation
+    pending_order_id = getattr(inv, "pending_order_id", None)
+    pending_quote_id = getattr(inv, "pending_quote_id", None)
+    if pending_order_id:
+        so_res = await db.execute(
+            select(SalesOrder)
+            .options(selectinload(SalesOrder.line_items))
+            .where(SalesOrder.id == pending_order_id)
+        )
+        so = so_res.unique().scalar_one_or_none()
+        if so and so.status not in (SalesOrderStatus.converted, SalesOrderStatus.cancelled):
+            await _link_sales_order_to_invoice(db, pending_order_id, inv, None, user=user)
+        inv.pending_order_id = None
+    elif pending_quote_id:
+        await _link_quotation_to_invoice(db, pending_quote_id, inv, user=user)
+        inv.pending_quote_id = None
+
+    if inv.customer_id and new_status in ("pending", "partial"):
+        await sync_customer_outstanding(db, inv.customer_id)
+
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.invoice_pending:{inv.id}")
+    await db.commit()
+    await notify_refresh()
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=inv.id, invoice_number=inv.number,
+        event_type="approved", action="approve_invoice",
+        detail=f"Invoice {inv.number} approved by {user.name}",
+        metadata={"status": new_status, "approved_by": user.name},
+    )
+    await _write_post_commit_audit(
+        db, action="Invoice Approved", module="Sales", reference_id=inv.number,
+        detail=f"Invoice {inv.number} approved", user=user, request=request,
+        branch_id=inv.branch_id,
+        metadata={"invoice_id": inv.id, "status": new_status, "total": total},
+    )
+    return {"status": new_status, "number": inv.number}
+
+
+@router.post("/{invoice_id}/reject", dependencies=[Depends(require_perm("invoices.approve"))])
+async def reject_invoice(
+    invoice_id: str,
+    body: InvoiceApproveReject,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Reject a draft invoice — marks it cancelled, no side-effects applied."""
+    res = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    inv = res.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    inv_status = inv.status.value if hasattr(inv.status, "value") else str(inv.status)
+    if inv_status == InvoiceStatus.cancelled.value:
+        return {"status": "cancelled", "number": inv.number, "already_processed": True}
+    if inv_status != InvoiceStatus.draft.value:
+        raise HTTPException(400, f"Only draft invoices can be rejected (status={inv_status})")
+    inv.status = InvoiceStatus.cancelled
+    if body.notes:
+        inv.notes = (inv.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.invoice_pending:{inv.id}")
+    await db.commit()
+    await notify_refresh()
+    _log_sales_invoice_history(db, user=user,
+        invoice_id=inv.id, invoice_number=inv.number,
+        event_type="rejected", action="reject_invoice",
+        detail=f"Invoice {inv.number} rejected by {user.name}",
+        metadata={"rejected_by": user.name, "reason": body.notes or ""},
+    )
+    await _write_post_commit_audit(
+        db, action="Invoice Rejected", module="Sales", reference_id=inv.number,
+        detail=f"Invoice {inv.number} rejected", user=user, request=request,
+        branch_id=inv.branch_id,
+        metadata={"invoice_id": inv.id, "reason": body.notes or ""},
+    )
+    return {"status": "cancelled", "number": inv.number}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # MULTI-INVOICE PAYMENTS (2026-05-24)
@@ -3142,6 +3401,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
 
+    direct = await can_direct_commit(user, db, "invoices.approve")
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
     total = round(subtotal + tax_total - (data.discount or 0), 2)
@@ -3161,20 +3421,21 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         allocate=_alloc_so,
     )
 
+    so_status = SalesOrderStatus.confirmed if direct else SalesOrderStatus.draft
     so = SalesOrder(
         id=str(uuid.uuid4()), number=so_num,
         customer_id=data.customer_id,
         customer_name=data.customer_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
-        created_by=data.created_by,
+        created_by=data.created_by or (user.name if user else None),
         date=data.date or today,
         expected_date=data.expected_date,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
         discount=round(data.discount or 0, 2),
         total=total,
-        status=SalesOrderStatus.confirmed,  # default to confirmed; "draft" reserved for future quick-save
+        status=so_status,
         notes=data.notes,
     )
     db.add(so)
@@ -3189,14 +3450,15 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         )
         db.add(li)
         created_lines.append(li)
-    if not await get_allow_overselling(db):
+    # Stock reservation only for confirmed SOs; draft SOs reserve on approval.
+    if direct and not await get_allow_overselling(db):
         try:
             await reserve_for_sales_order(
                 db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
             )
         except ValueError as e:
             raise HTTPException(400, str(e))
-    if data.quotation_id:
+    if direct and data.quotation_id:
         await _link_quotation_to_order(db, data.quotation_id, so, user=user)
     _log_sales_order_history(db, user=user,
         order_id=so.id,
@@ -3210,17 +3472,23 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
             "line_count": len(data.items or []),
         },
     )
-    _log_sales_order_history(db, user=user,
-        order_id=so.id,
-        order_number=so.number,
-        event_type="confirmed",
-        action="confirm_sales_order",
-        detail=f"Sales order {so.number} confirmed",
-        metadata={"from": "draft", "to": "confirmed"},
-    )
+    if direct:
+        _log_sales_order_history(db, user=user,
+            order_id=so.id,
+            order_number=so.number,
+            event_type="confirmed",
+            action="confirm_sales_order",
+            detail=f"Sales order {so.number} confirmed",
+            metadata={"from": "draft", "to": "confirmed"},
+        )
     # NB: no stock side-effect at create. Stock moves only when the SO is
     # converted to an invoice (same code path as POS sales).
+    if not direct:
+        from src.notifications.store import emit_sales_order_pending, notify_refresh
+        await emit_sales_order_pending(db, so)
     await db.commit()
+    if not direct:
+        await notify_refresh()
     return {"id": so.id, "number": so.number, "total": total, "status": so.status.value}
 
 
@@ -3383,6 +3651,89 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
     return {"status": so.status.value}
 
 
+# ─── Sales Order: APPROVAL ────────────────────────────────────────────────────
+class SOApproveReject(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/orders/{order_id}/approve", dependencies=[Depends(require_perm("invoices.approve"))])
+async def approve_sales_order(
+    order_id: str,
+    body: SOApproveReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Approve a draft sales order — moves it to confirmed, creates stock reservation."""
+    res = await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )
+    so = res.unique().scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    so_status = so.status.value if hasattr(so.status, "value") else str(so.status)
+    if so_status == SalesOrderStatus.confirmed.value:
+        return {"status": "confirmed", "number": so.number, "already_processed": True}
+    if so_status != SalesOrderStatus.draft.value:
+        raise HTTPException(400, f"Only draft sales orders can be approved (status={so_status})")
+    if so.created_by and so.created_by == user.name:
+        raise HTTPException(403, "You cannot approve your own sales order")
+    # Create stock reservation for confirmed SO
+    if not await get_allow_overselling(db):
+        try:
+            await reserve_for_sales_order(db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    so.status = SalesOrderStatus.confirmed
+    if body.notes:
+        so.notes = (so.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.sales_order_pending:{so.id}")
+    _log_sales_order_history(db, user=user,
+        order_id=so.id, order_number=so.number,
+        event_type="confirmed", action="approve_sales_order",
+        detail=f"Sales order {so.number} approved by {user.name}",
+        metadata={"from": "draft", "to": "confirmed", "approved_by": user.name},
+    )
+    await db.commit()
+    await notify_refresh()
+    return {"status": "confirmed", "number": so.number}
+
+
+@router.post("/orders/{order_id}/reject", dependencies=[Depends(require_perm("invoices.approve"))])
+async def reject_sales_order(
+    order_id: str,
+    body: SOApproveReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Reject a draft sales order — marks it cancelled."""
+    res = await db.execute(select(SalesOrder).where(SalesOrder.id == order_id))
+    so = res.scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    so_status = so.status.value if hasattr(so.status, "value") else str(so.status)
+    if so_status == SalesOrderStatus.cancelled.value:
+        return {"status": "cancelled", "number": so.number, "already_processed": True}
+    if so_status != SalesOrderStatus.draft.value:
+        raise HTTPException(400, f"Only draft sales orders can be rejected (status={so_status})")
+    so.status = SalesOrderStatus.cancelled
+    if body.notes:
+        so.notes = (so.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.sales_order_pending:{so.id}")
+    _log_sales_order_history(db, user=user,
+        order_id=so.id, order_number=so.number,
+        event_type="cancelled", action="reject_sales_order",
+        detail=f"Sales order {so.number} rejected by {user.name}",
+        metadata={"reason": body.notes or "", "rejected_by": user.name},
+    )
+    await db.commit()
+    await notify_refresh()
+    return {"status": "cancelled", "number": so.number}
+
+
 # ─── Sales Order: CONVERT TO INVOICE ─────────────────────────────────────────
 @router.post("/orders/{order_id}/convert", dependencies=[Depends(require_perm("invoices.create"))])
 async def convert_order_to_invoice(
@@ -3412,6 +3763,8 @@ async def convert_order_to_invoice(
         raise HTTPException(400, "Sales order already converted")
     if so.status == SalesOrderStatus.cancelled:
         raise HTTPException(400, "Cannot convert a cancelled sales order")
+    if so.status == SalesOrderStatus.draft:
+        raise HTTPException(400, "Sales order is pending approval and cannot be converted yet")
     if not so.line_items:
         raise HTTPException(400, "Sales order has no line items")
 

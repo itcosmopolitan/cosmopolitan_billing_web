@@ -18,6 +18,7 @@ from src.models import (
     GRNLineItem,
     GRNStatus,
     GoodsReceiptNote,
+    InvoiceStatus,
     ItemBatch,
     Organisation,
     PurchaseBill,
@@ -673,6 +674,7 @@ async def create_bill(
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
+    direct = await can_direct_commit(user, db, "purchases.approve")
 
     # 2026-05-24: rewrote totals to use percent-discount line math (parity
     # with sales create_invoice / _calc_lines). Old code summed gross
@@ -704,11 +706,15 @@ async def create_bill(
     # If operator marked "payment received" at create time, settle the
     # bill in-line — parity with POS create_invoice. Otherwise the bill
     # lands as pending and gets settled later via record_payment.
-    paid_at_create = data.payment_mode is not None
+    # Draft bills: defer payment to approval, store payment_mode for later.
+    paid_at_create = direct and data.payment_mode is not None
     paid_amount = total if paid_at_create else 0.0
 
     due_date = data.due_date
-    bill_status = "paid" if paid_amount >= total else "pending"
+    if direct:
+        bill_status = "paid" if paid_amount >= total else "pending"
+    else:
+        bill_status = InvoiceStatus.draft.value
     if not due_date and bill_status in ("pending", "partial"):
         vendor_row = (await db.execute(
             select(Vendor).where(Vendor.id == data.vendor_id)
@@ -754,8 +760,7 @@ async def create_bill(
         if grn.converted_bill_id:
             raise HTTPException(400, "GRN already has a linked bill")
         grn_total = float(grn.total or 0)
-        paid_amount = grn_total if paid_at_create else 0.0
-        bill_status = "paid" if paid_amount >= grn_total else "pending"
+        grn_paid = grn_total if paid_at_create else 0.0
         bill = await _create_bill_for_grn(
             db,
             grn,
@@ -763,8 +768,12 @@ async def create_bill(
             payment_mode=data.payment_mode,
             payment_ref=data.payment_ref or "",
             notes=data.notes,
-            paid_amount=paid_amount,
+            paid_amount=grn_paid,
         )
+        if not direct:
+            bill.status = InvoiceStatus.draft
+            bill.paid_amount = 0
+        bill.created_by = user.name if user else "Staff"
         _log_grn_history(db, user=user,
             grn_id=grn.id,
             grn_number=grn.number,
@@ -840,34 +849,73 @@ async def create_bill(
                     },
                 )
     else:
-        # Phase 3: stock on GRN, bill is financial only (auto-GRN for direct bill).
-        grn = await _create_grn_received(
-            db,
-            vendor_id=data.vendor_id,
-            vendor_name=data.vendor_name,
-            branch_id=data.branch_id,
-            branch_name=data.branch_name or data.branch_id,
-            date=data.date or today,
-            line_rows=line_rows,
-            discount=data.discount or 0,
-            notes=data.notes,
-            purchase_order_id=po.id if po else None,
-            po_number=po.number if po else None,
-            number=data.number,
-            tax_mode=tax_mode,
-        )
-        bill = await _create_bill_for_grn(
-            db,
-            grn,
-            due_date=due_date,
-            payment_mode=data.payment_mode,
-            payment_ref=data.payment_ref or "",
-            notes=data.notes,
-            paid_amount=paid_amount,
-        )
+        if direct:
+            # Phase 3: stock on GRN, bill is financial only (auto-GRN for direct bill).
+            grn = await _create_grn_received(
+                db,
+                vendor_id=data.vendor_id,
+                vendor_name=data.vendor_name,
+                branch_id=data.branch_id,
+                branch_name=data.branch_name or data.branch_id,
+                date=data.date or today,
+                line_rows=line_rows,
+                discount=data.discount or 0,
+                notes=data.notes,
+                purchase_order_id=po.id if po else None,
+                po_number=po.number if po else None,
+                number=data.number,
+                tax_mode=tax_mode,
+            )
+            bill = await _create_bill_for_grn(
+                db,
+                grn,
+                due_date=due_date,
+                payment_mode=data.payment_mode,
+                payment_ref=data.payment_ref or "",
+                notes=data.notes,
+                paid_amount=paid_amount,
+            )
+            bill.created_by = user.name if user else "Staff"
+        else:
+            # Draft bill: no auto-GRN yet; stock deferred to approval.
+            draft_num = await _next_bill_number(db)
+            bill = PurchaseBill(
+                id=str(uuid.uuid4()),
+                number=draft_num,
+                vendor_id=data.vendor_id,
+                vendor_name=data.vendor_name,
+                branch_id=data.branch_id,
+                branch_name=data.branch_name or data.branch_id,
+                date=data.date or today,
+                due_date=due_date,
+                subtotal=round(subtotal, 2),
+                tax_total=round(tax_total, 2),
+                discount=round(data.discount or 0, 2),
+                total=total,
+                paid_amount=0,
+                payment_mode=data.payment_mode,
+                payment_ref=data.payment_ref or "",
+                status=InvoiceStatus.draft,
+                grn_id=None,
+                notes=data.notes,
+                created_by=user.name if user else "Staff",
+            )
+            db.add(bill)
+            for item, line_net, line_tax in line_rows:
+                db.add(PurchaseLineItem(
+                    id=str(uuid.uuid4()), bill_id=bill.id,
+                    item_id=item.item_id, name=item.name,
+                    qty=item.qty, cost=item.cost,
+                    tax_rate=item.tax_rate or 0,
+                    discount=item.discount or 0,
+                    line_total=round(line_taxable_amount(line_net, item.tax_rate or 0, tax_mode) + line_tax, 2),
+                ))
+            await db.flush()
+            grn = None
         if po is not None:
-            po.status = PurchaseOrderStatus.converted
-            po.converted_bill_id = bill.id
+            if direct:
+                po.status = PurchaseOrderStatus.converted
+                po.converted_bill_id = bill.id
             _log_purchase_order_history(db, user=user,
                 order_id=po.id,
                 order_number=po.number,
@@ -887,6 +935,7 @@ async def create_bill(
     # Purchases > Payments tab is a complete ledger — parity with the sales
     # POS fix + record_payment. Previously a paid-at-create bill settled but
     # left no payment row, so it was missing from the Payments tab.
+    # Draft bills: skip payment recording — deferred to approval.
     if paid_at_create:
         pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
         bpay = VendorPayment(
@@ -926,10 +975,15 @@ async def create_bill(
                 recorded_by="Staff",
             )
 
-    if bill.vendor_id and bill_status in ("pending", "partial"):
+    if direct and bill.vendor_id and bill_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
 
+    if not direct:
+        from src.notifications.store import emit_bill_pending, notify_refresh
+        await emit_bill_pending(db, bill)
     await db.commit()
+    if not direct:
+        await notify_refresh()
     await _write_post_commit_audit(
         db,
         action="Purchase Bill Created",
@@ -973,6 +1027,8 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     if not b:
         raise HTTPException(404, "Bill not found")
     bill_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
+    if bill_status == InvoiceStatus.draft.value:
+        raise HTTPException(400, "Bill is pending approval — payment cannot be recorded until approved")
     if bill_status == "cancelled":
         raise HTTPException(400, "Bill is cancelled — cannot record payments")
     prev_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
@@ -1106,6 +1162,164 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         "balance": round(float(b.total or 0) - float(b.paid_amount or 0), 2),
         "credit_applied": credit_applied,
     }
+
+
+# ─── BILL APPROVAL ────────────────────────────────────────────────────────────
+class BillApproveReject(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/{bill_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
+async def approve_bill(
+    bill_id: str,
+    body: BillApproveReject,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Approve a draft purchase bill: create auto-GRN if needed, apply payment, update ledgers."""
+    res = await db.execute(
+        select(PurchaseBill)
+        .options(selectinload(PurchaseBill.line_items))
+        .where(PurchaseBill.id == bill_id)
+    )
+    bill = res.unique().scalar_one_or_none()
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    b_status = bill.status.value if hasattr(bill.status, "value") else str(bill.status)
+    if b_status in ("paid", "pending", "partial"):
+        return {"status": b_status, "number": bill.number, "already_processed": True}
+    if b_status != InvoiceStatus.draft.value:
+        raise HTTPException(400, f"Only draft bills can be approved (status={b_status})")
+    if bill.created_by and bill.created_by == user.name:
+        raise HTTPException(403, "You cannot approve your own bill")
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    tax_mode = await _get_org_tax_mode(db)
+
+    # If no linked GRN, create auto-GRN now (stock moves on approval)
+    if not bill.grn_id:
+        line_rows = []
+        for li in bill.line_items:
+            line_net = round(float(li.qty or 0) * float(li.cost or 0) * (1 - (li.discount or 0) / 100), 2)
+            line_tax = line_tax_amount(line_net, li.tax_rate or 0, tax_mode)
+            line_rows.append((li, line_net, line_tax))
+        grn = await _create_grn_received(
+            db,
+            vendor_id=bill.vendor_id,
+            vendor_name=bill.vendor_name or "",
+            branch_id=bill.branch_id,
+            branch_name=bill.branch_name or bill.branch_id,
+            date=bill.date,
+            line_rows=line_rows,
+            discount=float(bill.discount or 0),
+            notes=bill.notes,
+            created_by=user.name,
+            tax_mode=tax_mode,
+        )
+        bill.grn_id = grn.id
+        # Mark linked PO as converted if applicable
+        if grn.purchase_order_id:
+            po = (await db.execute(
+                select(PurchaseOrder).where(PurchaseOrder.id == grn.purchase_order_id)
+            )).scalar_one_or_none()
+            if po is not None:
+                po.status = PurchaseOrderStatus.converted
+                po.converted_bill_id = bill.id
+
+    total = float(bill.total or 0)
+    payment_mode = bill.payment_mode
+
+    # Apply payment if one was specified at create time
+    if payment_mode is not None:
+        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        bpay = VendorPayment(
+            id=str(uuid.uuid4()),
+            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            vendor_id=bill.vendor_id, vendor_name=bill.vendor_name,
+            branch_id=bill.branch_id, branch_name=bill.branch_name,
+            date=today_str, total_amount=round(total, 2),
+            payment_mode=payment_mode, payment_ref=bill.payment_ref or "",
+            notes="Bill approved", created_by=user.name,
+        )
+        db.add(bpay)
+        db.add(VendorPaymentAllocation(
+            id=str(uuid.uuid4()), payment_id=bpay.id,
+            bill_id=bill.id, bill_number=bill.number, amount=round(total, 2),
+        ))
+        await record_vendor_payment(db, bpay)
+        if payment_mode == "cash":
+            await record_cash_out(
+                db, branch_id=bill.branch_id or "", amount=round(total, 2),
+                date=today_str, description=f"Bill payment {bill.number}",
+                category="Purchase — Cash Payment",
+                source_type="purchase_payment", source_id=bpay.id,
+                source_ref=bill.number, recorded_by=user.name,
+            )
+        bill.paid_amount = round(total, 2)
+
+    new_status = "paid" if float(bill.paid_amount or 0) >= total else "pending"
+    bill.status = new_status
+    if new_status in ("pending", "partial") and not bill.due_date:
+        bill.due_date = compute_due_date(bill.date, None)
+
+    if bill.vendor_id and new_status in ("pending", "partial"):
+        await sync_vendor_outstanding(db, bill.vendor_id)
+
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.bill_pending:{bill.id}")
+    await db.commit()
+    await notify_refresh()
+    await _write_post_commit_audit(
+        db, action="Purchase Bill Approved", reference_id=bill.number,
+        detail=f"Purchase bill {bill.number} approved by {user.name}",
+        user=user, request=request, branch_id=bill.branch_id,
+        metadata={"bill_id": bill.id, "status": new_status, "total": total},
+    )
+    return {"status": new_status, "number": bill.number}
+
+
+@router.post("/{bill_id}/reject", dependencies=[Depends(require_perm("purchases.approve"))])
+async def reject_bill(
+    bill_id: str,
+    body: BillApproveReject,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Reject a draft purchase bill — marks it cancelled, no side-effects applied."""
+    res = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
+    bill = res.scalar_one_or_none()
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    b_status = bill.status.value if hasattr(bill.status, "value") else str(bill.status)
+    if b_status == "cancelled":
+        return {"status": "cancelled", "number": bill.number, "already_processed": True}
+    if b_status != InvoiceStatus.draft.value:
+        raise HTTPException(400, f"Only draft bills can be rejected (status={b_status})")
+    # If GRN was already linked (from an existing received GRN), detach the link
+    # so the GRN becomes billable again.
+    if bill.grn_id:
+        grn_res = await db.execute(
+            select(GoodsReceiptNote).where(GoodsReceiptNote.id == bill.grn_id)
+        )
+        grn = grn_res.scalar_one_or_none()
+        if grn and grn.converted_bill_id == bill.id:
+            grn.converted_bill_id = None
+    bill.status = InvoiceStatus.cancelled
+    if body.notes:
+        bill.notes = (bill.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.bill_pending:{bill.id}")
+    await db.commit()
+    await notify_refresh()
+    await _write_post_commit_audit(
+        db, action="Purchase Bill Rejected", reference_id=bill.number,
+        detail=f"Purchase bill {bill.number} rejected by {user.name}",
+        user=user, request=request, branch_id=bill.branch_id,
+        metadata={"bill_id": bill.id, "reason": body.notes or ""},
+    )
+    return {"status": "cancelled", "number": bill.number}
 
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
@@ -2528,6 +2742,65 @@ async def _next_bill_number(db: AsyncSession) -> str:
     return f"PUR-{datetime.now().year}-{400 + count:04d}"
 
 
+async def _create_grn_draft(
+    db: AsyncSession,
+    *,
+    vendor_id: str,
+    vendor_name: str,
+    branch_id: str,
+    branch_name: str,
+    date: Optional[str] = None,
+    line_rows: list,
+    discount: float = 0,
+    notes: Optional[str] = None,
+    created_by: str = "Staff",
+    purchase_order_id: Optional[str] = None,
+    po_number: Optional[str] = None,
+    number: Optional[str] = None,
+    tax_mode: str = "inclusive",
+) -> GoodsReceiptNote:
+    """Create a draft GRN (pending approval). No stock movement — that runs on approval."""
+    if tax_mode == "inclusive":
+        subtotal = sum(ln - lt for _, ln, lt in line_rows)
+    else:
+        subtotal = sum(ln for _, ln, _ in line_rows)
+    tax_total = sum(lt for _, _, lt in line_rows)
+    total = round(subtotal + tax_total - (discount or 0), 2)
+
+    grn_number = await resolve_number(
+        db, requested=number, model=GoodsReceiptNote,
+        allocate=lambda: _next_grn_number(db),
+    )
+    grn = GoodsReceiptNote(
+        id=str(uuid.uuid4()), number=grn_number,
+        vendor_id=vendor_id, vendor_name=vendor_name,
+        branch_id=branch_id, branch_name=branch_name or branch_id,
+        purchase_order_id=purchase_order_id, po_number=po_number,
+        date=date, subtotal=round(subtotal, 2), tax_total=round(tax_total, 2),
+        discount=round(discount or 0, 2), total=total,
+        status=GRNStatus.draft, notes=notes, created_by=created_by,
+    )
+    db.add(grn)
+    for line, line_net, line_tax in line_rows:
+        qty = int(getattr(line, "received_qty", None) or getattr(line, "qty", 0) or 0)
+        db.add(GRNLineItem(
+            id=str(uuid.uuid4()), grn_id=grn.id,
+            po_line_id=getattr(line, "po_line_id", None) or getattr(line, "id", None),
+            item_id=line.item_id, name=line.name,
+            ordered_qty=getattr(line, "ordered_qty", None),
+            received_qty=qty, cost=line.cost,
+            tax_rate=getattr(line, "tax_rate", 0) or 0,
+            discount=getattr(line, "discount", 0) or 0,
+            line_total=round(line_net + line_tax if tax_mode == "exclusive" else line_net, 2),
+            batch_number=getattr(line, "batch_number", None),
+            mfg_date=getattr(line, "mfg_date", None),
+            expiry_date=getattr(line, "expiry_date", None),
+        ))
+    await db.flush()
+    await db.refresh(grn, attribute_names=["line_items"])
+    return grn
+
+
 async def _create_grn_received(
     db: AsyncSession,
     *,
@@ -3368,11 +3641,12 @@ async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = 
 
 @router.post("/grns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
 async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    """Direct goods receipt (no PO). Stock moves immediately."""
+    """Direct goods receipt. Stock moves immediately if user has purchases.approve; otherwise lands as draft."""
     if not data.items:
         raise HTTPException(400, "GRN must have at least one line")
     await enforce_branch_access(data.branch_id, user=user, db=db)
     today = datetime.now().strftime("%Y-%m-%d")
+    direct = await can_direct_commit(user, db, "purchases.approve")
 
     po = None
     if data.purchase_order_id:
@@ -3398,23 +3672,43 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
 
     tax_mode = await _get_org_tax_mode(db)
     line_rows, _, _ = _calc_po_lines(data.items, tax_mode)
-    grn = await _create_grn_received(
-        db,
-        vendor_id=data.vendor_id,
-        vendor_name=data.vendor_name,
-        branch_id=data.branch_id,
-        branch_name=data.branch_name or data.branch_id,
-        date=data.date or today,
-        line_rows=line_rows,
-        discount=data.discount or 0,
-        notes=data.notes,
-        created_by=data.created_by,
-        purchase_order_id=po.id if po else None,
-        po_number=po.number if po else None,
-        number=data.number,
-        tax_mode=tax_mode,
-    )
-    if po is not None:
+
+    if direct:
+        grn = await _create_grn_received(
+            db,
+            vendor_id=data.vendor_id,
+            vendor_name=data.vendor_name,
+            branch_id=data.branch_id,
+            branch_name=data.branch_name or data.branch_id,
+            date=data.date or today,
+            line_rows=line_rows,
+            discount=data.discount or 0,
+            notes=data.notes,
+            created_by=data.created_by or (user.name if user else "Staff"),
+            purchase_order_id=po.id if po else None,
+            po_number=po.number if po else None,
+            number=data.number,
+            tax_mode=tax_mode,
+        )
+    else:
+        # Draft GRN: no stock movement until approved.
+        grn = await _create_grn_draft(
+            db,
+            vendor_id=data.vendor_id,
+            vendor_name=data.vendor_name,
+            branch_id=data.branch_id,
+            branch_name=data.branch_name or data.branch_id,
+            date=data.date or today,
+            line_rows=line_rows,
+            discount=data.discount or 0,
+            notes=data.notes,
+            created_by=data.created_by or (user.name if user else "Staff"),
+            purchase_order_id=po.id if po else None,
+            po_number=po.number if po else None,
+            number=data.number,
+            tax_mode=tax_mode,
+        )
+    if direct and po is not None:
         po.status = PurchaseOrderStatus.partially_received
 
     total_qty = int(sum(int(getattr(i, "qty", 0) or 0) for i in (data.items or [])))
@@ -3455,8 +3749,121 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
                 "target_record_number": po.number,
             },
         )
+    if not direct:
+        from src.notifications.store import emit_grn_pending, notify_refresh
+        await emit_grn_pending(db, grn)
     await db.commit()
+    if not direct:
+        await notify_refresh()
     return {"id": grn.id, "number": grn.number, "total": grn.total, "status": grn.status.value}
+
+
+# ─── GRN APPROVAL ─────────────────────────────────────────────────────────────
+class GRNApproveReject(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post("/grns/{grn_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
+async def approve_grn(
+    grn_id: str,
+    body: GRNApproveReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Approve a draft GRN — moves stock to received, marks it received."""
+    res = await db.execute(
+        select(GoodsReceiptNote)
+        .options(selectinload(GoodsReceiptNote.line_items))
+        .where(GoodsReceiptNote.id == grn_id)
+    )
+    grn = res.unique().scalar_one_or_none()
+    if not grn:
+        raise HTTPException(404, "GRN not found")
+    grn_status = grn.status.value if hasattr(grn.status, "value") else str(grn.status)
+    if grn_status == GRNStatus.received.value:
+        return {"status": "received", "number": grn.number, "already_processed": True}
+    if grn_status != GRNStatus.draft.value:
+        raise HTTPException(400, f"Only draft GRNs can be approved (status={grn_status})")
+    if grn.created_by and grn.created_by == user.name:
+        raise HTTPException(403, "You cannot approve your own GRN")
+
+    tax_mode = await _get_org_tax_mode(db)
+    receipt_lines = []
+    for li in grn.line_items:
+        receipt_lines.append(ReceiptLine(
+            item_id=li.item_id,
+            name=li.name,
+            qty=int(li.received_qty or 0),
+            cost=float(li.cost or 0),
+            batch_number=li.batch_number,
+            mfg_date=li.mfg_date,
+            expiry_date=li.expiry_date,
+        ))
+    try:
+        await receive_lines_to_stock(
+            db, grn_id=grn.id, branch_id=grn.branch_id,
+            vendor_id=grn.vendor_id, received_date=grn.date, lines=receipt_lines,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    grn.status = GRNStatus.received
+    if body.notes:
+        grn.notes = (grn.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
+
+    # Update linked PO status to partially_received
+    if grn.purchase_order_id:
+        po_res = await db.execute(
+            select(PurchaseOrder).where(PurchaseOrder.id == grn.purchase_order_id)
+        )
+        po = po_res.scalar_one_or_none()
+        if po and po.status not in (PurchaseOrderStatus.converted, PurchaseOrderStatus.cancelled):
+            po.status = PurchaseOrderStatus.partially_received
+
+    _log_grn_history(db, user=user,
+        grn_id=grn.id, grn_number=grn.number,
+        event_type="approved", action="approve_grn",
+        detail=f"GRN {grn.number} approved by {user.name} — stock received",
+        metadata={"approved_by": user.name},
+    )
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.grn_pending:{grn.id}")
+    await db.commit()
+    await notify_refresh()
+    return {"status": "received", "number": grn.number}
+
+
+@router.post("/grns/{grn_id}/reject", dependencies=[Depends(require_perm("purchases.approve"))])
+async def reject_grn(
+    grn_id: str,
+    body: GRNApproveReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Reject a draft GRN — marks it cancelled, no stock movement."""
+    res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
+    grn = res.scalar_one_or_none()
+    if not grn:
+        raise HTTPException(404, "GRN not found")
+    grn_status = grn.status.value if hasattr(grn.status, "value") else str(grn.status)
+    if grn_status == GRNStatus.cancelled.value:
+        return {"status": "cancelled", "number": grn.number, "already_processed": True}
+    if grn_status != GRNStatus.draft.value:
+        raise HTTPException(400, f"Only draft GRNs can be rejected (status={grn_status})")
+    grn.status = GRNStatus.cancelled
+    if body.notes:
+        grn.notes = (grn.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    _log_grn_history(db, user=user,
+        grn_id=grn.id, grn_number=grn.number,
+        event_type="rejected", action="reject_grn",
+        detail=f"GRN {grn.number} rejected by {user.name}",
+        metadata={"reason": body.notes or "", "rejected_by": user.name},
+    )
+    from src.notifications.store import notify_refresh, resolve_notification
+    await resolve_notification(db, f"approval.grn_pending:{grn.id}")
+    await db.commit()
+    await notify_refresh()
+    return {"status": "cancelled", "number": grn.number}
 
 
 @router.post("/grns/from-po/{order_id}", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])

@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/opt/homebrew/bin/python3.11 -m pip install asyncpg)"
+      "Bash(/opt/homebrew/bin/python3.11 -m pip install asyncpg)",
+      "Bash(python -m py_compile src/routes/sales.py)",
+      "Bash(python3 -m py_compile src/routes/sales.py)",
+      "Bash(python3 -m py_compile src/routes/purchases.py)",
+      "Bash(python3 -m py_compile src/models.py)",
+      "Bash(python3 -m py_compile src/database.py)",
+      "Bash(python3 -m py_compile src/notifications/store.py)",
+      "Bash(python3 -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(python3)"
     ]
   }
 }

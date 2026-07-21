@@ -374,6 +374,14 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("items", "approved_at",     "VARCHAR"),
     ("items", "rejected_at",     "VARCHAR"),
     ("items", "rejection_reason", "TEXT"),
+    # Approval workflow: sale invoices and purchase bills maker-checker (2026-07-21).
+    # `created_by` stores the operator who submitted — approvers check this to
+    # enforce the self-approval ban (same pattern as purchase_orders.created_by).
+    ("sale_invoices",  "created_by",         "VARCHAR"),
+    ("purchase_bills", "created_by",         "VARCHAR"),
+    # Pending SO/quotation link for draft invoices — applied on approval.
+    ("sale_invoices",  "pending_order_id",   "VARCHAR"),
+    ("sale_invoices",  "pending_quote_id",   "VARCHAR"),
 ]
 
 _REQUIRED_AUDIT_ACTIVITY_COLUMNS = {

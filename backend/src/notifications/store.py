@@ -327,11 +327,79 @@ async def emit_item_pending(db: AsyncSession, item) -> None:
         dedupe_key=f"approval.item_master_pending:{item.id}",
         kind="approval.item_master_pending",
         severity="info",
-        title=f"Item “{item.name}” awaiting approval",
+        title=f'Item “{item.name}” awaiting approval',
         body=item.sku,
         module="items",
         ref_type="item",
         ref_id=item.id,
         href="/item-master",
         exclude_user_name=item.created_by,
+    )
+
+
+async def emit_invoice_pending(db: AsyncSession, inv) -> None:
+    await upsert_notification(
+        db,
+        dedupe_key=f"approval.invoice_pending:{inv.id}",
+        kind="approval.invoice_pending",
+        severity="info",
+        title=f"Invoice {inv.number} awaiting approval",
+        body=inv.customer_name or "Walk-in",
+        branch_id=inv.branch_id,
+        module="invoices",
+        ref_type="sale_invoice",
+        ref_id=inv.id,
+        href="/sales",
+        exclude_user_name=inv.created_by,
+    )
+
+
+async def emit_sales_order_pending(db: AsyncSession, so) -> None:
+    await upsert_notification(
+        db,
+        dedupe_key=f"approval.sales_order_pending:{so.id}",
+        kind="approval.sales_order_pending",
+        severity="info",
+        title=f"Sales order {so.number} awaiting approval",
+        body=so.customer_name or "Walk-in",
+        branch_id=so.branch_id,
+        module="invoices",
+        ref_type="sales_order",
+        ref_id=so.id,
+        href="/sales",
+        exclude_user_name=so.created_by,
+    )
+
+
+async def emit_bill_pending(db: AsyncSession, bill) -> None:
+    await upsert_notification(
+        db,
+        dedupe_key=f"approval.bill_pending:{bill.id}",
+        kind="approval.bill_pending",
+        severity="info",
+        title=f"Purchase bill {bill.number} awaiting approval",
+        body=bill.vendor_name,
+        branch_id=bill.branch_id,
+        module="purchases",
+        ref_type="purchase_bill",
+        ref_id=bill.id,
+        href="/purchases",
+        exclude_user_name=bill.created_by,
+    )
+
+
+async def emit_grn_pending(db: AsyncSession, grn) -> None:
+    await upsert_notification(
+        db,
+        dedupe_key=f"approval.grn_pending:{grn.id}",
+        kind="approval.grn_pending",
+        severity="info",
+        title=f"GRN {grn.number} awaiting approval",
+        body=grn.vendor_name,
+        branch_id=grn.branch_id,
+        module="purchases",
+        ref_type="grn",
+        ref_id=grn.id,
+        href="/purchases",
+        exclude_user_name=grn.created_by,
     )

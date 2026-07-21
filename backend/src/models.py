@@ -464,6 +464,10 @@ class SaleInvoice(Base):
     origin        = Column(String, default="invoice")
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
+    created_by    = Column(String, nullable=True)
+    # Pending links for draft invoices: applied (and cleared) on approval.
+    pending_order_id = Column(String, nullable=True)
+    pending_quote_id = Column(String, nullable=True)
 
     customer  = relationship("Customer", back_populates="invoices")
     line_items = relationship("SaleLineItem", back_populates="invoice", cascade="all, delete-orphan")
@@ -691,6 +695,7 @@ class PurchaseBill(Base):
     grn_id        = Column(String, ForeignKey("goods_receipt_notes.id"), nullable=True)
     notes         = Column(Text)
     created_at    = Column(DateTime, default=datetime.utcnow)
+    created_by    = Column(String, nullable=True)
 
     vendor     = relationship("Vendor", back_populates="bills")
     line_items = relationship("PurchaseLineItem", back_populates="bill", cascade="all, delete-orphan")
