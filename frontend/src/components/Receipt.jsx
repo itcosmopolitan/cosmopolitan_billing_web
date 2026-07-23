@@ -155,7 +155,7 @@ export function Receipt({ sale, branch }) {
 
   const shareWhatsApp = () => {
     const items = (sale.items || []).map(i => `• ${i.name} x${i.qty} = MVR${i.lineTotal || i.qty * i.price}`).join('\n')
-    const msg = `*Sri Murugan Traders — ${branch?.name}*\n` +
+    const msg = `*Cosmopolitan — ${branch?.name}*\n` +
       `Invoice: *${sale.number}*\n` +
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
