@@ -125,7 +125,7 @@ function CustomerDisplayLive({ roomId }) {
       }}>
         <div>
           <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 4 }}>Your order</div>
-          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>{organisation?.name || 'Sri Murugan Traders'}</h1>
+          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>{organisation?.name || 'Cosmopolitan'}</h1>
           {branchName && (
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>{branchName}</div>
           )}
