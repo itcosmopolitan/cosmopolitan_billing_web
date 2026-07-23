@@ -35,4 +35,4 @@ jobs:
       - name: Sync main branch to client repository
         run: |
           git remote add client git@github-client:itcosmopolitan/cosmopolitan_billing_web.git
-          git push client Master:main
+          git push --force client Master:main
