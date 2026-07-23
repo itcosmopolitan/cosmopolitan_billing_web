@@ -3,7 +3,7 @@ name: Sync Client Repository
 on:
   push:
     branches:
-      - main
+      - Master
 
 jobs:
   sync-client:
