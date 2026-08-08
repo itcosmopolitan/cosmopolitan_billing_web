@@ -116,10 +116,10 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload &
 BACKEND_PID=$!
 
 # Wait until the API responds (or fail fast if startup crashed, e.g. missing deps)
-HEALTH_RETRIES=30
+HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/health"
+HEALTH_RETRIES=120
 HEALTH_COUNT=0
-until curl -fsS -m 2 "http://127.0.0.1:${BACKEND_PORT}/api/v1/permissions/catalog" >/dev/null 2>&1; do
-  HEALTH_COUNT=$((HEALTH_COUNT + 1))
+until curl -fsS -m 2 "$HEALTH_URL" >/dev/null 2>&1; do
   if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
     echo -e "${YELLOW}❌ Backend exited during startup. Check errors above.${RESET}"
     exit 1

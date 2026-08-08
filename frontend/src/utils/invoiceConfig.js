@@ -95,38 +95,56 @@ export function useInvoiceConfig() {
   return config
 }
 
+export function getColumnDefinitions(config) {
+  const cols = [
+    { key: 'no', label: 'No.', width: '5%', align: 'left' },
+    { key: 'description', label: 'Description', width: '34%', align: 'left' },
+  ]
+  if (config.showHsn) cols.push({ key: 'hsn', label: 'HSN', width: '8%', align: 'left' })
+  if (config.showAttr) cols.push({ key: 'attr', label: 'Attribute', width: '7%', align: 'left' })
+  if (config.showSize) cols.push({ key: 'packing', label: 'Packing', width: '7%', align: 'left' })
+  cols.push({ key: 'origin', label: 'Origin', width: '7%', align: 'left' })
+  cols.push({ key: 'units', label: 'Units', width: '7%', align: 'left' })
+  cols.push({ key: 'qty', label: 'Qty', width: '5%', align: 'right' })
+  cols.push({ key: 'rate', label: 'Rate', width: '12%', align: 'right' })
+  if (config.showDisc) cols.push({ key: 'disc', label: 'Disc %', width: '6%', align: 'right' })
+  cols.push({ key: 'gst', label: 'GST', width: '8%', align: 'right' })
+  cols.push({ key: 'amount', label: 'Amount', width: '9%', align: 'right' })
+  return cols
+}
+
 export function getColumnStructure(config) {
-  const cols = ['2.5fr']
-  if (config.showHsn) cols.push('0.9fr')
-  if (config.showAttr) cols.push('1fr')
-  if (config.showSize) cols.push('0.8fr')
-  if (config.showDisc) cols.push('0.7fr')
-  cols.push('0.7fr')
-  cols.push('1.2fr')
-  cols.push('1.2fr')
-  return cols.join(' ')
+  return getColumnDefinitions(config).map((col) => col.width).join(' ')
 }
 
 export function getColumnHeaders(config) {
-  const headers = ['Item Name']
-  if (config.showHsn) headers.push('HSN')
-  if (config.showAttr) headers.push('Attribute')
-  if (config.showSize) headers.push('Size')
-  if (config.showDisc) headers.push('Disc %')
-  headers.push('Qty')
-  headers.push('Price')
-  headers.push('Total')
-  return headers
+  return getColumnDefinitions(config).map((col) => col.label)
+}
+
+export function getColumnKeys(config) {
+  return getColumnDefinitions(config).map((col) => col.key)
 }
 
 export function getItemCell(item, field, config) {
-  if (field === 'name') return item.name
+  if (field === 'no') return null
+  if (field === 'description') return item.name
   if (field === 'hsn' && config.showHsn) return item.hsnCode || item.hsn_code || ''
   if (field === 'attr' && config.showAttr) return item.attribute || item.attr || ''
-  if (field === 'size' && config.showSize) return item.size || item.package || ''
+  if (field === 'packing' && config.showSize) return item.size || item.package || item.packing || ''
+  if (field === 'origin') return item.origin || item.country || item.manufacturer || ''
+  if (field === 'units') return item.units || item.unit || ''
   if (field === 'disc' && config.showDisc) return `${item.discount ?? item.discPercent ?? 0}%`
-  if (field === 'qty') return item.qty || 0
-  if (field === 'price') return item.price
-  if (field === 'total') return item.lineTotal || item.total || (item.qty * item.price)
+  if (field === 'qty') return item.qty || item.quantity || 0
+  if (field === 'rate') return item.price ?? item.rate
+  if (field === 'gst') {
+    const qty = Number(item.qty || item.quantity || 0)
+    const rate = Number(item.price ?? item.rate ?? 0)
+    const discountPct = Number(item.discount ?? item.discPercent ?? 0)
+    const amount = Number(item.lineTotal ?? item.total ?? qty * rate)
+    const taxable = discountPct ? amount * (1 - discountPct / 100) : amount
+    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    return Math.round((taxable * taxRate) / 100 * 100) / 100
+  }
+  if (field === 'amount') return item.lineTotal || item.total || (item.qty * item.price)
   return ''
 }

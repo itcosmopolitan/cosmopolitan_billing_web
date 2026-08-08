@@ -69,6 +69,9 @@ def serialize_branch(b) -> dict:
         "phone": b.phone,
         "address": b.address,
         "gstin": b.gstin,
+        "gst": b.gstin,
+        "homepage": getattr(b, "homepage", None) or getattr(b, "website", None),
+        "website": getattr(b, "website", None) or getattr(b, "homepage", None),
         "active": b.active,
     }
 
@@ -80,6 +83,13 @@ def serialize_customer(c) -> dict:
         "phone": c.phone,
         "email": c.email,
         "address": c.address,
+        "street1": c.street1,
+        "street2": c.street2,
+        "street3": c.street3,
+        "city": c.city,
+        "state_province": c.state_province,
+        "country": c.country,
+        "postal_code": c.postal_code,
         # NB: model column is `gstin`; the frontend / API contract calls it
         # `gst_in`. Keep the API name; don't rename the model.
         "gst_in": c.gstin,

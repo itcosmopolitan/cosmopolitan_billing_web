@@ -387,6 +387,8 @@ export default function POSPage() {
 
       const soldItemIds = cart.map((i) => i.id)
 
+      const selectedCustomerName = customer?.name || 'Walk-in'
+      const selectedCustomerId = customer?.id || null
       setLastSale({
         number: result.number,
         total: result.total,
@@ -394,6 +396,16 @@ export default function POSPage() {
         taxTotal: tax,
         discount: disc,
         method: paymentReceived ? paymentMethod : null,
+        customerName: selectedCustomerName,
+        customerId: selectedCustomerId,
+        customerAddress: customer?.address,
+        customerStreet1: customer?.street1,
+        customerStreet2: customer?.street2,
+        customerStreet3: customer?.street3,
+        customerCity: customer?.city,
+        customerStateProvince: customer?.state_province,
+        customerCountry: customer?.country,
+        customerPostalCode: customer?.postal_code,
         items: cart.map(i => ({
           name: i.name,
           qty: i.qty,
@@ -418,6 +430,8 @@ export default function POSPage() {
         const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
         store.setCustomer({ ...customer, credit_balance: newBalance })
       }
+      // Keep customer info available for the receipt modal until the sale
+      // completion modal closes; clear cart afterward.
       store.clearCart()
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
@@ -1322,7 +1336,8 @@ export default function POSPage() {
               discount: lastSale.discount,
               paymentMode: lastSale.method,
               cashier: 'Staff',
-              customerName: customer?.name || 'Walk-in',
+              customerName: lastSale.customerName || 'Walk-in',
+              customerId: lastSale.customerId || null,
               date: new Date(),
               items: lastSale.items || [],
             }}

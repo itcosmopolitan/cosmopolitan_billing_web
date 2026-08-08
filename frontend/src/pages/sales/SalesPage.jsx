@@ -13,7 +13,7 @@ import {
   statusOptions,
 } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
-import { Receipt } from '@/components/Receipt'
+import openInvoicePrintWindow from '@/utils/printInvoice'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
@@ -73,7 +73,6 @@ export default function SalesPage() {
   const [dateTo, setDateTo]     = useState('')
   const [showDetail, setShowDetail] = useState(null)
   const [showPayment, setShowPayment] = useState(null)
-  const [showReceipt, setShowReceipt] = useState(null)
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
@@ -1612,31 +1611,55 @@ export default function SalesPage() {
       <Modal open={!!showDetail} onClose={() => setShowDetail(null)} title={`Invoice — ${showDetail?.number}`} icon="🧾" size="lg"
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-          <button className="btn btn-secondary" onClick={() => { setShowReceipt(showDetail); setShowDetail(null) }}>🖨 Receipt</button>
+          <button className="btn btn-secondary" onClick={() => { openInvoicePrintWindow(showDetail, branches.find(b => b.id === showDetail.branchId)); setShowDetail(null) }}>🖨 Invoice</button>
           {showDetail?.status !== 'cancelled' && !(showDetail?.paidAmount > 0) && can('invoices.cancel') && (
             <button className="btn btn-danger" onClick={() => { setShowCancelInvoice(showDetail); setShowDetail(null) }}>Cancel Invoice</button>
           )}
           {['pending','partial','overdue'].includes(showDetail?.status) && <button className="btn btn-primary" onClick={() => { setShowPayment(showDetail); setShowDetail(null) }}>Record Payment</button>}
         </>}>
-        {showDetail && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
-              {[
-                { label: 'Customer', value: showDetail.customerName || 'Walk-in' },
-                { label: 'Branch', value: showDetail.branchName || showDetail.branchId },
-                { label: 'Cashier', value: showDetail.cashier || 'N/A' },
-                { label: 'Date', value: showDetail.date },
-                { label: 'Payment Mode', value: displayPaymentMode(showDetail.paymentMode) },
-                { label: 'Status', value: <Chip status={showDetail.status} /> },
-                { label: 'Return Status', value: <ReturnStatusChip status={showDetail.returnStatus} /> },
-                { label: 'Credited (returns)', value: showDetail.creditedAmount > 0 ? fmt(showDetail.creditedAmount) : '—' },
-              ].map((r) => (
-                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
+        {showDetail && (() => {
+          const customerAddressLines = [
+            showDetail.customerStreet1 || showDetail.customer_street1,
+            showDetail.customerStreet2 || showDetail.customer_street2,
+            showDetail.customerStreet3 || showDetail.customer_street3,
+            showDetail.customerCity || showDetail.customer_city || showDetail.city,
+            showDetail.customerStateProvince || showDetail.customer_state_province,
+            showDetail.customerCountry || showDetail.customer_country || showDetail.country,
+            showDetail.customerPostalCode || showDetail.customer_postal_code || showDetail.postal_code,
+          ].filter((line) => typeof line === 'string' && line.trim()).map((line) => line.trim())
+
+          const customerValue = (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div>{showDetail.customerName || 'Walk-in'}</div>
+              {customerAddressLines.length > 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  {customerAddressLines.map((line, index) => (
+                    <div key={index}>{line}</div>
+                  ))}
                 </div>
-              ))}
+              ) : null}
             </div>
+          )
+
+          return (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
+                {[
+                  { label: 'Customer', value: customerValue },
+                  { label: 'Branch', value: showDetail.branchName || showDetail.branchId },
+                  { label: 'Cashier', value: showDetail.cashier || 'N/A' },
+                  { label: 'Date', value: showDetail.date },
+                  { label: 'Payment Mode', value: displayPaymentMode(showDetail.paymentMode) },
+                  { label: 'Status', value: <Chip status={showDetail.status} /> },
+                  { label: 'Return Status', value: <ReturnStatusChip status={showDetail.returnStatus} /> },
+                  { label: 'Credited (returns)', value: showDetail.creditedAmount > 0 ? fmt(showDetail.creditedAmount) : '—' },
+                ].map((r) => (
+                  <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
+                  </div>
+                ))}
+              </div>
             <table className="data-table" style={{ marginBottom: 14 }}>
               <thead><tr><th>Item</th><th className="text-right">Qty</th><th className="text-right">Price</th><th className="text-right">GST</th><th className="text-right">Total</th></tr></thead>
               <tbody>
@@ -1663,9 +1686,8 @@ export default function SalesPage() {
               })()}
             </div>
           </>
-        )}
+        )})()}
       </Modal>
-
       {/* Payment Modal */}
       <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm" busy={paySaving}
         footer={<>
@@ -1774,16 +1796,7 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      {/* Receipt Modal */}
-      <Modal open={!!showReceipt} onClose={() => setShowReceipt(null)} title={`Receipt — ${showReceipt?.number}`} icon="🧾" size="md">
-        {showReceipt && (
-          <Receipt
-            sale={showReceipt}
-            branch={branches.find(b => b.id === showReceipt.branchId)}
-            onClose={() => setShowReceipt(null)}
-          />
-        )}
-      </Modal>
+      
     </div>
   )
 }

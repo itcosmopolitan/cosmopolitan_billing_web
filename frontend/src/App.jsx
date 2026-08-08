@@ -45,6 +45,7 @@ import ReportsPage   from '@/pages/reports/ReportsPage'
 import SettingsPage  from '@/pages/settings/SettingsPage'
 import AuditTrailPage from '@/pages/AuditTrail'
 import CustomerDisplayPage from '@/pages/display/CustomerDisplayPage'
+import SalesTaxInvoicePreview from '@/pages/invoices/SalesTaxInvoicePreview'
 
 function AppShell() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
@@ -98,6 +99,7 @@ function AppShell() {
             <Route path="/reports"    element={<RequirePerm perm="reports.view"><ReportsPage /></RequirePerm>} />
             <Route path="/settings"   element={<RequirePerm perm="settings.view"><SettingsPage /></RequirePerm>} />
             <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditTrailPage /></RequirePerm>} />
+            <Route path="/invoice-preview" element={<SalesTaxInvoicePreview />} />
           </Routes>
         </main>
       </div>
