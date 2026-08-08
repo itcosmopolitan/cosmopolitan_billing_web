@@ -47,17 +47,32 @@ export async function openInvoicePrintWindow(sale, branch) {
   branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
 
   const payload = { sale: saleToSend, branch: branchMerged, printedAt: new Date().toISOString() }
+  const invoiceId = fullSale?.id ?? sale?.id ?? sale?.invoice_id ?? sale?.invoiceId
+  const printUrl = invoiceId ? `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(invoiceId))}` : '/invoice-cosmo.html'
 
-  const win = window.open('/invoice-cosmo.html', '_blank')
-  const interval = setInterval(() => {
+  const win = window.open(printUrl, '_blank')
+  const sendPayload = () => {
     try {
-      if (!win || win.closed) { clearInterval(interval); return }
-      win.postMessage({ type: 'renderInvoice', payload }, '*')
-      clearInterval(interval)
+      if (!win || win.closed) return false
+      win.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
+      return true
     } catch (e) {
-      // retry
+      return false
     }
+  }
+
+  const interval = setInterval(() => {
+    if (!win || win.closed) { clearInterval(interval); return }
+    if (sendPayload()) { clearInterval(interval) }
   }, 200)
+
+  if (win) {
+    win.addEventListener('load', () => {
+      sendPayload()
+      clearInterval(interval)
+    })
+  }
+
   setTimeout(() => { try { win.focus() } catch (e) {} }, 500)
 }
 

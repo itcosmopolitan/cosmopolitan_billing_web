@@ -286,6 +286,17 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("invoice_template_settings", "footer_note", "TEXT DEFAULT ''"),
     ("item_branch_config", "cost_price", "FLOAT"),
     ("stock_adjustments", "request_id", "VARCHAR"),
+    # Customer structured address fields added after the original customers
+    # table definition. We must bootstrap them for older databases without
+    # relying on Alembic-managed schema state.
+    ("customers", "customer_code", "VARCHAR(8)"),
+    ("customers", "street1", "VARCHAR(30)"),
+    ("customers", "street2", "VARCHAR(30)"),
+    ("customers", "street3", "VARCHAR(30)"),
+    ("customers", "city", "VARCHAR"),
+    ("customers", "state_province", "VARCHAR"),
+    ("customers", "country", "VARCHAR"),
+    ("customers", "postal_code", "VARCHAR"),
     # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
     # `outstanding` so the two intents don't sign-flip on each other.
     ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),

@@ -396,6 +396,7 @@ class Customer(Base):
     phone           = Column(String)
     email           = Column(String)
     address         = Column(Text)
+    customer_code   = Column(String(8), nullable=True, unique=True)
     street1         = Column(String(30))
     street2         = Column(String(30))
     street3         = Column(String(30))

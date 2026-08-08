@@ -10,7 +10,19 @@ follow-up.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, List
+from typing import Any, List, Optional
+
+
+def _build_customer_code(customer_id: Optional[str]) -> str:
+    """Return a deterministic 8-digit customer code from a customer UUID."""
+    if not customer_id:
+        return ""
+
+    value = str(customer_id)
+    digest = 0
+    for char in value:
+        digest = (digest * 31 + ord(char)) % 100000000
+    return f"{digest:08d}"
 
 
 def _enum_value(v: Any) -> Any:
@@ -77,8 +89,10 @@ def serialize_branch(b) -> dict:
 
 
 def serialize_customer(c) -> dict:
+    customer_code = getattr(c, "customer_code", None) or _build_customer_code(c.id)
     return {
         "id": c.id,
+        "customer_code": customer_code,
         "name": c.name,
         "phone": c.phone,
         "email": c.email,
