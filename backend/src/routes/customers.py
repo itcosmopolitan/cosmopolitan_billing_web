@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Customer, CustomerCreditEntry
+from src.models import Branch, Customer, CustomerCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_customer
 from src.permissions import CUSTOMER_PICKER_READ
@@ -22,9 +22,16 @@ class CustomerCreate(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     gst_in: Optional[str] = None
-    branch_id: str = "br-001"
+    branch_id: str
     credit_limit: float = 10000
     customer_type: str = "retail"
+    street1: str
+    street2: Optional[str] = None
+    street3: Optional[str] = None
+    city: str
+    state_province: Optional[str] = None
+    country: str
+    postal_code: Optional[str] = None
 
 
 class CustomerUpdate(BaseModel):
@@ -47,6 +54,13 @@ class CustomerUpdate(BaseModel):
     branch_id: Optional[str] = None
     credit_limit: Optional[float] = None
     customer_type: Optional[str] = None
+    street1: Optional[str] = None
+    street2: Optional[str] = None
+    street3: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
 
@@ -221,13 +235,36 @@ async def customer_credit_ledger(
     } for e in rows]
     return paged(items, total, sk, lim)
 
+async def _validate_branch_id(branch_id: str, db: AsyncSession) -> None:
+    result = await db.execute(select(Branch.id).where(Branch.id == branch_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(400, f"Unknown branch: {branch_id}")
+
+def _compose_address_from_parts(data: Union[CustomerCreate, CustomerUpdate]) -> str:
+    parts = [
+        getattr(data, 'street1', None),
+        getattr(data, 'street2', None),
+        getattr(data, 'street3', None),
+        getattr(data, 'city', None),
+        getattr(data, 'state_province', None),
+        getattr(data, 'country', None),
+        getattr(data, 'postal_code', None),
+    ]
+    return ", ".join([p.strip() for p in parts if isinstance(p, str) and p.strip()])
+
+
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create"))])
 async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)
+    address = _compose_address_from_parts(data)
     c = Customer(id=str(uuid.uuid4()), name=data.name, phone=data.phone,
-                 email=data.email, address=data.address, gstin=data.gst_in,
+                 email=data.email, address=address, gstin=data.gst_in,
                  branch_id=data.branch_id, credit_limit=data.credit_limit,
-                 type=data.customer_type)
+                 type=data.customer_type,
+                 street1=data.street1, street2=data.street2, street3=data.street3,
+                 city=data.city, state_province=data.state_province,
+                 country=data.country, postal_code=data.postal_code)
     db.add(c)
     await db.commit()
     return {"id": c.id, "message": "Customer created"}
@@ -240,8 +277,20 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
         raise HTTPException(404, "Customer not found")
     items = data.model_dump(exclude_unset=True)
     if "branch_id" in items:
+        await _validate_branch_id(items["branch_id"], db)
         await enforce_branch_access(items["branch_id"], user=user, db=db)
+
+    if any(k in items for k in [
+        "street1", "street2", "street3", "city", "state_province", "country", "postal_code"
+    ]):
+        for k, v in items.items():
+            if k in ["street1", "street2", "street3", "city", "state_province", "country", "postal_code"]:
+                setattr(c, k, v)
+        c.address = _compose_address_from_parts(data)
+
     for k, v in items.items():
+        if k in ["street1", "street2", "street3", "city", "state_province", "country", "postal_code"]:
+            continue
         setattr(c, _FIELD_TO_COLUMN.get(k, k), v)
     await db.commit()
     return {"message": "Updated"}

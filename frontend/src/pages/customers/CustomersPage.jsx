@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { customersAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
+import { decomposeAddress } from '@/utils/address'
 import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
@@ -12,7 +13,9 @@ export default function CustomersPage() {
   const can = useCan()
   const [search, setSearch]     = useState('')
   const [typeF, setTypeF]       = useState('')
-  const [showAdd, setShowAdd]   = useState(false)
+  const [customerModalOpen, setCustomerModalOpen] = useState(false)
+  const [customerModalMode, setCustomerModalMode] = useState('add')
+  const [editingCustomer, setEditingCustomer] = useState(null)
   const [showDetail, setShowDetail] = useState(null)
   const [ledgerCustomer, setLedgerCustomer] = useState(null)
   const [ledgerEntries, setLedgerEntries] = useState([])
@@ -26,12 +29,94 @@ export default function CustomersPage() {
   const [custSortOrder, setCustSortOrder] = useState('asc')
   const [custSummary, setCustSummary] = useState(null)
   const branches = useAppStore((s) => s.branches)
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [form, setForm]         = useState({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id:'', credit_limit:'10000', customer_type:'retail' })
+  const [form, setForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    gst_in: '',
+    street1: '',
+    street2: '',
+    street3: '',
+    city: '',
+    stateProvince: '',
+    country: '',
+    postalCode: '',
+    branch_id: '',
+    credit_limit: '10000',
+    customer_type: 'retail',
+  })
 
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
+
+  const resetCustomerForm = (initial = {}) => {
+    setForm({
+      name: '',
+      phone: '',
+      email: '',
+      gst_in: '',
+      street1: '',
+      street2: '',
+      street3: '',
+      city: '',
+      stateProvince: '',
+      country: '',
+      postalCode: '',
+      branch_id: initial.branch_id || '',
+      credit_limit: initial.credit_limit ?? '10000',
+      customer_type: initial.customer_type || 'retail',
+      ...initial,
+    })
+  }
+
+  const openAddCustomerModal = () => {
+    resetCustomerForm({
+      branch_id: branches[0]?.id || '',
+      credit_limit: '10000',
+      customer_type: 'retail',
+    })
+    setEditingCustomer(null)
+    setCustomerModalMode('add')
+    setCustomerModalOpen(true)
+  }
+
+  const openEditCustomerModal = (customer) => {
+    const structured = {
+      street1: customer.street1 || '',
+      street2: customer.street2 || '',
+      street3: customer.street3 || '',
+      city: customer.city || '',
+      stateProvince: customer.state_province || '',
+      country: customer.country || '',
+      postalCode: customer.postal_code || '',
+    }
+    const hasStructured = Boolean(
+      structured.street1 || structured.street2 || structured.street3 ||
+      structured.city || structured.stateProvince || structured.country || structured.postalCode
+    )
+    const addressParts = hasStructured ? structured : decomposeAddress(customer.address)
+    resetCustomerForm({
+      name: customer.name || '',
+      phone: customer.phone || '',
+      email: customer.email || '',
+      gst_in: customer.gst_in || customer.gstin || '',
+      ...addressParts,
+      branch_id: customer.branch_id || '',
+      credit_limit: customer.credit_limit != null ? String(customer.credit_limit) : '0',
+      customer_type: customer.customer_type || customer.type || 'retail',
+    })
+    setEditingCustomer(customer)
+    setCustomerModalMode('edit')
+    setCustomerModalOpen(true)
+  }
+
+  const closeCustomerModal = () => {
+    setCustomerModalOpen(false)
+    setEditingCustomer(null)
+  }
 
   useEffect(() => {
     if (branches.length > 0 && !form.branch_id) {
@@ -42,6 +127,14 @@ export default function CustomersPage() {
   useEffect(() => {
     setCustSkip(0)
   }, [search, typeF])
+
+  useEffect(() => {
+    const unsub = subscribeToBranchChanged(() => {
+      setCustSkip(0)
+      setListVersion((v) => v + 1)
+    })
+    return () => unsub()
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -88,7 +181,7 @@ export default function CustomersPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [custSkip, custLimit, search, typeF, listVersion, custSortBy, custSortOrder])
+  }, [custSkip, custLimit, search, typeF, listVersion, custSortBy, custSortOrder, activeBranch?.id])
 
   const onSort = (key) => {
     setCustSkip(0)
@@ -107,32 +200,70 @@ export default function CustomersPage() {
     topBuyer:    customers.length > 0 ? customers.reduce((a, c) => (c.totalPurchases || 0) > (a.totalPurchases || 0) ? c : a, customers[0]) : null,
   }), [custTotal, custSummary, customers])
 
-  const save = async () => {
+  const validateEmail = (email) => {
+    if (!email) return true
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  }
+
+  const saveCustomer = async () => {
     if (saving) return
-    if (!form.name) { toast.error('Customer name required'); return }
+    if (!form.name?.trim()) { toast.error('Customer name required'); return }
     if (!form.branch_id) { toast.error('Select a branch'); return }
+    if (!branches.find((b) => b.id === form.branch_id)) { toast.error('Select a valid branch'); return }
+    if (!form.street1?.trim()) { toast.error('Street 1 is required'); return }
+    if (!form.city?.trim()) { toast.error('City is required'); return }
+    if (!form.country?.trim()) { toast.error('Country is required'); return }
+    if (!validateEmail(form.email?.trim())) { toast.error('Enter a valid email address'); return }
+
+    const token = localStorage.getItem('retailos_token')
+    if (!token) { toast.error('Not authenticated'); return }
 
     setSaving(true)
     try {
       const payload = {
-        name: form.name,
-        phone: form.phone,
-        email: form.email,
-        address: form.address,
-        gst_in: form.gst_in,
+        name: form.name.trim(),
+        phone: form.phone?.trim() || undefined,
+        email: form.email?.trim() || undefined,
+        address: '',
+        gst_in: form.gst_in?.trim() || undefined,
         branch_id: form.branch_id,
         credit_limit: Number(form.credit_limit) || 0,
-        customer_type: form.customer_type
+        customer_type: form.customer_type,
+        street1: form.street1?.trim(),
+        street2: form.street2?.trim() || undefined,
+        street3: form.street3?.trim() || undefined,
+        city: form.city?.trim(),
+        state_province: form.stateProvince?.trim() || undefined,
+        country: form.country?.trim(),
+        postal_code: form.postalCode?.trim() || undefined,
       }
 
-      await customersAPI.create(payload)
+      if (customerModalMode === 'add') {
+        await customersAPI.create(payload)
+        toast.success('Customer added successfully')
+      } else if (customerModalMode === 'edit' && editingCustomer) {
+        await customersAPI.update(editingCustomer.id, payload)
+        toast.success('Customer updated successfully')
+      } else {
+        toast.error('Unable to save customer')
+        return
+      }
+
       setListVersion((v) => v + 1)
-      toast.success('Customer added successfully')
-      setShowAdd(false)
-      setForm({ name:'', phone:'', email:'', address:'', gst_in:'', branch_id: branches[0]?.id || '', credit_limit:'10000', customer_type:'retail' })
+      setCustomerModalOpen(false)
+      setEditingCustomer(null)
     } catch (err) {
       console.error('Failed to save customer:', err)
-      toast.error('Failed to add customer')
+      const detail = err?.response?.data?.detail
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : detail?.message || err?.message || 'Failed to save customer'
+      if (err?.response?.status === 401) {
+        toast.error('Session expired, please log in again')
+      } else {
+        toast.error(message)
+      }
     } finally {
       setSaving(false)
     }
@@ -176,7 +307,7 @@ export default function CustomersPage() {
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
         {can('customers.create') && (
-          <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>+ Add Customer</button>
+          <button className="btn btn-primary btn-sm" onClick={openAddCustomerModal}>+ Add Customer</button>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
           onExport: () => {
@@ -272,7 +403,7 @@ export default function CustomersPage() {
                       <div style={{ display:'flex', gap:4 }}>
                         <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(c)}>View</button>
                         {can('customers.edit') && (
-                          <button className="btn btn-ghost btn-xs">Edit</button>
+                          <button className="btn btn-ghost btn-xs" onClick={() => openEditCustomerModal(c)}>Edit</button>
                         )}
                       </div>
                     </td>
@@ -292,19 +423,86 @@ export default function CustomersPage() {
         />
       </Card>
 
-      {/* Add Customer */}
-      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Customer" icon="👤" size="md" busy={saving}
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Customer'}</button></>}>
-        <FormRow><FormGroup label="Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} placeholder="Full name or company" /></FormGroup>
-        <FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} placeholder="10-digit mobile" /></FormGroup></FormRow>
-        <FormRow><FormGroup label="Email"><input className="form-input" value={form.email} onChange={e=>pf('email',e.target.value)} type="email" /></FormGroup>
-        <FormGroup label="GST Reg No"><input className="form-input" value={form.gst_in} onChange={e=>pf('gst_in',e.target.value)} placeholder="For business customers" /></FormGroup></FormRow>
-        <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
+      {/* Add / Edit Customer */}
+      <Modal
+        open={customerModalOpen}
+        onClose={closeCustomerModal}
+        title={customerModalMode === 'edit' ? 'Edit Customer' : 'Add Customer'}
+        icon="👤"
+        size="md"
+        busy={saving}
+        footer={<>
+          <button className="btn btn-secondary" onClick={closeCustomerModal} disabled={saving}>Cancel</button>
+          <button className="btn btn-primary" onClick={saveCustomer} disabled={saving}>{saving ? 'Saving…' : customerModalMode === 'edit' ? 'Save Changes' : 'Save Customer'}</button>
+        </>}
+      >
         <FormRow>
-          <FormGroup label="Primary Branch" required><AutocompleteDropdown value={form.branch_id} onChange={(v) => pf('branch_id', v)} fetchUrl={AUTOCOMPLETE_BRANCH_URL} fetchParams={{ retail_only: true }} prependOptions={[{ id: '', label: 'Select branch…' }]} isSearchFieldRequired={false} placeholder="Select branch…" /></FormGroup>
-          <FormGroup label="Type"><AutocompleteDropdown value={form.customer_type} onChange={(v) => pf('customer_type', v)} options={CUSTOMER_TYPE_OPTIONS} isSearchFieldRequired={false} /></FormGroup>
+          <FormGroup label="Name" required>
+            <input className="form-input" value={form.name} onChange={e => pf('name', e.target.value)} placeholder="Full name or company" />
+          </FormGroup>
+          <FormGroup label="Phone">
+            <input className="form-input" value={form.phone} onChange={e => pf('phone', e.target.value)} placeholder="10-digit mobile" />
+          </FormGroup>
         </FormRow>
-        <FormGroup label="Credit Limit (MVR)"><input className="form-input" type="number" value={form.credit_limit} onChange={e=>pf('credit_limit',e.target.value)} /></FormGroup>
+        <FormRow>
+          <FormGroup label="Email">
+            <input className="form-input" type="email" value={form.email} onChange={e => pf('email', e.target.value)} />
+          </FormGroup>
+          <FormGroup label="GST Reg No">
+            <input className="form-input" value={form.gst_in} onChange={e => pf('gst_in', e.target.value)} placeholder="For business customers" />
+          </FormGroup>
+        </FormRow>
+        <FormGroup label="Street 1" required>
+          <input className="form-input" maxLength={30} value={form.street1} onChange={e => pf('street1', e.target.value)} placeholder="Street address line 1" />
+        </FormGroup>
+        <FormRow>
+          <FormGroup label="Street 2">
+            <input className="form-input" maxLength={30} value={form.street2} onChange={e => pf('street2', e.target.value)} placeholder="Street address line 2" />
+          </FormGroup>
+          <FormGroup label="Street 3">
+            <input className="form-input" maxLength={30} value={form.street3} onChange={e => pf('street3', e.target.value)} placeholder="Street address line 3" />
+          </FormGroup>
+        </FormRow>
+        <FormRow>
+          <FormGroup label="City" required>
+            <input className="form-input" value={form.city} onChange={e => pf('city', e.target.value)} placeholder="City" />
+          </FormGroup>
+          <FormGroup label="State / Province">
+            <input className="form-input" value={form.stateProvince} onChange={e => pf('stateProvince', e.target.value)} placeholder="State or province" />
+          </FormGroup>
+        </FormRow>
+        <FormRow>
+          <FormGroup label="Country" required>
+            <input className="form-input" value={form.country} onChange={e => pf('country', e.target.value)} placeholder="Country" />
+          </FormGroup>
+          <FormGroup label="Postal Code / Zipcode">
+            <input className="form-input" value={form.postalCode} onChange={e => pf('postalCode', e.target.value)} placeholder="Postal code or zipcode" />
+          </FormGroup>
+        </FormRow>
+        <FormRow>
+          <FormGroup label="Primary Branch" required>
+            <AutocompleteDropdown
+              value={form.branch_id}
+              onChange={(v) => pf('branch_id', v)}
+              fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+              fetchParams={{ retail_only: true }}
+              prependOptions={[
+                { id: '', label: 'Select branch…' },
+                ...(form.branch_id && branches.find((b) => b.id === form.branch_id)
+                  ? [{ id: form.branch_id, label: branches.find((b) => b.id === form.branch_id).name }]
+                  : []),
+              ]}
+              isSearchFieldRequired={false}
+              placeholder="Select branch…"
+            />
+          </FormGroup>
+          <FormGroup label="Type">
+            <AutocompleteDropdown value={form.customer_type} onChange={(v) => pf('customer_type', v)} options={CUSTOMER_TYPE_OPTIONS} isSearchFieldRequired={false} />
+          </FormGroup>
+        </FormRow>
+        <FormGroup label="Credit Limit (MVR)">
+          <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
+        </FormGroup>
       </Modal>
 
       {/* Detail Modal */}

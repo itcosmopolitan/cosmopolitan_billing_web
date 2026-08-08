@@ -17,6 +17,7 @@ import {
   configToApi,
   getColumnStructure,
   getColumnHeaders,
+  getColumnKeys,
   notifyInvoiceConfigChanged,
   DEFAULT_INVOICE_CONFIG,
 } from '@/utils/invoiceConfig'
@@ -609,8 +610,8 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
   }, [load, refreshKey])
 
   const sampleItems = [
-    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', disc: '0', qty: '1', price: 'MVR270.00', total: 'MVR270.00' },
-    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', disc: '5', qty: '2', price: 'MVR17.80', total: 'MVR35.60' },
+    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', origin: 'IN', units: 'Kg', disc: '0', qty: '1', price: '270.00', gst: '0.00', total: '270.00' },
+    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', origin: 'IN', units: 'Ltr', disc: '5', qty: '2', price: '17.80', gst: '1.60', total: '35.60' },
   ]
 
   const currentConfig = useMemo(() => ({
@@ -620,6 +621,7 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
   const columnGrid = useMemo(() => getColumnStructure(currentConfig), [currentConfig])
   const columnHeaders = useMemo(() => getColumnHeaders(currentConfig), [currentConfig])
+  const previewColumnKeys = useMemo(() => getColumnKeys(currentConfig), [currentConfig])
 
   const handleSave = async () => {
     setSaving(true)
@@ -746,7 +748,7 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
       </Card>
 
       <Card title="Live Preview">
-        <div style={{ border: '1px solid var(--border-default)', borderRadius: 10, padding: 16, fontFamily: 'DM Mono, monospace', fontSize: 10.5, color: 'var(--text-primary)', background: 'var(--bg-raised)', lineHeight: 1.4, maxHeight: 600, overflowY: 'auto' }}>
+        <div style={{ border: '1px solid var(--border-default)', borderRadius: 10, padding: 16, fontFamily: 'Arial, sans-serif', fontSize: 10.5, color: 'var(--text-primary)', background: 'var(--bg-raised)', lineHeight: 1.4, maxHeight: 600, overflowY: 'auto' }}>
           {(showPrintedDate || showStore || showCashier) && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, fontSize: 9, marginBottom: 8, textAlign: 'center' }}>
               {showPrintedDate && <div>Printed: 27 May 2026, 2:30 PM</div>}
@@ -754,6 +756,10 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
               {showCashier && <div>Cashier: Admin</div>}
             </div>
           )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, marginBottom: 10, fontSize: 10 }}>
+            <div />
+            <div style={{ textAlign: 'right', fontWeight: 700 }}>Invoice: INV-2026-1048</div>
+          </div>
 
           {headerStyle !== 'logo' && (
             <div style={{ textAlign: 'center', marginBottom: 8 }}>
@@ -777,20 +783,35 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: columnGrid, gap: 4, fontWeight: 700, borderBottom: '1px solid var(--text-secondary)', paddingBottom: 4, marginBottom: 4, fontSize: 10.5 }}>
             {columnHeaders.map((h) => (
-              <div key={h} style={{ textAlign: h === 'Item Name' ? 'left' : 'right' }}>{h}</div>
+              <div key={h} style={{ textAlign: ['Description', 'No.'].includes(h) ? 'left' : 'right' }}>{h}</div>
             ))}
           </div>
 
           {sampleItems.map((item, idx) => (
             <div key={idx} style={{ display: 'grid', gridTemplateColumns: columnGrid, gap: 4, padding: '3px 0', fontSize: 10 }}>
-              {['name', 'hsn', 'attr', 'size', 'disc', 'qty', 'price', 'total'].map((field) => {
-                if (field === 'hsn' && !showHsn) return null
-                if (field === 'attr' && !showAttr) return null
-                if (field === 'size' && !showSize) return null
-                if (field === 'disc' && !showDisc) return null
-                const value = field === 'price' ? item.price : field === 'disc' ? `${item.disc}%` : item[field]
+              {previewColumnKeys.map((key) => {
+                if (key === 'hsn' && !showHsn) return null
+                if (key === 'attr' && !showAttr) return null
+                if (key === 'packing' && !showSize) return null
+                if (key === 'disc' && !showDisc) return null
+                let value = ''
+                switch (key) {
+                  case 'no': value = idx + 1; break
+                  case 'description': value = item.name; break
+                  case 'hsn': value = item.hsn; break
+                  case 'attr': value = item.attr; break
+                  case 'packing': value = item.size; break
+                  case 'origin': value = item.origin || 'IN'; break
+                  case 'units': value = item.units || 'Can'; break
+                  case 'qty': value = item.qty; break
+                  case 'rate': value = item.price; break
+                  case 'disc': value = `${item.disc}%`; break
+                  case 'gst': value = item.gst || '0'; break
+                  case 'amount': value = item.total; break
+                  default: value = ''
+                }
                 return (
-                  <div key={field} style={{ textAlign: field === 'name' ? 'left' : 'right' }}>
+                  <div key={key} style={{ textAlign: key === 'description' ? 'left' : 'right' }}>
                     {value}
                   </div>
                 )

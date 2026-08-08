@@ -509,7 +509,7 @@ async def list_invoices(
     )
     q = (
         select(SaleInvoice)
-        .options(selectinload(SaleInvoice.line_items))
+        .options(selectinload(SaleInvoice.line_items), selectinload(SaleInvoice.customer))
     )
     if conds:
         q = q.where(and_(*conds))
@@ -517,7 +517,19 @@ async def list_invoices(
     total = int(count_r.scalar() or 0)
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     invoices = result.unique().scalars().all()
-    out = [_inv_dict(inv, inv.line_items) for inv in invoices]
+    # Attach organisation profile as a fallback for branch-level metadata
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    out = []
+    for inv in invoices:
+        d = _inv_dict(inv, inv.line_items)
+        if org_row:
+            d.setdefault('organisation', {})
+            d['organisation']['id'] = org_row.id
+            d['organisation']['name'] = org_row.name
+            d['organisation']['gstin'] = org_row.gstin or ''
+            d['organisation']['email'] = org_row.email or ''
+            d['organisation']['website'] = org_row.website or ''
+        out.append(d)
     return paged(out, total, sk, lim)
 
 # Legacy SAMPLE_RETURNS-backed /returns endpoint removed 2026-05-23 (PR 2).
@@ -855,13 +867,30 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
 @router.get("/{invoice_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    result = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items), selectinload(SaleInvoice.customer))
+        .where(SaleInvoice.id == invoice_id)
+    )
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
     await _resolve_branch_scope(user, db, inv.branch_id)
-    li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
-    return _inv_dict(inv, li_res.scalars().all())
+    d = _inv_dict(inv, inv.line_items)
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    if org_row:
+        d.setdefault('organisation', {})
+        d['organisation']['id'] = org_row.id
+        d['organisation']['name'] = org_row.name
+        d['organisation']['gstin'] = org_row.gstin or ''
+        d['organisation']['email'] = org_row.email or ''
+        d['organisation']['website'] = org_row.website or ''
+        d['gstNo'] = d.get('gstNo') or org_row.gstin or ''
+        d['gst_no'] = d['gstNo']
+        d['email'] = org_row.email or ''
+        d['phoneNo'] = d.get('phoneNo') or getattr(org_row, 'phone', '') or ''
+        d['phone_no'] = d['phoneNo']
+    return d
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
 @router.put("/{invoice_id}", dependencies=[Depends(require_perm("invoices.edit"))])
@@ -2752,6 +2781,27 @@ def _inv_dict(inv, items=None):
         "id": inv.id, "number": inv.number,
         "customerId": inv.customer_id,
         "customerName": inv.customer_name or "Walk-in",
+        "customerAddress": inv.customer.address if inv.customer else None,
+        "customer_address": inv.customer.address if inv.customer else None,
+        "customerStreet1": inv.customer.street1 if inv.customer else None,
+        "customer_street1": inv.customer.street1 if inv.customer else None,
+        "customerStreet2": inv.customer.street2 if inv.customer else None,
+        "customer_street2": inv.customer.street2 if inv.customer else None,
+        "customerStreet3": inv.customer.street3 if inv.customer else None,
+        "customer_street3": inv.customer.street3 if inv.customer else None,
+        "customerCity": inv.customer.city if inv.customer else None,
+        "customer_city": inv.customer.city if inv.customer else None,
+        "customerStateProvince": inv.customer.state_province if inv.customer else None,
+        "customer_state_province": inv.customer.state_province if inv.customer else None,
+        "customerCountry": inv.customer.country if inv.customer else None,
+        "customer_country": inv.customer.country if inv.customer else None,
+        "customerPostalCode": inv.customer.postal_code if inv.customer else None,
+        "customer_postal_code": inv.customer.postal_code if inv.customer else None,
+        "gstNo": inv.customer.gstin if inv.customer else None,
+        "gst_no": inv.customer.gstin if inv.customer else None,
+        "phoneNo": inv.customer.phone if inv.customer else None,
+        "phone_no": inv.customer.phone if inv.customer else None,
+        "email": inv.customer.email if inv.customer else None,
         "branchId": inv.branch_id,
         "branchName": inv.branch_name,
         "cashier": inv.cashier,
@@ -4842,7 +4892,21 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
         raise HTTPException(404, "Invoice not found")
     await _resolve_branch_scope(user, db, inv.branch_id)
     li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
-    return _inv_dict(inv, li_res.scalars().all())
+    d = _inv_dict(inv, li_res.scalars().all())
+    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    if org_row:
+        d.setdefault('organisation', {})
+        d['organisation']['id'] = org_row.id
+        d['organisation']['name'] = org_row.name
+        d['organisation']['gstin'] = org_row.gstin or ''
+        d['organisation']['email'] = org_row.email or ''
+        d['organisation']['website'] = org_row.website or ''
+        d['email'] = org_row.email or ''
+        d['gstNo'] = d.get('gstNo') or org_row.gstin or ''
+        d['gst_no'] = d['gstNo']
+        d['phoneNo'] = d.get('phoneNo') or getattr(org_row, 'phone', '') or ''
+        d['phone_no'] = d['phoneNo']
+    return d
 
 
 # ─── Sales Returns: CREATE ───────────────────────────────────────────────────
