@@ -266,6 +266,9 @@ export const salesAPI = {
   update:  (id, data) => api.put(`/sales/${id}`, data),
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   cancel:  (id)     => api.post(`/sales/${id}/cancel`),
+  submit:  (id)     => api.post(`/sales/${id}/submit`),
+  approve: (id, notes) => api.post(`/sales/${id}/approve`, { notes }),
+  reject:  (id, notes) => api.post(`/sales/${id}/reject`, { notes }),
   // creditPurchases endpoint removed 2026-05-23 (Sales Phase 1) — see
   // ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md. The same data is
   // available via salesAPI.list({ payment_mode: 'credit' }) if needed.
@@ -283,6 +286,9 @@ export const salesAPI = {
     updateStatus: (id, status)    => api.patch(`/sales/orders/${id}/status`, null, { params: { status } }),
     // body = { payment_received: bool, payment_mode: string|null, notes: string|null }
     convert:      (id, body)      => api.post(`/sales/orders/${id}/convert`, body),
+    submit:       (id)            => api.post(`/sales/orders/${id}/submit`),
+    approve:      (id, notes)     => api.post(`/sales/orders/${id}/approve`, { notes }),
+    reject:       (id, notes)     => api.post(`/sales/orders/${id}/reject`, { notes }),
   },
   returns: {
     // 2026-05-24: trailing slash on list + create is LOAD-BEARING.
@@ -342,6 +348,9 @@ export const purchasesAPI = {
   update:  (id, data) => api.put(`/purchases/${id}`, data),
   payment: (id, data) => api.post(`/purchases/${id}/payment`, data),
   cancel:  (id)     => api.post(`/purchases/${id}/cancel`),
+  submit:  (id)     => api.post(`/purchases/${id}/submit`),
+  approve: (id, notes) => api.post(`/purchases/${id}/approve`, { notes }),
+  reject:  (id, notes) => api.post(`/purchases/${id}/reject`, { notes }),
   // Purchase Orders — mirror of salesAPI.orders. PO is the intent doc;
   // convert spawns a bill (which is what moves stock + creates batches).
   orders: {
@@ -350,6 +359,7 @@ export const purchasesAPI = {
     create:       (data)   => api.post('/purchases/orders/', data),
     update:       (id, data) => api.put(`/purchases/orders/${id}`, data),
     updateStatus: (id, status) => api.patch(`/purchases/orders/${id}/status`, { status }),
+    submit:       (id)     => api.post(`/purchases/orders/${id}/submit`),
     approve:      (id, notes) => api.post(`/purchases/orders/${id}/approve`, { notes }),
     reject:       (id, notes) => api.post(`/purchases/orders/${id}/reject`, { notes }),
     convert:      (id, body) => api.post(`/purchases/orders/${id}/convert`, body),
@@ -361,6 +371,9 @@ export const purchasesAPI = {
     fromPo:     (poId, data) => api.post(`/purchases/grns/from-po/${poId}`, data),
     bill:       (id, body) => api.post(`/purchases/grns/${id}/bill`, body),
     cancel:     (id)     => api.post(`/purchases/grns/${id}/cancel`),
+    submit:     (id)     => api.post(`/purchases/grns/${id}/submit`),
+    approve:    (id, notes) => api.post(`/purchases/grns/${id}/approve`, { notes }),
+    reject:     (id, notes) => api.post(`/purchases/grns/${id}/reject`, { notes }),
   },
   returns: {
     list:    (params) => api.get('/purchases/returns/', { params }),
@@ -445,6 +458,7 @@ export const transfersAPI = {
   create:  (data)   => api.post('/transfers/', data),
   update:  (id, data) => api.put(`/transfers/${id}`, data),
   approve: (id, data) => api.post(`/transfers/${id}/approve`, data),
+  submit:  (id, params) => api.post(`/transfers/${id}/submit`, null, { params }),
   reject:  (id, data) => api.post(`/transfers/${id}/reject`, data),
   receive: (id, data) => api.post(`/transfers/${id}/receive`, data),
   delete:  (id, params) => api.delete(`/transfers/${id}`, { params }),
@@ -455,6 +469,7 @@ export const adjustmentsAPI = {
   list:    (params) => api.get('/adjustments/', { params }),
   create:  (data)   => api.post('/adjustments/', data),
   approve: (id, data) => api.post(`/adjustments/${id}/approve`, data),
+  submit:  (id, params) => api.post(`/adjustments/${id}/submit`, null, { params }),
   reject:  (id, data) => api.post(`/adjustments/${id}/reject`, data),
   delete:  (id, params) => api.delete(`/adjustments/${id}`, { params }),
 }

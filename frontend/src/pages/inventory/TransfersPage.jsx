@@ -17,6 +17,7 @@ const inFlightTransfersRequests = new Map()
 
 const TAB_DEFS = [
   { id: 'all',      label: 'All Transfers' },
+  { id: 'draft',    label: 'Draft' },
   { id: 'pending',  label: 'Pending Approval' },
   { id: 'transit',  label: 'In Transit' },
   { id: 'received', label: 'Received' },
@@ -283,6 +284,24 @@ export default function TransfersPage() {
     }
   }
 
+  const submit = async (row) => {
+    if (actionBusy) return
+    setActionBusy(row.id)
+    setActionKind('submit')
+    try {
+      await transfersAPI.submit(row.id, { ref_number: row.ref_number })
+      toast.success(`${row.ref_number} submitted for approval`)
+      bumpList()
+      setShowDetail(null)
+    } catch (err) {
+      console.error(err)
+      toast.error(err.response?.data?.detail || 'Failed to submit transfer')
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
+    }
+  }
+
   const reject = async (row) => {
     if (actionBusy) return
     setActionBusy(row.id)
@@ -468,9 +487,15 @@ export default function TransfersPage() {
                             },
                             {
                               label: 'Edit',
-                              hidden: t.status !== 'pending' || !canCreate,
+                              hidden: !['draft', 'pending'].includes(t.status) || !canCreate,
                               disabled: isRowBusy(t.id),
                               onClick: () => navigate(`/transfers/${t.id}/edit`),
+                            },
+                            {
+                              label: actionKind === 'submit' && isRowBusy(t.id) ? 'Submitting…' : 'Submit for approval',
+                              hidden: t.status !== 'draft' || !canCreate,
+                              disabled: isRowBusy(t.id),
+                              onClick: () => submit(t),
                             },
                             {
                               label: actionKind === 'approve' && isRowBusy(t.id) ? 'Approving…' : 'Approve & dispatch',
@@ -494,7 +519,7 @@ export default function TransfersPage() {
                             {
                               label: actionKind === 'delete' && isRowBusy(t.id) ? 'Deleting…' : 'Delete',
                               danger: true,
-                              hidden: t.status !== 'pending' || !canDelete,
+                              hidden: !['draft', 'pending'].includes(t.status) || !canDelete,
                               disabled: isRowBusy(t.id) || deleteBusy || !!actionBusy,
                               onClick: () => deleteRequest(t),
                             },

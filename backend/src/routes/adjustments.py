@@ -457,7 +457,7 @@ async def create_adjustment(
             reason=data.reason,
             notes=data.notes,
             batch_id=data.batch_id,
-            status=AdjustmentStatus.pending,
+            status=AdjustmentStatus.pending if await can_direct_commit(user, db, "adjustments.approve") else AdjustmentStatus.draft,
             requested_by=data.requested_by or user.name,
         )
         db.add(ar)
@@ -485,12 +485,9 @@ async def create_adjustment(
                 )
                 await db.commit()
                 return {"id": rid, "ref_number": ref, **result}
-            from src.notifications.store import emit_adjustment_pending, notify_refresh
-
-            await emit_adjustment_pending(db, ar)
+            # Draft stays private — notification fires on submit.
             await db.commit()
-            await notify_refresh()
-            return {"id": rid, "ref_number": ref, "status": "pending"}
+            return {"id": rid, "ref_number": ref, "status": "draft"}
         except IntegrityError as exc:
             await db.rollback()
             last_err = exc
@@ -505,6 +502,35 @@ async def create_adjustment(
         409,
         "Could not allocate a unique adjustment reference number. Please retry.",
     ) from last_err
+
+
+@router.post("/{request_id}/submit", dependencies=[Depends(require_perm("adjustments.create"))])
+async def submit_adjustment(
+    request_id: str,
+    ref_number: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Creator submits a private draft adjustment for approval."""
+    ar = await _lock_request(db, request_id, ref_number=ref_number)
+    if ar.status == AdjustmentStatus.pending:
+        return {"status": "pending", "ref_number": ar.ref_number, "already_processed": True}
+    if ar.status != AdjustmentStatus.draft:
+        raise HTTPException(400, f"Only draft adjustments can be submitted (status={ar.status.value})")
+    if ar.requested_by and ar.requested_by != user.name and not await can_direct_commit(user, db, "adjustments.approve"):
+        raise HTTPException(403, "Only the creator can submit this draft for approval")
+    ar.status = AdjustmentStatus.pending
+    from src.notifications.store import emit_adjustment_pending, notify_refresh
+    await emit_adjustment_pending(db, ar)
+    _log_adjustment_history(
+        db, user=user, adjustment_id=request_id, adjustment_number=ar.ref_number,
+        event_type="submitted", action="Adjustment submitted",
+        detail=f"Adjustment {ar.ref_number} submitted for approval",
+        branch_id=ar.branch_id,
+    )
+    await db.commit()
+    await notify_refresh()
+    return {"status": "pending", "ref_number": ar.ref_number}
 
 
 @router.post("/{request_id}/approve", dependencies=[Depends(require_perm("adjustments.approve"))])

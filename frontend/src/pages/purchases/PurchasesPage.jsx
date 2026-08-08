@@ -595,6 +595,42 @@ export default function PurchasesPage() {
     })
   }
 
+  const submitPO = async (po) => {
+    if (!po?.id) return
+    await runRowAction(po.id, 'submit-po', async () => {
+      await purchasesAPI.orders.submit(po.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${po.number} submitted for approval`)
+    })
+  }
+
+  const submitBill = async (bill) => {
+    if (!bill?.id) return
+    await runRowAction(bill.id, 'submit-bill', async () => {
+      await purchasesAPI.submit(bill.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${bill.number} submitted for approval`)
+    })
+  }
+
+  const approveBill = async (bill) => {
+    if (!bill?.id) return
+    await runRowAction(bill.id, 'approve-bill', async () => {
+      await purchasesAPI.approve(bill.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${bill.number} approved`)
+    })
+  }
+
+  const rejectBill = async (bill) => {
+    if (!bill?.id) return
+    await runRowAction(bill.id, 'reject-bill', async () => {
+      await purchasesAPI.reject(bill.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${bill.number} rejected`)
+    })
+  }
+
   const rejectPO = async (po) => {
     if (!po?.id) return
     await runRowAction(po.id, 'reject-po', async () => {
@@ -616,6 +652,33 @@ export default function PurchasesPage() {
       await purchasesAPI.grns.cancel(grn.id)
       setListVersion((v) => v + 1)
       toast.success(`${grn.number} cancelled — stock reversed`)
+    })
+  }
+
+  const submitGrn = async (grn) => {
+    if (!grn?.id) return
+    await runRowAction(grn.id, 'submit-grn', async () => {
+      await purchasesAPI.grns.submit(grn.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${grn.number} submitted for approval`)
+    })
+  }
+
+  const approveGrn = async (grn) => {
+    if (!grn?.id) return
+    await runRowAction(grn.id, 'approve-grn', async () => {
+      await purchasesAPI.grns.approve(grn.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${grn.number} approved — stock received`)
+    })
+  }
+
+  const rejectGrn = async (grn) => {
+    if (!grn?.id) return
+    await runRowAction(grn.id, 'reject-grn', async () => {
+      await purchasesAPI.grns.reject(grn.id)
+      setListVersion((v) => v + 1)
+      toast.success(`${grn.number} rejected`)
     })
   }
 
@@ -707,7 +770,7 @@ export default function PurchasesPage() {
             <AutocompleteDropdown
               value={billStatusF}
               onChange={setBillStatusF}
-              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled'])}
+              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled', 'draft', 'pending_approval'])}
               prependOptions={[{ id: '', label: 'All Status' }]}
               isSearchFieldRequired={false}
               placeholder="All Status"
@@ -756,9 +819,11 @@ export default function PurchasesPage() {
                 <tbody>
                   {bills.map((b) => {
                     const balance = (b.total || 0) - (b.paidAmount || 0)
-                    const canPay = b.status !== 'paid' && b.status !== 'cancelled'
-                    const canEdit = b.status !== 'paid' && b.status !== 'cancelled' && !(b.paidAmount > 0)
-                    const canCancel = b.status !== 'cancelled' && !(b.paidAmount > 0)
+                    const isDraft = b.status === 'draft'
+                    const isPendingApproval = b.status === 'pending_approval'
+                    const canPay = !['paid', 'cancelled', 'draft', 'pending_approval'].includes(b.status)
+                    const canEdit = isDraft && !(b.paidAmount > 0)
+                    const canCancel = !['cancelled', 'draft', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     return (
                       <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -798,6 +863,25 @@ export default function PurchasesPage() {
                                 hidden: !canEdit || !can('purchases.edit'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => navigate(`/purchases/bills/${b.id}/edit`),
+                              },
+                              {
+                                label: 'Submit for approval',
+                                hidden: !isDraft || !can('purchases.create'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => submitBill(b),
+                              },
+                              {
+                                label: 'Approve',
+                                hidden: !(isPendingApproval || isDraft) || !can('purchases.approve'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => approveBill(b),
+                              },
+                              {
+                                label: 'Reject',
+                                danger: true,
+                                hidden: !(isPendingApproval || isDraft) || !can('purchases.approve'),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => rejectBill(b),
                               },
                               {
                                 label: 'Record payment',
@@ -899,7 +983,11 @@ export default function PurchasesPage() {
                     const isCancelled = o.status === 'cancelled'
                     const isPartiallyReceived = o.status === 'partially_received'
                     const isPendingApproval = o.status === 'pending_approval'
-                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived && !isPendingApproval
+                    const isDraft = o.status === 'draft'
+                    const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived && !isPendingApproval && !isDraft
+                    const canCreateGrn = canReceiveOrConvert && can('purchases.create')
+                    // Bill form creates a draft bill (no stock) for create-only; approvers post stock on bill approve.
+                    const canConvertToBill = canReceiveOrConvert && can('purchases.create')
                     return (
                       <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -923,6 +1011,12 @@ export default function PurchasesPage() {
                               ariaLabel={`Actions for ${o.number}`}
                               actions={[
                                 {
+                                  label: 'Submit for approval',
+                                  hidden: !isDraft || !can('purchases.create'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => submitPO(o),
+                                },
+                                {
                                   label: 'Approve',
                                   hidden: !isPendingApproval || !can('purchases.approve'),
                                   disabled: isRowBusy(o.id),
@@ -937,7 +1031,7 @@ export default function PurchasesPage() {
                                 },
                                 {
                                   label: 'View',
-                                  hidden: !(isConverted || isCancelled || isPartiallyReceived) || !can('purchases.edit'),
+                                  hidden: !(isConverted || isCancelled || isPartiallyReceived || isPendingApproval) || !can('purchases.edit'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/purchases/orders/${o.id}/edit?view=1`),
                                 },
@@ -949,19 +1043,19 @@ export default function PurchasesPage() {
                                 },
                                 {
                                   label: 'Edit',
-                                  hidden: !canReceiveOrConvert || !can('purchases.edit'),
+                                  hidden: !(isDraft || canReceiveOrConvert) || !can('purchases.edit'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/purchases/orders/${o.id}/edit`),
                                 },
                                 {
                                   label: 'Receive stock',
-                                  hidden: !canReceiveOrConvert || !can('purchases.create'),
+                                  hidden: !canCreateGrn,
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/purchases/grns/new?fromPo=${o.id}`),
                                 },
                                 {
                                   label: 'Convert to bill',
-                                  hidden: !canReceiveOrConvert || !can('purchases.create'),
+                                  hidden: !canConvertToBill,
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/purchases/bills/new?fromPo=${o.id}`),
                                 },
@@ -1025,7 +1119,7 @@ export default function PurchasesPage() {
             <AutocompleteDropdown
               value={grnStatusF}
               onChange={setGrnStatusF}
-              options={statusOptions(['received', 'cancelled'])}
+              options={statusOptions(['draft', 'pending_approval', 'received', 'cancelled'])}
               prependOptions={[{ id: '', label: 'All Status' }]}
               isSearchFieldRequired={false}
               placeholder="All Status"
@@ -1062,6 +1156,8 @@ export default function PurchasesPage() {
                 <tbody>
                   {grns.map((g) => {
                     const hasBill = !!g.convertedBillId
+                    const isDraft = g.status === 'draft'
+                    const isPendingApproval = g.status === 'pending_approval'
                     const isReceived = g.status === 'received'
                     return (
                       <tr key={g.id}>
@@ -1082,6 +1178,25 @@ export default function PurchasesPage() {
                                 hidden: !canActivity,
                                 disabled: isRowBusy(g.id),
                                 onClick: () => setActivityTarget({ recordType: 'grn', recordId: g.id, title: `GRN ${g.number || g.id}` }),
+                              },
+                              {
+                                label: actionKind === 'submit-grn' && isRowBusy(g.id) ? 'Submitting…' : 'Submit for approval',
+                                hidden: !isDraft || !can('purchases.create'),
+                                disabled: isRowBusy(g.id),
+                                onClick: () => submitGrn(g),
+                              },
+                              {
+                                label: actionKind === 'approve-grn' && isRowBusy(g.id) ? 'Approving…' : 'Approve',
+                                hidden: !isPendingApproval || !can('purchases.approve'),
+                                disabled: isRowBusy(g.id),
+                                onClick: () => approveGrn(g),
+                              },
+                              {
+                                label: actionKind === 'reject-grn' && isRowBusy(g.id) ? 'Rejecting…' : 'Reject',
+                                danger: true,
+                                hidden: !isPendingApproval || !can('purchases.approve'),
+                                disabled: isRowBusy(g.id),
+                                onClick: () => rejectGrn(g),
                               },
                               {
                                 label: 'Create bill',

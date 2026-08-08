@@ -453,7 +453,7 @@ async def create_transfer(
         to_branch_id=data.to_branch_id,
         to_branch_name=to_name,
         requested_by=data.requested_by or user.name,
-        status=TransferStatus.pending,
+        status=TransferStatus.pending if direct else TransferStatus.draft,
         priority=data.priority,
         notes=data.notes,
         request_date=data.expected_date,
@@ -488,12 +488,9 @@ async def create_transfer(
         )
         await db.commit()
         return {"id": tid, "ref_number": ref, **result}
-    from src.notifications.store import emit_transfer_pending, notify_refresh
-
-    await emit_transfer_pending(db, t)
+    # Draft stays private — notification fires on submit.
     await db.commit()
-    await notify_refresh()
-    return {"id": tid, "ref_number": ref, "status": "pending"}
+    return {"id": tid, "ref_number": ref, "status": "draft"}
 
 
 @router.put("/{transfer_id}", dependencies=[Depends(require_perm("transfers.create"))])
@@ -514,10 +511,10 @@ async def update_transfer(
         raise HTTPException(400, "At least one line item is required")
 
     t = await _lock_transfer(db, transfer_id, ref_number=data.ref_number)
-    if t.status != TransferStatus.pending:
+    if t.status not in (TransferStatus.pending, TransferStatus.draft):
         raise HTTPException(
             400,
-            f"Only pending transfers can be edited; this transfer is {t.status.value}",
+            f"Only draft/pending transfers can be edited; this transfer is {t.status.value}",
         )
 
     # Validate the requested branches are within the user's scope
@@ -567,7 +564,35 @@ async def update_transfer(
         detail=f"Edited transfer route, items, or notes for {t.ref_number}",
     )
     await db.commit()
-    return {"id": transfer_id, "ref_number": t.ref_number, "status": "pending"}
+    return {"id": transfer_id, "ref_number": t.ref_number, "status": t.status.value}
+
+@router.post("/{transfer_id}/submit", dependencies=[Depends(require_perm("transfers.create"))])
+async def submit_transfer(
+    transfer_id: str,
+    ref_number: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Creator submits a private draft transfer for approval."""
+    t = await _lock_transfer(db, transfer_id, ref_number=ref_number)
+    if t.status == TransferStatus.pending:
+        return {"status": "pending", "ref_number": t.ref_number, "already_processed": True}
+    if t.status != TransferStatus.draft:
+        raise HTTPException(400, f"Only draft transfers can be submitted (status={t.status.value})")
+    if t.requested_by and t.requested_by != user.name and not await can_direct_commit(user, db, "transfers.approve"):
+        raise HTTPException(403, "Only the creator can submit this draft for approval")
+    t.status = TransferStatus.pending
+    from src.notifications.store import emit_transfer_pending, notify_refresh
+    await emit_transfer_pending(db, t)
+    _log_transfer_history(
+        db, user=user, transfer_id=transfer_id, transfer_number=t.ref_number,
+        event_type="submitted", action="Transfer submitted",
+        detail=f"Transfer {t.ref_number} submitted for approval",
+    )
+    await db.commit()
+    await notify_refresh()
+    return {"status": "pending", "ref_number": t.ref_number}
+
 
 @router.post("/{transfer_id}/approve", dependencies=[Depends(require_perm("transfers.approve"))])
 async def approve_transfer(

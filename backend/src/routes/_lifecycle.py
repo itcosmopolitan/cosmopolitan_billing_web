@@ -38,8 +38,20 @@ def compute_due_date(from_date: str, payment_terms: Optional[str] = None) -> str
     return (base + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
+def _approval_held_status(status) -> bool:
+    """True when status is still in the maker-checker queue (no ledger effects)."""
+    raw = status.value if hasattr(status, "value") else str(status)
+    return raw in (
+        InvoiceStatus.draft.value,
+        InvoiceStatus.pending_approval.value,
+    )
+
+
 def _recompute_invoice_status(inv) -> None:
     if inv.status == InvoiceStatus.cancelled or str(inv.status).endswith("cancelled"):
+        return
+    # Never promote draft / pending_approval into payment statuses via recompute.
+    if _approval_held_status(inv.status):
         return
     total = float(inv.total or 0)
     paid = float(inv.paid_amount or 0)
@@ -57,6 +69,8 @@ def _recompute_invoice_status(inv) -> None:
 
 def _recompute_bill_status(bill) -> None:
     if bill.status == InvoiceStatus.cancelled or str(bill.status).endswith("cancelled"):
+        return
+    if _approval_held_status(bill.status):
         return
     total = float(bill.total or 0)
     paid = float(bill.paid_amount or 0)

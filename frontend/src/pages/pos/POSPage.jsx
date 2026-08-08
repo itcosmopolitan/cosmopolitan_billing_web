@@ -705,7 +705,7 @@ export default function POSPage() {
             title="Focus input then scan barcode"
             onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
           >📷 Scan</button>
-          {can('invoices.create') && (
+          {can('pos.use') && can('invoices.create') && (
             <button className="btn btn-secondary btn-sm" onClick={() => setShowRefund(true)}>↩ Refund</button>
           )}
           <button className="btn btn-secondary btn-sm" style={{ position: 'relative' }} onClick={() => setShowHeld(true)}>
@@ -1218,11 +1218,12 @@ export default function POSPage() {
               width: '100%',
               justifyContent: 'center',
               fontSize: 15,
-              opacity: completing ? 0.6 : 1,
-              cursor: completing ? 'not-allowed' : 'pointer',
+              opacity: completing || !can('pos.use') ? 0.6 : 1,
+              cursor: completing || !can('pos.use') ? 'not-allowed' : 'pointer',
             }}
             onClick={handleComplete}
-            disabled={completing}
+            disabled={completing || !can('pos.use')}
+            title={!can('pos.use') ? 'POS billing requires pos.use permission' : undefined}
           >
             {completing ? '⏳ Saving...' : `✓ Complete Sale — ${fmt(total)}`}
             <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>F8</span>

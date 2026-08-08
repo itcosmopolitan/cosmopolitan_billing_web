@@ -44,3 +44,13 @@ async def can_direct_commit(user: User, db: AsyncSession, approve_perm: str) -> 
     if getattr(user, "all_branches", False):
         return True
     return await user_can(user, db, approve_perm)
+
+
+async def can_direct_pos_bill(user: User, db: AsyncSession) -> bool:
+    """POS live counter: direct stock+payment when the user may run the till.
+
+    Does not require invoices.approve — cashiers complete sales at the counter.
+    """
+    if getattr(user, "all_branches", False):
+        return True
+    return await user_can(user, db, "pos.use")

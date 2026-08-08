@@ -102,8 +102,8 @@ export default function TransferFormPage({ mode = 'create' }) {
         setLoading(true)
         const transfer = await transfersAPI.get(transferId)
         if (cancelled) return
-        if (transfer.status !== 'pending') {
-          toast.error('Only pending transfers can be edited')
+        if (transfer.status !== 'pending' && transfer.status !== 'draft') {
+          toast.error('Only draft or pending transfers can be edited')
           navigate('/transfers', { replace: true })
           return
         }

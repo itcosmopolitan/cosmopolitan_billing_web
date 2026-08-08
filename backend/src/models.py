@@ -33,14 +33,16 @@ class ItemApprovalStatus(str, enum.Enum):
     inactive = "inactive"
 
 class InvoiceStatus(str, enum.Enum):
-    draft   = "draft"
-    paid    = "paid"
-    pending = "pending"
-    partial = "partial"
-    overdue = "overdue"
-    cancelled = "cancelled"
+    draft            = "draft"
+    pending_approval = "pending_approval"
+    paid             = "paid"
+    pending          = "pending"
+    partial          = "partial"
+    overdue          = "overdue"
+    cancelled        = "cancelled"
 
 class TransferStatus(str, enum.Enum):
+    draft    = "draft"
     pending  = "pending"
     approved = "approved"
     transit  = "transit"
@@ -48,6 +50,7 @@ class TransferStatus(str, enum.Enum):
     rejected = "rejected"
 
 class AdjustmentStatus(str, enum.Enum):
+    draft    = "draft"
     pending  = "pending"
     approved = "approved"
     rejected = "rejected"
@@ -66,11 +69,12 @@ class SalesOrderStatus(str, enum.Enum):
     flows feel consistent. `converted` is terminal — once an SO has spawned
     an invoice, its line items / totals are locked and the SO can't be
     edited or re-converted."""
-    draft     = "draft"
-    confirmed = "confirmed"
+    draft              = "draft"
+    pending_approval   = "pending_approval"
+    confirmed          = "confirmed"
     partially_invoiced = "partially_invoiced"
-    converted = "converted"
-    cancelled = "cancelled"
+    converted          = "converted"
+    cancelled          = "cancelled"
 
 
 class PurchaseOrderStatus(str, enum.Enum):
@@ -90,9 +94,10 @@ class PurchaseOrderStatus(str, enum.Enum):
 
 class GRNStatus(str, enum.Enum):
     """Goods Receipt Note lifecycle. Stock moves only at `received`."""
-    draft     = "draft"
-    received  = "received"
-    cancelled = "cancelled"
+    draft            = "draft"
+    pending_approval = "pending_approval"
+    received         = "received"
+    cancelled        = "cancelled"
 
 
 class SalesReturnStatus(str, enum.Enum):

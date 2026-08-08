@@ -20,6 +20,7 @@ const inFlightAdjustmentsRequests = new Map()
 
 const TAB_DEFS = [
   { id: 'all',      label: 'All' },
+  { id: 'draft',    label: 'Draft' },
   { id: 'pending',  label: 'Pending Approval' },
   { id: 'approved', label: 'Approved' },
   { id: 'rejected', label: 'Rejected' },
@@ -355,6 +356,24 @@ export default function AdjustmentsPage() {
     }
   }
 
+  const submit = async (row) => {
+    if (actionBusy) return
+    setActionBusy(row.id)
+    setActionKind('submit')
+    try {
+      await adjustmentsAPI.submit(row.id, { ref_number: row.ref_number })
+      toast.success(`${row.ref_number} submitted for approval`)
+      bumpList()
+      setShowDetail(null)
+    } catch (err) {
+      console.error(err)
+      toast.error(err.response?.data?.detail || 'Failed to submit')
+    } finally {
+      setActionBusy(null)
+      setActionKind(null)
+    }
+  }
+
   const reject = async (row) => {
     if (actionBusy) return
     setActionBusy(row.id)
@@ -537,6 +556,12 @@ export default function AdjustmentsPage() {
                               onClick: () => setActivityTarget({ recordType: 'stock_adjustment', recordId: r.id, title: `Adjustment ${r.ref_number || r.id}` }),
                             },
                             {
+                              label: actionKind === 'submit' && isRowBusy(r.id) ? 'Submitting…' : 'Submit for approval',
+                              hidden: r.status !== 'draft' || !can('adjustments.create'),
+                              disabled: isRowBusy(r.id),
+                              onClick: () => submit(r),
+                            },
+                            {
                               label: actionKind === 'approve' && isRowBusy(r.id) ? 'Approving…' : 'Approve',
                               hidden: r.status !== 'pending' || !can('adjustments.approve'),
                               disabled: isRowBusy(r.id),
@@ -552,7 +577,7 @@ export default function AdjustmentsPage() {
                             {
                               label: actionKind === 'delete' && isRowBusy(r.id) ? 'Deleting…' : 'Delete',
                               danger: true,
-                              hidden: r.status !== 'pending' || !canDelete,
+                              hidden: !['draft', 'pending'].includes(r.status) || !canDelete,
                               disabled: isRowBusy(r.id) || deleteBusy || !!actionBusy,
                               onClick: () => deleteRequest(r),
                             },

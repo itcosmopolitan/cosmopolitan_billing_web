@@ -631,6 +631,54 @@ export default function SalesPage() {
     }
   }
 
+  const submitInvoice = async (inv) => {
+    await runRowAction(inv.id, 'submit-invoice', async () => {
+      await salesAPI.submit(inv.id)
+      setSalesListVersion((v) => v + 1)
+      toast.success(`${inv.number} submitted for approval`)
+    })
+  }
+
+  const approveInvoice = async (inv) => {
+    await runRowAction(inv.id, 'approve-invoice', async () => {
+      await salesAPI.approve(inv.id)
+      setSalesListVersion((v) => v + 1)
+      toast.success(`${inv.number} approved`)
+    })
+  }
+
+  const rejectInvoice = async (inv) => {
+    await runRowAction(inv.id, 'reject-invoice', async () => {
+      await salesAPI.reject(inv.id)
+      setSalesListVersion((v) => v + 1)
+      toast.success(`${inv.number} rejected`)
+    })
+  }
+
+  const submitSalesOrder = async (o) => {
+    await runRowAction(o.id, 'submit-so', async () => {
+      await salesAPI.orders.submit(o.id)
+      setOrderListVersion((v) => v + 1)
+      toast.success(`${o.number} submitted for approval`)
+    })
+  }
+
+  const approveSalesOrder = async (o) => {
+    await runRowAction(o.id, 'approve-so', async () => {
+      await salesAPI.orders.approve(o.id)
+      setOrderListVersion((v) => v + 1)
+      toast.success(`${o.number} approved`)
+    })
+  }
+
+  const rejectSalesOrder = async (o) => {
+    await runRowAction(o.id, 'reject-so', async () => {
+      await salesAPI.orders.reject(o.id)
+      setOrderListVersion((v) => v + 1)
+      toast.success(`${o.number} rejected`)
+    })
+  }
+
   const voidPayment = async (payment) => {
     if (!payment?.id) return
     await runRowAction(payment.id, 'void-payment', async () => {
@@ -794,7 +842,7 @@ export default function SalesPage() {
             <AutocompleteDropdown
               value={invStatusF}
               onChange={setInvStatusF}
-              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'draft'])}
+              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'draft', 'pending_approval'])}
               prependOptions={[{ id: '', label: 'All Status' }]}
               isSearchFieldRequired={false}
               placeholder="All Status"
@@ -876,13 +924,37 @@ export default function SalesPage() {
                               label: 'Edit',
                               hidden: !(
                                 can('invoices.edit')
-                                && inv.status !== 'cancelled'
-                                && inv.status !== 'paid'
+                                && inv.status === 'draft'
                                 && !(inv.paidAmount > 0)
                                 && (inv.origin || 'invoice').toLowerCase() !== 'pos'
                               ),
                               disabled: isRowBusy(inv.id),
                               onClick: () => navigate(`/sales/invoices/${inv.id}/edit`),
+                            },
+                            {
+                              label: 'Submit for approval',
+                              hidden: !(inv.status === 'draft' && can('invoices.create')),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => submitInvoice(inv),
+                            },
+                            {
+                              label: 'Approve',
+                              hidden: !(
+                                ['pending_approval', 'draft'].includes(inv.status)
+                                && can('invoices.approve')
+                              ),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => approveInvoice(inv),
+                            },
+                            {
+                              label: 'Reject',
+                              danger: true,
+                              hidden: !(
+                                ['pending_approval', 'draft'].includes(inv.status)
+                                && can('invoices.approve')
+                              ),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => rejectInvoice(inv),
                             },
                             {
                               label: 'Record payment',
@@ -893,7 +965,10 @@ export default function SalesPage() {
                             {
                               label: 'Cancel invoice',
                               danger: true,
-                              hidden: inv.status === 'cancelled' || inv.paidAmount > 0 || !can('invoices.cancel'),
+                              hidden: inv.status === 'cancelled'
+                                || ['draft', 'pending_approval'].includes(inv.status)
+                                || inv.paidAmount > 0
+                                || !can('invoices.cancel'),
                               disabled: isRowBusy(inv.id),
                               onClick: () => setShowCancelInvoice(inv),
                             },
@@ -1383,7 +1458,7 @@ export default function SalesPage() {
             <AutocompleteDropdown
               value={orderStatusF}
               onChange={setOrderStatusF}
-              options={['draft', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
+              options={['draft', 'pending_approval', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
                 id: s,
                 label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
               }))}
@@ -1423,6 +1498,9 @@ export default function SalesPage() {
                     const isConverted = o.status === 'converted'
                     const isPartial = o.status === 'partially_invoiced'
                     const isCancelled = o.status === 'cancelled'
+                    const isDraft = o.status === 'draft'
+                    const isPendingApproval = o.status === 'pending_approval'
+                    const isConfirmed = o.status === 'confirmed'
                     return (
                       <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
                         <td>
@@ -1438,7 +1516,7 @@ export default function SalesPage() {
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                         <td className="text-right mono">{fmt(o.total)}</td>
-                        <td><Chip status={isConverted ? 'paid' : isPartial ? 'pending' : isCancelled ? 'inactive' : 'active'} label={(o.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /></td>
+                        <td><Chip status={o.status} label={(o.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /></td>
                         <td>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <RowActionsMenu
@@ -1447,9 +1525,28 @@ export default function SalesPage() {
                               actions={[
                                 {
                                   label: 'Edit',
-                                  hidden: isConverted || isCancelled || !can('invoices.edit'),
+                                  hidden: !isDraft || !can('invoices.edit'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/orders/${o.id}/edit`),
+                                },
+                                {
+                                  label: 'Submit for approval',
+                                  hidden: !isDraft || !can('invoices.create'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => submitSalesOrder(o),
+                                },
+                                {
+                                  label: 'Approve',
+                                  hidden: !(isPendingApproval || isDraft) || !can('invoices.approve'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => approveSalesOrder(o),
+                                },
+                                {
+                                  label: 'Reject',
+                                  danger: true,
+                                  hidden: !(isPendingApproval || isDraft) || !can('invoices.approve'),
+                                  disabled: isRowBusy(o.id),
+                                  onClick: () => rejectSalesOrder(o),
                                 },
                                 {
                                   label: 'Activity',
@@ -1459,13 +1556,13 @@ export default function SalesPage() {
                                 },
                                 {
                                   label: 'Convert to invoice',
-                                  hidden: isConverted || isCancelled || !can('invoices.create'),
+                                  hidden: !(isConfirmed || isPartial) || !can('invoices.create'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/invoices/new?fromOrder=${o.id}`),
                                 },
                                 {
                                   label: 'View',
-                                  hidden: !(isConverted || isCancelled),
+                                  hidden: !(isConverted || isCancelled || isPendingApproval),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/orders/${o.id}/edit?view=1`),
                                 },

@@ -744,6 +744,8 @@ async def create_bill(
             )
         if po.status == PurchaseOrderStatus.cancelled:
             raise HTTPException(400, "Cannot convert a cancelled purchase order")
+        if po.status in (PurchaseOrderStatus.draft, PurchaseOrderStatus.pending_approval):
+            raise HTTPException(400, "Purchase order must be approved before converting to a bill")
 
     if data.grn_id:
         grn_res = await db.execute(
@@ -978,12 +980,8 @@ async def create_bill(
     if direct and bill.vendor_id and bill_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
 
-    if not direct:
-        from src.notifications.store import emit_bill_pending, notify_refresh
-        await emit_bill_pending(db, bill)
+    # Draft stays private — notification fires on submit.
     await db.commit()
-    if not direct:
-        await notify_refresh()
     await _write_post_commit_audit(
         db,
         action="Purchase Bill Created",
@@ -1027,8 +1025,8 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     if not b:
         raise HTTPException(404, "Bill not found")
     bill_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
-    if bill_status == InvoiceStatus.draft.value:
-        raise HTTPException(400, "Bill is pending approval — payment cannot be recorded until approved")
+    if bill_status in (InvoiceStatus.draft.value, InvoiceStatus.pending_approval.value):
+        raise HTTPException(400, "Bill is awaiting approval — payment cannot be recorded until approved")
     if bill_status == "cancelled":
         raise HTTPException(400, "Bill is cancelled — cannot record payments")
     prev_status = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
@@ -1169,6 +1167,40 @@ class BillApproveReject(BaseModel):
     notes: Optional[str] = None
 
 
+@router.post("/{bill_id}/submit", dependencies=[Depends(require_perm("purchases.create"))])
+async def submit_bill(
+    bill_id: str,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Creator submits a private draft bill for approval (no stock/payment yet)."""
+    res = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
+    bill = res.scalar_one_or_none()
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
+    b_status = bill.status.value if hasattr(bill.status, "value") else str(bill.status)
+    if b_status == InvoiceStatus.pending_approval.value:
+        return {"status": "pending_approval", "number": bill.number, "already_processed": True}
+    if b_status != InvoiceStatus.draft.value:
+        raise HTTPException(400, f"Only draft bills can be submitted (status={b_status})")
+    if bill.created_by and bill.created_by != user.name and not await can_direct_commit(user, db, "purchases.approve"):
+        raise HTTPException(403, "Only the creator can submit this draft for approval")
+    bill.status = InvoiceStatus.pending_approval
+    from src.notifications.store import emit_bill_pending, notify_refresh
+    await emit_bill_pending(db, bill)
+    await db.commit()
+    await notify_refresh()
+    await _write_post_commit_audit(
+        db, action="Purchase Bill Submitted", reference_id=bill.number,
+        detail=f"Purchase bill {bill.number} submitted for approval",
+        user=user, request=request, branch_id=bill.branch_id,
+        metadata={"bill_id": bill.id, "status": "pending_approval"},
+    )
+    return {"status": "pending_approval", "number": bill.number}
+
+
 @router.post("/{bill_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
 async def approve_bill(
     bill_id: str,
@@ -1177,7 +1209,7 @@ async def approve_bill(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Approve a draft purchase bill: create auto-GRN if needed, apply payment, update ledgers."""
+    """Approve a submitted purchase bill: create auto-GRN if needed, apply payment, update ledgers."""
     res = await db.execute(
         select(PurchaseBill)
         .options(selectinload(PurchaseBill.line_items))
@@ -1186,11 +1218,12 @@ async def approve_bill(
     bill = res.unique().scalar_one_or_none()
     if not bill:
         raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
     b_status = bill.status.value if hasattr(bill.status, "value") else str(bill.status)
     if b_status in ("paid", "pending", "partial"):
         return {"status": b_status, "number": bill.number, "already_processed": True}
-    if b_status != InvoiceStatus.draft.value:
-        raise HTTPException(400, f"Only draft bills can be approved (status={b_status})")
+    if b_status not in (InvoiceStatus.pending_approval.value, InvoiceStatus.draft.value):
+        raise HTTPException(400, f"Only pending-approval bills can be approved (status={b_status})")
     if bill.created_by and bill.created_by == user.name:
         raise HTTPException(403, "You cannot approve your own bill")
 
@@ -1287,16 +1320,17 @@ async def reject_bill(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Reject a draft purchase bill — marks it cancelled, no side-effects applied."""
+    """Reject a submitted purchase bill — marks it cancelled, no side-effects applied."""
     res = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     bill = res.scalar_one_or_none()
     if not bill:
         raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
     b_status = bill.status.value if hasattr(bill.status, "value") else str(bill.status)
     if b_status == "cancelled":
         return {"status": "cancelled", "number": bill.number, "already_processed": True}
-    if b_status != InvoiceStatus.draft.value:
-        raise HTTPException(400, f"Only draft bills can be rejected (status={b_status})")
+    if b_status not in (InvoiceStatus.pending_approval.value, InvoiceStatus.draft.value):
+        raise HTTPException(400, f"Only pending-approval bills can be rejected (status={b_status})")
     # If GRN was already linked (from an existing received GRN), detach the link
     # so the GRN becomes billable again.
     if bill.grn_id:
@@ -3110,7 +3144,7 @@ async def create_order(
         vendor_name=data.vendor_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
-        created_by=data.created_by or user.name,
+        created_by=user.name if user else (data.created_by or "Staff"),
         date=data.date or today,
         expected_date=data.expected_date,
         subtotal=round(subtotal, 2),
@@ -3120,7 +3154,7 @@ async def create_order(
         status=(
             PurchaseOrderStatus.confirmed
             if direct
-            else PurchaseOrderStatus.pending_approval
+            else PurchaseOrderStatus.draft
         ),
         notes=data.notes,
     )
@@ -3146,13 +3180,8 @@ async def create_order(
             "line_count": len(data.items),
         },
     )
-    if not direct:
-        from src.notifications.store import emit_po_pending, notify_refresh
-
-        await emit_po_pending(db, po)
+    # Draft stays private — notification fires on submit.
     await db.commit()
-    if not direct:
-        await notify_refresh()
     return {"id": po.id, "number": po_num, "total": total, "status": po.status.value}
 
 
@@ -3228,6 +3257,38 @@ class POApprove(BaseModel):
     notes: Optional[str] = None
 
 
+@router.post("/orders/{order_id}/submit", dependencies=[Depends(require_perm("purchases.create"))])
+async def submit_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Creator submits a private draft PO for approval."""
+    res = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == order_id))
+    po = res.scalar_one_or_none()
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    await enforce_branch_access(po.branch_id, user=user, db=db)
+    if po.status == PurchaseOrderStatus.pending_approval:
+        return {"status": "pending_approval", "number": po.number, "already_processed": True}
+    if po.status != PurchaseOrderStatus.draft:
+        raise HTTPException(400, f"Only draft POs can be submitted (status={po.status.value})")
+    if po.created_by and po.created_by != user.name and not await can_direct_commit(user, db, "purchases.approve"):
+        raise HTTPException(403, "Only the creator can submit this draft for approval")
+    po.status = PurchaseOrderStatus.pending_approval
+    from src.notifications.store import emit_po_pending, notify_refresh
+    await emit_po_pending(db, po)
+    _log_purchase_order_history(db, user=user,
+        order_id=po.id, order_number=po.number,
+        event_type="submitted", action="submit_purchase_order",
+        detail=f"Purchase order {po.number} submitted for approval",
+        metadata={"from": "draft", "to": "pending_approval"},
+    )
+    await db.commit()
+    await notify_refresh()
+    return {"status": "pending_approval", "number": po.number}
+
+
 @router.post("/orders/{order_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
 async def approve_order(
     order_id: str,
@@ -3239,6 +3300,7 @@ async def approve_order(
     po = res.scalar_one_or_none()
     if not po:
         raise HTTPException(404, "Purchase order not found")
+    await enforce_branch_access(po.branch_id, user=user, db=db)
     if po.created_by and po.created_by == user.name and po.status == PurchaseOrderStatus.pending_approval:
         raise HTTPException(403, "You cannot approve your own purchase order")
     if po.status == PurchaseOrderStatus.confirmed:
@@ -3359,8 +3421,17 @@ async def convert_order_to_bill(
         )
     if po.status == PurchaseOrderStatus.cancelled:
         raise HTTPException(400, "Cannot convert a cancelled purchase order")
-    if po.status == PurchaseOrderStatus.pending_approval:
+    if po.status in (PurchaseOrderStatus.draft, PurchaseOrderStatus.pending_approval):
         raise HTTPException(400, "Purchase order must be approved before converting to a bill")
+
+    await enforce_branch_access(po.branch_id, user=user, db=db)
+    # Convert applies stock + AP immediately — create-only users must use GRN draft→submit.
+    if not await can_direct_commit(user, db, "purchases.approve"):
+        raise HTTPException(
+            403,
+            "Converting a PO to bill requires purchases.approve (stock and AP post immediately). "
+            "Create a GRN instead, then submit it for approval.",
+        )
 
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
@@ -3409,6 +3480,7 @@ async def convert_order_to_bill(
         notes=data.notes or po.notes,
         purchase_order_id=po.id,
         po_number=po.number,
+        created_by=user.name if user else "Staff",
         tax_mode=tax_mode,
     )
     bill = await _create_bill_for_grn(
@@ -3660,7 +3732,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
             raise HTTPException(404, "Purchase order not found")
         if po.status == PurchaseOrderStatus.cancelled:
             raise HTTPException(400, "Cannot receive against a cancelled PO")
-        if po.status == PurchaseOrderStatus.pending_approval:
+        if po.status in (PurchaseOrderStatus.draft, PurchaseOrderStatus.pending_approval):
             raise HTTPException(400, "Purchase order must be approved before receiving stock")
         if po.status == PurchaseOrderStatus.converted:
             raise HTTPException(400, "PO already fully converted — use a new PO for additional receipts")
@@ -3684,7 +3756,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
             line_rows=line_rows,
             discount=data.discount or 0,
             notes=data.notes,
-            created_by=data.created_by or (user.name if user else "Staff"),
+            created_by=user.name if user else (data.created_by or "Staff"),
             purchase_order_id=po.id if po else None,
             po_number=po.number if po else None,
             number=data.number,
@@ -3702,7 +3774,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
             line_rows=line_rows,
             discount=data.discount or 0,
             notes=data.notes,
-            created_by=data.created_by or (user.name if user else "Staff"),
+            created_by=user.name if user else (data.created_by or "Staff"),
             purchase_order_id=po.id if po else None,
             po_number=po.number if po else None,
             number=data.number,
@@ -3723,6 +3795,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
             "line_count": len(data.items or []),
             "total_qty": total_qty,
             "total": float(grn.total or 0),
+            "status": grn.status.value if hasattr(grn.status, "value") else str(grn.status),
         },
     )
     _log_grn_history(db, user=user,
@@ -3749,18 +3822,47 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
                 "target_record_number": po.number,
             },
         )
-    if not direct:
-        from src.notifications.store import emit_grn_pending, notify_refresh
-        await emit_grn_pending(db, grn)
+    # Draft stays private — notification fires on submit.
     await db.commit()
-    if not direct:
-        await notify_refresh()
     return {"id": grn.id, "number": grn.number, "total": grn.total, "status": grn.status.value}
 
 
 # ─── GRN APPROVAL ─────────────────────────────────────────────────────────────
 class GRNApproveReject(BaseModel):
     notes: Optional[str] = None
+
+
+@router.post("/grns/{grn_id}/submit", dependencies=[Depends(require_perm("purchases.create"))])
+async def submit_grn(
+    grn_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Creator submits a private draft GRN for approval (no stock yet)."""
+    res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
+    grn = res.scalar_one_or_none()
+    if not grn:
+        raise HTTPException(404, "GRN not found")
+    await enforce_branch_access(grn.branch_id, user=user, db=db)
+    grn_status = grn.status.value if hasattr(grn.status, "value") else str(grn.status)
+    if grn_status == GRNStatus.pending_approval.value:
+        return {"status": "pending_approval", "number": grn.number, "already_processed": True}
+    if grn_status != GRNStatus.draft.value:
+        raise HTTPException(400, f"Only draft GRNs can be submitted (status={grn_status})")
+    if grn.created_by and grn.created_by != user.name and not await can_direct_commit(user, db, "purchases.approve"):
+        raise HTTPException(403, "Only the creator can submit this draft for approval")
+    grn.status = GRNStatus.pending_approval
+    from src.notifications.store import emit_grn_pending, notify_refresh
+    await emit_grn_pending(db, grn)
+    _log_grn_history(db, user=user,
+        grn_id=grn.id, grn_number=grn.number,
+        event_type="submitted", action="submit_grn",
+        detail=f"GRN {grn.number} submitted for approval",
+        metadata={"from": "draft", "to": "pending_approval"},
+    )
+    await db.commit()
+    await notify_refresh()
+    return {"status": "pending_approval", "number": grn.number}
 
 
 @router.post("/grns/{grn_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
@@ -3770,7 +3872,7 @@ async def approve_grn(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Approve a draft GRN — moves stock to received, marks it received."""
+    """Approve a submitted GRN — moves stock, marks it received."""
     res = await db.execute(
         select(GoodsReceiptNote)
         .options(selectinload(GoodsReceiptNote.line_items))
@@ -3779,15 +3881,15 @@ async def approve_grn(
     grn = res.unique().scalar_one_or_none()
     if not grn:
         raise HTTPException(404, "GRN not found")
+    await enforce_branch_access(grn.branch_id, user=user, db=db)
     grn_status = grn.status.value if hasattr(grn.status, "value") else str(grn.status)
     if grn_status == GRNStatus.received.value:
         return {"status": "received", "number": grn.number, "already_processed": True}
-    if grn_status != GRNStatus.draft.value:
-        raise HTTPException(400, f"Only draft GRNs can be approved (status={grn_status})")
+    if grn_status not in (GRNStatus.pending_approval.value, GRNStatus.draft.value):
+        raise HTTPException(400, f"Only pending-approval GRNs can be approved (status={grn_status})")
     if grn.created_by and grn.created_by == user.name:
         raise HTTPException(403, "You cannot approve your own GRN")
 
-    tax_mode = await _get_org_tax_mode(db)
     receipt_lines = []
     for li in grn.line_items:
         receipt_lines.append(ReceiptLine(
@@ -3840,16 +3942,17 @@ async def reject_grn(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Reject a draft GRN — marks it cancelled, no stock movement."""
+    """Reject a submitted GRN — marks it cancelled, no stock movement."""
     res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
     grn = res.scalar_one_or_none()
     if not grn:
         raise HTTPException(404, "GRN not found")
+    await enforce_branch_access(grn.branch_id, user=user, db=db)
     grn_status = grn.status.value if hasattr(grn.status, "value") else str(grn.status)
     if grn_status == GRNStatus.cancelled.value:
         return {"status": "cancelled", "number": grn.number, "already_processed": True}
-    if grn_status != GRNStatus.draft.value:
-        raise HTTPException(400, f"Only draft GRNs can be rejected (status={grn_status})")
+    if grn_status not in (GRNStatus.pending_approval.value, GRNStatus.draft.value):
+        raise HTTPException(400, f"Only pending-approval GRNs can be rejected (status={grn_status})")
     grn.status = GRNStatus.cancelled
     if body.notes:
         grn.notes = (grn.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
@@ -3883,7 +3986,7 @@ async def receive_from_po(
         raise HTTPException(404, "Purchase order not found")
     if po.status == PurchaseOrderStatus.cancelled:
         raise HTTPException(400, "Cannot receive against a cancelled PO")
-    if po.status == PurchaseOrderStatus.pending_approval:
+    if po.status in (PurchaseOrderStatus.draft, PurchaseOrderStatus.pending_approval):
         raise HTTPException(400, "Purchase order must be approved before receiving stock")
     if po.status == PurchaseOrderStatus.converted:
         raise HTTPException(400, "PO already fully converted — use a new PO for additional receipts")
@@ -3893,6 +3996,8 @@ async def receive_from_po(
             "PO already has a pending goods receipt — bill the existing GRN or cancel the PO",
         )
 
+    await enforce_branch_access(po.branch_id, user=user, db=db)
+    direct = await can_direct_commit(user, db, "purchases.approve")
     today = datetime.now().strftime("%Y-%m-%d")
     tax_mode = await _get_org_tax_mode(db)
     receipts_by_item = {}
@@ -3921,8 +4026,7 @@ async def receive_from_po(
         line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
-    grn = await _create_grn_received(
-        db,
+    create_kwargs = dict(
         vendor_id=po.vendor_id,
         vendor_name=po.vendor_name or "",
         branch_id=po.branch_id,
@@ -3933,10 +4037,15 @@ async def receive_from_po(
         notes=data.notes or po.notes,
         purchase_order_id=po.id,
         po_number=po.number,
-        created_by=data.created_by,
+        created_by=user.name if user else (data.created_by or "Staff"),
         tax_mode=tax_mode,
     )
-    po.status = PurchaseOrderStatus.partially_received
+    if direct:
+        grn = await _create_grn_received(db, **create_kwargs)
+        po.status = PurchaseOrderStatus.partially_received
+    else:
+        # Draft: no stock / PO lock until GRN is submitted and approved.
+        grn = await _create_grn_draft(db, **create_kwargs)
 
     total_qty = int(sum(int(getattr(li, "qty", 0) or 0) for li in (po.line_items or [])))
     _log_grn_history(db, user=user,
@@ -3950,6 +4059,7 @@ async def receive_from_po(
             "line_count": len(po.line_items or []),
             "total_qty": total_qty,
             "total": float(grn.total or 0),
+            "status": grn.status.value if hasattr(grn.status, "value") else str(grn.status),
         },
     )
     _log_grn_history(db, user=user,
@@ -3976,7 +4086,7 @@ async def receive_from_po(
         },
     )
     await db.commit()
-    return {"id": grn.id, "number": grn.number, "total": grn.total}
+    return {"id": grn.id, "number": grn.number, "total": grn.total, "status": grn.status.value}
 
 
 @router.post("/grns/{grn_id}/bill", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
@@ -4000,10 +4110,13 @@ async def create_bill_from_grn(
     if grn.converted_bill_id:
         raise HTTPException(400, "GRN already has a linked bill")
 
+    await enforce_branch_access(grn.branch_id, user=user, db=db)
+    direct = await can_direct_commit(user, db, "purchases.approve")
+
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
 
-    paid = grn.total if data.payment_received else 0.0
+    paid = grn.total if (direct and data.payment_received) else 0.0
     payment_mode = data.payment_mode if data.payment_received else None
     due_date = data.due_date
     if not due_date and not data.payment_received:
@@ -4021,6 +4134,11 @@ async def create_bill_from_grn(
         notes=data.notes,
         paid_amount=round(paid, 2),
     )
+    bill.created_by = user.name if user else "Staff"
+    if not direct:
+        # Financial draft — AP posts on bill approve (stock already on GRN).
+        bill.status = InvoiceStatus.draft
+        bill.paid_amount = 0
 
     if grn.purchase_order_id:
         po = (await db.execute(
