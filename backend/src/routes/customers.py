@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.models import Branch, Customer, CustomerCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
-from src.routes._serializers import serialize_customer
+from src.routes._serializers import _build_customer_code, serialize_customer
 from src.permissions import CUSTOMER_PICKER_READ
 from src.security import require_perm, current_user, enforce_branch_access
 from src.models import User
@@ -258,10 +258,12 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)
     address = _compose_address_from_parts(data)
-    c = Customer(id=str(uuid.uuid4()), name=data.name, phone=data.phone,
-                 email=data.email, address=address, gstin=data.gst_in,
-                 branch_id=data.branch_id, credit_limit=data.credit_limit,
-                 type=data.customer_type,
+    customer_id = str(uuid.uuid4())
+    customer_code = _build_customer_code(customer_id)
+    c = Customer(id=customer_id, name=data.name, phone=data.phone,
+                 email=data.email, address=address, customer_code=customer_code,
+                 gstin=data.gst_in, branch_id=data.branch_id,
+                 credit_limit=data.credit_limit, type=data.customer_type,
                  street1=data.street1, street2=data.street2, street3=data.street3,
                  city=data.city, state_province=data.state_province,
                  country=data.country, postal_code=data.postal_code)
@@ -292,5 +294,8 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
         if k in ["street1", "street2", "street3", "city", "state_province", "country", "postal_code"]:
             continue
         setattr(c, _FIELD_TO_COLUMN.get(k, k), v)
+
+    if not c.customer_code:
+        c.customer_code = _build_customer_code(c.id)
     await db.commit()
     return {"message": "Updated"}

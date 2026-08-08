@@ -398,8 +398,15 @@
     if (!value) return ''
     const date = new Date(value)
     if (Number.isNaN(date)) return value
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
-    return `${date.getDate()}. ${months[date.getMonth()]} ${date.getFullYear()}`
+
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const hours = String(date.getHours()).padStart(2, '0')
+    const minutes = String(date.getMinutes()).padStart(2, '0')
+    const seconds = String(date.getSeconds()).padStart(2, '0')
+
+    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
   }
 
   function escapeHtml(value) {
@@ -431,8 +438,8 @@
           </div>
           <div class="company-info">
             <div class="company-name">${escapeHtml(branch.company || 'Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
-            <div class="company-line">${escapeHtml((branch.address || 'LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv').split('\n')[0])}</div>
-            <div class="company-line">${escapeHtml((branch.address || 'LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv').split('\n')[1] || 'Hulhumale\', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv')}</div>
+            <div class="company-line">${escapeHtml(('LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv').split('\n')[0])}</div>
+            <div class="company-line">${escapeHtml(('LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv').split('\n')[1] || 'Hulhumale\', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv')}</div>
           </div>
           <div class="gold-badge">
             ${branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl ? `<img class="badge-img" src="${escapeHtml(branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl)}" alt="Badge" />` : `
@@ -487,9 +494,20 @@
               return escapeHtml(addressLines.join('\n')).replace(/\n/g,'<br/>')
             })()}</div>
             <table style="margin-top:10px; width:100%;">
-              <tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(invoice.customerId || invoice.customer_id || invoice.customerCode || '')}</td></tr>
+              ${(() => {
+                const customerId = invoice.customerId || invoice.customer_id || invoice.customerCode || ''
+                const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || ''
+                const customerName = (invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '').toString().trim().toLowerCase()
+                const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
+                return customerId && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerId)}</td></tr>` : ''
+              })()}
+              ${(() => {
+                const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || ''
+                const customerName = (invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '').toString().trim().toLowerCase()
+                const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
+                return customerGstin && !isWalkIn ? `<tr><td class="label">Customer GST IN</td><td>${escapeHtml(customerGstin)}</td></tr>` : ''
+              })()}
               <tr><td class="label">Invoice No.</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
-              <tr><td class="label">Order No.</td><td>${escapeHtml(invoice.orderNo || invoice.order_number || invoice.so || invoice.soNumber || '')}</td></tr>
               <tr><td class="label">Purchase Order No</td><td>${escapeHtml(invoice.purchaseOrderNo || invoice.purchase_order_no || invoice.poNumber || invoice.po_no || '')}</td></tr>
               <tr><td class="label">Posting Date</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
             </table>

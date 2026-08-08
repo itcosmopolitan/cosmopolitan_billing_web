@@ -63,7 +63,7 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
-from src.routes._serializers import get_user_branch_ids
+from src.routes._serializers import _build_customer_code, get_user_branch_ids
 from src.routes._approval import can_direct_commit, can_direct_pos_bill
 from src.permissions import SALES_DOCUMENT_READ
 from src.security import (
@@ -521,7 +521,16 @@ async def list_invoices(
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     out = []
     for inv in invoices:
-        d = _inv_dict(inv, inv.line_items)
+        sales_order_number = None
+        if getattr(inv, "pending_order_id", None):
+            so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
+            sales_order_number = so_res.scalar_one_or_none()
+        elif getattr(inv, "origin", None) == "sales_order":
+            sales_order_number = inv.number
+        else:
+            so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
+            sales_order_number = so_res.scalar_one_or_none()
+        d = _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
         if org_row:
             d.setdefault('organisation', {})
             d['organisation']['id'] = org_row.id
@@ -876,7 +885,16 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
     if not inv:
         raise HTTPException(404, "Invoice not found")
     await _resolve_branch_scope(user, db, inv.branch_id)
-    d = _inv_dict(inv, inv.line_items)
+    sales_order_number = None
+    if getattr(inv, "pending_order_id", None):
+        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
+        sales_order_number = so_res.scalar_one_or_none()
+    elif getattr(inv, "origin", None) == "sales_order":
+        sales_order_number = inv.number
+    else:
+        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
+        sales_order_number = so_res.scalar_one_or_none()
+    d = _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if org_row:
         d.setdefault('organisation', {})
@@ -1008,7 +1026,16 @@ async def update_invoice(
 
     await db.commit()
     li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
-    return _inv_dict(inv, li_res.scalars().all())
+    sales_order_number = None
+    if getattr(inv, "pending_order_id", None):
+        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
+        sales_order_number = so_res.scalar_one_or_none()
+    elif getattr(inv, "origin", None) == "sales_order":
+        sales_order_number = inv.number
+    else:
+        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
+        sales_order_number = so_res.scalar_one_or_none()
+    return _inv_dict(inv, li_res.scalars().all(), sales_order_number=sales_order_number)
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
@@ -2776,10 +2803,19 @@ def _quote_dict(quote, items=None):
         } for i in items]
     return d
 
-def _inv_dict(inv, items=None):
+def _inv_dict(inv, items=None, sales_order_number=None):
+    customer_code = None
+    if inv.customer_id:
+        customer_code = getattr(inv.customer, "customer_code", None) or None
+    if not customer_code and inv.customer_id:
+        try:
+            customer_code = _build_customer_code(inv.customer_id)
+        except Exception:
+            customer_code = None
+
     d = {
         "id": inv.id, "number": inv.number,
-        "customerId": inv.customer_id,
+        "customerId": customer_code or inv.customer_id,
         "customerName": inv.customer_name or "Walk-in",
         "customerAddress": inv.customer.address if inv.customer else None,
         "customer_address": inv.customer.address if inv.customer else None,
@@ -2818,6 +2854,8 @@ def _inv_dict(inv, items=None):
         "returnStatus": getattr(inv, "return_status", None) or "none",
         "origin": getattr(inv, "origin", None) or "invoice",
         "notes": inv.notes,
+        "salesOrderId": getattr(inv, "pending_order_id", None) or None,
+        "salesOrderNumber": sales_order_number or None,
     }
     if items is not None:
         d["items"] = [{

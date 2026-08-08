@@ -380,6 +380,7 @@ export default function CustomersPage() {
                   <tr key={c.id}>
                     <td>
                       <div style={{ fontWeight:500, color:'var(--text-primary)', fontSize:13 }}>{c.name}</div>
+                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>Customer ID: {c.customer_code || c.customerCode || '—'}</div>
                       <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.gstIn || 'No GST Reg No'}</div>
                     </td>
                     <td>

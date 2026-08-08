@@ -289,6 +289,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # Customer structured address fields added after the original customers
     # table definition. We must bootstrap them for older databases without
     # relying on Alembic-managed schema state.
+    ("customers", "customer_code", "VARCHAR(8)"),
     ("customers", "street1", "VARCHAR(30)"),
     ("customers", "street2", "VARCHAR(30)"),
     ("customers", "street3", "VARCHAR(30)"),

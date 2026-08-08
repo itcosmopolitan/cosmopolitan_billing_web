@@ -399,6 +399,8 @@ export function Receipt({ sale, branch }) {
     branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
 
     const payload = { sale: saleToSend, branch: branchMerged, printedAt }
+    const invoiceId = fullSale?.id ?? sale?.id ?? sale?.invoice_id ?? sale?.invoiceId
+    const printUrl = invoiceId ? `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(invoiceId))}` : '/invoice-cosmo.html'
     console.debug('[PrintInvoiceCosmo] payload', {
       sale: {
         id: saleToSend.id,
@@ -418,17 +420,28 @@ export function Receipt({ sale, branch }) {
         homePage: branchMerged.homePage,
       },
     })
-    const win = window.open('/invoice-cosmo.html', '_blank')
-    // try to postMessage until the window is ready
-    const interval = setInterval(() => {
+    const win = window.open(printUrl, '_blank')
+    const sendPayload = () => {
       try {
-        if (!win || win.closed) { clearInterval(interval); return }
+        if (!win || win.closed) return false
         win.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
-        clearInterval(interval)
+        return true
       } catch (e) {
-        // keep trying
+        return false
       }
+    }
+
+    const interval = setInterval(() => {
+      if (!win || win.closed) { clearInterval(interval); return }
+      if (sendPayload()) { clearInterval(interval) }
     }, 200)
+
+    if (win) {
+      win.addEventListener('load', () => {
+        sendPayload()
+        clearInterval(interval)
+      })
+    }
     setTimeout(() => { try { win.focus() } catch (e) {} }, 500)
   }
 
