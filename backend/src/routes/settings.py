@@ -245,11 +245,22 @@ class NumberingUpdate(BaseModel):
 
 @router.get("/numbering", dependencies=[Depends(require_perm("settings.view"))])
 async def list_numbering(db: AsyncSession = Depends(get_db)):
+    from src.document_numbering import ensure_branch_in_format
+
     rows = (
         await db.execute(select(DocumentNumbering).order_by(DocumentNumbering.label))
     ).scalars().all()
     if not rows:
         return []
+    dirty = False
+    for row in rows:
+        if (row.scope or "") == "per_branch":
+            updated = ensure_branch_in_format(row.format or "")
+            if updated and updated != (row.format or ""):
+                row.format = updated
+                dirty = True
+    if dirty:
+        await db.commit()
     out = []
     for row in rows:
         seq = await get_counter_seq(db, row.doc_type, row.scope or "per_branch", None)
@@ -310,6 +321,14 @@ async def update_numbering(
         raise HTTPException(400, "Format must include a # sequence placeholder (e.g. ####)")
     if "scope" in payload and payload["scope"] not in ("per_branch", "centralised"):
         raise HTTPException(400, "Scope must be per_branch or centralised")
+
+    new_scope = payload.get("scope", row.scope)
+    new_format = payload.get("format", row.format) or ""
+    if new_scope == "per_branch" and "BRANCH" not in new_format:
+        raise HTTPException(
+            400,
+            "Per-branch formats must include BRANCH (e.g. CN-BRANCH-YYYY-####)",
+        )
 
     old_scope = row.scope
     for key, val in payload.items():

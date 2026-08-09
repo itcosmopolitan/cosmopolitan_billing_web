@@ -1,5 +1,5 @@
 import { fmt } from '@/utils/helpers'
-import { useAppStore } from '@/store'
+import MarginBadge from '@/components/MarginBadge'
 import {
   computeDocumentTotals,
   hasLineLevelDiscount,
@@ -7,10 +7,12 @@ import {
   discountToggleStyle,
   discountToggleBtnStyle,
 } from '@/utils/documentFormTotals'
+import { documentMargin } from '@/utils/marginCalc'
 
 /**
  * Discount + totals footer for sales/purchase document forms.
  * Notes left, summary right. Line-item OR document-level discount — not both.
+ * Line prices are always tax-inclusive.
  */
 export default function DocumentTotalsStrip({
   items,
@@ -21,16 +23,15 @@ export default function DocumentTotalsStrip({
   readOnly = false,
   lineGross,
   showWhenEmpty = false,
-  taxPricingMode: taxModeProp,
+  showMargin = true,
+  /** Override auto sale-margin (e.g. purchase vs catalog sell). */
+  marginOverride = null,
   notes = '',
   onNotesChange,
   notesLabel = 'Notes',
   notesPlaceholder = 'Thanks for your business.',
   notesHint = 'Will be displayed on the invoice',
 }) {
-  const storeTaxMode = useAppStore((s) => s.taxPricingMode)
-  const taxPricingMode = taxModeProp || storeTaxMode || 'inclusive'
-
   if (!showWhenEmpty && (!items || items.length === 0)) return null
 
   const hasLineDiscount = hasLineLevelDiscount(items)
@@ -41,9 +42,18 @@ export default function DocumentTotalsStrip({
     entityDiscount,
     entityDiscountType,
     lineGross,
-    taxPricingMode,
     enforceExclusive: !readOnly,
   })
+  const margin = marginOverride !== null && marginOverride !== undefined
+    ? marginOverride
+    : (showMargin
+      ? documentMargin(items, {
+        entityDiscount,
+        entityDiscountType,
+        lineGross,
+        enforceExclusive: !readOnly,
+      })
+      : null)
 
   const showTax = totals.taxTotal > 0
 
@@ -88,7 +98,7 @@ export default function DocumentTotalsStrip({
 
   const summaryCard = (
     <div className="document-summary-card">
-      {totals.taxMode === 'inclusive' && items.length > 0 && (
+      {items.length > 0 && (
         <div className="document-summary-card__hint">Item amounts include tax</div>
       )}
 
@@ -141,6 +151,16 @@ export default function DocumentTotalsStrip({
           {hasLineDiscount
             ? 'Using line-item discount mode.'
             : 'Using document-level discount mode.'}
+        </div>
+      )}
+
+      {margin && (
+        <div className="document-summary-row">
+          <span className="document-summary-row__label">Margin</span>
+          <span className="document-summary-row__spacer" />
+          <span className="document-summary-row__value">
+            <MarginBadge margin={margin} showAmount />
+          </span>
         </div>
       )}
 

@@ -27,6 +27,12 @@ import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { emptyPurchaseLine } from './purchaseFormShared'
+import { fmt } from '@/utils/helpers'
+import MarginBadge from '@/components/MarginBadge'
+import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
+
+const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
 
 export default function BillFormModal({
   open,
@@ -56,6 +62,7 @@ export default function BillFormModal({
       item_id: inv.id,
       name: inv.name,
       cost: inv.cost_price ?? inv.selling_price ?? 0,
+      sellingPrice: inv.selling_price ?? inv.sellingPrice ?? 0,
       taxRate: inv.tax_rate || 0,
       // Cache batch flags for the conditional row render below.
       batchTracking: Boolean(inv.batch_tracking),
@@ -66,7 +73,14 @@ export default function BillFormModal({
 
   const handleClear = (i) => {
     const next = [...billForm.items]
-    next[i] = { ...next[i], item_id: null, name: '', batchTracking: false, expiryTracking: false }
+    next[i] = {
+      ...next[i],
+      item_id: null,
+      name: '',
+      sellingPrice: 0,
+      batchTracking: false,
+      expiryTracking: false,
+    }
     pbf('items', next)
   }
 
@@ -92,6 +106,21 @@ export default function BillFormModal({
 
   const hasTrackedItems = billForm.items.some((it) => it.batchTracking)
   const disableLineDiscount = shouldDisableLineDiscount(billForm.discount)
+  const rollup = computeDocumentTotals(billForm.items, {
+    entityDiscount: billForm.discount,
+    entityDiscountType: billForm.discountType || '%',
+    lineGross: costLineGross,
+    enforceExclusive: true,
+  })
+  const discShares = rollup.discountMode === 'entity'
+    ? entityDiscountShares(billForm.items, rollup.entityDiscount, costLineGross)
+    : billForm.items.map(() => 0)
+  const purchaseMargin = purchaseDocumentMargin(billForm.items, {
+    entityDiscount: billForm.discount,
+    entityDiscountType: billForm.discountType || '%',
+    lineGross: costLineGross,
+    enforceExclusive: true,
+  })
 
   const formBody = (
     <div className="bill-form-shell">
@@ -221,6 +250,8 @@ export default function BillFormModal({
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               <th style={{ width: 60 }} />
             </tr>
           </thead>
@@ -231,6 +262,8 @@ export default function BillFormModal({
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
+              const lineTotal = lineNetAmount(it, costLineGross)
+              const margin = purchaseLineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <Fragment key={i}>
                   <tr>
@@ -272,6 +305,12 @@ export default function BillFormModal({
                         </button>
                       </div>
                     </td>
+                    <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
+                      <MarginBadge margin={margin} />
+                    </td>
+                    <td className="text-right mono" style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                      {fmt(lineTotal)}
+                    </td>
                     <td>
                       {billForm.items.length > 1 && (
                         <button
@@ -286,9 +325,9 @@ export default function BillFormModal({
                   </tr>
                   {it.batchTracking && (
                     <tr>
-                      {/* Batch capture row spans all 5 columns. Compact
+                      {/* Batch capture row spans all line-item columns. Compact
                           inputs for lot # / mfg / expiry. */}
-                      <td colSpan={5} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
+                      <td colSpan={7} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', fontSize: 12 }}>
                           <span style={{ color: 'var(--text-muted)', fontWeight: 500, minWidth: 90, paddingBottom: 8 }}>
                             🧴 Batch capture:
@@ -343,6 +382,7 @@ export default function BillFormModal({
           onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
           lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
           showWhenEmpty
+          marginOverride={purchaseMargin}
           notes={billForm.notes || ''}
           onNotesChange={(v) => pbf('notes', v)}
           notesHint={isGrn ? 'Will be displayed on the goods receipt' : 'Will be displayed on the bill'}

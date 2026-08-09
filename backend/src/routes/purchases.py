@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.document_numbering import allocate_number, resolve_number
-from src.tax_calc import line_tax_amount, line_taxable_amount, normalize_tax_pricing_mode
+from src.tax_calc import line_tax_amount, line_taxable_amount
 from src.models import (
     AuditLog,
     GRNLineItem,
@@ -58,7 +58,7 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
 )
 from src.routes._serializers import get_user_branch_ids
-from src.routes._approval import can_direct_commit
+from src.routes._approval import assert_may_edit_document, can_direct_commit
 from src.permissions import PURCHASE_DOCUMENT_READ
 from src.security import (
     current_user,
@@ -1419,7 +1419,7 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: Us
 
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
-@router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit"))])
+@router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit", "purchases.create"))])
 async def update_bill(
     bill_id: str,
     data: BillUpdate,
@@ -1427,9 +1427,9 @@ async def update_bill(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Edit a pending or partial bill. Replaces line items and recalculates
+    """Edit a draft, pending, or partial bill. Replaces line items and recalculates
     totals. Paid and cancelled bills are locked — use vendor returns or
-    Record Payment to adjust settled bills."""
+    Record Payment to adjust settled bills. Create-only users may edit drafts."""
     from sqlalchemy import delete as sa_delete
     result = await db.execute(
         select(PurchaseBill)
@@ -1443,6 +1443,15 @@ async def update_bill(
     bill_status = str(bill.status.value) if hasattr(bill.status, "value") else str(bill.status)
     if bill_status in ("paid", "cancelled"):
         raise HTTPException(400, f"Cannot edit a {bill_status} bill")
+    if bill_status == InvoiceStatus.pending_approval.value:
+        raise HTTPException(
+            400,
+            "Bill is awaiting approval and cannot be edited — reject it first or ask the creator to revise after rejection",
+        )
+    await assert_may_edit_document(
+        user, db, status=bill_status,
+        create_perm="purchases.create", edit_perm="purchases.edit",
+    )
     if (bill.paid_amount or 0) > 0:
         raise HTTPException(
             400,
@@ -1517,8 +1526,10 @@ async def update_bill(
             line_total=round(line_taxable + line_tax, 2),
         ))
 
-    if bill.vendor_id:
-        await sync_vendor_outstanding(db, bill.vendor_id)
+    # Draft / pending_approval never touch vendor outstanding.
+    if bill_status not in (InvoiceStatus.draft.value, InvoiceStatus.pending_approval.value):
+        if bill.vendor_id:
+            await sync_vendor_outstanding(db, bill.vendor_id)
     await db.commit()
     preview = item_changes[0]["detail"] if item_changes else f"Updated line items for {bill.number}"
     if len(item_changes) > 1:
@@ -2739,8 +2750,8 @@ def _po_dict(po, items=None):
 
 
 async def _get_org_tax_mode(db: AsyncSession) -> str:
-    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
-    return normalize_tax_pricing_mode(org_row.tax_pricing_mode if org_row else None)
+    """Always inclusive — org pricing-mode preference removed."""
+    return "inclusive"
 
 
 def _calc_po_lines(lines, tax_mode: str = "inclusive"):
@@ -2794,10 +2805,8 @@ async def _create_grn_draft(
     tax_mode: str = "inclusive",
 ) -> GoodsReceiptNote:
     """Create a draft GRN (pending approval). No stock movement — that runs on approval."""
-    if tax_mode == "inclusive":
-        subtotal = sum(ln - lt for _, ln, lt in line_rows)
-    else:
-        subtotal = sum(ln for _, ln, _ in line_rows)
+    # Inclusive: line_net is GST-inclusive; subtotal is taxable portion.
+    subtotal = sum(ln - lt for _, ln, lt in line_rows)
     tax_total = sum(lt for _, _, lt in line_rows)
     total = round(subtotal + tax_total - (discount or 0), 2)
 
@@ -2825,7 +2834,7 @@ async def _create_grn_draft(
             received_qty=qty, cost=line.cost,
             tax_rate=getattr(line, "tax_rate", 0) or 0,
             discount=getattr(line, "discount", 0) or 0,
-            line_total=round(line_net + line_tax if tax_mode == "exclusive" else line_net, 2),
+            line_total=round(line_net, 2),
             batch_number=getattr(line, "batch_number", None),
             mfg_date=getattr(line, "mfg_date", None),
             expiry_date=getattr(line, "expiry_date", None),
@@ -2856,10 +2865,7 @@ async def _create_grn_received(
     """Create a received GRN and move stock. `line_rows` is
     [(line, line_net, line_tax), ...] where line has item_id, name, qty,
     cost, tax_rate, discount, batch_number, mfg_date, expiry_date."""
-    if tax_mode == "inclusive":
-        subtotal = sum(ln - lt for _, ln, lt in line_rows)
-    else:
-        subtotal = sum(ln for _, ln, _ in line_rows)
+    subtotal = sum(ln - lt for _, ln, lt in line_rows)
     tax_total = sum(lt for _, _, lt in line_rows)
     total = round(subtotal + tax_total - (discount or 0), 2)
 
@@ -2905,7 +2911,7 @@ async def _create_grn_received(
             cost=line.cost,
             tax_rate=getattr(line, "tax_rate", 0) or 0,
             discount=getattr(line, "discount", 0) or 0,
-            line_total=round(line_net + line_tax if tax_mode == "exclusive" else line_net, 2),
+            line_total=round(line_net, 2),
             batch_number=getattr(line, "batch_number", None),
             mfg_date=getattr(line, "mfg_date", None),
             expiry_date=getattr(line, "expiry_date", None),
@@ -3186,11 +3192,12 @@ async def create_order(
 
 
 # ─── PO: UPDATE ───────────────────────────────────────────────────────────────
-@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("purchases.edit"))])
+@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("purchases.edit", "purchases.create"))])
 async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full-replacement edit. Same shape as create; allowed only while
     the PO is not in a terminal status. UI hides Edit for converted /
     cancelled POs, this is the server-side defence-in-depth check.
+    Create-only users may edit private drafts before submit.
     """
     res = await db.execute(
         select(PurchaseOrder)
@@ -3202,6 +3209,16 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
         raise HTTPException(404, "Purchase order not found")
     if _po_terminal(po):
         raise HTTPException(400, "Cannot edit a terminal-status purchase order")
+    if po.status == PurchaseOrderStatus.pending_approval:
+        raise HTTPException(
+            400,
+            "Purchase order is awaiting approval and cannot be edited — reject it first",
+        )
+    await assert_may_edit_document(
+        user, db, status=po.status,
+        create_perm="purchases.create", edit_perm="purchases.edit",
+        draft_statuses=("draft",),
+    )
     if not data.items:
         raise HTTPException(400, "Purchase order must have at least one line item")
 

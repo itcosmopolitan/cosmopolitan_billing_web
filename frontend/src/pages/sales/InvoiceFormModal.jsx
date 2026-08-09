@@ -12,6 +12,10 @@ import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/Doc
 import InventoryItemPicker from './InventoryItemPicker'
 import { emptySaleLine } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
+import { fmt } from '@/utils/helpers'
+import MarginBadge from '@/components/MarginBadge'
+import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 
 export default function InvoiceFormModal({
   open,
@@ -44,6 +48,7 @@ export default function InvoiceFormModal({
       item_id: inv.id,
       name: inv.name,
       price: inv.selling_price,
+      costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
       batchTracking: Boolean(inv.batch_tracking),
       expiryTracking: Boolean(inv.expiry_tracking),
@@ -56,6 +61,7 @@ export default function InvoiceFormModal({
     patchLine(i, {
       item_id: null,
       name: '',
+      costPrice: 0,
       batchTracking: false,
       expiryTracking: false,
       batchAllocation: [],
@@ -85,6 +91,14 @@ export default function InvoiceFormModal({
 
   const disableLineDiscount = shouldDisableLineDiscount(invoiceForm.discount)
   const hasBatchLines = invoiceForm.items.some((it) => it.batchTracking)
+  const rollup = computeDocumentTotals(invoiceForm.items, {
+    entityDiscount: invoiceForm.discount,
+    entityDiscountType: invoiceForm.discountType || '%',
+    enforceExclusive: true,
+  })
+  const discShares = rollup.discountMode === 'entity'
+    ? entityDiscountShares(invoiceForm.items, rollup.entityDiscount)
+    : invoiceForm.items.map(() => 0)
 
   const formBody = (
     <div className="invoice-form-shell">
@@ -190,6 +204,8 @@ export default function InvoiceFormModal({
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 95, textAlign: 'right' }}>Price</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
               <th style={{ width: 60 }} />
             </tr>
@@ -201,6 +217,8 @@ export default function InvoiceFormModal({
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
+              const lineTotal = lineNetAmount(it)
+              const margin = lineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -239,6 +257,12 @@ export default function InvoiceFormModal({
                         {type}
                       </button>
                     </div>
+                  </td>
+                  <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
+                    <MarginBadge margin={margin} />
+                  </td>
+                  <td className="text-right mono" style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                    {fmt(lineTotal)}
                   </td>
                   {hasBatchLines && (
                     <td>

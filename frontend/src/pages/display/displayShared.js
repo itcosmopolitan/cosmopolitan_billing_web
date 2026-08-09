@@ -86,7 +86,6 @@ export function buildPosDisplayPayload(
   {
     discountPct = 0,
     discountAmt = 0,
-    taxPricingMode = 'inclusive',
     branchName = '',
     displayCode = '',
     cashierName = '',
@@ -98,7 +97,7 @@ export function buildPosDisplayPayload(
     price: Number(row.price) || 0,
     subtotal: Number(row.lineTotal) || 0,
   }))
-  const totals = calcCartTotals(cart || [], { discountPct, discountAmt, taxPricingMode })
+  const totals = calcCartTotals(cart || [], { discountPct, discountAmt })
 
   return {
     customer: {

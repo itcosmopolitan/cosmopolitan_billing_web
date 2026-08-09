@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number, resolve_number
-from src.tax_calc import line_tax_amount, line_taxable_amount, normalize_tax_pricing_mode
+from src.tax_calc import line_tax_amount, line_taxable_amount
 from src.models import (
     AuditLog,
     Customer,
@@ -64,7 +64,11 @@ from src.routes._atomic import (
 )
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import _build_customer_code, get_user_branch_ids
-from src.routes._approval import can_direct_commit, can_direct_pos_bill
+from src.routes._approval import (
+    assert_may_edit_document,
+    can_direct_commit,
+    can_direct_pos_bill,
+)
 from src.permissions import SALES_DOCUMENT_READ
 from src.security import (
     current_user,
@@ -694,7 +698,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
             price=item.price,
             tax_rate=item.tax_rate,
             discount=item.line_discount,
-            line_total=round(line_net + line_tax, 2),
+            line_total=round(line_net, 2),
         )
         db.add(li)
 
@@ -785,7 +789,7 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate,
             discount=line.line_discount or 0,
-            line_total=round(line_net + line_tax, 2),
+            line_total=round(line_net, 2),
         ))
 
     preview = item_changes[0]["detail"] if item_changes else f"Revised quotation {quote.number}"
@@ -911,7 +915,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
     return d
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
-@router.put("/{invoice_id}", dependencies=[Depends(require_perm("invoices.edit"))])
+@router.put("/{invoice_id}", dependencies=[Depends(require_perm("invoices.edit", "invoices.create"))])
 async def update_invoice(
     invoice_id: str,
     data: InvoiceUpdate,
@@ -920,7 +924,10 @@ async def update_invoice(
 ):
     """Edit an unpaid invoice. Replaces line items, reverses then re-applies
     stock, and recalculates totals. Locked when payments, credit notes, or
-    POS origin — use returns / cancel / refund flows instead."""
+    POS origin — use returns / cancel / refund flows instead.
+
+    Create-only users may edit private `draft` invoices before submit.
+    """
     from sqlalchemy import delete as sa_delete
 
     res = await db.execute(
@@ -944,6 +951,10 @@ async def update_invoice(
             400,
             "Invoice is awaiting approval and cannot be edited — reject it first or ask the creator to revise after rejection",
         )
+    await assert_may_edit_document(
+        user, db, status=inv_status,
+        create_perm="invoices.create", edit_perm="invoices.edit",
+    )
 
     if not data.items:
         raise HTTPException(400, "Invoice must have at least one line item")
@@ -951,10 +962,7 @@ async def update_invoice(
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
 
-    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
-    tax_mode = normalize_tax_pricing_mode(
-        org_row.tax_pricing_mode if org_row else None
-    )
+    tax_mode = "inclusive"
     line_rows = []
     for i in data.items:
         gross = round(i.qty * i.price, 2)
@@ -968,10 +976,8 @@ async def update_invoice(
         line_rows.append((i, line_amount, line_taxable, line_tax))
     subtotal = sum(r[2] for r in line_rows)
     tax_total = sum(r[3] for r in line_rows)
-    if tax_mode == "inclusive":
-        total = round(sum(r[1] for r in line_rows) - data.discount, 2)
-    else:
-        total = round(subtotal + tax_total - data.discount, 2)
+    # Inclusive: document total is line amounts (tax already inside) minus discount.
+    total = round(sum(r[1] for r in line_rows) - data.discount, 2)
 
     prev_customer_id = inv.customer_id
     if data.customer_id is not None:
@@ -1070,11 +1076,8 @@ async def create_invoice(
             )
     else:
         direct = await can_direct_commit(user, db, "invoices.approve")
-    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
-    tax_mode = normalize_tax_pricing_mode(
-        org_row.tax_pricing_mode if org_row else None
-    )
-    # Line amount after line discount; tax extracted or added per org pricing mode.
+    tax_mode = "inclusive"
+    # Line amount after line discount; tax is extracted from inclusive prices.
     line_rows = []
     for i in data.items:
         gross = round(i.qty * i.price, 2)
@@ -1088,10 +1091,7 @@ async def create_invoice(
         line_rows.append((i, line_amount, line_taxable, line_tax))
     subtotal  = sum(r[2] for r in line_rows)
     tax_total = sum(r[3] for r in line_rows)
-    if tax_mode == "inclusive":
-        total = round(sum(r[1] for r in line_rows) - data.discount, 2)
-    else:
-        total = round(subtotal + tax_total - data.discount, 2)
+    total = round(sum(r[1] for r in line_rows) - data.discount, 2)
     is_paid_at_create = data.payment_mode is not None
     if direct:
         paid   = total if is_paid_at_create else 0.0
@@ -3030,8 +3030,8 @@ def _so_dict(so, items=None):
 
 
 async def _get_org_tax_mode(db: AsyncSession) -> str:
-    org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
-    return normalize_tax_pricing_mode(org_row.tax_pricing_mode if org_row else None)
+    """Always inclusive — org pricing-mode preference removed."""
+    return "inclusive"
 
 
 def _calc_lines(lines, tax_mode: str = "inclusive"):
@@ -3658,7 +3658,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
 
 
 # ─── Sales Order: UPDATE (full replace of editable fields + items) ──────────
-@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.edit"))])
+@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.edit", "invoices.create"))])
 async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full replace of an SO's editable fields. Status is NOT changed here
     (the convert flow + the dedicated `/status` PATCH handle that). Items
@@ -3667,7 +3667,9 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
 
     Editable iff status ∈ {draft, confirmed}. Converted / cancelled orders
     are locked — pretending to allow edits would orphan accounting state
-    (the spawned invoice would no longer match the SO it came from)."""
+    (the spawned invoice would no longer match the SO it came from).
+    Create-only users may edit private drafts before submit.
+    """
     res = await db.execute(
         select(SalesOrder)
         .options(selectinload(SalesOrder.line_items))
@@ -3681,8 +3683,13 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
         SalesOrderStatus.converted,
         SalesOrderStatus.cancelled,
         SalesOrderStatus.partially_invoiced,
+        SalesOrderStatus.pending_approval,
     ):
         raise HTTPException(400, f"Cannot edit a {so.status.value} sales order")
+    await assert_may_edit_document(
+        user, db, status=so.status,
+        create_perm="invoices.create", edit_perm="invoices.edit",
+    )
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
 

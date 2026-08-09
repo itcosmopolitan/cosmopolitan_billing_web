@@ -1,32 +1,24 @@
-"""Shared GST line/cart math for inclusive vs exclusive pricing."""
+"""Shared GST line math — shelf/line amounts are always tax-inclusive."""
 
 from __future__ import annotations
 
-VALID_TAX_PRICING_MODES = frozenset({"inclusive", "exclusive"})
+# Kept for callers that still pass a mode; exclusive is no longer supported.
+VALID_TAX_PRICING_MODES = frozenset({"inclusive"})
 
 
 def normalize_tax_pricing_mode(mode: str | None) -> str:
-    if mode in VALID_TAX_PRICING_MODES:
-        return mode
+    """Always inclusive — org preference removed."""
     return "inclusive"
 
 
-def line_tax_amount(line_amount: float, tax_rate: float, mode: str) -> float:
-    """Tax component for a discounted line amount.
-
-    * inclusive — `line_amount` is GST-inclusive; extract tax from it.
-    * exclusive — `line_amount` is pre-tax; tax is added on top.
-    """
+def line_tax_amount(line_amount: float, tax_rate: float, mode: str | None = None) -> float:
+    """Tax component extracted from a GST-inclusive discounted line amount."""
     if tax_rate <= 0 or line_amount <= 0:
         return 0.0
-    if normalize_tax_pricing_mode(mode) == "inclusive":
-        return round(line_amount * tax_rate / (100 + tax_rate), 2)
-    return round(line_amount * tax_rate / 100, 2)
+    return round(line_amount * tax_rate / (100 + tax_rate), 2)
 
 
-def line_taxable_amount(line_amount: float, tax_rate: float, mode: str) -> float:
-    """Pre-tax (taxable) portion of the line."""
+def line_taxable_amount(line_amount: float, tax_rate: float, mode: str | None = None) -> float:
+    """Pre-tax (taxable) portion of an inclusive line amount."""
     tax = line_tax_amount(line_amount, tax_rate, mode)
-    if normalize_tax_pricing_mode(mode) == "inclusive":
-        return round(line_amount - tax, 2)
-    return round(line_amount, 2)
+    return round(line_amount - tax, 2)

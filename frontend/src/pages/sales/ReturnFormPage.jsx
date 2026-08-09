@@ -12,6 +12,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
+import { lineTaxAmount } from '@/utils/taxCalc'
 
 export default function ReturnFormPage() {
   const navigate = useNavigate()
@@ -179,10 +180,10 @@ export default function ReturnFormPage() {
     for (const il of invoice.items || []) {
       const q = returnQtys[il.id] || 0
       if (q > 0) anyReturned = true
-      const unitBase = Number(il.lineTotal || 0) / Math.max(1, Number(il.qty || 1))
-      const lineBase = q * unitBase
-      const t = Math.round(lineBase * (Number(il.taxRate || 0) / 100) * 100) / 100
-      subtotal += lineBase
+      // Sale prices are tax-inclusive — extract tax, do not add it on top.
+      const lineGross = Math.round(q * Number(il.price || 0) * 100) / 100
+      const t = lineTaxAmount(lineGross, il.taxRate || 0)
+      subtotal += Math.round((lineGross - t) * 100) / 100
       tax += t
     }
     return {
@@ -370,8 +371,7 @@ export default function ReturnFormPage() {
                       {(invoice.items || []).map((il) => {
                         const remaining = remainingFor(il)
                         const q = returnQtys[il.id] || 0
-                        const unitBase = Number(il.lineTotal || 0) / Math.max(1, Number(il.qty || 1))
-                        const lineWithTax = Math.round(q * unitBase * (1 + Number(il.taxRate || 0) / 100) * 100) / 100
+                        const lineWithTax = Math.round(q * Number(il.price || 0) * 100) / 100
                         const disabled = remaining === 0
                         const batches = sourceBatches(il)
                         const showBatchPanel = batches.length > 0 && q > 0

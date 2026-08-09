@@ -822,7 +822,7 @@ export default function PurchasesPage() {
                     const isDraft = b.status === 'draft'
                     const isPendingApproval = b.status === 'pending_approval'
                     const canPay = !['paid', 'cancelled', 'draft', 'pending_approval'].includes(b.status)
-                    const canEdit = isDraft && !(b.paidAmount > 0)
+                    const canEdit = !['paid', 'cancelled', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     const canCancel = !['cancelled', 'draft', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     return (
                       <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
@@ -860,7 +860,14 @@ export default function PurchasesPage() {
                               },
                               {
                                 label: 'Edit',
-                                hidden: !canEdit || !can('purchases.edit'),
+                                hidden: !(
+                                  canEdit
+                                  && b.status !== 'pending_approval'
+                                  && (
+                                    (isDraft && can('purchases.create', 'purchases.edit'))
+                                    || (!isDraft && can('purchases.edit'))
+                                  )
+                                ),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => navigate(`/purchases/bills/${b.id}/edit`),
                               },
@@ -1043,7 +1050,10 @@ export default function PurchasesPage() {
                                 },
                                 {
                                   label: 'Edit',
-                                  hidden: !(isDraft || canReceiveOrConvert) || !can('purchases.edit'),
+                                  hidden: !(
+                                    (isDraft && can('purchases.create', 'purchases.edit'))
+                                    || (canReceiveOrConvert && can('purchases.edit'))
+                                  ),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/purchases/orders/${o.id}/edit`),
                                 },

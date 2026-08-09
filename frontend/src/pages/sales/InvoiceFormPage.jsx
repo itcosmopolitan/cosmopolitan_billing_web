@@ -14,15 +14,13 @@ import {
   lineDiscountToPercent,
 } from './salesFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
+  const withCost = await enrichSaleLinesWithCosts(items, branchId)
   const out = []
-  for (const line of items) {
-    if (!line.item_id) {
-      out.push(line)
-      continue
-    }
-    if (line.batchTracking) {
+  for (const line of withCost) {
+    if (!line.item_id || line.batchTracking) {
       out.push(line)
       continue
     }

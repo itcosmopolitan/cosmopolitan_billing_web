@@ -8,6 +8,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import PurchaseOrderFormModal from './PurchaseOrderFormModal'
 import { emptyPoForm, poFromRow, lineDiscountToPercent } from './purchaseFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { enrichPurchaseLinesWithSellPrice } from '@/utils/enrichSaleLineCosts'
 
 export default function PurchaseOrderFormPage({ mode = 'create' }) {
   const { orderId } = useParams()
@@ -28,7 +29,7 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
   const goBack = () => navigate('/purchases?tab=orders')
 
   useEffect(() => {
-    if (isEdit && !can('purchases.edit') && !readOnly) {
+    if (isEdit && !can('purchases.edit', 'purchases.create') && !readOnly) {
       navigate('/purchases?tab=orders', { replace: true })
     } else if (!isEdit && !can('purchases.create')) {
       navigate('/purchases?tab=orders', { replace: true })
@@ -43,7 +44,22 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
         setLoading(true)
         const po = await purchasesAPI.orders.get(orderId)
         if (cancelled) return
-        setForm(poFromRow(po, activeBranchId))
+        if (!readOnly) {
+          if (['pending_approval', 'converted', 'cancelled', 'partially_received'].includes(po.status)) {
+            toast.error(`Cannot edit a ${String(po.status).replace(/_/g, ' ')} purchase order`)
+            navigate('/purchases?tab=orders', { replace: true })
+            return
+          }
+          if (po.status !== 'draft' && !can('purchases.edit')) {
+            toast.error('Editing this purchase order requires purchases.edit')
+            navigate('/purchases?tab=orders', { replace: true })
+            return
+          }
+        }
+        const base = poFromRow(po, activeBranchId)
+        const items = await enrichPurchaseLinesWithSellPrice(base.items)
+        if (cancelled) return
+        setForm({ ...base, items })
         setEditingNumber(po.number)
       } catch {
         toast.error('Purchase order not found')

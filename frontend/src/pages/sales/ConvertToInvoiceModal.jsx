@@ -184,11 +184,14 @@ export default function ConvertToInvoiceModal({
       const gross = qty * (l.price || 0)
       const disc = l.discount || 0
       const net = gross * (1 - disc / 100)
-      const lineTax = net * ((l.taxRate || 0) / 100)
+      // Prices are tax-inclusive — do not add tax on top.
       subtotal += net
-      tax += lineTax
+      const rate = Number(l.taxRate || 0)
+      if (rate > 0 && net > 0) {
+        tax += Math.round((net * rate / (100 + rate)) * 100) / 100
+      }
     }
-    return Math.round((subtotal + tax) * 100) / 100
+    return Math.round(subtotal * 100) / 100
   }, [lines, lineQtys, source?.total])
 
   const buttonDisabled = confirming || (paymentReceived && !paymentMethod)

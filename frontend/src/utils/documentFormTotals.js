@@ -1,12 +1,19 @@
 /** Line + document-level discount rollup for sales/purchase forms (POS parity). */
-import { lineTaxAmount, normalizeTaxPricingMode } from '@/utils/taxCalc'
+import { lineTaxAmount } from '@/utils/taxCalc'
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100
 
 export function lineDiscountAmount(it, gross) {
   const raw = Math.max(0, Number(it.lineDiscount || 0))
-    if (it.lineDiscountType === 'MVR') return Math.min(gross, raw)
+  if (it.lineDiscountType === 'MVR') return Math.min(gross, raw)
   return Math.min(gross, gross * (Math.min(raw, 100) / 100))
+}
+
+/** Qty × unit − line discount (before document-level discount / tax display). */
+export function lineNetAmount(it, lineGross) {
+  const grossFn = lineGross || ((row) => Number(row.qty || 0) * Number(row.price || 0))
+  const gross = grossFn(it)
+  return round2(Math.max(0, gross - lineDiscountAmount(it, gross)))
 }
 
 export function hasLineLevelDiscount(items) {
@@ -18,23 +25,21 @@ export function hasEntityLevelDiscount(discount) {
 }
 
 /**
+ * Totals for document forms. Line prices are always tax-inclusive.
  * @param {Array} items
  * @param {object} opts
  * @param {number} opts.entityDiscount
  * @param {'%'|'MVR'} opts.entityDiscountType
  * @param {(it: object) => number} opts.lineGross
- * @param {'inclusive'|'exclusive'} opts.taxPricingMode
  * @param {boolean} opts.enforceExclusive — when true, line vs entity are mutually exclusive (POS default)
  */
 export function computeDocumentTotals(items, {
   entityDiscount = 0,
   entityDiscountType = '%',
   lineGross,
-  taxPricingMode = 'inclusive',
   enforceExclusive = true,
 } = {}) {
   const grossFn = lineGross || ((it) => Number(it.qty || 0) * Number(it.price || 0))
-  const mode = normalizeTaxPricingMode(taxPricingMode)
 
   let gross = 0
   let lineDiscount = 0
@@ -47,13 +52,13 @@ export function computeDocumentTotals(items, {
     const disc = lineDiscountAmount(it, g)
     const lineNet = Math.max(0, g - disc)
     const rate = Number(it.taxRate || 0)
-    const tax = lineTaxAmount(lineNet, rate, mode)
+    const tax = lineTaxAmount(lineNet, rate)
 
     gross += g
     lineDiscount += disc
     lineNetTotal += lineNet
     taxTotal += tax
-    netSubtotal += mode === 'inclusive' ? round2(lineNet - tax) : lineNet
+    netSubtotal += round2(lineNet - tax)
   }
 
   gross = round2(gross)
@@ -73,14 +78,9 @@ export function computeDocumentTotals(items, {
     if (entityDiscountType === 'MVR') {
       entityDiscFlat = raw
     } else {
-      const base = mode === 'inclusive' ? lineNetTotal : netSubtotal
-      entityDiscFlat = round2(base * (Math.min(raw, 100) / 100))
+      entityDiscFlat = round2(lineNetTotal * (Math.min(raw, 100) / 100))
     }
   }
-
-  const total = mode === 'inclusive'
-    ? round2(lineNetTotal - entityDiscFlat)
-    : round2(netSubtotal + taxTotal - entityDiscFlat)
 
   return {
     gross,
@@ -89,9 +89,9 @@ export function computeDocumentTotals(items, {
     netSubtotal,
     taxTotal,
     entityDiscount: round2(entityDiscFlat),
-    total: Math.max(0, total),
+    total: Math.max(0, round2(lineNetTotal - entityDiscFlat)),
     discountMode: useLine ? 'line' : (useEntity ? 'entity' : 'none'),
-    taxMode: mode,
+    taxMode: 'inclusive',
   }
 }
 

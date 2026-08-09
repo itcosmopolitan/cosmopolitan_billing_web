@@ -96,9 +96,6 @@ export const useAppStore = create(
       // UI preferences
       sidebarCollapsed: false,
       theme: 'light',
-      // inclusive = shelf prices include GST (fixed default)
-      taxPricingMode: 'inclusive',
-
       // ── RBAC session state (Users & Roles, Phase 1 + 1.5) ────────────────
       // `permissions` is the list granted to the current user (e.g. ["items.view", "*"]).
       // `permCatalog` is the full module → [actions] map from /permissions/catalog,
@@ -378,17 +375,21 @@ export const usePOSStore = create((set, get) => ({
     })
   },
 
-  // Computed totals
+  // Computed totals — lineTotal is tax-inclusive.
   getSubtotal: () => get().cart.reduce((s, i) => s + i.lineTotal, 0),
-  getTaxTotal: () => get().cart.reduce((s, i) => s + (i.lineTotal * (i.taxRate / 100)), 0),
+  getTaxTotal: () => get().cart.reduce((s, i) => {
+    const rate = Number(i.taxRate) || 0
+    const amt = Number(i.lineTotal) || 0
+    if (amt <= 0 || rate <= 0) return s
+    return s + Math.round((amt * rate / (100 + rate)) * 100) / 100
+  }, 0),
   getDiscount: () => {
     const sub = get().getSubtotal()
     return get().discountAmt + (sub * get().discountPct / 100)
   },
   getTotal: () => {
     const sub = get().getSubtotal()
-    const tax = get().getTaxTotal()
     const disc = get().getDiscount()
-    return sub + tax - disc
+    return Math.max(0, Math.round((sub - disc) * 100) / 100)
   },
 }))

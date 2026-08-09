@@ -921,11 +921,17 @@ export default function SalesPage() {
                             },
                             {
                               label: 'Edit',
+                              // Drafts: create-only makers can revise before submit.
+                              // Posted unpaid: needs invoices.edit (stock already applied).
                               hidden: !(
-                                can('invoices.edit')
-                                && inv.status === 'draft'
-                                && !(inv.paidAmount > 0)
+                                !(inv.paidAmount > 0)
                                 && (inv.origin || 'invoice').toLowerCase() !== 'pos'
+                                && inv.status !== 'cancelled'
+                                && inv.status !== 'pending_approval'
+                                && (
+                                  (inv.status === 'draft' && can('invoices.create', 'invoices.edit'))
+                                  || (['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit'))
+                                )
                               ),
                               disabled: isRowBusy(inv.id),
                               onClick: () => navigate(`/sales/invoices/${inv.id}/edit`),
@@ -1524,7 +1530,10 @@ export default function SalesPage() {
                               actions={[
                                 {
                                   label: 'Edit',
-                                  hidden: !isDraft || !can('invoices.edit'),
+                                  hidden: !(
+                                    (isDraft && can('invoices.create', 'invoices.edit'))
+                                    || (isConfirmed && can('invoices.edit'))
+                                  ),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/orders/${o.id}/edit`),
                                 },

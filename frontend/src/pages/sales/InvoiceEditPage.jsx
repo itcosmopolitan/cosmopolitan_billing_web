@@ -7,16 +7,14 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import InvoiceFormModal from './InvoiceFormModal'
 import { invoiceFromRow, lineDiscountToPercent } from './salesFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
+  const withCost = await enrichSaleLinesWithCosts(items, branchId)
   const out = []
-  for (const line of items) {
-    if (!line.item_id) {
-      out.push(line)
-      continue
-    }
-    if (line.batchTracking) {
+  for (const line of withCost) {
+    if (!line.item_id || line.batchTracking) {
       out.push(line)
       continue
     }
@@ -36,12 +34,13 @@ async function enrichLinesWithBatchFlags(items, branchId) {
   return out
 }
 
-function invoiceEditable(inv) {
+function invoiceEditable(inv, can) {
   if (!inv) return false
-  if (inv.status === 'cancelled' || inv.status === 'paid') return false
+  if (inv.status === 'cancelled' || inv.status === 'paid' || inv.status === 'pending_approval') return false
   if ((inv.paidAmount || 0) > 0) return false
   if ((inv.origin || 'invoice').toLowerCase() === 'pos') return false
-  return true
+  if (inv.status === 'draft') return can('invoices.create', 'invoices.edit')
+  return can('invoices.edit')
 }
 
 export default function InvoiceEditPage() {
@@ -56,7 +55,7 @@ export default function InvoiceEditPage() {
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
   useEffect(() => {
-    if (!can('invoices.edit')) {
+    if (!can('invoices.edit', 'invoices.create')) {
       navigate('/sales?tab=invoices', { replace: true })
     }
   }, [can, navigate])
@@ -68,22 +67,27 @@ export default function InvoiceEditPage() {
         setLoading(true)
         const inv = await salesAPI.get(invoiceId)
         if (cancelled) return
-        if (!invoiceEditable(inv)) {
+        if (!invoiceEditable(inv, can)) {
           toast.error('This invoice cannot be edited')
           navigate('/sales?tab=invoices', { replace: true })
           return
         }
         const base = invoiceFromRow(inv, inv.branchId)
         const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
+        if (cancelled) return
         setForm({ ...base, items })
       } catch {
-        toast.error('Invoice not found')
-        navigate('/sales?tab=invoices', { replace: true })
+        if (!cancelled) {
+          toast.error('Invoice not found')
+          navigate('/sales?tab=invoices', { replace: true })
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
     })()
     return () => { cancelled = true }
+    // Intentionally omit `can` — only reload when the invoice id changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoiceId, navigate])
 
   const save = async () => {

@@ -135,7 +135,7 @@ class Organisation(Base):
     state_code    = Column(String, default="33")
     financial_year= Column(String, default="Apr-Mar")
     logo_url      = Column(String)
-    # inclusive = shelf prices include GST (default); exclusive = tax added at checkout
+    # Legacy column — pricing is always tax-inclusive; value forced to "inclusive".
     tax_pricing_mode = Column(String, default="inclusive")
     # Phase 0: when True (default), POS/SO convert may sell below available stock.
     allow_overselling = Column(Boolean, default=True, nullable=False)
