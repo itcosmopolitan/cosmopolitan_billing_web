@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 
 export interface InvoiceLineItem {
   itemNo?: string
@@ -8,6 +9,7 @@ export interface InvoiceLineItem {
   units?: string
   qty: number
   rate: number
+  discountPct?: number
   gstAmount: number
   lineTotal: number
 }
@@ -37,6 +39,8 @@ export interface Invoice {
   totalGst: number
   totalInclGst: number
   amountInWords: string
+  discountAmount?: number
+  discountPct?: number
 }
 
 const LOGO_SRC = '/assets/cosmopolitan-logo.png'
@@ -107,14 +111,17 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     const rate = parseNumber(item?.price ?? item?.rate ?? 0)
     const lineTotal = parseNumber(item?.lineTotal ?? item?.total ?? qty * rate)
     const gstAmount = parseNumber(item?.gstAmount ?? item?.taxAmount ?? item?.tax_amount ?? 0)
+    const discountPct = parseNumber(item?.discount ?? item?.discPercent ?? item?.disc_percent ?? item?.discount_pct ?? 0)
+    const metadata = getInvoiceItemMetadata(item)
     return {
       itemNo: item?.itemNo || item?.item_no || '',
       description: `${item?.name || item?.description || ''}`,
-      packing: item?.packing || item?.size || item?.package || '',
-      origin: item?.origin || item?.country || item?.manufacturer || '',
-      units: item?.units || item?.unit || '',
+      packing: metadata.packaging,
+      origin: metadata.origin,
+      units: metadata.units,
       qty,
       rate,
+      discountPct: discountPct || undefined,
       gstAmount: gstAmount || parseNumber((lineTotal * parseNumber(item?.taxRate ?? item?.tax_rate ?? 0)) / 100),
       lineTotal,
     }
@@ -123,6 +130,8 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   const subtotal = parseNumber(sale?.subtotal ?? lineItems.reduce((sum: number, item: InvoiceLineItem) => sum + item.lineTotal, 0))
   const totalGst = parseNumber(sale?.taxTotal ?? sale?.tax_total ?? 0)
   const totalInclGst = parseNumber(sale?.total ?? subtotal + totalGst)
+  const discountAmount = parseNumber(sale?.discount ?? sale?.discount_amount ?? sale?.discount_amt ?? 0)
+  const discountPct = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
   const gstRatePercent = parseNumber(sale?.gstRatePercent ?? sale?.tax_rate_percent ?? sale?.taxRate ?? sale?.tax_rate ?? sale?.taxPercent ?? sale?.tax_percent ?? 0)
   const postingDate = `${sale?.date || sale?.invoiceDate || sale?.invoice_date || ''}`.trim()
 
@@ -162,6 +171,8 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     totalExclGst: subtotal,
     totalGst: totalGst,
     totalInclGst,
+    discountAmount: discountAmount || undefined,
+    discountPct: discountPct || undefined,
     amountInWords: `${sale?.amountInWords || amountToWords(totalInclGst)}`,
   }
 }
@@ -349,6 +360,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   <th>Units</th>
                   <th>Qty</th>
                   <th>Rate</th>
+                  <th>Disc %</th>
                   <th>GST</th>
                   <th>Amount</th>
                 </tr>
@@ -363,6 +375,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <td>{item.units ?? ''}</td>
                     <td>{formatNumber(item.qty, 0)}</td>
                     <td>{formatNumber(item.rate)}</td>
+                    <td>{item.discountPct ? `${formatNumber(item.discountPct, 2)}%` : ''}</td>
                     <td>{formatNumber(item.gstAmount)}</td>
                     <td>{formatNumber(item.lineTotal)}</td>
                   </tr>
@@ -381,6 +394,12 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <span>{invoice.gstRatePercent}% GST</span>
                     <span>{formatNumber(invoice.totalGst)}</span>
                   </div>
+                  {invoice.discountAmount ? (
+                    <div className="totals-row">
+                      <span>Discount ({invoice.discountPct ?? 0}%)</span>
+                      <span>-{formatNumber(invoice.discountAmount)}</span>
+                    </div>
+                  ) : null}
                   <div className="totals-row totals-row--total">
                     <span>Total MRF Incl. GST</span>
                     <span>{formatNumber(invoice.totalInclGst)}</span>

@@ -417,11 +417,12 @@
     return items.map((it, index) => {
       const qty = Number(it.qty || it.quantity || 0)
       const rate = Number(it.price || it.rate || 0)
+      const discountPct = Number(it.discount ?? it.discPercent ?? it.disc_percent ?? it.discount_pct ?? 0)
       const gstRate = Number(it.taxRate ?? it.tax_rate ?? 0)
       const amount = Number(it.lineTotal || it.total || qty * rate)
       const gstAmt = Math.round((amount * gstRate) / 100 * 100) / 100
       const rowLabel = it.code || it.itemCode || it.productCode || String(index + 1)
-      return `<tr>\n<td>${escapeHtml(rowLabel)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+      return `<tr>\n<td>${escapeHtml(rowLabel)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
   }
 
@@ -536,6 +537,7 @@
               <th>Units</th>
               <th class="num">Qty</th>
               <th class="num">Rate</th>
+              <th class="num">Disc %</th>
               <th class="num">GST</th>
               <th class="num">Amount</th>
             </tr>
@@ -552,6 +554,13 @@
               <td class="tlabel">Total MRF Excl. GST</td>
               <td class="tval">${formatNumber(totals.subtotal)}</td>
             </tr>
+            ${totals.discountAmount ? `
+            <tr>
+              <td colspan="6"></td>
+              <td class="tlabel">Discount (${totals.discountPercent}%)</td>
+              <td class="tval">-${formatNumber(totals.discountAmount)}</td>
+            </tr>
+            ` : ''}
             <tr>
               <td colspan="6"></td>
               <td class="tlabel">${escapeHtml(totals.taxLabel)}</td>
@@ -606,25 +615,17 @@
     return pages
   }
 
-  window.addEventListener('message', (ev) => {
-    const msg = ev.data || {}
-    if (msg.type !== 'renderInvoice') return
-    const sale = msg.payload?.sale || {}
-    const branch = msg.payload?.branch || {}
+  function renderInvoicePayload(payload) {
+    const sale = payload?.sale || {}
+    const branch = payload?.branch || {}
     const items = sale.items || []
     const subtotal = Number(sale.subtotal ?? items.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0))
     const taxtotal = Number(sale.taxTotal ?? sale.tax_total ?? 0)
     const total = Number(sale.total ?? subtotal + taxtotal)
     const taxPercent = sale.taxPercent ?? sale.tax_percent ?? (subtotal ? Math.round((taxtotal / subtotal) * 100) : 0)
     const pages = paginateItems(items, 16)
-    const totals = {
-      subtotal,
-      taxTotal: taxtotal,
-      total,
-      taxLabel: `${taxPercent}% GST`,
-      totalInWords: String(sale.totalInWords || '').toUpperCase(),
-    }
-
+    const discountAmount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
+    const discountPercent = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
     const copyLabels = ['COSMOPOLITAN COPY', 'CUSTOMER COPY']
     const allPages = []
     copyLabels.forEach((copyLabel) => {
@@ -633,11 +634,73 @@
       })
     })
 
+    const totals = {
+      subtotal,
+      taxTotal: taxtotal,
+      total,
+      discountAmount,
+      discountPercent,
+      taxLabel: `${taxPercent}% GST`,
+      totalInWords: String(sale.totalInWords || '').toUpperCase(),
+    }
+
     document.getElementById('invoicePages').innerHTML = allPages.map((page) => {
       return renderPage(page.pageIndex, page.totalPages, page.pageItems, sale, branch, totals, page.copyLabel)
     }).join('')
     setTimeout(() => { window.print() }, 500)
+  }
+
+  window.addEventListener('message', (ev) => {
+    const msg = ev.data || {}
+    if (msg.type !== 'renderInvoice') return
+    renderInvoicePayload(msg.payload)
   })
+
+  function setStatusMessage(message) {
+    const container = document.getElementById('invoicePages')
+    if (!container) return
+    container.innerHTML = `<div style="padding:40px; text-align:center; color:#555; font-size:14px;">${message}</div>`
+  }
+
+  function getAuthHeaders() {
+    const headers = { Accept: 'application/json' }
+    try {
+      const token = window.localStorage.getItem('retailos_token')
+      if (token) headers.Authorization = `Bearer ${token}`
+    } catch (e) {
+      // ignore localStorage errors
+    }
+    return headers
+  }
+
+  async function tryLoadInvoiceFromQuery() {
+    const params = new URLSearchParams(window.location.search)
+    const invoiceId = params.get('invoice_id') || params.get('invoiceId')
+    if (!invoiceId) return
+
+    setStatusMessage('Loading invoice…')
+    try {
+      const response = await fetch(`/api/v1/sales/${encodeURIComponent(invoiceId)}`, {
+        headers: getAuthHeaders(),
+      })
+      if (!response.ok) {
+        console.error('Invoice fetch failed', response.status, response.statusText)
+        setStatusMessage('Unable to load invoice. Please refresh or sign in again.')
+        return
+      }
+      const sale = await response.json()
+      if (!sale || !sale.id) {
+        setStatusMessage('Invoice data is invalid or missing.')
+        return
+      }
+      renderInvoicePayload({ sale, branch: {} })
+    } catch (err) {
+      console.error('Failed to load invoice from query:', err)
+      setStatusMessage('Unable to load invoice. Check your network connection.')
+    }
+  }
+
+  tryLoadInvoiceFromQuery()
 })();
 </script>
 

@@ -297,6 +297,9 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("customers", "state_province", "VARCHAR"),
     ("customers", "country", "VARCHAR"),
     ("customers", "postal_code", "VARCHAR"),
+    ("items", "country_of_origin", "VARCHAR"),
+    ("items", "is_packaging", "BOOLEAN DEFAULT 0"),
+    ("items", "packaging_quantity", "FLOAT"),
     # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
     # `outstanding` so the two intents don't sign-flip on each other.
     ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
@@ -320,6 +323,14 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # consumed; the sales-return line remembers which lots it restored to
     # (for the per-batch cumulative cap + delete reversal). JSON text.
     ("sale_line_items", "batch_allocation", "TEXT"),
+    ("sale_line_items", "sku", "VARCHAR"),
+    ("sale_line_items", "barcode", "VARCHAR"),
+    ("sale_line_items", "brand", "VARCHAR"),
+    ("sale_line_items", "country_of_origin", "VARCHAR"),
+    ("sale_line_items", "unit", "VARCHAR"),
+    ("sale_line_items", "packaging_quantity", "FLOAT"),
+    ("sale_line_items", "is_packaging", "BOOLEAN DEFAULT 0"),
+    ("sale_line_items", "hsn_code", "VARCHAR"),
     ("sales_return_line_items", "batch_allocation", "TEXT"),
     # 2026-05-30: back-pointer from a quotation to the sales order it
     # spawned. Lets the bulk-delete guard check whether a LIVE sales

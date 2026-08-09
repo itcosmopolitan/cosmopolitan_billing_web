@@ -17,6 +17,7 @@ import { PRODUCTS } from '@/utils/seedData'
 import { Modal, AutocompleteDropdown, Spinner } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
+import openInvoicePrintWindow from '@/utils/printInvoice'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
@@ -423,7 +424,6 @@ export default function POSPage() {
         id: result.id,
       })
 
-      setShowComplete(true)
       // 2026-05-25: refresh local customer credit_balance after a
       // credit-mode sale so the next cart sees the updated balance.
       // Cheap optimistic update — backend already debited atomically.
@@ -431,8 +431,7 @@ export default function POSPage() {
         const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
         store.setCustomer({ ...customer, credit_balance: newBalance })
       }
-      // Keep customer info available for the receipt modal until the sale
-      // completion modal closes; clear cart afterward.
+      // Keep customer info available during the redirect; clear cart afterward.
       store.clearCart()
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
@@ -443,6 +442,14 @@ export default function POSPage() {
       await refreshProductStock()
       queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
       toast.success(`Sale ${result.number} completed!`)
+      if (result?.id) {
+        const url = `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(result.id))}`
+        const win = window.open(url, '_blank')
+        if (win) {
+          win.focus()
+        }
+        return
+      }
     } catch (err) {
       console.error('Failed to complete sale:', err)
       toast.error('Failed to save sale. Please try again.')

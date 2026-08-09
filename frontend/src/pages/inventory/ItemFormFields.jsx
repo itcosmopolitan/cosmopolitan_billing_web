@@ -38,17 +38,22 @@ export default function ItemFormFields({
               <FormGroup label="Brand"><input className="form-input" value={form.brand} onChange={(e) => patchForm('brand', e.target.value)} placeholder="e.g. India Gate" /></FormGroup>
               <FormGroup label="SKU"><input className="form-input" value={form.sku} onChange={(e) => patchForm('sku', e.target.value)} placeholder="Auto-generated if blank" /></FormGroup>
               <FormGroup label="Barcode"><input className="form-input" value={form.barcode} onChange={(e) => patchForm('barcode', e.target.value)} placeholder="Scan or enter" /></FormGroup>
+              <FormGroup label="County of Orgin"><input className="form-input" value={form.country_of_origin || ''} onChange={(e) => patchForm('country_of_origin', e.target.value)} placeholder="e.g. Maldives" /></FormGroup>
             </div>
           </div>
 
           <div className="item-form-panel">
             <div className="item-form-panel__head">Classification</div>
             <div className="item-form-grid">
-              <FormGroup label="Category">
+              <FormGroup label="Category" required>
                 <div className="item-form-select-action" style={compactSelectStyle}>
                   <AutocompleteDropdown
                     value={form.categoryId || ''}
-                    onSelectOption={(opt) => patchForm('categoryId', opt?.id || '')}
+                    selectedLabel={form.categoryName || ''}
+                    onSelectOption={(opt) => {
+                      patchForm('categoryId', opt?.id || '')
+                      patchForm('categoryName', opt?.label || opt?.text || '')
+                    }}
                     fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
                     isSearchFieldRequired
                     placeholder="Select category…"
@@ -63,10 +68,11 @@ export default function ItemFormFields({
                   )}
                 </div>
               </FormGroup>
-              <FormGroup label="Unit">
+              <FormGroup label="Unit" required>
                 <div className="item-form-select-action" style={compactSelectStyle}>
                   <AutocompleteDropdown
                     value={form.unit || ''}
+                    selectedLabel={form.unit || ''}
                     onSelectOption={(opt) => patchForm('unit', opt?.id || '')}
                     fetchUrl={AUTOCOMPLETE_UNIT_URL}
                     isSearchFieldRequired
@@ -95,6 +101,35 @@ export default function ItemFormFields({
                 />
               </FormGroup>
               <FormGroup label="HSN Code"><input className="form-input" value={form.hsn_code} onChange={(e) => patchForm('hsn_code', e.target.value)} placeholder="e.g. 1006" /></FormGroup>
+              <FormGroup label="Packaging / Set">
+                <label className="item-form-check" style={{ marginBottom: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.is_packaging)}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      patchForm('is_packaging', checked)
+                      if (!checked) patchForm('packaging_quantity', '')
+                    }}
+                  />
+                  This item is sold as a pack, box, or set
+                </label>
+              </FormGroup>
+              {Boolean(form.is_packaging) && (
+                  <div style={{ marginTop: 6 }}>
+                    <FormGroup label="Quantity per pack / set" required>
+                      <input
+                        className="form-input"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={form.packaging_quantity ?? ''}
+                        onChange={(e) => patchForm('packaging_quantity', e.target.value)}
+                        placeholder="e.g. 12"
+                      />
+                    </FormGroup>
+                  </div>
+              )}
             </div>
           </div>
         </div>

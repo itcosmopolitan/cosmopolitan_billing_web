@@ -20,6 +20,7 @@ from src.models import (
     InvoiceStatus,
     Organisation,
     ItemBatch,
+    Item,
     Quotation,
     QuotationLineItem,
     QuotationStatus,
@@ -80,6 +81,27 @@ from src.security import (
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+
+
+def _snapshot_item_metadata(item):
+    if item is None:
+        return {}
+    return {
+        "sku": item.sku,
+        "barcode": item.barcode,
+        "brand": item.brand,
+        "country_of_origin": item.country_of_origin,
+        "unit": item.unit,
+        "packaging_quantity": item.packaging_quantity,
+        "is_packaging": item.is_packaging,
+        "hsn_code": item.hsn_code,
+    }
+
+async def _load_items_by_id(db: AsyncSession, item_ids: set[str]) -> dict[str, Item]:
+    if not item_ids:
+        return {}
+    res = await db.execute(select(Item).where(Item.id.in_(item_ids)))
+    return {item.id: item for item in res.scalars().all()}
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 class BatchAllocationEntry(BaseModel):
@@ -513,7 +535,7 @@ async def list_invoices(
     )
     q = (
         select(SaleInvoice)
-        .options(selectinload(SaleInvoice.line_items), selectinload(SaleInvoice.customer))
+        .options(selectinload(SaleInvoice.line_items).selectinload(SaleLineItem.item), selectinload(SaleInvoice.customer))
     )
     if conds:
         q = q.where(and_(*conds))
@@ -882,7 +904,7 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(
         select(SaleInvoice)
-        .options(selectinload(SaleInvoice.line_items), selectinload(SaleInvoice.customer))
+        .options(selectinload(SaleInvoice.line_items).selectinload(SaleLineItem.item), selectinload(SaleInvoice.customer))
         .where(SaleInvoice.id == invoice_id)
     )
     inv = result.scalar_one_or_none()
@@ -1003,14 +1025,18 @@ async def update_invoice(
         await _restock_invoice_lines(db, inv, inv.line_items)
     await db.execute(sa_delete(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
 
+    item_ids = {item.item_id for item in data.items if item.item_id}
+    item_map = await _load_items_by_id(db, item_ids)
     allow_oversell = await get_allow_overselling(db)
     for item, _line_amount, line_taxable, _line_tax in line_rows:
+        item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=item.item_id, name=item.name,
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
             line_total=line_taxable,
+            **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
         if item.item_id and not is_approval_held:
@@ -1178,15 +1204,20 @@ async def create_invoice(
     )
     db.add(inv)
 
+    item_ids = {item.item_id for item in data.items if item.item_id}
+    item_map = await _load_items_by_id(db, item_ids)
     allow_oversell = await get_allow_overselling(db)
 
     for item, _line_amount, line_taxable, _line_tax in line_rows:
+        item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=item.item_id, name=item.name,
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
+            discount=item.line_discount or 0,
             line_total=line_taxable,
+            **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
         if direct and item.item_id:
@@ -2858,20 +2889,41 @@ def _inv_dict(inv, items=None, sales_order_number=None):
         "salesOrderNumber": sales_order_number or None,
     }
     if items is not None:
-        d["items"] = [{
-            "id": i.id,
-            "itemId": i.item_id,
-            "name": i.name, "qty": i.qty,
-            "price": i.price, "taxRate": i.tax_rate,
-            "lineTotal": i.line_total,
-            # 2026-05-31: source-lot manifest so the return modal can offer
-            # per-batch restore. Parsed JSON list of {batch_id, batch_number,
-            # consumed, expiry_date}; null/absent for untracked or legacy lines.
-            "batchAllocation": (
-                json.loads(i.batch_allocation)
-                if getattr(i, "batch_allocation", None) else None
-            ),
-        } for i in items]
+        out_lines = []
+        for i in items:
+            item_obj = getattr(i, "item", None)
+            def _snapshot_field(field_name):
+                value = getattr(i, field_name, None)
+                if value is not None:
+                    return value
+                return getattr(item_obj, field_name, None) if item_obj is not None else None
+
+            out_line = {
+                "id": i.id,
+                "itemId": i.item_id,
+                "name": i.name,
+                "qty": i.qty,
+                "price": i.price,
+                "taxRate": i.tax_rate,
+                "discount": float(i.discount or 0),
+                "lineTotal": i.line_total,
+                "batchAllocation": (
+                    json.loads(i.batch_allocation) if getattr(i, "batch_allocation", None) else None
+                ),
+                "sku": _snapshot_field("sku"),
+                "barcode": _snapshot_field("barcode"),
+                "brand": _snapshot_field("brand"),
+                "hsn_code": _snapshot_field("hsn_code"),
+                "packing": _snapshot_field("packaging_quantity"),
+                "packaging_quantity": _snapshot_field("packaging_quantity"),
+                "is_packaging": _snapshot_field("is_packaging"),
+                "origin": _snapshot_field("country_of_origin"),
+                "country_of_origin": _snapshot_field("country_of_origin"),
+                "unit": _snapshot_field("unit"),
+                "units": _snapshot_field("unit"),
+            }
+            out_lines.append(out_line)
+        d["items"] = out_lines
     return d
 
 
@@ -4057,6 +4109,8 @@ async def convert_order_to_invoice(
     )
     db.add(inv)
 
+    item_ids = {so_line.item_id for so_line, _ in convert_plan if so_line.item_id}
+    item_map = await _load_items_by_id(db, item_ids)
     alloc_by_item: dict = {}
     if data.line_allocations:
         for a in data.line_allocations:
@@ -4070,6 +4124,7 @@ async def convert_order_to_invoice(
             float(so_line.tax_rate or 0),
             tax_mode,
         )
+        item_obj = item_map.get(so_line.item_id) if so_line.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=so_line.item_id, name=so_line.name,
@@ -4077,6 +4132,7 @@ async def convert_order_to_invoice(
             tax_rate=so_line.tax_rate,
             discount=so_line.discount or 0,
             line_total=line_total,
+            **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
         if so_line.item_id:
@@ -4412,18 +4468,22 @@ async def convert_quote_to_invoice(
     )
     db.add(inv)
 
+    item_ids = {line.item_id for line in quote.line_items if line.item_id}
+    item_map = await _load_items_by_id(db, item_ids)
     alloc_by_item = {}
     if data.line_allocations:
         for a in data.line_allocations:
             alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
 
     for line in quote.line_items:
+        item_obj = item_map.get(line.item_id) if line.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=line.item_id, name=line.name,
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate,
             line_total=line.line_total,
+            **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
         if line.item_id:
