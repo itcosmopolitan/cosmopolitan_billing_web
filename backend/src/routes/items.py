@@ -561,8 +561,11 @@ class ItemCreate(BaseModel):
     name: str
     sku: Optional[str] = None
     barcode: Optional[str] = None
+    country_of_origin: Optional[str] = None
     category_id: Optional[str] = None
     brand: Optional[str] = None
+    is_packaging: bool = False
+    packaging_quantity: Optional[float] = None
     unit: str = "Pcs"
     cost_price: float
     selling_price: float
@@ -641,7 +644,10 @@ class ItemPatch(BaseModel):
     column to be flipped from a PATCH."""
     name: Optional[str] = None
     barcode: Optional[str] = None
+    country_of_origin: Optional[str] = None
     category_id: Optional[str] = None
+    is_packaging: Optional[bool] = None
+    packaging_quantity: Optional[float] = None
     brand: Optional[str] = None
     unit: Optional[str] = None
     cost_price: Optional[float] = None
@@ -936,6 +942,8 @@ async def create_item(
     user: User = Depends(current_user),
 ):
     await _validate_category_id(data.category_id, db)
+    if data.is_packaging and (data.packaging_quantity is None or data.packaging_quantity <= 0):
+        raise HTTPException(400, "Packaging quantity must be greater than zero when packaging is enabled")
     direct = await can_direct_commit(user, db, "item_master.approve")
     initial_status = ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
     item = Item(
@@ -943,6 +951,7 @@ async def create_item(
         name=data.name,
         sku=data.sku or f"SKU-{uuid.uuid4().hex[:6].upper()}",
         barcode=data.barcode,
+        country_of_origin=data.country_of_origin,
         category_id=data.category_id or None,
         brand=data.brand,
         unit=data.unit,
@@ -951,6 +960,8 @@ async def create_item(
         tax_rate=data.tax_rate,
         hsn_code=data.hsn_code,
         reorder_level=data.reorder_level,
+        is_packaging=data.is_packaging,
+        packaging_quantity=data.packaging_quantity if data.is_packaging else None,
         emoji=data.emoji,
         batch_tracking=data.batch_tracking,
         expiry_tracking=data.expiry_tracking,
@@ -1099,6 +1110,7 @@ async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
         "name": item.name,
         "sku": item.sku,
         "barcode": item.barcode,
+        "country_of_origin": item.country_of_origin,
         "categoryId": item.category_id,
         "categoryName": item.category.name if item.category else "Uncategorized",
         "brand": item.brand,
@@ -1111,6 +1123,8 @@ async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
         "hsn_code": item.hsn_code,
         "default_reorder_level": item.reorder_level,
         "reorder_level": item.reorder_level,
+        "is_packaging": item.is_packaging,
+        "packaging_quantity": item.packaging_quantity,
         "emoji": item.emoji,
         "batch_tracking": item.batch_tracking,
         "expiry_tracking": item.expiry_tracking,
@@ -1258,12 +1272,15 @@ async def update_item(
         raise HTTPException(404, "Item not found")
 
     await _validate_category_id(data.category_id, db)
+    if data.is_packaging and (data.packaging_quantity is None or data.packaging_quantity <= 0):
+        raise HTTPException(400, "Packaging quantity must be greater than zero when packaging is enabled")
 
     was_tracked = bool(item.batch_tracking)
     before = {
         "name": item.name,
         "sku": item.sku,
         "barcode": item.barcode,
+        "country_of_origin": item.country_of_origin,
         "cost_price": item.cost_price,
         "selling_price": item.selling_price,
         "tax_rate": item.tax_rate,
@@ -1274,6 +1291,7 @@ async def update_item(
     item.name = data.name
     item.sku = data.sku or item.sku
     item.barcode = data.barcode
+    item.country_of_origin = data.country_of_origin
     item.category_id = data.category_id or None
     item.brand = data.brand
     item.unit = data.unit
@@ -1282,6 +1300,8 @@ async def update_item(
     item.tax_rate = data.tax_rate
     item.hsn_code = data.hsn_code
     item.reorder_level = data.reorder_level
+    item.is_packaging = data.is_packaging
+    item.packaging_quantity = data.packaging_quantity if data.is_packaging else None
     item.batch_tracking = data.batch_tracking
     item.expiry_tracking = data.expiry_tracking if data.batch_tracking else False
 
@@ -1581,8 +1601,11 @@ async def patch_item(
             "name",
             "sku",
             "barcode",
+            "country_of_origin",
             "cost_price",
             "selling_price",
+            "is_packaging",
+            "packaging_quantity",
             "tax_rate",
             "reorder_level",
             "batch_tracking",

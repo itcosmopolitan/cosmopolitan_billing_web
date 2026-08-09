@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import SalesTaxInvoice, { mapSaleToInvoice } from '@/components/invoices/SalesTaxInvoice'
+import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
 import openInvoicePrintWindow from '@/utils/printInvoice'
 
 const formatNumber = (value, options = {}) => {
@@ -218,7 +219,9 @@ export function Receipt({ sale, branch }) {
           <tbody>
             ${(sale.items || []).map((item, index) => {
               const row = columns.map((col) => {
-                const raw = col.key === 'no' ? index + 1 : getInvoiceCellValue(item, col.key)
+                const raw = col.key === 'no' ? index + 1 : (col.key === 'packing' || col.key === 'origin' || col.key === 'units'
+                  ? resolveInvoiceItemField(item, col.key)
+                  : getInvoiceCellValue(item, col.key))
                 if (col.key === 'rate' || col.key === 'gst' || col.key === 'amount') {
                   return `<td class="item-cell right">${formatCurrency(raw)}</td>`
                 }

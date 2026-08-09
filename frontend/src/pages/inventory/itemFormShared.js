@@ -1,7 +1,8 @@
 export const EMPTY_ITEM = {
-  name: '', sku: '', barcode: '', categoryId: '', brand: '',
-  unit: 'Pcs', cost_price: '', selling_price: '', tax_rate: '8',
+  name: '', sku: '', barcode: '', country_of_origin: '', categoryId: '', categoryName: '', brand: '',
+  unit: '', cost_price: '', selling_price: '', tax_rate: '8',
   hsn_code: '', reorder_level: '10', active: true,
+  is_packaging: false, packaging_quantity: '',
   batch_tracking: false, expiry_tracking: false, emoji: '📦',
 }
 
@@ -45,14 +46,18 @@ export function formFromItem(item) {
     name: item.name || '',
     sku: item.sku || '',
     barcode: item.barcode || '',
+    country_of_origin: item.country_of_origin || '',
     categoryId: item.categoryId || '',
+    categoryName: item.categoryName || item.category?.name || '',
     brand: item.brand || '',
-    unit: item.unit || 'Pcs',
+    unit: item.unit || '',
     cost_price: item.default_cost_price ?? item.cost_price ?? '',
     selling_price: item.default_selling_price ?? item.selling_price ?? '',
     tax_rate: item.tax_rate ?? '8',
     hsn_code: item.hsn_code || '',
     reorder_level: item.default_reorder_level ?? item.reorder_level ?? '10',
+    is_packaging: Boolean(item.is_packaging),
+    packaging_quantity: item.packaging_quantity ?? '',
     emoji: item.emoji || '📦',
     batch_tracking: Boolean(item.batch_tracking),
     expiry_tracking: Boolean(item.expiry_tracking),
@@ -62,6 +67,12 @@ export function formFromItem(item) {
 
 export function validateItemForm(form, branchConfigs) {
   if (!form.name) return { ok: false, error: 'Item name is required' }
+  if (!form.categoryId) return { ok: false, error: 'Category is required' }
+  if (!form.unit) return { ok: false, error: 'Unit is required' }
+  if (!form.cost_price && form.cost_price !== 0) return { ok: false, error: 'Default cost price is required' }
+  if (form.is_packaging && (!form.packaging_quantity && form.packaging_quantity !== 0)) {
+    return { ok: false, error: 'Quantity per pack/set is required when packaging is enabled' }
+  }
   if (!form.selling_price) return { ok: false, error: 'Selling price is required' }
 
   const listed = branchConfigs.filter((bc) => bc.branch_id)
@@ -102,6 +113,7 @@ export function buildCatalogPayload(form, branchFilter) {
     name: form.name,
     sku: form.sku,
     barcode: form.barcode,
+    country_of_origin: form.country_of_origin,
     category_id: form.categoryId,
     brand: form.brand,
     unit: form.unit,
@@ -110,6 +122,8 @@ export function buildCatalogPayload(form, branchFilter) {
     tax_rate: Number(form.tax_rate),
     hsn_code: form.hsn_code,
     reorder_level: Number(form.reorder_level),
+    is_packaging: Boolean(form.is_packaging),
+    packaging_quantity: form.is_packaging ? Number(form.packaging_quantity) : null,
     emoji: form.emoji || '📦',
     batch_tracking: form.batch_tracking,
     expiry_tracking: form.expiry_tracking,

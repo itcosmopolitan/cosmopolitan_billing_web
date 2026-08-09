@@ -271,6 +271,7 @@ class Item(Base):
     name            = Column(String, nullable=False)
     sku             = Column(String, unique=True)
     barcode         = Column(String)
+    country_of_origin = Column(String)
     category_id     = Column(String, ForeignKey("categories.id"), nullable=True)
     brand           = Column(String)
     unit            = Column(String, default="Pcs")
@@ -279,6 +280,8 @@ class Item(Base):
     tax_rate        = Column(Float, default=18)
     hsn_code        = Column(String)
     reorder_level   = Column(Integer, default=10)
+    is_packaging    = Column(Boolean, default=False)
+    packaging_quantity = Column(Float, nullable=True)
     emoji           = Column(String, default="📦")
     batch_tracking  = Column(Boolean, default=False)
     expiry_tracking = Column(Boolean, default=False)
@@ -501,6 +504,14 @@ class SaleLineItem(Base):
     tax_rate   = Column(Float, default=0)
     discount   = Column(Float, default=0)
     line_total = Column(Float, default=0)
+    sku        = Column(String)
+    barcode    = Column(String)
+    brand      = Column(String)
+    country_of_origin = Column(String)
+    unit       = Column(String)
+    packaging_quantity = Column(Float, nullable=True)
+    is_packaging = Column(Boolean, default=False)
+    hsn_code   = Column(String)
     # 2026-05-31: which batch lots this sale line consumed, so a return can
     # restore stock to the SAME lots (preserving original expiry). JSON list
     # of {batch_id, batch_number, consumed, expiry_date}. NULL for untracked
