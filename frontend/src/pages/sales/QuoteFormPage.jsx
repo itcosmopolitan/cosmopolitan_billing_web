@@ -13,6 +13,7 @@ import {
   lineDiscountToPercent,
 } from './salesFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
 export default function QuoteFormPage({ mode = 'create' }) {
   const { quoteId } = useParams()
@@ -48,7 +49,10 @@ export default function QuoteFormPage({ mode = 'create' }) {
         setLoading(true)
         const q = await salesAPI.quotations.get(quoteId)
         if (cancelled) return
-        setForm(quoteFromRow(q, activeBranchId))
+        const base = quoteFromRow(q, activeBranchId)
+        const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
+        if (cancelled) return
+        setForm({ ...base, items })
         setEditingNumber(q.number)
       } catch {
         toast.error('Quotation not found')

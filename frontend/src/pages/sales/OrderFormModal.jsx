@@ -25,6 +25,10 @@ import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { emptySaleLine } from './salesFormShared'
+import { fmt } from '@/utils/helpers'
+import MarginBadge from '@/components/MarginBadge'
+import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 
 // Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
 
@@ -67,6 +71,7 @@ export default function OrderFormModal({
       item_id: inv.id,
       name: inv.name,
       price: inv.selling_price,
+      costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
     }
     pof('items', next)
@@ -76,7 +81,7 @@ export default function OrderFormModal({
     const next = [...orderForm.items]
     // Wipe identity + name only; keep qty so the operator doesn't have to
     // retype if they just want to swap to a different SKU at the same qty.
-    next[i] = { ...next[i], item_id: null, name: '' }
+    next[i] = { ...next[i], item_id: null, name: '', costPrice: 0 }
     pof('items', next)
   }
 
@@ -105,6 +110,14 @@ export default function OrderFormModal({
   }
 
   const disableLineDiscount = readOnly || shouldDisableLineDiscount(orderForm.discount)
+  const rollup = computeDocumentTotals(orderForm.items, {
+    entityDiscount: orderForm.discount,
+    entityDiscountType: orderForm.discountType || '%',
+    enforceExclusive: !readOnly,
+  })
+  const discShares = rollup.discountMode === 'entity'
+    ? entityDiscountShares(orderForm.items, rollup.entityDiscount)
+    : orderForm.items.map(() => 0)
 
   const formBody = (
     <div className="order-form-shell">
@@ -173,6 +186,8 @@ export default function OrderFormModal({
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 95, textAlign: 'right' }}>Price</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {!readOnly && <th style={{ width: 60 }} />}
             </tr>
           </thead>
@@ -188,6 +203,8 @@ export default function OrderFormModal({
               // during a re-pick.
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
+              const lineTotal = lineNetAmount(it)
+              const margin = lineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -233,6 +250,12 @@ export default function OrderFormModal({
                         {type}
                       </button>
                     </div>
+                  </td>
+                  <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
+                    <MarginBadge margin={margin} />
+                  </td>
+                  <td className="text-right mono" style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                    {fmt(lineTotal)}
                   </td>
                   {!readOnly && (
                     <td>

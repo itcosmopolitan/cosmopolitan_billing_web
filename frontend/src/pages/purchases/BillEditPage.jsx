@@ -8,6 +8,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import BillFormModal from './BillFormModal'
 import { billFromRow, lineDiscountToPercent } from './purchaseFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { enrichPurchaseLinesWithSellPrice } from '@/utils/enrichSaleLineCosts'
 
 export default function BillEditPage() {
   const { billId } = useParams()
@@ -22,7 +23,7 @@ export default function BillEditPage() {
   const pbf = (k, v) => setForm((b) => ({ ...b, [k]: v }))
 
   useEffect(() => {
-    if (!can('purchases.edit')) {
+    if (!can('purchases.edit', 'purchases.create')) {
       navigate('/purchases', { replace: true })
     }
   }, [can, navigate])
@@ -35,12 +36,25 @@ export default function BillEditPage() {
         const bill = await purchasesAPI.get(billId)
         if (cancelled) return
         const status = bill.status
-        if (status === 'paid' || status === 'cancelled' || (bill.paidAmount || 0) > 0) {
+        if (
+          status === 'paid'
+          || status === 'cancelled'
+          || status === 'pending_approval'
+          || (bill.paidAmount || 0) > 0
+        ) {
           toast.error(`Cannot edit this bill`)
           navigate('/purchases?tab=bills', { replace: true })
           return
         }
-        setForm(billFromRow(bill, bill.branchId))
+        if (status !== 'draft' && !can('purchases.edit')) {
+          toast.error('Editing this bill requires purchases.edit')
+          navigate('/purchases?tab=bills', { replace: true })
+          return
+        }
+        const base = billFromRow(bill, bill.branchId)
+        const items = await enrichPurchaseLinesWithSellPrice(base.items)
+        if (cancelled) return
+        setForm({ ...base, items })
       } catch {
         toast.error('Bill not found')
         navigate('/purchases?tab=bills', { replace: true })
@@ -49,6 +63,8 @@ export default function BillEditPage() {
       }
     })()
     return () => { cancelled = true }
+    // Intentionally omit `can` — only reload when the bill id changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [billId, navigate])
 
   const save = async () => {

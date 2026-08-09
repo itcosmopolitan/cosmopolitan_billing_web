@@ -6,6 +6,7 @@ module's own UI (no separate approvals queue).
 """
 from __future__ import annotations
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,3 +55,28 @@ async def can_direct_pos_bill(user: User, db: AsyncSession) -> bool:
     if getattr(user, "all_branches", False):
         return True
     return await user_can(user, db, "pos.use")
+
+
+async def assert_may_edit_document(
+    user: User,
+    db: AsyncSession,
+    *,
+    status,
+    create_perm: str,
+    edit_perm: str,
+    draft_statuses: tuple[str, ...] = ("draft",),
+) -> None:
+    """Create-only users may edit private drafts; posted docs need *.edit."""
+    raw = status.value if hasattr(status, "value") else str(status)
+    has_edit = await user_can(user, db, edit_perm)
+    has_create = await user_can(user, db, create_perm)
+    if raw in draft_statuses:
+        if has_edit or has_create:
+            return
+        raise HTTPException(403, f"Missing permission: {create_perm} or {edit_perm}")
+    if has_edit:
+        return
+    raise HTTPException(
+        403,
+        f"Editing this document requires {edit_perm} (create-only users may edit drafts only)",
+    )

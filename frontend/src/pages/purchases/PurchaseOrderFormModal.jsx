@@ -20,6 +20,12 @@ import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { emptyPurchaseLine } from './purchaseFormShared'
+import { fmt } from '@/utils/helpers'
+import MarginBadge from '@/components/MarginBadge'
+import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
+
+const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
 
 // Per-row discount via lineDiscountType. Backend stores percent only.
 
@@ -57,6 +63,7 @@ export default function PurchaseOrderFormModal({
       // pay the vendor) over `selling_price`. Operator can override per
       // line if this vendor quoted a different rate.
       cost: inv.cost_price ?? inv.selling_price ?? 0,
+      sellingPrice: inv.selling_price ?? inv.sellingPrice ?? 0,
       taxRate: inv.tax_rate || 0,
     }
     ppof('items', next)
@@ -64,7 +71,7 @@ export default function PurchaseOrderFormModal({
 
   const handleClear = (i) => {
     const next = [...poForm.items]
-    next[i] = { ...next[i], item_id: null, name: '' }
+    next[i] = { ...next[i], item_id: null, name: '', sellingPrice: 0 }
     ppof('items', next)
   }
 
@@ -91,6 +98,21 @@ export default function PurchaseOrderFormModal({
   }
 
   const disableLineDiscount = readOnly || shouldDisableLineDiscount(poForm.discount)
+  const rollup = computeDocumentTotals(poForm.items, {
+    entityDiscount: poForm.discount,
+    entityDiscountType: poForm.discountType || '%',
+    lineGross: costLineGross,
+    enforceExclusive: !readOnly,
+  })
+  const discShares = rollup.discountMode === 'entity'
+    ? entityDiscountShares(poForm.items, rollup.entityDiscount, costLineGross)
+    : poForm.items.map(() => 0)
+  const purchaseMargin = purchaseDocumentMargin(poForm.items, {
+    entityDiscount: poForm.discount,
+    entityDiscountType: poForm.discountType || '%',
+    lineGross: costLineGross,
+    enforceExclusive: !readOnly,
+  })
 
   const formBody = (
     <>
@@ -142,6 +164,8 @@ export default function PurchaseOrderFormModal({
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {!readOnly && <th style={{ width: 60 }} />}
             </tr>
           </thead>
@@ -152,6 +176,8 @@ export default function PurchaseOrderFormModal({
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
+              const lineTotal = lineNetAmount(it, costLineGross)
+              const margin = purchaseLineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
                   <td style={{ minWidth: 220 }}>
@@ -193,6 +219,12 @@ export default function PurchaseOrderFormModal({
                       </button>
                     </div>
                   </td>
+                  <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
+                    <MarginBadge margin={margin} />
+                  </td>
+                  <td className="text-right mono" style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                    {fmt(lineTotal)}
+                  </td>
                   {!readOnly && (
                     <td>
                       {poForm.items.length > 1 && (
@@ -229,6 +261,7 @@ export default function PurchaseOrderFormModal({
           readOnly={readOnly}
           lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
           showWhenEmpty
+          marginOverride={purchaseMargin}
           notes={poForm.notes}
           onNotesChange={readOnly ? undefined : (v) => ppof('notes', v)}
           notesHint="Will be displayed on the purchase order"

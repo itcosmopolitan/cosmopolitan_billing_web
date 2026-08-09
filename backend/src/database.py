@@ -856,10 +856,26 @@ async def _ensure_nullable_columns(conn) -> None:
 
 async def _bootstrap_document_numbering(conn) -> None:
     """Idempotently seed document numbering templates for existing databases."""
-    from src.document_numbering import DEFAULT_NUMBERING
+    from src.document_numbering import DEFAULT_NUMBERING, ensure_branch_in_format
 
-    rows = (await conn.execute(text("SELECT doc_type FROM document_numbering"))).fetchall()
+    rows = (
+        await conn.execute(
+            text("SELECT doc_type, format, scope FROM document_numbering")
+        )
+    ).fetchall()
     existing = {r[0] for r in rows}
+    for doc_type, fmt, scope in rows:
+        if (scope or "") != "per_branch":
+            continue
+        updated = ensure_branch_in_format(fmt or "")
+        if updated and updated != (fmt or ""):
+            await conn.execute(
+                text(
+                    "UPDATE document_numbering SET format = :format "
+                    "WHERE doc_type = :doc_type"
+                ),
+                {"format": updated, "doc_type": doc_type},
+            )
     for cfg in DEFAULT_NUMBERING:
         if cfg["doc_type"] in existing:
             if cfg["doc_type"] == "stock_adjustment":

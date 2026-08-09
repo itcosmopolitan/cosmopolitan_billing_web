@@ -11,6 +11,8 @@ import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/di
 import { unwrapPaged } from '@/utils/pagination'
 import { fmt } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
+import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
+import MarginBadge from '@/components/MarginBadge'
 import { PRODUCTS } from '@/utils/seedData'
 import { Modal, AutocompleteDropdown, Spinner } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
@@ -90,7 +92,6 @@ export default function POSPage() {
 
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
-  const taxPricingMode = useAppStore((s) => s.taxPricingMode)
   const cashierUser = useAppStore((s) => s.user)
   const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod } = store
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
@@ -348,7 +349,7 @@ export default function POSPage() {
 
     setCompleting(true)
     try {
-      const totals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
+      const totals = calcCartTotals(cart, { discountPct, discountAmt })
       const { netSubtotal: sub, taxTotal: tax, discount: disc } = totals
 
       // Call API to create sale
@@ -514,7 +515,7 @@ export default function POSPage() {
     }
   }, [products, activeBranch?.id, allowOverselling, cart, store])
 
-  const cartTotals = calcCartTotals(cart, { discountPct, discountAmt, taxPricingMode })
+  const cartTotals = calcCartTotals(cart, { discountPct, discountAmt })
   const {
     netSubtotal: subtotal,
     taxTotal: tax,
@@ -524,6 +525,11 @@ export default function POSPage() {
   } = cartTotals
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
+  // Bill-level discount is allocated across lines for per-line margin; line discounts already sit in lineTotal.
+  const lineEntityShares = hasBillLevelDiscount && !hasLineLevelDiscount
+    ? posEntityDiscountShares(cart, discount)
+    : cart.map(() => 0)
+  const cartMargin = posDocumentMargin(cart, { discountPct, discountAmt })
   const paymentMethodOptions = [
     { id: 'cash', label: '💵 Cash' },
     { id: 'card', label: '💳 Card' },
@@ -544,13 +550,12 @@ export default function POSPage() {
       buildPosDisplayPayload(cart, customer, {
         discountPct,
         discountAmt,
-        taxPricingMode,
         branchName: activeBranch?.name,
         displayCode,
         cashierName: cashierUser?.name || '',
       }),
     )
-  }, [cart, customer, discountPct, discountAmt, taxPricingMode, activeBranch?.name, displayCode, cashierUser?.name, sendCartUpdate])
+  }, [cart, customer, discountPct, discountAmt, activeBranch?.name, displayCode, cashierUser?.name, sendCartUpdate])
 
   const copyDisplayCode = async () => {
     try {
@@ -993,7 +998,7 @@ export default function POSPage() {
               <table style={{ width: '100%', minWidth: 760, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
-                    {['Item Details', 'Qty', 'Rate', 'Margin', 'Discount', 'Line Total', ''].map((h) => (
+                    {['Item Details', 'Qty', 'Rate', 'Discount', 'Margin', 'Line Total', ''].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -1016,11 +1021,12 @@ export default function POSPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {cart.map((item) => (
+                  {cart.map((item, cartIdx) => (
                     <CartRow
                       key={item.id}
                       item={item}
                       branchId={activeBranch?.id}
+                      entityDiscountShare={lineEntityShares[cartIdx] || 0}
                       onQtyChange={(qty) => {
                         if (!allowOverselling) {
                           const stock = Number(item.availableStock ?? item.available_stock ?? 0)
@@ -1199,11 +1205,27 @@ export default function POSPage() {
                         gap: 16,
                         fontSize: 11.5,
                         color: 'var(--green)',
-                        marginBottom: 6,
+                        marginBottom: 3,
                       }}
                     >
                       <span>Disc</span>
                       <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+                    </div>
+                  )}
+                  {cartMargin && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--text-muted)',
+                        marginBottom: 6,
+                      }}
+                    >
+                      <span>Margin</span>
+                      <MarginBadge margin={cartMargin} showAmount size="sm" />
                     </div>
                   )}
                 </div>

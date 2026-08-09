@@ -16,7 +16,6 @@ from src.models import Item, Organisation, TaxRate, User
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.security import require_perm, current_user
 from src.services.audit_service import add_audit_log
-from src.tax_calc import VALID_TAX_PRICING_MODES, normalize_tax_pricing_mode
 
 router = APIRouter()
 
@@ -35,7 +34,8 @@ class TaxRateUpdate(BaseModel):
 
 
 class TaxSettingsUpdate(BaseModel):
-    tax_pricing_mode: str
+    """Accepted for API compatibility; pricing mode is always inclusive."""
+    tax_pricing_mode: Optional[str] = None
 
 
 async def _get_organisation(db: AsyncSession) -> Organisation:
@@ -161,40 +161,41 @@ async def list_tax_rates(
 
 @router.get("/settings")
 async def get_tax_settings(db: AsyncSession = Depends(get_db)):
+    """Legacy endpoint — pricing is always tax-inclusive."""
     org = await _get_organisation(db)
-    mode = normalize_tax_pricing_mode(org.tax_pricing_mode)
+    if org and getattr(org, "tax_pricing_mode", None) != "inclusive":
+        org.tax_pricing_mode = "inclusive"
+        await db.commit()
     return {
-        "tax_pricing_mode": mode,
-        "tax_pricing_label": "Tax inclusive" if mode == "inclusive" else "Tax exclusive",
+        "tax_pricing_mode": "inclusive",
+        "tax_pricing_label": "Tax inclusive",
     }
 
 
 @router.patch("/settings", dependencies=[Depends(require_perm("settings.edit"))])
 async def update_tax_settings(
-    data: TaxSettingsUpdate,
+    _data: TaxSettingsUpdate = TaxSettingsUpdate(),
     db: AsyncSession = Depends(get_db),
     request: Request = None,
     user: User = Depends(current_user),
 ):
-    mode = data.tax_pricing_mode.strip().lower()
-    if mode not in VALID_TAX_PRICING_MODES:
-        raise HTTPException(400, "tax_pricing_mode must be 'inclusive' or 'exclusive'")
+    """Pricing mode is fixed to inclusive; this endpoint only normalizes the org row."""
     org = await _get_organisation(db)
-    org.tax_pricing_mode = mode
+    org.tax_pricing_mode = "inclusive"
     add_audit_log(
         db,
         action="Tax settings updated",
         module="Settings",
         reference_id=org.id,
-        detail=f"Updated tax pricing mode to {mode}",
+        detail="Tax pricing mode is always inclusive",
         user=user,
         request=request,
-        metadata={"tax_pricing_mode": mode},
+        metadata={"tax_pricing_mode": "inclusive"},
     )
     await db.commit()
     return {
-        "tax_pricing_mode": mode,
-        "tax_pricing_label": "Tax inclusive" if mode == "inclusive" else "Tax exclusive",
+        "tax_pricing_mode": "inclusive",
+        "tax_pricing_label": "Tax inclusive",
     }
 
 

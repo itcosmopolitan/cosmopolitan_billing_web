@@ -14,6 +14,7 @@ import {
   lineDiscountToPercent,
 } from './salesFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
 export default function OrderFormPage({ mode = 'create' }) {
   const { orderId } = useParams()
@@ -36,7 +37,7 @@ export default function OrderFormPage({ mode = 'create' }) {
   const goBack = () => navigate('/sales?tab=orders')
 
   useEffect(() => {
-    if (isEdit && !can('invoices.edit') && !readOnly) {
+    if (isEdit && !can('invoices.edit', 'invoices.create') && !readOnly) {
       navigate('/sales?tab=orders', { replace: true })
     } else if (!isEdit && !can('invoices.create')) {
       navigate('/sales?tab=orders', { replace: true })
@@ -51,7 +52,22 @@ export default function OrderFormPage({ mode = 'create' }) {
           setLoading(true)
           const so = await salesAPI.orders.get(orderId)
           if (cancelled) return
-          setForm(orderFromRow(so, activeBranchId))
+          if (!readOnly) {
+            if (['pending_approval', 'converted', 'cancelled', 'partially_invoiced'].includes(so.status)) {
+              toast.error(`Cannot edit a ${String(so.status).replace(/_/g, ' ')} sales order`)
+              navigate('/sales?tab=orders', { replace: true })
+              return
+            }
+            if (so.status !== 'draft' && !can('invoices.edit')) {
+              toast.error('Editing this sales order requires invoices.edit')
+              navigate('/sales?tab=orders', { replace: true })
+              return
+            }
+          }
+          const base = orderFromRow(so, activeBranchId)
+          const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
+          if (cancelled) return
+          setForm({ ...base, items })
           setEditingNumber(so.number)
         } catch {
           toast.error('Sales order not found')
@@ -69,7 +85,10 @@ export default function OrderFormPage({ mode = 'create' }) {
           setLoading(true)
           const q = await salesAPI.quotations.get(fromQuoteId)
           if (cancelled) return
-          setForm(quoteFromRow(q, activeBranchId))
+          const base = quoteFromRow(q, activeBranchId)
+          const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
+          if (cancelled) return
+          setForm({ ...base, items })
           setConversionLabel(q.number)
         } catch {
           toast.error('Quotation not found')

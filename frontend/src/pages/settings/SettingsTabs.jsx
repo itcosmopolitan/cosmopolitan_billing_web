@@ -36,10 +36,41 @@ const INVOICE_CHECKBOX_GROUP_STYLE = {
   rowGap: 8,
 }
 
+const SAMPLE_BRANCH_CODE = 'TN'
+
+/** Insert BRANCH after the first segment (e.g. CN-YYYY-#### → CN-BRANCH-YYYY-####). */
+function ensureBranchInFormat(formatStr) {
+  const fmt = (formatStr || '').trim()
+  if (!fmt || /\bBRANCH\b/.test(fmt)) return fmt
+  const dash = fmt.indexOf('-')
+  if (dash === -1) return `${fmt}-BRANCH`
+  return `${fmt.slice(0, dash)}-BRANCH${fmt.slice(dash)}`
+}
+
+/** Drop BRANCH token and tidy doubled separators. */
+function stripBranchFromFormat(formatStr) {
+  let out = (formatStr || '')
+    .replace(/-BRANCH-/g, '-')
+    .replace(/BRANCH-/g, '')
+    .replace(/-BRANCH/g, '')
+    .replace(/BRANCH/g, '')
+  out = out.replace(/-{2,}/g, '-')
+  return out.replace(/^-|-$/g, '')
+}
+
 /** Client-side preview — mirrors backend `render_number`. */
-function previewFormat(prefix, formatStr, seq) {
+function previewFormat(prefix, formatStr, seq, { branchCode = SAMPLE_BRANCH_CODE, scope = 'per_branch' } = {}) {
   const year = new Date().getFullYear()
-  let out = (formatStr || '').replace(/PREFIX/g, prefix).replace(/YYYY/g, String(year))
+  let out = (formatStr || '').replace(/PREFIX/g, prefix)
+  if (/\bBRANCH\b/.test(out)) {
+    const code = scope === 'per_branch' ? String(branchCode || '').trim().toUpperCase() : ''
+    if (code) {
+      out = out.replace(/BRANCH/g, code)
+    } else {
+      out = stripBranchFromFormat(out)
+    }
+  }
+  out = out.replace(/YYYY/g, String(year))
   out = out.replace(/MM/g, String(new Date().getMonth() + 1).padStart(2, '0'))
   out = out.replace(/DD/g, String(new Date().getDate()).padStart(2, '0'))
   const m = /(#+)/.exec(out)
@@ -58,9 +89,6 @@ export function TaxConfigTab({ refreshKey = 0 }) {
   const [taxSortOrder, setTaxSortOrder] = useState('asc')
   const [taxListVersion, setTaxListVersion] = useState(0)
   const [taxHasMorePage, setTaxHasMorePage] = useState(false)
-  const [taxPricingMode, setTaxPricingMode] = useState('exclusive')
-  const [taxPricingLabel, setTaxPricingLabel] = useState('Tax exclusive')
-  const [taxSettingsSaving, setTaxSettingsSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -89,25 +117,19 @@ export function TaxConfigTab({ refreshKey = 0 }) {
     ;(async () => {
       try {
         setLoading(true)
-        const taxPromise = taxRatesAPI.list({
+        const raw = await taxRatesAPI.list({
           skip: taxSkip,
           limit: taxLimit,
           sort_by: taxSortBy,
           sort_order: taxSortOrder,
           active_only: false,
         }, { signal: controller.signal })
-        const settingsPromise = settingsAPI.getTaxSettings({ signal: controller.signal })
-        const [raw, taxSettings] = await Promise.all([taxPromise, settingsPromise])
         if (!cancelled) {
           const { items, total, limit, perPage, hasMorePage } = unwrapPaged(raw)
           setRates(items || [])
           setTaxTotal(total)
           setTaxHasMorePage(hasMorePage)
           syncPageLimit(perPage, limit)
-          if (taxSettings) {
-            setTaxPricingMode(taxSettings.tax_pricing_mode || 'exclusive')
-            setTaxPricingLabel(taxSettings.tax_pricing_label || 'Tax exclusive')
-          }
         }
       } catch (err) {
         if (err?.code === 'ERR_CANCELED') return
@@ -180,21 +202,6 @@ export function TaxConfigTab({ refreshKey = 0 }) {
     }
   }
 
-  const saveTaxSettings = async () => {
-    if (taxSettingsSaving) return
-    setTaxSettingsSaving(true)
-    try {
-      const saved = await settingsAPI.updateTaxSettings({ tax_pricing_mode: taxPricingMode })
-      setTaxPricingMode(saved.tax_pricing_mode || taxPricingMode)
-      setTaxPricingLabel(saved.tax_pricing_label || taxPricingLabel)
-      toast.success('Tax settings saved')
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setTaxSettingsSaving(false)
-    }
-  }
-
   const toggleTaxActive = async (tax) => {
     if (taxRowBusy || taxSaving) return
     const nextActive = !tax.is_active
@@ -212,31 +219,6 @@ export function TaxConfigTab({ refreshKey = 0 }) {
 
   return (
     <>
-      <AlertBar type="blue" icon="ℹ" style={{ marginBottom: 16 }}>
-        Tax rates are used for invoice calculations and GST reports only. Cosmopolitan Pro does not file returns or integrate with government portals.
-      </AlertBar>
-      <Card title="Tax Pricing" style={{ marginBottom: 16 }}>
-        <FormGroup label="Pricing Mode">
-          <AutocompleteDropdown
-            value={taxPricingMode}
-            onChange={setTaxPricingMode}
-            options={[
-              { id: 'inclusive', label: 'Tax inclusive' },
-              { id: 'exclusive', label: 'Tax exclusive' },
-            ]}
-            isSearchFieldRequired={false}
-            disabled={!can('settings.edit')}
-          />
-          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>
-            {taxPricingLabel || 'Choose whether prices on invoices include tax or add tax on top.'}
-          </div>
-        </FormGroup>
-        {can('settings.edit') && (
-          <button className="btn btn-primary btn-sm" onClick={saveTaxSettings} disabled={taxSettingsSaving || loading}>
-            {taxSettingsSaving ? 'Saving…' : 'Save Tax Settings'}
-          </button>
-        )}
-      </Card>
       <Card
         title="GST Rate Configuration"
         titleRight={
@@ -402,20 +384,36 @@ export function NumberingTab({ refreshKey = 0 }) {
 
   const liveSample = useMemo(() => {
     if (!editing) return ''
-    return previewFormat(form.prefix, form.format, Number(form.next_seq) || 1)
-  }, [editing, form.prefix, form.format, form.next_seq])
+    return previewFormat(form.prefix, form.format, Number(form.next_seq) || 1, {
+      scope: form.scope,
+      branchCode: SAMPLE_BRANCH_CODE,
+    })
+  }, [editing, form.prefix, form.format, form.next_seq, form.scope])
 
   const openEdit = (row) => {
+    const scope = row.scope || 'per_branch'
+    const format = scope === 'per_branch'
+      ? ensureBranchInFormat(row.format)
+      : row.format
     setEditing(row)
     setForm({
       prefix: row.prefix,
-      format: row.format,
-      scope: row.scope,
+      format,
+      scope,
       next_seq: row.next_seq,
     })
   }
 
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  const onScopeChange = (scope) => {
+    setForm((f) => {
+      let format = f.format
+      if (scope === 'per_branch') format = ensureBranchInFormat(format)
+      else format = stripBranchFromFormat(format)
+      return { ...f, scope, format }
+    })
+  }
 
   const save = async () => {
     if (!editing) return
@@ -425,6 +423,10 @@ export function NumberingTab({ refreshKey = 0 }) {
     }
     if (!/#+/.test(form.format || '')) {
       toast.error('Format must include # placeholders for the sequence (e.g. INV-YYYY-####)')
+      return
+    }
+    if (form.scope === 'per_branch' && !/\bBRANCH\b/.test(form.format || '')) {
+      toast.error('Per-branch formats should include BRANCH (e.g. CN-BRANCH-YYYY-####)')
       return
     }
     setSaving(true)
@@ -447,10 +449,10 @@ export function NumberingTab({ refreshKey = 0 }) {
 
   return (
     <>
-      <AlertBar type="blue" icon="ℹ" style={{ marginBottom: 16 }}>
-        Configure how invoices, bills, and other documents are numbered. Changes apply to newly created documents. Use <code>YYYY</code>, <code>MM</code>, <code>DD</code>, and <code>#</code> for the auto-increment sequence.
+      <AlertBar className="mb-5" type="blue" icon="ℹ" style={{ marginBottom: 16 }}>
+        Configure how invoices, bills, and other documents are numbered. Changes apply to newly created documents. Use <code>YYYY</code>, <code>MM</code>, <code>DD</code>, <code>BRANCH</code> (branch short code when scope is Per Branch), and <code>#</code> for the auto-increment sequence.
       </AlertBar>
-      <Card title="Document Number Formats">
+      <Card>
         {loading ? (
           <div style={{ padding: 24, color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
         ) : rows.length === 0 ? (
@@ -458,20 +460,48 @@ export function NumberingTab({ refreshKey = 0 }) {
             No numbering rules found. Restart the backend to seed defaults, or run <code>python src/seed.py</code>.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {rows.map((r) => (
-              <div key={r.doc_type} style={{ display: 'grid', gridTemplateColumns: '160px 140px 160px 120px auto', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.label}</span>
-                <span style={{ fontSize: 12, fontFamily: 'DM Mono', color: 'var(--accent)' }}>{r.format}</span>
-                <span style={{ fontSize: 12, fontFamily: 'DM Mono', color: 'var(--text-muted)' }}>{r.sample}</span>
-                <span style={{ fontSize: 11.5 }}><Tag>{SCOPE_LABELS[r.scope] || r.scope}</Tag></span>
-                {canEdit ? (
-                  <button className="btn btn-ghost btn-xs" onClick={() => openEdit(r)}>Edit</button>
-                ) : (
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>View only</span>
-                )}
-              </div>
-            ))}
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <colgroup>
+                <col style={{ width: '22%' }} />
+                <col style={{ width: '28%' }} />
+                <col style={{ width: '24%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '12%' }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Document Type</th>
+                  <th>Format</th>
+                  <th>Preview</th>
+                  <th>Scope</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.doc_type}>
+                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{r.label}</td>
+                    <td style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
+                      {r.format}
+                    </td>
+                    <td style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-all' }}>
+                      {r.sample}
+                    </td>
+                    <td>
+                      <Tag>{SCOPE_LABELS[r.scope] || r.scope}</Tag>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {canEdit ? (
+                        <button className="btn btn-ghost btn-xs" onClick={() => openEdit(r)}>Edit</button>
+                      ) : (
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>View only</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </Card>
@@ -498,7 +528,7 @@ export function NumberingTab({ refreshKey = 0 }) {
           <FormGroup label="Scope" required>
             <AutocompleteDropdown
               value={form.scope}
-              onChange={(v) => pf('scope', v)}
+              onChange={onScopeChange}
               options={[
                 { id: 'per_branch', label: 'Per Branch' },
                 { id: 'centralised', label: 'Centralised' },
@@ -512,12 +542,27 @@ export function NumberingTab({ refreshKey = 0 }) {
             className="form-input"
             value={form.format}
             onChange={(e) => pf('format', e.target.value)}
-            placeholder="INV-YYYY-####"
+            placeholder="CN-BRANCH-YYYY-####"
             style={{ fontFamily: 'DM Mono' }}
           />
           <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>
-            Example: INV-YYYY-#### — the # group sets sequence width (4 digits).
+            Placeholders: <code>PREFIX</code>, <code>BRANCH</code>, <code>YYYY</code>, <code>MM</code>, <code>DD</code>, <code>####</code>.
+            {form.scope === 'per_branch' ? (
+              <> Per branch: include <code>BRANCH</code> so the branch code appears (e.g. CN-BRANCH-YYYY-#### → CN-{SAMPLE_BRANCH_CODE}-2026-0013).</>
+            ) : (
+              <> Centralised numbers omit the branch code.</>
+            )}
           </div>
+          {form.scope === 'per_branch' && !/\bBRANCH\b/.test(form.format || '') && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              style={{ marginTop: 6 }}
+              onClick={() => pf('format', ensureBranchInFormat(form.format))}
+            >
+              Insert BRANCH into format
+            </button>
+          )}
         </FormGroup>
         <FormGroup label="Next sequence number">
           <input
@@ -532,7 +577,9 @@ export function NumberingTab({ refreshKey = 0 }) {
           </div>
         </FormGroup>
         <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Preview</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+            Preview{form.scope === 'per_branch' ? ` (sample branch code ${SAMPLE_BRANCH_CODE})` : ''}
+          </div>
           <div style={{ fontFamily: 'DM Mono', fontSize: 13, color: 'var(--accent)' }}>{liveSample || '—'}</div>
         </div>
       </Modal>

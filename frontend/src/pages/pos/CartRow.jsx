@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmt } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
+import MarginBadge from '@/components/MarginBadge'
 import {
   allocatableBatches,
   computeAutoAllocation,
@@ -8,13 +9,7 @@ import {
   allocationSum,
 } from '@/utils/batchAllocation'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
-
-const lineMarginPct = (unitPrice, costPrice) => {
-  const p = Number(unitPrice)
-  const c = Number(costPrice)
-  if (!p || p <= 0) return null
-  return ((p - c) / p) * 100
-}
+import { posLineMargin } from '@/utils/marginCalc'
 
 /**
  * One row of the POS cart table. Extracted from POSPage to keep that file
@@ -39,9 +34,9 @@ export default function CartRow({
   onEditAllocation,
   onBatchesLoaded,
   disableDiscount,
+  entityDiscountShare = 0,
 }) {
-  const marginPct = lineMarginPct(item.price, item.costPrice)
-  const marginPositive = marginPct != null && marginPct >= 0
+  const margin = posLineMargin(item, entityDiscountShare)
   const hsn = item.hsnCode || '—'
   const hasStock = item.availableStock != null || item.available_stock != null
   const stockQty = hasStock ? Number(item.availableStock ?? item.available_stock) || 0 : null
@@ -172,16 +167,6 @@ export default function CartRow({
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, verticalAlign: 'top' }}>
         {fmt(item.price)}
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
-        {marginPct == null ? (
-          <span style={{ color: 'var(--text-muted)' }}>—</span>
-        ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600, color: marginPositive ? 'var(--green)' : 'var(--red)', fontSize: 12 }}>
-            <span aria-hidden>{marginPositive ? '↑' : '↓'}</span>
-            <span style={{ fontFamily: 'DM Mono, monospace' }}>{marginPct.toFixed(1)}%</span>
-          </span>
-        )}
-      </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: disableDiscount ? 0.6 : 1 }}>
           <input
@@ -202,6 +187,9 @@ export default function CartRow({
                     style={{ border: 'none', background: discType === 'flat' ? 'var(--accent-bg)' : 'transparent', color: discType === 'flat' ? 'var(--accent)' : 'var(--text-muted)', cursor: disableDiscount ? 'not-allowed' : 'pointer', fontSize: 11, padding: '4px 7px', fontWeight: 600 }}>MVR</button>
           </div>
         </div>
+      </td>
+      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+        <MarginBadge margin={margin} />
       </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'top' }}>
         {fmt(item.lineTotal)}
