@@ -141,6 +141,37 @@ export default function QuoteFormModal({
             value={quoteForm.validUntil} onChange={(v) => pqf('validUntil', v)} />
         </FormGroup>
       </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <FormGroup label="Shipment Date">
+          <DatePicker disabled={readOnly}
+            value={quoteForm.shipmentDate} onChange={(v) => pqf('shipmentDate', v)} />
+        </FormGroup>
+        <FormGroup label="Payment Terms">
+          <input className="form-input" type="text" disabled={readOnly}
+            value={quoteForm.paymentTerms || ''}
+            onChange={(e) => pqf('paymentTerms', e.target.value)} />
+        </FormGroup>
+        <FormGroup label="Shipment Method">
+          <input className="form-input" type="text" disabled={readOnly}
+            value={quoteForm.shipmentMethod || ''}
+            onChange={(e) => pqf('shipmentMethod', e.target.value)} />
+        </FormGroup>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <FormGroup label="Prices Include VAT">
+          <label className="form-checkbox" style={{ alignItems: 'center' }}>
+            <input type="checkbox" disabled={readOnly}
+              checked={!!quoteForm.pricesIncludingVat}
+              onChange={(e) => pqf('pricesIncludingVat', e.target.checked)} />
+            <span style={{ marginLeft: 8 }}>{quoteForm.pricesIncludingVat ? 'Yes' : 'No'}</span>
+          </label>
+        </FormGroup>
+        <FormGroup label="Payment Discount on VAT">
+          <input className="form-input" type="number" min="0" disabled={readOnly}
+            value={quoteForm.paymentDiscountOnVat || 0}
+            onChange={(e) => pqf('paymentDiscountOnVat', e.target.value)} />
+        </FormGroup>
+      </div>
       <FormGroup label="Items" required>
         {/* 2026-05-24: same column changes as OrderFormModal — Tax % out,
             per-line Discount in, 95px right-aligned numeric columns

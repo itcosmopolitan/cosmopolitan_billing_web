@@ -87,6 +87,11 @@ export default function QuoteFormPage({ mode = 'create' }) {
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
         created_by: 'Staff',
         valid_until: form.validUntil,
+        shipment_date: form.shipmentDate,
+        payment_terms: form.paymentTerms,
+        shipment_method: form.shipmentMethod,
+        prices_including_vat: Boolean(form.pricesIncludingVat),
+        payment_discount_on_vat: Number(form.paymentDiscountOnVat || 0),
         items: form.items.map((i) => ({
           item_id: i.item_id || null,
           name: i.name,
@@ -94,6 +99,10 @@ export default function QuoteFormPage({ mode = 'create' }) {
           price: Number(i.price),
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
+          unit: i.unit || '',
+          vat_identifier: i.vatIdentifier || i.vat_identifier || 'GST',
+          allow_invoice_discount: i.allowInvoiceDiscount ?? true,
+          hsn_code: i.hsnCode || i.hsn_code || '',
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
           lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),

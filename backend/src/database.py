@@ -331,6 +331,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("sale_line_items", "packaging_quantity", "FLOAT"),
     ("sale_line_items", "is_packaging", "BOOLEAN DEFAULT 0"),
     ("sale_line_items", "hsn_code", "VARCHAR"),
+    ("quotation_line_items", "unit", "VARCHAR"),
+    ("quotation_line_items", "vat_identifier", "VARCHAR DEFAULT 'GST'"),
+    ("quotation_line_items", "allow_invoice_discount", "BOOLEAN DEFAULT 1 NOT NULL"),
+    ("quotation_line_items", "hsn_code", "VARCHAR"),
     ("sales_return_line_items", "batch_allocation", "TEXT"),
     # 2026-05-30: back-pointer from a quotation to the sales order it
     # spawned. Lets the bulk-delete guard check whether a LIVE sales
@@ -339,6 +343,13 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # SO was deleted). Nullable; legacy converted quotes have NULL here
     # and the guard treats NULL as "no live dependency".
     ("quotations", "converted_order_id", "VARCHAR"),
+    # 2026-08-10: quotation metadata fields added for shipment/payment
+    # details and VAT-inclusive pricing support.
+    ("quotations", "shipment_date", "VARCHAR"),
+    ("quotations", "payment_terms", "VARCHAR DEFAULT ''"),
+    ("quotations", "shipment_method", "VARCHAR DEFAULT ''"),
+    ("quotations", "prices_including_vat", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("quotations", "payment_discount_on_vat", "FLOAT DEFAULT 0 NOT NULL"),
     # 2026-06-09: direct quote→invoice convert (skip SO). Nullable until
     # conversion; mirrors converted_order_id / SalesOrder.converted_invoice_id.
     ("quotations", "converted_invoice_id", "VARCHAR"),

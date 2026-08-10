@@ -615,7 +615,11 @@
     return pages
   }
 
+  let hasRenderedInvoice = false
+
   function renderInvoicePayload(payload) {
+    if (hasRenderedInvoice) return
+    hasRenderedInvoice = true
     const sale = payload?.sale || {}
     const branch = payload?.branch || {}
     const items = sale.items || []

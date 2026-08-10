@@ -53,6 +53,11 @@ export const emptyQuoteForm = (branchId) => ({
   discount: 0,
   discountType: '%',
   validUntil: '',
+  shipmentDate: '',
+  paymentTerms: '',
+  shipmentMethod: '',
+  pricesIncludingVat: false,
+  paymentDiscountOnVat: 0,
   notes: '',
 })
 
@@ -92,6 +97,11 @@ export function quoteFromRow(q, branchId) {
     discount: q.discount || 0,
     discountType: 'MVR',
     validUntil: q.validUntil || '',
+    shipmentDate: q.shipmentDate || '',
+    paymentTerms: q.paymentTerms || '',
+    shipmentMethod: q.shipmentMethod || '',
+    pricesIncludingVat: Boolean(q.pricesIncludingVat),
+    paymentDiscountOnVat: q.paymentDiscountOnVat || 0,
     notes: q.notes || '',
   }
 }
