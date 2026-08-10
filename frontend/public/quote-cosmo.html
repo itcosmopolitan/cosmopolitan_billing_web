@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sales Quote</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 11px;
+    color: #222;
+    margin: 0;
+    padding: 0;
+    background: #e8e8e8;
+  }
+  .page {
+    width: 850px;
+    background: #fff;
+    margin: 20px auto;
+    padding: 30px 40px 30px 40px;
+    position: relative;
+    page-break-after: always;
+    page-break-inside: avoid;
+  }
+  .page:last-child { page-break-after: auto; }
+  .header {
+    display: grid;
+    grid-template-columns: 180px 1fr 120px;
+    align-items: flex-start;
+    border-bottom: 0px solid transparent;
+    padding-bottom: 6px;
+    gap: 16px;
+  }
+  .logo-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 180px;
+  }
+  .logo-img {
+    width: 150px;
+    height: auto;
+    display: block;
+  }
+  .logo-tag {
+    font-size: 10px;
+    font-style: italic;
+    color: #444;
+  }
+  .fssc {
+    font-size: 10px;
+    color: #2e7d32;
+    font-weight: bold;
+    margin-top: 6px;
+  }
+  .company-info {
+    flex: 1;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .company-name {
+    color: #6dbe4b;
+    font-weight: 800;
+    font-size: 18px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    line-height: 1.2;
+  }
+  .company-line {
+    font-size: 12px;
+    color: #222;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-x: visible;
+  }
+  .company-addr {
+    display: none;
+  }
+  .gold-badge {
+    text-align: center;
+    width: 120px;
+    display:flex;justify-content:flex-end;align-items:center
+  }
+  .badge-img {
+    width: 86px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+  .gold-circle {
+    width: 45px;
+    height: 45px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #ffe27a, #d4af37);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: bold;
+    color: #5a4200;
+    margin: 0 auto 2px auto;
+  }
+  .gold-seal {
+    width: 86px;
+    height: 86px;
+    border-radius: 50%;
+    border: 3px solid #c89b43;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    color: #8b6a00;
+    text-align: center;
+    padding: 4px;
+    margin: 0 auto;
+  }
+  .gold-seal .gold-corporate { font-size: 9px; letter-spacing: 0.6px; color: #8b6a00; margin-bottom: 0; }
+  .gold-seal .gold-text { font-size: 12px; font-weight: 700; margin-top: 2px; }
+  .gold-seal .gold-100 { font-size: 26px; font-weight: 800; line-height: 0.95; margin-top: 0; }
+  .gold-seal .gold-year { font-size: 10px; margin-top: 2px; color: #6d6d6d; }
+  .title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 6px;
+    position: relative;
+  }
+  .copy-label {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #fff;
+    background: #1b3e6f;
+    padding: 3px 7px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+  }
+  .title-row h1 {
+    font-size: 16px;
+    margin: 0;
+    color: #111;
+    letter-spacing: 0.4px;
+    font-weight: 800;
+  }
+  .title-row .pageno {
+    font-size: 9.5px;
+    color: #555;
+    white-space: nowrap;
+  }
+  .parties {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 22px;
+    margin-top: 18px;
+    align-items: start;
+  }
+  .bill-to {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .bill-to h2 {
+    font-size: 15px;
+    margin: 0 0 6px 0;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+  }
+  .bill-to .addr-line {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+    white-space: pre-wrap;
+    margin-top: 2px;
+  }
+  .seller-addr {
+    font-size: 10.5px;
+    text-align: right;
+    line-height: 1.35;
+    color: #222;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  .seller-addr strong {
+    display: block;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .info-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .details-box {
+    border: 1px solid rgba(0,0,0,0.08);
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: #fbfbfb;
+  }
+  .details-title {
+    font-size: 11px;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: #1b3e6f;
+  }
+  .bill-to.details-box, .seller-addr.details-box {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  .bill-to .addr-line {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+    white-space: pre-wrap;
+    margin-top: 2px;
+  }
+  .seller-addr.details-box {
+    text-align: right;
+  }
+  .seller-addr.details-box > div:not(.details-title) {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+  }
+  .copy-label {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #fff;
+    background: #1b3e6f;
+    padding: 3px 7px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+  }
+  .info-section { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+  .details-box { border: 1px solid rgba(0,0,0,0.08); padding: 10px 12px; border-radius: 6px; background: #fbfbfb; }
+  .details-title { font-size: 11px; font-weight: 800; margin-bottom: 8px; color: #1b3e6f; }
+  .bill-to.details-box, .seller-addr.details-box {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  .bill-to .addr-line {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+    white-space: pre-wrap;
+    margin-top: 2px;
+  }
+  .seller-addr.details-box {
+    text-align: right;
+  }
+  .seller-addr.details-box > div:not(.details-title) {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+  }
+  .seller-addr.details-box strong {
+    display: block;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .info-left table, .info-right table { border-collapse: collapse; font-size: 10px; width: 100%; }
+  .info-left td, .info-right td { padding: 2px 3px; vertical-align: top; line-height: 1.25; }
+  .info-left td.label, .info-right td.label { color: #333; white-space: nowrap; width: 130px; font-weight: 700; font-size: 9.8px; letter-spacing: 0.3px; }
+  .info-left td + td, .info-right td + td { padding-left: 8px; color: #111; font-size: 10px; }
+  .info-left tr, .info-right tr { border-bottom: 1px solid rgba(0,0,0,0.08); }
+  .info-left tr:last-child td, .info-right tr:last-child td { border-bottom: none; }
+  table.items { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 10.5px; }
+  table.items thead tr { border-top: 1px solid #000; border-bottom: 1px solid #000; }
+  table.items th, table.items td { padding: 5px 4px; vertical-align: top; }
+  table.items th.num, table.items td.num { text-align: right; }
+  table.items th { font-weight: bold; }
+  .totals { width: 100%; margin-top: 4px; font-size: 10.5px; border-collapse: collapse; }
+  .totals td { padding: 3px 4px; }
+  .totals .tlabel { text-align: right; padding-right: 10px; }
+  .totals .tval { text-align: right; width: 110px; }
+  .totals .grand td { border-top: 1px solid #000; font-weight: bold; padding-top: 5px; }
+  .vat-spec { margin-top: 26px; }
+  .vat-spec h3 { font-size: 11px; font-weight: bold; margin: 0 0 8px 0; }
+  table.vat-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  table.vat-table th, table.vat-table td { padding: 5px 4px; vertical-align: top; }
+  table.vat-table thead tr { border-top: 1px solid #000; border-bottom: 1px solid #000; }
+  table.vat-table th.num, table.vat-table td.num { text-align: right; }
+  table.vat-table tbody tr.total-row td { border-top: 1px solid #000; font-weight: bold; padding-top: 5px; }
+  .payment-section { margin-top: 18px; font-size: 10px; }
+  .payment-row { display: flex; gap: 4px; margin-bottom: 4px; }
+  .plabel { width: 150px; font-weight: 700; }
+  .pcolon { width: 6px; }
+  .bank-details { margin-top: 10px; font-size: 10px; line-height: 1.4; }
+  .terms { margin-top: 14px; font-size: 10px; line-height: 1.4; }
+  .thankyou { margin-top: 14px; font-size: 11px; font-weight: 700; text-align: center; }
+  .signoff { display: flex; justify-content: space-between; margin-top: 20px; font-size: 11px; }
+  #quotePages { min-height: 100vh; }
+</style>
+</head>
+<body>
+<div id="quotePages"></div>
+<script>
+(function() {
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return ''
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+  }
+
+  function formatDate(dateString) {
+    if (!dateString) return ''
+    const d = new Date(dateString)
+    if (Number.isNaN(d.getTime())) return dateString
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  }
+
+  function formatNumber(value) {
+    const n = Number(value)
+    if (Number.isNaN(n)) return '0.00'
+    return n.toLocaleString('en-MV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+
+  function formatYesNo(value) {
+    return value ? 'Yes' : 'No'
+  }
+
+  function quoteLineAmount(line) {
+    const qty = Number(line.qty || 0)
+    const price = Number(line.price || 0)
+    const amount = Number(line.lineTotal ?? (qty * price))
+    return Number.isFinite(amount) ? amount : 0
+  }
+
+  function quoteLineVatAmount(line, pricesIncludingVat) {
+    const amount = quoteLineAmount(line)
+    const rate = Number(line.taxRate || line.tax_rate || 0)
+    if (!rate) return 0
+    const inclusive = line.pricesIncludingVat || line.prices_including_vat || pricesIncludingVat
+    if (inclusive) {
+      return amount - (amount / (1 + rate / 100))
+    }
+    return amount * rate / 100
+  }
+
+  function groupVatRows(items, pricesIncludingVat) {
+    const groups = {}
+    items.forEach((line) => {
+      const key = `${line.vatIdentifier || line.vat_identifier || 'GST'}|${Number(line.taxRate || line.tax_rate || 0)}`
+      if (!groups[key]) {
+        groups[key] = {
+          vatIdentifier: line.vatIdentifier || line.vat_identifier || 'GST',
+          taxRate: Number(line.taxRate || line.tax_rate || 0),
+          lineAmount: 0,
+          invoiceDiscountBase: 0,
+          vatBase: 0,
+          vatAmount: 0,
+        }
+      }
+      const amount = quoteLineAmount(line)
+      const taxAmount = quoteLineVatAmount(line, pricesIncludingVat)
+      groups[key].lineAmount += amount
+      groups[key].invoiceDiscountBase += amount
+      groups[key].vatBase += amount
+      groups[key].vatAmount += taxAmount
+    })
+    return Object.values(groups)
+  }
+
+  function renderPage(pageIndex, totalPages, pageItems, quote, branch, totals, copyLabel) {
+    const customerAddress = (quote.customerAddress || quote.customer_address || quote.address || '').toString().trim()
+    const customerId = quote.customerId || quote.customer_id || ''
+    const customerGstin = quote.customerGstin || quote.customer_gstin || quote.gstin || quote.gstNo || quote.gst_no || ''
+    const customerName = (quote.customerName || quote.customer_name || quote.customer || quote.name || '').toString().trim().toLowerCase()
+    const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
+    const branchGstin = branch.gstin || branch.gst || branch.gstNo || branch.gst_no || quote.gstin || quote.gst || ''
+    const branchEmail = quote.email || branch.email || branch.emailAddress || branch.email_address || ''
+    const branchWebsite = quote.website || branch.website || branch.homePage || branch.homepage || branch.url || ''
+    const branchPhone = quote.phoneNo || quote.phone || branch.phone || branch.phoneNo || branch.phone_no || branch.tel || ''
+    const salesperson = quote.salesperson || quote.createdBy || quote.created_by || ''
+    const paymentTerms = quote.paymentTerms || quote.payment_terms || ''
+    const shipmentMethod = quote.shipmentMethod || quote.shipment_method || ''
+    const pricesIncludingVat = quote.pricesIncludingVat || quote.prices_including_vat || false
+    const paymentDiscountOnVat = Number(quote.paymentDiscountOnVat ?? quote.payment_discount_on_vat ?? 0)
+
+    return `
+      <div class="page">
+        <div class="header">
+          <div style="display:flex; align-items:flex-start;">
+            <div class="logo-block">
+              <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+              <div class="logo-tag">"where quality and service matters"</div>
+              <div class="fssc">&#9678; FSSC 22000</div>
+            </div>
+          </div>
+          <div class="company-info">
+            <div class="company-name">Cosmopolitan Champa Brothers Maldives</div>
+            <div class="company-line">LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv</div>
+            <div class="company-line">Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv</div>
+          </div>
+          <div class="gold-badge">
+            <img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='block'" />
+            <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+              <div class="gold-corporate">Corporate Maldives</div>
+              <div class="gold-text">GOLD</div>
+              <div class="gold-100">100</div>
+              <div class="gold-year">2023</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="title-row">
+          <div class="copy-label">${escapeHtml(copyLabel || '')}</div>
+          <h1>Sales - Quote</h1>
+          <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
+        </div>
+
+        <div class="parties">
+          <div class="bill-to details-box">
+            <div class="details-title">Customer Details</div>
+            <h2 style="margin:0 0 6px 0;">${escapeHtml(quote.customerName || quote.customer_name || quote.customer || quote.name || '')}</h2>
+            ${customerAddress ? `<div class="addr-line">${escapeHtml(customerAddress).replace(/\n/g,'<br/>')}</div>` : `<div class="addr-line">${(() => {
+              const streetParts = [
+                quote.customerStreet1 || quote.customer_street1,
+                quote.customerStreet2 || quote.customer_street2,
+                quote.customerStreet3 || quote.customer_street3,
+              ].filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim())
+
+              const otherParts = [
+                quote.customerCity || quote.customer_city || quote.city,
+                quote.customerStateProvince || quote.customer_state_province,
+                quote.customerCountry || quote.customer_country || quote.country,
+                quote.customerPostalCode || quote.customer_postal_code || quote.postal_code,
+              ].filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim())
+
+              const addressLines = []
+              if (streetParts.length) addressLines.push(streetParts.join(', '))
+              if (otherParts.length) addressLines.push(...otherParts)
+
+              if (!addressLines.length) {
+                const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
+                if (Array.isArray(rawAddress)) {
+                  addressLines.push(...rawAddress.filter(Boolean).map((line) => String(line).trim()))
+                } else if (rawAddress) {
+                  addressLines.push(...String(rawAddress).split('\n').map((line) => line.trim()).filter(Boolean))
+                }
+              }
+              return escapeHtml(addressLines.join('\n')).replace(/\n/g,'<br/>')
+            })()}</div>`}
+            <table style="margin-top:10px; width:100%;">
+              ${customerId && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerId)}</td></tr>` : ''}
+              <tr><td class="label">VAT Registration No.</td><td>${escapeHtml(quote.customerGstin)}</td></tr>
+              <tr><td class="label">Document Date</td><td>${escapeHtml(formatDate(quote.date || quote.quote_date || ''))}</td></tr>
+              <tr><td class="label">Shipment Date</td><td>${escapeHtml(formatDate(quote.shipmentDate || quote.shipment_date || ''))}</td></tr>
+              <tr><td class="label">Quote No.</td><td>${escapeHtml(quote.number || quote.quote_no || '')}</td></tr>
+              <tr><td class="label">Prices Including VAT</td><td>${escapeHtml(formatYesNo(pricesIncludingVat))}</td></tr>
+              <tr><td class="label">Payment Terms</td><td>${escapeHtml(paymentTerms)}</td></tr>
+              <tr><td class="label">Shipment Method</td><td>${escapeHtml(shipmentMethod)}</td></tr>
+            </table>
+          </div>
+          <div class="seller-addr details-box">
+            <div class="details-title">Organization Details</div>
+            <div style="font-weight:700; margin-bottom:6px;">Cosmopolitan Champa Brothers Maldives</div>
+            <div style="margin-bottom:8px;">LOT NO-10627, Haivakaru Magu, Hulhumale', Maldives.</div>
+            <table style="width:100%;">
+              <tr><td class="label">Phone No.</td><td>${escapeHtml(branchPhone)}</td></tr>
+              <tr><td class="label">Branch E-Mail</td><td>${escapeHtml(branchEmail)}</td></tr>
+              <tr><td class="label">Website</td><td>${escapeHtml(branchWebsite)}</td></tr>
+              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branchGstin)}</td></tr>
+              <tr><td class="label">Salesperson</td><td>${escapeHtml(salesperson)}</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <table class="items">
+          <thead>
+            <tr>
+              <th>No.</th>
+              <th>Description</th>
+              <th class="num">Quantity</th>
+              <th>Unit of<br>Measure</th>
+              <th class="num">Unit Price</th>
+              <th class="num">Discount<br>%</th>
+              <th>Allow<br>Invoice<br>Discount</th>
+              <th>VAT<br>Identifier</th>
+              <th class="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageItems.map((line) => `
+              <tr>
+                <td>${escapeHtml(line.sku || line.itemId || line.id || '')}</td>
+                <td>${escapeHtml(line.name || '')}</td>
+                <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
+                <td>${escapeHtml(line.unit || line.units || '')}</td>
+                <td class="num">${formatNumber(line.price)}</td>
+                <td class="num">${escapeHtml(Number(line.discount || line.line_discount || 0).toFixed(2))}</td>
+                <td>${escapeHtml(line.allowInvoiceDiscount || line.allow_invoice_discount ? 'Yes' : 'No')}</td>
+                <td>${escapeHtml(line.vatIdentifier || line.vat_identifier || 'GST')}</td>
+                <td class="num">${formatNumber(quoteLineAmount(line))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        ${pageIndex === totalPages - 1 ? `
+        <table class="totals">
+          <tr><td colspan="7"></td><td class="tlabel">Total MRF Excl. VAT</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
+          <tr><td colspan="7"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
+          <tr><td colspan="7"></td><td class="tlabel">Payment Discount on VAT</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>
+          <tr class="grand"><td colspan="7"></td><td class="tlabel">Total MRF Incl. VAT</td><td class="tval">${formatNumber(totals.total)}</td></tr>
+        </table>
+
+        <div class="vat-spec">
+          <h3>VAT Amount Specification</h3>
+          <table class="vat-table">
+            <thead>
+              <tr>
+                <th>VAT Identifier</th>
+                <th class="num">VAT %</th>
+                <th class="num">Line Amount</th>
+                <th class="num">Invoice Discount<br>Base Amount</th>
+                <th class="num">Invoice Discount<br>Amount</th>
+                <th class="num">VAT Base</th>
+                <th class="num">VAT Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${groupVatRows(quote.items || []).map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.vatIdentifier)}</td>
+                  <td class="num">${escapeHtml(String(row.taxRate))}</td>
+                  <td class="num">${formatNumber(row.lineAmount)}</td>
+                  <td class="num">${formatNumber(row.invoiceDiscountBase)}</td>
+                  <td class="num">${formatNumber(0)}</td>
+                  <td class="num">${formatNumber(row.vatBase)}</td>
+                  <td class="num">${formatNumber(row.vatAmount)}</td>
+                </tr>
+              `).join('')}
+              <tr class="total-row">
+                <td>Total</td>
+                <td class="num"></td>
+                <td class="num">${formatNumber(totals.subtotal)}</td>
+                <td class="num">${formatNumber(totals.subtotal)}</td>
+                <td class="num">${formatNumber(0)}</td>
+                <td class="num">${formatNumber(totals.subtotal)}</td>
+                <td class="num">${formatNumber(totals.taxTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        ` : ''}
+      </div>
+    `
+  }
+
+  function paginateItems(items, rowsPerPage) {
+    const pages = []
+    for (let i = 0; i < items.length; i += rowsPerPage) {
+      pages.push(items.slice(i, i + rowsPerPage))
+    }
+    return pages
+  }
+
+  let hasRenderedQuote = false
+
+  function renderQuotePayload(payload) {
+    if (hasRenderedQuote) return
+    hasRenderedQuote = true
+    const quote = payload?.quote || {}
+    const branch = {
+      ...payload?.branch,
+      gstin: payload?.branch?.gstin || payload?.branch?.gst || payload?.branch?.gstNo || payload?.branch?.gst_no || '',
+      email: payload?.branch?.email || payload?.branch?.emailAddress || payload?.branch?.email_address || '',
+      website: payload?.branch?.website || payload?.branch?.homePage || payload?.branch?.homepage || payload?.branch?.url || '',
+      homePage: payload?.branch?.homePage || payload?.branch?.homepage || payload?.branch?.website || payload?.branch?.url || '',
+      phone: payload?.branch?.phone || payload?.branch?.phoneNo || payload?.branch?.phone_no || payload?.branch?.tel || '',
+    }
+    const items = quote.items || []
+    const subtotal = Number(quote.subtotal ?? 0)
+    const taxTotal = Number(quote.taxTotal ?? quote.tax_total ?? 0)
+    const total = Number(quote.total ?? subtotal + taxTotal)
+    const taxPercent = quote.taxPercent ?? quote.tax_percent ?? (subtotal ? Math.round((taxTotal / subtotal) * 100) : 0)
+    const pages = paginateItems(items, 16)
+    const totals = {
+      subtotal,
+      taxTotal,
+      total,
+      taxLabel: `${taxPercent}% GST`,
+    }
+    const copyLabels = ['COSMOPOLITAN COPY', 'CUSTOMER COPY']
+    const allPages = []
+    copyLabels.forEach((copyLabel) => {
+      pages.forEach((pageItems, pageIndex) => {
+        allPages.push({ pageItems, copyLabel, pageIndex, totalPages: pages.length })
+      })
+    })
+
+    document.getElementById('quotePages').innerHTML = allPages.map((page) => renderPage(page.pageIndex, page.totalPages, page.pageItems, quote, branch, totals, page.copyLabel)).join('')
+    setTimeout(() => { window.print() }, 500)
+  }
+
+  function setStatusMessage(message) {
+    const container = document.getElementById('quotePages')
+    if (!container) return
+    container.innerHTML = `<div style="padding:40px; text-align:center; color:#555; font-size:14px;">${escapeHtml(message)}</div>`
+  }
+
+  function getAuthHeaders() {
+    const headers = { Accept: 'application/json' }
+    try {
+      const token = window.localStorage.getItem('retailos_token')
+      if (token) headers.Authorization = `Bearer ${token}`
+    } catch (e) {}
+    return headers
+  }
+
+  async function fetchBranchById(branchId) {
+    if (!branchId) return {}
+    try {
+      const response = await fetch(`/api/v1/branches/${encodeURIComponent(branchId)}`, {
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) {
+        return await response.json()
+      }
+    } catch (e) {
+      // ignore branch load failure
+    }
+    return {}
+  }
+
+  async function tryLoadQuoteFromQuery() {
+    if (window.opener) return
+    const params = new URLSearchParams(window.location.search)
+    const quoteId = params.get('quote_id') || params.get('quoteId')
+    if (!quoteId) return
+    setStatusMessage('Loading quotation…')
+    try {
+      const response = await fetch(`/api/v1/sales/quotations/${encodeURIComponent(quoteId)}`, {
+        headers: getAuthHeaders(),
+      })
+      if (!response.ok) {
+        setStatusMessage('Unable to load quotation. Please refresh or sign in again.')
+        return
+      }
+      const quote = await response.json()
+      if (!quote || !quote.id) {
+        setStatusMessage('Quotation data is invalid or missing.')
+        return
+      }
+      const branchId = quote.branchId || quote.branch_id
+      const branch = branchId ? await fetchBranchById(branchId) : {}
+      renderQuotePayload({ quote, branch })
+    } catch (err) {
+      setStatusMessage('Unable to load quotation. Check your network connection.')
+    }
+  }
+
+  window.addEventListener('message', async (ev) => {
+    const msg = ev.data || {}
+    if (msg.type !== 'renderQuote') return
+    const payload = msg.payload || {}
+    const quote = payload.quote || {}
+    let branch = payload.branch || {}
+    const branchId = branch.id || quote.branchId || quote.branch_id
+    const needsBranchLoad = branchId && (!branch.phone || !branch.email || !branch.website || !branch.gstin)
+    if (needsBranchLoad) {
+      branch = { ...branch, ...(await fetchBranchById(branchId)) }
+    }
+    renderQuotePayload({ quote, branch })
+  })
+
+  tryLoadQuoteFromQuery()
+})();
+</script>
+</body>
+</html>

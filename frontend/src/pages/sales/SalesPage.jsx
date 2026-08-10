@@ -13,7 +13,7 @@ import {
   statusOptions,
 } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
-import openInvoicePrintWindow from '@/utils/printInvoice'
+import openInvoicePrintWindow, { openQuotePrintWindow } from '@/utils/printInvoice'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
@@ -1102,6 +1102,12 @@ export default function SalesPage() {
                                 hidden: ['converted', 'rejected'].includes(q.status) || !can('invoices.create'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => navigate(`/sales/invoices/new?fromQuote=${q.id}`),
+                              },
+                              {
+                                label: 'Print quote',
+                                hidden: false,
+                                disabled: isRowBusy(q.id),
+                                onClick: () => openQuotePrintWindow(q, branches.find((b) => b.id === q.branchId)),
                               },
                               {
                                 label: 'View',

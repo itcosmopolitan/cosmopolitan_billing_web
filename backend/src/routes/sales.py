@@ -126,6 +126,10 @@ class LineItemIn(BaseModel):
     tax_rate: float = 0
     line_discount: float = 0
     line_discount_amount: float = 0
+    unit: Optional[str] = None
+    vat_identifier: Optional[str] = None
+    allow_invoice_discount: Optional[bool] = None
+    hsn_code: Optional[str] = None
     # ── Batch sourcing (precedence: allocation > batch_id > auto FIFO/FEFO) ──
     # `batch_allocation`: full split set by the cashier in the cart UI when
     # the qty spans multiple lots. Backend consumes exactly these in order.
@@ -408,6 +412,11 @@ class QuotationCreate(BaseModel):
     created_by: str = "Staff"
     date: Optional[str] = None
     valid_until: Optional[str] = None
+    shipment_date: Optional[str] = None
+    payment_terms: Optional[str] = None
+    shipment_method: Optional[str] = None
+    prices_including_vat: bool = False
+    payment_discount_on_vat: float = 0
     items: List[LineItemIn]
     discount: float = 0
     number: Optional[str] = None
@@ -616,7 +625,10 @@ async def list_quotations(
         default_key="created_at",
         default_order="desc",
     )
-    q = select(Quotation).options(selectinload(Quotation.line_items))
+    q = select(Quotation).options(
+        selectinload(Quotation.line_items).selectinload(QuotationLineItem.item),
+        selectinload(Quotation.customer),
+    )
     q_count = select(func.count(Quotation.id))
     if branch_id:
         conds.append(Quotation.branch_id == branch_id)
@@ -637,7 +649,7 @@ async def list_quotations(
 @router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Get a specific quotation"""
-    result = await db.execute(select(Quotation).options(selectinload(Quotation.line_items)).where(Quotation.id == quote_id))
+    result = await db.execute(select(Quotation).options(selectinload(Quotation.line_items), selectinload(Quotation.customer)).where(Quotation.id == quote_id))
     quote = result.unique().scalar_one_or_none()
     if not quote:
         raise HTTPException(404, "Quotation not found")
@@ -702,6 +714,11 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         created_by=data.created_by,
         date=data.date or datetime.now().strftime("%Y-%m-%d"),
         valid_until=data.valid_until,
+        shipment_date=data.shipment_date,
+        payment_terms=data.payment_terms,
+        shipment_method=data.shipment_method,
+        prices_including_vat=data.prices_including_vat,
+        payment_discount_on_vat=data.payment_discount_on_vat,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
         discount=data.discount,
@@ -720,6 +737,10 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
             price=item.price,
             tax_rate=item.tax_rate,
             discount=item.line_discount,
+            unit=item.unit or '',
+            vat_identifier=item.vat_identifier or 'GST',
+            allow_invoice_discount=item.allow_invoice_discount if item.allow_invoice_discount is not None else True,
+            hsn_code=item.hsn_code or '',
             line_total=round(line_net, 2),
         )
         db.add(li)
@@ -794,6 +815,11 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     quote.created_by = data.created_by
     quote.date = data.date or quote.date
     quote.valid_until = data.valid_until
+    quote.shipment_date = data.shipment_date
+    quote.payment_terms = data.payment_terms
+    quote.shipment_method = data.shipment_method
+    quote.prices_including_vat = data.prices_including_vat
+    quote.payment_discount_on_vat = data.payment_discount_on_vat
     quote.subtotal = round(subtotal, 2)
     quote.tax_total = round(tax_total, 2)
     quote.discount = round(data.discount or 0, 2)
@@ -811,6 +837,10 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate,
             discount=line.line_discount or 0,
+            unit=line.unit or '',
+            vat_identifier=line.vat_identifier or 'GST',
+            allow_invoice_discount=line.allow_invoice_discount if line.allow_invoice_discount is not None else True,
+            hsn_code=line.hsn_code or '',
             line_total=round(line_net, 2),
         ))
 
@@ -2800,15 +2830,47 @@ async def cancel_invoice(
     return {"status": "cancelled", "stock_restored": stock_restored}
 
 def _quote_dict(quote, items=None):
+    customer_code = None
+    if quote.customer_id:
+        customer_code = getattr(quote.customer, "customer_code", None) or None
+    if not customer_code and quote.customer_id:
+        try:
+            customer_code = _build_customer_code(quote.customer_id)
+        except Exception:
+            customer_code = None
+
     d = {
         "id": quote.id, "number": quote.number,
-        "customerId": quote.customer_id,
+        "customerId": customer_code or quote.customer_id,
         "customerName": quote.customer_name or "Walk-in",
+        "customerAddress": quote.customer.address if quote.customer else None,
+        "customer_address": quote.customer.address if quote.customer else None,
+        "customerStreet1": quote.customer.street1 if quote.customer else None,
+        "customer_street1": quote.customer.street1 if quote.customer else None,
+        "customerStreet2": quote.customer.street2 if quote.customer else None,
+        "customer_street2": quote.customer.street2 if quote.customer else None,
+        "customerStreet3": quote.customer.street3 if quote.customer else None,
+        "customer_street3": quote.customer.street3 if quote.customer else None,
+        "customerCity": quote.customer.city if quote.customer else None,
+        "customer_city": quote.customer.city if quote.customer else None,
+        "customerStateProvince": quote.customer.state_province if quote.customer else None,
+        "customer_state_province": quote.customer.state_province if quote.customer else None,
+        "customerCountry": quote.customer.country if quote.customer else None,
+        "customer_country": quote.customer.country if quote.customer else None,
+        "customerPostalCode": quote.customer.postal_code if quote.customer else None,
+        "customer_postal_code": quote.customer.postal_code if quote.customer else None,
+        "customerGstin": quote.customer.gstin if quote.customer else None,
+        "customer_gstin": quote.customer.gstin if quote.customer else None,
         "branchId": quote.branch_id,
         "branchName": quote.branch_name,
         "createdBy": quote.created_by,
         "date": quote.date,
         "validUntil": quote.valid_until,
+        "shipmentDate": quote.shipment_date,
+        "paymentTerms": quote.payment_terms,
+        "shipmentMethod": quote.shipment_method,
+        "pricesIncludingVat": quote.prices_including_vat,
+        "paymentDiscountOnVat": quote.payment_discount_on_vat,
         "subtotal": quote.subtotal,
         "taxTotal": quote.tax_total,
         "discount": quote.discount,
@@ -2827,10 +2889,19 @@ def _quote_dict(quote, items=None):
         # and _return_dict already emit itemId; this brings _quote_dict
         # in line.
         d["items"] = [{
-            "id": i.id, "itemId": i.item_id,
-            "name": i.name, "qty": i.qty,
-            "price": i.price, "taxRate": i.tax_rate,
-            "discount": i.discount, "lineTotal": i.line_total,
+            "id": i.id,
+            "itemId": i.item_id,
+            "sku": (i.item.sku if getattr(i, 'item', None) else None),
+            "name": i.name,
+            "qty": i.qty,
+            "price": i.price,
+            "taxRate": i.tax_rate,
+            "discount": i.discount,
+            "lineTotal": i.line_total,
+            "unit": i.unit,
+            "vatIdentifier": i.vat_identifier,
+            "allowInvoiceDiscount": i.allow_invoice_discount,
+            "hsnCode": i.hsn_code,
         } for i in items]
     return d
 
