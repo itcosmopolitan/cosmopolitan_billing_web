@@ -351,6 +351,7 @@ class SaleCreate(BaseModel):
     # `_coerce_payment_mode` below so the contract is forgiving on input
     # but strict on storage.
     payment_mode: Optional[PaymentMode] = None
+    payment_ref: Optional[str] = None
     notes: Optional[str] = None
     # Phase 4: pos | invoice | sales_order | quotation (default invoice).
     origin: Optional[str] = None
@@ -501,11 +502,14 @@ async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optiona
 async def list_invoices(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
+    payment_mode: Optional[str] = None,
     customer_id: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     origin: Optional[str] = None,
+    category_id: Optional[str] = None,
+    discount: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -518,6 +522,23 @@ async def list_invoices(
     await refresh_sale_overdue(db, branch_id)
     await db.commit()
     conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to, origin)
+    # Payment method filter
+    if payment_mode:
+        conds.append(SaleInvoice.payment_mode == payment_mode)
+    # Category filter: invoices that contain at least one line item in the category
+    if category_id:
+        subq = select(SaleLineItem.invoice_id).join(Item, SaleLineItem.item_id == Item.id).where(Item.category_id == category_id)
+        conds.append(SaleInvoice.id.in_(subq))
+    # Discount filter: 'with' => invoice.discount > 0 OR any line has discount > 0
+    #                 'without' => invoice.discount == 0 AND no line has discount > 0
+    if discount:
+        if discount == 'with':
+            subq = select(SaleLineItem.invoice_id).where(SaleLineItem.discount > 0)
+            conds.append(or_(SaleInvoice.discount > 0, SaleInvoice.id.in_(subq)))
+        elif discount == 'without':
+            subq = select(SaleLineItem.invoice_id).where(SaleLineItem.discount > 0)
+            conds.append(SaleInvoice.discount <= 0)
+            conds.append(SaleInvoice.id.notin_(subq))
     if branch_id is None and not getattr(user, "all_branches", False):
         branch_ids = await get_allowed_branch_ids(user, db)
         if not branch_ids:
@@ -1306,7 +1327,7 @@ async def create_invoice(
             date=today,
             total_amount=total,
             payment_mode="credit",
-            payment_ref="",
+            payment_ref=data.payment_ref or "",
             notes="POS credit-mode sale",
             credit_applied=0.0,
             created_by="POS",
@@ -1339,7 +1360,7 @@ async def create_invoice(
             date=today,
             total_amount=total,
             payment_mode=data.payment_mode,
-            payment_ref="",
+            payment_ref=data.payment_ref or "",
             notes="POS sale",
             credit_applied=0.0,
             created_by="POS",

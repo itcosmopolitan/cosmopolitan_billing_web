@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { salesAPI, branchesAPI, customersAPI } from '@/api'
+import { salesAPI, branchesAPI, customersAPI, AUTOCOMPLETE_CUSTOMER_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
@@ -10,6 +10,7 @@ import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   QUOTE_STATUS_FILTER_OPTIONS,
   PAYMENT_MODE_LABEL_OPTIONS,
+  PAYMENT_METHOD_WITH_CREDIT_OPTIONS,
   statusOptions,
 } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
@@ -66,6 +67,10 @@ export default function SalesPage() {
   }, [navigate])
   const [search, setSearch]       = useState('')
   const [invStatusF, setInvStatusF]     = useState('')
+  const [paymentModeF, setPaymentModeF] = useState('')
+  const [customerF, setCustomerF] = useState('')
+  const [categoryF, setCategoryF] = useState('')
+  const [discountF, setDiscountF] = useState('')
   const [quoteStatusF, setQuoteStatusF] = useState('')
   const [orderStatusF, setOrderStatusF] = useState('')
   const [retStatusF, setRetStatusF]     = useState('')
@@ -335,7 +340,7 @@ export default function SalesPage() {
     setOrderSkip(0)
     setRetSkip(0)
     setPaySkip(0)
-  }, [search, invStatusF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
+  }, [search, invStatusF, paymentModeF, customerF, categoryF, discountF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
 
   // Re-fetch lists when active branch changes.
   useEffect(() => {
@@ -387,6 +392,10 @@ export default function SalesPage() {
           sort_order: invSortOrder,
           search: search || undefined,
           status: invStatusF || undefined,
+          payment_mode: paymentModeF || undefined,
+          customer_id: customerF || undefined,
+          category_id: categoryF || undefined,
+          discount: discountF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -407,7 +416,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, invSkip, invLimit, search, invStatusF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
+  }, [tab, activeBranch?.id, invSkip, invLimit, search, invStatusF, paymentModeF, customerF, categoryF, discountF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
 
   useEffect(() => {
     if (tab !== 'quotes') return
@@ -849,6 +858,41 @@ export default function SalesPage() {
               prependOptions={[{ id: '', label: 'All Status' }]}
               isSearchFieldRequired={false}
               placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={paymentModeF}
+              onChange={setPaymentModeF}
+              options={PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
+              prependOptions={[{ id: '', label: 'All Methods' }]}
+              isSearchFieldRequired={false}
+              placeholder="Payment Method"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
+              value={customerF}
+              onChange={setCustomerF}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired={true}
+              placeholder="Customer"
+              style={{ width: 220 }}
+              clearable
+            />
+            <AutocompleteDropdown
+              value={categoryF}
+              onChange={setCategoryF}
+              fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
+              isSearchFieldRequired={true}
+              placeholder="Category"
+              style={{ width: 180 }}
+              clearable
+            />
+            <AutocompleteDropdown
+              value={discountF}
+              onChange={setDiscountF}
+              options={[{ id: '', label: 'All' }, { id: 'with', label: 'With discount' }, { id: 'without', label: 'Without discount' }]}
+              isSearchFieldRequired={false}
+              placeholder="Discount"
               style={{ width: 140 }}
             />
             {/* Branch filter removed 2026-05-23 — Topbar active-branch

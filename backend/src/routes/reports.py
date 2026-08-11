@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from src import config
 from src.database import get_db
 from src.date_utils import MAX_REPORT_DATE_RANGE_DAYS, parse_date_range
 from src.models import (
@@ -80,6 +81,15 @@ def _branch_condition(column, branch_id: Optional[str], allowed_branch_ids: Opti
             return column == "__no_branch_access__"
         return column.in_(allowed_branch_ids)
     return None
+
+
+def _use_materialized_read_models(db: AsyncSession) -> bool:
+    dialect = db.bind.dialect.name if getattr(db, "bind", None) is not None else "sqlite"
+    try:
+        use_read_models = bool(config.get().dashboard_use_materialized_views)
+    except RuntimeError:
+        use_read_models = False
+    return use_read_models and dialect == "postgresql"
 
 
 def _sale_filters(
@@ -484,91 +494,58 @@ async def daily_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [DailySalesSummary.sale_date >= start, DailySalesSummary.sale_date <= end]
-    branch_cond = _branch_condition(DailySalesSummary.branch_id, branch_id, branch_scope)
+
+    date_expr = func.to_date(SaleInvoice.date, "YYYY-MM-DD")
+    si_conds = [date_expr >= start, date_expr <= end]
+    branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        si_conds.append(branch_cond)
     if search:
-        conds.append(DailySalesSummary.cashier.ilike(f"%{search}%"))
+        si_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
 
     sort_map = {
-        "date": DailySalesSummary.sale_date,
-        "invoice_count": DailySalesSummary.bill_count,
-        "quantity_sold": DailySalesSummary.revenue,
-        "gross_sales": DailySalesSummary.revenue,
-        "discounts": DailySalesSummary.discount,
-        "tax": DailySalesSummary.revenue,
-        "net_sales": DailySalesSummary.collected,
+        "date": date_expr,
+        "invoice_count": func.count(SaleInvoice.id),
+        "quantity_sold": func.coalesce(func.sum(SaleLineItem.qty), 0),
+        "gross_sales": func.coalesce(func.sum(SaleInvoice.total), 0),
+        "discounts": func.coalesce(func.sum(SaleInvoice.discount), 0),
+        "tax": func.coalesce(func.sum(SaleInvoice.tax_total), 0),
+        "net_sales": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    total_q = select(func.count()).select_from(DailySalesSummary).where(and_(*conds))
-    total = int((await db.execute(total_q)).scalar() or 0)
-    # If the materialized read-model is empty (e.g. not populated on the DB),
-    # fall back to aggregating directly from `sale_invoices` so the reports
-    # still work on fresh / demo databases.
-    if total == 0:
-        date_expr = func.to_date(SaleInvoice.date, "YYYY-MM-DD")
-        si_conds = []
-        branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
-        if branch_cond is not None:
-            si_conds.append(branch_cond)
-        si_conds.append(date_expr >= start)
-        si_conds.append(date_expr <= end)
-        if search:
-            si_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
 
-        fallback_sort_map = {
-            "date": date_expr,
-            "invoice_count": func.count(SaleInvoice.id),
-            "gross_sales": func.coalesce(func.sum(SaleInvoice.total), 0),
-            "discounts": func.coalesce(func.sum(SaleInvoice.discount), 0),
-            "tax": func.coalesce(func.sum(SaleInvoice.total), 0),
-            "net_sales": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
-        }
-        order_by_expr = resolve_sort(sort_by, sort_order, fallback_sort_map, "date", "desc")
+    base_q = (
+        select(
+            date_expr.label("date"),
+            func.count(SaleInvoice.id).label("invoice_count"),
+            func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
+            func.coalesce(func.sum(SaleInvoice.total), 0).label("gross_sales"),
+            func.coalesce(func.sum(SaleInvoice.discount), 0).label("discounts"),
+            func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax"),
+            func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("net_sales"),
+        )
+        .select_from(SaleInvoice)
+        .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
+        .where(and_(*si_conds))
+        .group_by(date_expr)
+    )
 
-        base_q = (
-            select(
-                date_expr.label("date"),
-                func.count(SaleInvoice.id).label("invoice_count"),
-                func.coalesce(func.sum(SaleInvoice.total), 0).label("gross_sales"),
-                func.coalesce(func.sum(SaleInvoice.discount), 0).label("discounts"),
-                func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("net_sales"),
+    total = int(
+        (
+            await db.execute(
+                select(func.count(func.distinct(date_expr))).where(and_(*si_conds))
             )
-            .where(and_(*si_conds))
-            .group_by(date_expr)
-        )
-        total = int(
-            (
-                await db.execute(
-                    select(func.count(func.distinct(date_expr))).where(and_(*si_conds))
-                )
-            ).scalar()
-            or 0
-        )
-        result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
-        rows = [
-            {**dict(r._mapping), "date": r.date.isoformat() if r.date else None}
-            for r in result.fetchall()
-        ]
-    else:
-        result = await db.execute(
-            select(
-                DailySalesSummary.sale_date.label("date"),
-                DailySalesSummary.bill_count.label("invoice_count"),
-                DailySalesSummary.revenue.label("gross_sales"),
-                DailySalesSummary.discount.label("discounts"),
-                DailySalesSummary.collected.label("net_sales"),
-            )
-            .where(and_(*conds))
-            .order_by(order_by_expr)
-            .offset(sk)
-            .limit(lim)
-        )
-        rows = [{**dict(r._mapping), "date": r.date.isoformat() if r.date else None} for r in result.fetchall()]
+        ).scalar()
+        or 0
+    )
+    result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [
+        {**dict(r._mapping), "date": r.date.isoformat() if r.date else None}
+        for r in result.fetchall()
+    ]
     return paged(rows, total, sk, lim)
 
 
@@ -587,44 +564,80 @@ async def product_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
-    branch_cond = _branch_condition(ProductSalesSummary.branch_id, branch_id, branch_scope)
-    if branch_cond is not None:
-        conds.append(branch_cond)
-    if search:
-        conds.append(ProductSalesSummary.product_name.ilike(f"%{search}%"))
+    use_mv = _use_materialized_read_models(db)
 
     sort_map = {
-        "product_code": ProductSalesSummary.item_id,
-        "product_name": ProductSalesSummary.product_name,
-        "category": ProductSalesSummary.category_id,
-        "quantity_sold": ProductSalesSummary.quantity_sold,
-        "sales_value": ProductSalesSummary.revenue,
-        "cost_value": ProductSalesSummary.revenue,
-        "profit": ProductSalesSummary.profit,
+        "product_code": Item.sku if use_mv else Item.sku,
+        "product_name": ProductSalesSummary.product_name if use_mv else SaleLineItem.name,
+        "category": Category.name,
+        "quantity_sold": ProductSalesSummary.quantity_sold if use_mv else func.sum(SaleLineItem.qty),
+        "sales_value": ProductSalesSummary.revenue if use_mv else func.coalesce(func.sum(SaleLineItem.line_total), 0),
+        "cost_value": ProductSalesSummary.revenue if use_mv else func.coalesce(func.sum(SaleLineItem.line_total), 0),
+        "profit": ProductSalesSummary.profit if use_mv else func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_value", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    total_q = select(func.count()).select_from(ProductSalesSummary).where(and_(*conds))
-    total = int((await db.execute(total_q)).scalar() or 0)
-    result = await db.execute(
-        select(
-            ProductSalesSummary.item_id.label("product_code"),
-            ProductSalesSummary.product_name.label("product_name"),
-            ProductSalesSummary.category_id.label("category"),
-            ProductSalesSummary.quantity_sold.label("quantity_sold"),
-            ProductSalesSummary.revenue.label("sales_value"),
-            ProductSalesSummary.profit.label("profit"),
+    if use_mv:
+        conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
+        branch_cond = _branch_condition(ProductSalesSummary.branch_id, branch_id, branch_scope)
+        if branch_cond is not None:
+            conds.append(branch_cond)
+        if search:
+            conds.append(ProductSalesSummary.product_name.ilike(f"%{search}%"))
+
+        total_q = select(func.count()).select_from(ProductSalesSummary).where(and_(*conds))
+        total = int((await db.execute(total_q)).scalar() or 0)
+        result = await db.execute(
+            select(
+                func.coalesce(Item.sku, ProductSalesSummary.item_id).label("product_code"),
+                ProductSalesSummary.product_name.label("product_name"),
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                ProductSalesSummary.quantity_sold.label("quantity_sold"),
+                ProductSalesSummary.revenue.label("sales_value"),
+                ProductSalesSummary.profit.label("profit"),
+            )
+            .select_from(ProductSalesSummary)
+            .outerjoin(Item, Item.id == ProductSalesSummary.item_id)
+            .outerjoin(Category, Category.id == Item.category_id)
+            .where(and_(*conds))
+            .group_by(Item.sku, ProductSalesSummary.item_id, ProductSalesSummary.product_name, Category.name, ProductSalesSummary.quantity_sold, ProductSalesSummary.revenue, ProductSalesSummary.profit)
+            .order_by(order_by_expr)
+            .offset(sk)
+            .limit(lim)
         )
-        .where(and_(*conds))
-        .order_by(order_by_expr)
-        .offset(sk)
-        .limit(lim)
-    )
-    rows = [dict(r._mapping) for r in result.fetchall()]
+        rows = [dict(r._mapping) for r in result.fetchall()]
+    else:
+        conds = [SaleInvoice.date >= (start.isoformat() if hasattr(start, 'isoformat') else start), SaleInvoice.date <= (end.isoformat() if hasattr(end, 'isoformat') else end)]
+        branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
+        if branch_cond is not None:
+            conds.append(branch_cond)
+        if search:
+            conds.append(SaleLineItem.name.ilike(f"%{search}%"))
+
+        base = (
+            select(
+                func.coalesce(Item.sku, SaleLineItem.item_id).label("product_code"),
+                SaleLineItem.name.label("product_name"),
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
+                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("sales_value"),
+                func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0).label("profit"),
+            )
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .outerjoin(Item, SaleLineItem.item_id == Item.id)
+            .outerjoin(Category, Item.category_id == Category.id)
+            .where(and_(*conds))
+            .group_by(Item.sku, SaleLineItem.item_id, SaleLineItem.name, Category.name)
+        )
+        total_q = select(func.count()).select_from(base.subquery())
+        total = int((await db.execute(total_q)).scalar() or 0)
+        result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+        rows = [dict(r._mapping) for r in result.fetchall()]
+
     return paged(rows, total, sk, lim)
 
 
@@ -1076,6 +1089,69 @@ async def document_trail(
     return paged(rows, total, sk, lim)
 
 
+@router.get("/payment-sales", dependencies=[Depends(require_perm("reports.view"))])
+async def payment_sales(
+    branch_id: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    start, end = _normalize_date_range(date_from, date_to)
+    conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
+    if branch_id:
+        conds.append(SaleInvoice.branch_id == branch_id)
+
+    sort_map = {
+        "payment_method": SaleInvoice.payment_mode,
+        "invoice_count": func.count(SaleInvoice.id),
+        "sales_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
+        "tax_amount": func.coalesce(func.sum(SaleInvoice.tax_total), 0),
+        "discount_amount": func.coalesce(func.sum(SaleInvoice.discount), 0),
+        "net_sales": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
+    }
+
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_amount", "desc")
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+
+    base = (
+        select(
+            func.coalesce(SaleInvoice.payment_mode, "cash").label("payment_method"),
+            func.count(SaleInvoice.id).label("invoice_count"),
+            func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
+            func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax_amount"),
+            func.coalesce(func.sum(SaleInvoice.discount), 0).label("discount_amount"),
+            func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("net_sales"),
+        )
+        .where(and_(*conds))
+        .group_by(SaleInvoice.payment_mode)
+    )
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [dict(r._mapping) for r in result.fetchall()]
+    # Map raw payment_mode values (e.g. 'bank_transfer') to human-friendly labels
+    _pm_map = {
+        'cash': 'Cash',
+        'card': 'Card',
+        'upi': 'UPI',
+        'bank_transfer': 'Bank Transfer',
+        'credit': 'Credit',
+    }
+    for r in rows:
+        raw = r.get('payment_method')
+        if raw is None:
+            r['payment_method'] = 'Unrecorded'
+        else:
+            s = str(raw).strip().lower()
+            r['payment_method'] = _pm_map.get(s) or ' '.join([w.capitalize() for w in s.replace('_', ' ').split()])
+    return paged(rows, total, sk, lim)
+
+
 @router.get("/category-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def category_sales(
     branch_id: Optional[str] = None,
@@ -1089,29 +1165,54 @@ async def category_sales(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
-    if branch_id:
-        conds.append(ProductSalesSummary.branch_id == branch_id)
-    if search:
-        conds.append(Category.name.ilike(f"%{search}%"))
+    use_mv = _use_materialized_read_models(db)
 
     sort_map = {
         "category": Category.name,
-        "quantity_sold": func.sum(ProductSalesSummary.quantity_sold),
-        "sales_value": func.sum(ProductSalesSummary.revenue),
-        "cost_value": func.sum(ProductSalesSummary.revenue),
-        "profit": func.sum(ProductSalesSummary.profit),
+        "quantity_sold": func.sum(ProductSalesSummary.quantity_sold) if use_mv else func.sum(SaleLineItem.qty),
+        "sales_value": func.sum(ProductSalesSummary.revenue) if use_mv else func.coalesce(func.sum(SaleLineItem.line_total), 0),
+        "cost_value": func.sum(ProductSalesSummary.revenue) if use_mv else func.coalesce(func.sum(SaleLineItem.line_total), 0),
+        "profit": func.sum(ProductSalesSummary.profit) if use_mv else func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_value", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    base = select(
-        Category.name.label("category"),
-        func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("quantity_sold"),
-        func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("sales_value"),
-        func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
-    ).select_from(ProductSalesSummary).join(Category, Category.id == ProductSalesSummary.category_id, isouter=True).where(and_(*conds)).group_by(Category.name)
+
+    if use_mv:
+        conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
+        if branch_id:
+            conds.append(ProductSalesSummary.branch_id == branch_id)
+        if search:
+            conds.append(Category.name.ilike(f"%{search}%"))
+
+        base = select(
+            Category.name.label("category"),
+            func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("quantity_sold"),
+            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("sales_value"),
+            func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
+        ).select_from(ProductSalesSummary).join(Category, Category.id == ProductSalesSummary.category_id, isouter=True).where(and_(*conds)).group_by(Category.name)
+    else:
+        conds = [SaleInvoice.date >= (start.isoformat() if hasattr(start, 'isoformat') else start), SaleInvoice.date <= (end.isoformat() if hasattr(end, 'isoformat') else end)]
+        if branch_id:
+            conds.append(SaleInvoice.branch_id == branch_id)
+        if search:
+            conds.append(Category.name.ilike(f"%{search}%"))
+
+        base = (
+            select(
+                func.coalesce(Category.name, "Uncategorized").label("category"),
+                func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
+                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("sales_value"),
+                func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0).label("profit"),
+            )
+            .select_from(SaleLineItem)
+            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
+            .outerjoin(Item, SaleLineItem.item_id == Item.id)
+            .outerjoin(Category, Item.category_id == Category.id)
+            .where(and_(*conds))
+            .group_by(Category.name)
+        )
 
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -1472,6 +1573,7 @@ async def out_of_stock(
             Category.name.label("category"),
             Branch.name.label("branch"),
         )
+        .select_from(ItemStock)
         .join(Item, Item.id == ItemStock.item_id)
         .join(Branch, Branch.id == ItemStock.branch_id)
         .join(Category, Category.id == Item.category_id, isouter=True)

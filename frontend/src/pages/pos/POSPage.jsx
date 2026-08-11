@@ -94,7 +94,7 @@ export default function POSPage() {
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const cashierUser = useAppStore((s) => s.user)
-  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod } = store
+  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod, paymentRef } = store
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
   // unpaid invoice" case — there's no-one to follow up with for collection.
   // We surface this exactly once per Complete-Sale attempt via this ref so
@@ -385,6 +385,7 @@ export default function POSPage() {
         payment_mode: paymentReceived ? paymentMethod : null,
         origin: 'pos',
         notes: store.notes,
+        payment_ref: paymentReceived ? paymentRef || '' : undefined,
       })
 
       const soldItemIds = cart.map((i) => i.id)
@@ -1152,6 +1153,15 @@ export default function POSPage() {
                     placeholder="Method…"
                     direction="up"
                     style={{ width: 152, minWidth: 132, maxWidth: '100%' }}
+                  />
+                )}
+                {paymentReceived && (paymentMethod === 'upi' || paymentMethod === 'bank_transfer') && (
+                  <input
+                    className="form-input"
+                    placeholder="REF number"
+                    value={paymentRef || ''}
+                    onChange={(e) => store.setPaymentRef(e.target.value)}
+                    style={{ width: 180, minWidth: 140 }}
                   />
                 )}
               </div>
