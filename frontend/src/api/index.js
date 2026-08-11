@@ -256,6 +256,16 @@ export const itemsAPI = {
     list:   ()     => api.get('/items/categories'),
     create: (data) => api.post('/items/categories', data),
   },
+  import: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post('/items/import', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120_000 })
+  },
+  downloadTemplate: async () => {
+    // Request binary Excel file and return a Blob
+    const data = await api.get('/items/import/template', { responseType: 'arraybuffer', noBranchScope: true })
+    return new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  },
 }
 
 // ─── Sales ────────────────────────────────────────────────────────────────────

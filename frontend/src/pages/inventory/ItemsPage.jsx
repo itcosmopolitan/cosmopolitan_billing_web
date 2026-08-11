@@ -222,6 +222,10 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [itemActionBusy, setItemActionBusy] = useState(null)
   const [showDetail, setShowDetail] = useState(null)
   const [actionKind, setActionKind] = useState(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importFile, setImportFile] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importResult, setImportResult] = useState(null)
 
   const approveItem = async (item) => {
     if (itemActionBusy) return
@@ -411,7 +415,10 @@ export default function ItemsPage({ mode = 'branch' }) {
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAdjSelect(true)}>⚖ Request Adjustment</button>
         )}
         {isMaster && can('item_master.create') && (
-          <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
+          <>
+            <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setImportOpen(true); setImportResult(null); setImportFile(null) }} style={{ marginLeft: 8 }}>Import</button>
+          </>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
           onExport: handleExport,
@@ -989,6 +996,76 @@ export default function ItemsPage({ mode = 'branch' }) {
           title={activityTarget?.title}
         />
       )}
+      <Modal
+        open={importOpen}
+        onClose={() => !importBusy && setImportOpen(false)}
+        title="Import Items"
+        icon="⬆️"
+        size="lg"
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setImportOpen(false)} disabled={importBusy}>Close</button>
+          <button className="btn btn-primary" onClick={async () => {
+            if (!importFile) { toast.error('Select a file to upload'); return }
+            setImportBusy(true)
+            try {
+              const res = await itemsAPI.import(importFile)
+              setImportResult(res)
+              toast.success(`${res.created || 0} items imported`)
+              await fetchItems()
+            } catch (err) {
+              console.error('Import failed', err)
+              toast.error(err?.response?.data?.detail || err?.message || 'Import failed')
+            } finally {
+              setImportBusy(false)
+            }
+          }} disabled={importBusy}>{importBusy ? 'Uploading…' : 'Upload'}</button>
+        </>}
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Upload instructions</div>
+            <div>
+              Upload an Excel (.xlsx) file with a header row. Required/recognized columns (case-insensitive):
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <strong>Columns:</strong> Name, SKU, Barcode, Category, Brand, Unit, Cost Price, Selling Price, Tax Rate, Reorder Level, Batch Tracking, Expiry Tracking, Active
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <strong>Per-branch (optional):</strong> use "Opening Stock - &lt;Branch Name&gt;", "Opening Batch Number - &lt;Branch Name&gt;", "Cost Price - &lt;Branch Name&gt;", and "Selling Price - &lt;Branch Name&gt;" — template includes current branches.
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <strong>Formats:</strong> dates should be ISO <code>YYYY-MM-DD</code> or Excel date cells; booleans accept <code>1/0</code>, <code>true/false</code>, or <code>yes/no</code> (case-insensitive). Categories are resolved by name.
+            </div>
+          </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
+            <button className="btn btn-ghost btn-sm" onClick={async () => {
+              try {
+                const blob = await itemsAPI.downloadTemplate()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'item_import_template.xlsx'
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+                URL.revokeObjectURL(url)
+              } catch (err) {
+                console.error('Failed to download template', err)
+                toast.error(err?.response?.data?.detail || err?.message || 'Failed to download template')
+              }
+            }}>Download template</button>
+          </div>
+          {importResult && importResult.errors && importResult.errors.length > 0 && (
+            <div style={{ maxHeight: 200, overflowY: 'auto', padding: 8, background: 'var(--bg-raised)', borderRadius: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Errors</div>
+              {importResult.errors.map((err) => (
+                <div key={err.row} style={{ fontSize: 13 }}>[Row {err.row}] {err.error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }
