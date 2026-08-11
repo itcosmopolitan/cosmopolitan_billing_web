@@ -66,6 +66,20 @@ const REPORT_CATEGORIES = [
         ],
       },
       {
+        id: 'payment-sales',
+        label: 'Payment Method Sales',
+        api: 'paymentSales',
+        defaultSort: 'sales_amount',
+        columns: [
+          { key: 'payment_method', label: 'Payment Method', sortable: true },
+          { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'sales_amount', label: 'Sales Amount', align: 'right', sortable: true, formatter: formatCurrency },
+          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
+          { key: 'net_sales', label: 'Net Sales', align: 'right', sortable: true, formatter: formatCurrency },
+        ],
+      },
+      {
         id: 'category-sales',
         label: 'Category-wise Sales',
         api: 'categorySales',

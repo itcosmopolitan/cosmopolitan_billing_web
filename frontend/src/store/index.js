@@ -212,6 +212,7 @@ export const usePOSStore = create((set, get) => ({
   // (pending) invoice. See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
   paymentReceived: false,
   paymentMethod: null,
+  paymentRef: '',
   splitPayments: [],
   heldBills: [],
   notes: '',
@@ -317,7 +318,7 @@ export const usePOSStore = create((set, get) => ({
   clearCart: () => set({
     cart: [], customer: null, discountPct: 0, discountAmt: 0, notes: '',
     // PR 1: reset payment fields so the next sale starts fresh + unchecked.
-    paymentReceived: false, paymentMethod: null,
+    paymentReceived: false, paymentMethod: null, paymentRef: '',
   }),
 
   setCustomer: (customer) => {
@@ -341,6 +342,7 @@ export const usePOSStore = create((set, get) => ({
     paymentMethod: received ? s.paymentMethod : null,
   })),
   setPaymentMethod: (m) => set({ paymentMethod: m }),
+  setPaymentRef: (r) => set({ paymentRef: r }),
   setNotes: (n) => set({ notes: n }),
 
   holdBill: () => {

@@ -501,6 +501,7 @@ export const reportsAPI = {
   dailySales:            (params) => api.get('/reports/daily-sales',        { params }),
   productSales:          (params) => api.get('/reports/product-sales',      { params }),
   categorySales:         (params) => api.get('/reports/category-sales',     { params }),
+  paymentSales:          (params) => api.get('/reports/payment-sales',      { params }),
   branchSales:           (params) => api.get('/reports/branch-sales',       { params }),
   cashierSales:          (params) => api.get('/reports/cashier-sales',      { params }),
   purchaseRegister:      (params) => api.get('/reports/purchase-register',  { params }),
