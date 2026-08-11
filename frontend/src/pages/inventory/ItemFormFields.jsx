@@ -139,8 +139,38 @@ export default function ItemFormFields({
             <div className="item-form-panel__head">Pricing</div>
             <div className="item-form-grid item-form-grid--single">
               <FormGroup label="Default Cost Price (MVR)" required><input className="form-input" type="number" value={form.cost_price} onChange={(e) => patchForm('cost_price', e.target.value)} placeholder="0.00" /></FormGroup>
-              <FormGroup label="Default Selling Price (MVR)" required><input className="form-input" type="number" value={form.selling_price} onChange={(e) => patchForm('selling_price', e.target.value)} placeholder="0.00" /></FormGroup>
+              <FormGroup label="Default Selling Price — Retail (MVR)" required><input className="form-input" type="number" value={form.selling_price} onChange={(e) => patchForm('selling_price', e.target.value)} placeholder="0.00" /></FormGroup>
               <FormGroup label="Default Reorder Level"><input className="form-input" type="number" value={form.reorder_level} onChange={(e) => patchForm('reorder_level', e.target.value)} placeholder="Min stock trigger" /></FormGroup>
+            </div>
+            <div className="item-form-panel__head" style={{ marginTop: 14 }}>Discount pattern</div>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+              Suggested % off retail for Wholesale / Staff. Cashier applies the discount on the bill and checks GP%.
+            </p>
+            <div className="item-form-grid item-form-grid--single">
+              <FormGroup label="Wholesale discount %">
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={form.wholesale_discount_pct}
+                  onChange={(e) => patchForm('wholesale_discount_pct', e.target.value)}
+                  placeholder="e.g. 10"
+                />
+              </FormGroup>
+              <FormGroup label="Staff discount %">
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={form.staff_discount_pct}
+                  onChange={(e) => patchForm('staff_discount_pct', e.target.value)}
+                  placeholder="e.g. 15"
+                />
+              </FormGroup>
             </div>
           </div>
 

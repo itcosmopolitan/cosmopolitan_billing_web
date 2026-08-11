@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { customersAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
+import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_MANAGERS_URL } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { decomposeAddress } from '@/utils/address'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
-import { CUSTOMER_TYPE_OPTIONS } from '@/utils/dropdownOptions'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { tableRowClickProps } from '@/utils/tableRowClick'
+import CustomerDetailPanel from './CustomerDetailPanel'
 
 export default function CustomersPage() {
   const can = useCan()
@@ -48,6 +50,9 @@ export default function CustomersPage() {
     branch_id: '',
     credit_limit: '10000',
     customer_type: 'retail',
+    key_account_manager: '',
+    key_account_manager_name: '',
+    credit_terms: '',
   })
 
   const pf = (k,v) => setForm(f=>({...f,[k]:v}))
@@ -68,6 +73,9 @@ export default function CustomersPage() {
       branch_id: initial.branch_id || '',
       credit_limit: initial.credit_limit ?? '10000',
       customer_type: initial.customer_type || 'retail',
+      key_account_manager: initial.key_account_manager || '',
+      key_account_manager_name: initial.key_account_manager_name || '',
+      credit_terms: initial.credit_terms || '',
       ...initial,
     })
   }
@@ -77,6 +85,9 @@ export default function CustomersPage() {
       branch_id: branches[0]?.id || '',
       credit_limit: '10000',
       customer_type: 'retail',
+      key_account_manager: '',
+      key_account_manager_name: '',
+      credit_terms: '',
     })
     setEditingCustomer(null)
     setCustomerModalMode('add')
@@ -107,6 +118,9 @@ export default function CustomersPage() {
       branch_id: customer.branch_id || '',
       credit_limit: customer.credit_limit != null ? String(customer.credit_limit) : '0',
       customer_type: customer.customer_type || customer.type || 'retail',
+      key_account_manager: customer.keyAccountManagerId || customer.key_account_manager || '',
+      key_account_manager_name: customer.keyAccountManager || customer.key_account_manager_name || '',
+      credit_terms: customer.credit_terms || customer.creditTerms || '',
     })
     setEditingCustomer(customer)
     setCustomerModalMode('edit')
@@ -164,6 +178,9 @@ export default function CustomersPage() {
           // applying credit to an invoice is manual in v1.
           creditBalance: c.credit_balance || 0,
           totalPurchases: c.total_purchases || 0,
+          keyAccountManager: c.key_account_manager_name || c.key_account_manager || '',
+          keyAccountManagerId: c.key_account_manager || '',
+          creditTerms: c.credit_terms || '',
         }))
         setCustomers(mapped)
         setCustTotal(total)
@@ -229,6 +246,8 @@ export default function CustomersPage() {
         branch_id: form.branch_id,
         credit_limit: Number(form.credit_limit) || 0,
         customer_type: form.customer_type,
+        key_account_manager: form.key_account_manager?.trim() || null,
+        credit_terms: form.credit_terms?.trim() || null,
         street1: form.street1?.trim(),
         street2: form.street2?.trim() || undefined,
         street3: form.street3?.trim() || undefined,
@@ -358,8 +377,10 @@ export default function CustomersPage() {
               <tr>
                 <SortableHeader label="Customer" sortKey="name" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
                 <SortableHeader label="Contact" sortKey="phone" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
-                <SortableHeader label="Type" sortKey="customer_type" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
+                <SortableHeader label="Pricing" sortKey="customer_type" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
+                <th>KAM</th>
                 <th>Branch</th>
+                <th>Credit Terms</th>
                 <SortableHeader label="Credit Limit" sortKey="credit_limit" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 {/* Sales Phase 1 (2026-05-23): money we owe the customer.
@@ -377,7 +398,7 @@ export default function CustomersPage() {
               {customers.map(c => {
                 const pct = creditUsedPct(c)
                 return (
-                  <tr key={c.id}>
+                  <tr key={c.id} {...tableRowClickProps(() => setShowDetail(c))}>
                     <td>
                       <div style={{ fontWeight:500, color:'var(--text-primary)', fontSize:13 }}>{c.name}</div>
                       <div style={{ fontSize:11, color:'var(--text-muted)' }}>Customer ID: {c.customer_code || c.customerCode || '—'}</div>
@@ -387,8 +408,10 @@ export default function CustomersPage() {
                       <div style={{ fontSize:12.5 }}>{c.phone}</div>
                       <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.email || '—'}</div>
                     </td>
-                    <td><Tag color={c.type==='wholesale' ? 'var(--purple)' : undefined}>{c.type === 'wholesale' ? 'Wholesale' : 'Retail'}</Tag></td>
+                    <td><Tag color={c.type==='wholesale' ? 'var(--purple)' : c.type === 'staff' ? 'var(--accent)' : undefined}>{CUSTOMER_TYPE_LABELS[c.type] || 'Retail'}</Tag></td>
+                    <td style={{ fontSize:12 }}>{c.keyAccountManager || '—'}</td>
                     <td style={{ fontSize:12 }}>{branches.find(b=>b.id===c.branchId)?.name || c.branchId}</td>
+                    <td style={{ fontSize:12 }}>{c.creditTerms || '—'}</td>
                     <td className="text-right mono">{fmt(c.creditLimit)}</td>
                     <td className="text-right mono" style={{ color: c.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(c.outstanding)}</td>
                     <td className="text-right mono" style={{ color: c.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
@@ -400,7 +423,7 @@ export default function CustomersPage() {
                     </td>
                     <td className="text-right mono">{fmt(c.totalPurchases)}</td>
                     <td><Chip status={c.active ? 'active' : 'inactive'} /></td>
-                    <td>
+                    <td data-no-row-click>
                       <div style={{ display:'flex', gap:4 }}>
                         <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(c)}>View</button>
                         {can('customers.edit') && (
@@ -497,43 +520,57 @@ export default function CustomersPage() {
               placeholder="Select branch…"
             />
           </FormGroup>
-          <FormGroup label="Type">
+          <FormGroup label="Pricing category" required>
             <AutocompleteDropdown value={form.customer_type} onChange={(v) => pf('customer_type', v)} options={CUSTOMER_TYPE_OPTIONS} isSearchFieldRequired={false} />
           </FormGroup>
         </FormRow>
-        <FormGroup label="Credit Limit (MVR)">
-          <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
+        <FormRow>
+          <FormGroup label="Key Account Manager">
+            <AutocompleteDropdown
+              value={form.key_account_manager}
+              onSelectOption={(opt) => {
+                if (!opt) {
+                  pf('key_account_manager', '')
+                  pf('key_account_manager_name', '')
+                  return
+                }
+                pf('key_account_manager', opt.id)
+                pf('key_account_manager_name', opt.label)
+              }}
+              fetchUrl={AUTOCOMPLETE_BRANCH_MANAGERS_URL}
+              prependOptions={[{ id: '', label: 'None' }]}
+              isSearchFieldRequired
+              selectedLabel={form.key_account_manager_name || undefined}
+              clearable
+              onClear={() => {
+                pf('key_account_manager', '')
+                pf('key_account_manager_name', '')
+              }}
+              placeholder="Select branch manager…"
+              searchPlaceholder="Search branch managers…"
+              emptyLabel="No branch managers found"
+            />
+          </FormGroup>
+          <FormGroup label="Credit Limit (MVR)">
+            <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
+          </FormGroup>
+        </FormRow>
+        <FormGroup label="Credit terms">
+          <input
+            className="form-input"
+            value={form.credit_terms}
+            onChange={e => pf('credit_terms', e.target.value)}
+            placeholder="e.g. Cash, Credit - 7 Days, Credit - 30 Days"
+          />
         </FormGroup>
       </Modal>
 
-      {/* Detail Modal */}
-      <Modal open={!!showDetail} onClose={()=>setShowDetail(null)} title={showDetail?.name} icon="👤" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowDetail(null)}>Close</button><button className="btn btn-primary" onClick={()=>{ openCreditLedger(showDetail); setShowDetail(null) }}>View Credit Ledger</button></>}>
-        {showDetail && (
-          <>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
-              {[
-                {label:'Phone', value:showDetail.phone},{label:'Email', value:showDetail.email||'—'},
-                {label:'GST Reg No', value:showDetail.gstIn||'—'},{label:'Type', value:showDetail.type==='wholesale'?'Wholesale':'Retail'},
-                {label:'Credit Limit', value:fmt(showDetail.creditLimit)},
-                {label:'Outstanding', value:<span style={{color:showDetail.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(showDetail.outstanding)}</span>},
-                {label:'Store Credit', value:<span style={{color:showDetail.creditBalance>0?'var(--accent)':'var(--text-muted)'}}>{showDetail.creditBalance>0?fmt(showDetail.creditBalance):'—'}</span>},
-                {label:'Total Purchases', value:fmt(showDetail.totalPurchases)},{label:'Status', value:<Chip status={showDetail.active?'active':'inactive'}/>},
-              ].map(r=>(
-                <div key={r.label} style={{padding:'10px 12px',background:'var(--bg-raised)',borderRadius:8}}>
-                  <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:3}}>{r.label}</div>
-                  <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            {showDetail.outstanding > 0 && (
-              <AlertBar type="amber" icon="⚠️">
-                Outstanding balance of <strong>{fmt(showDetail.outstanding)}</strong> — {Math.round(creditUsedPct(showDetail))}% of credit limit used.
-              </AlertBar>
-            )}
-          </>
-        )}
-      </Modal>
+      <CustomerDetailPanel
+        open={!!showDetail}
+        customer={showDetail}
+        onClose={() => setShowDetail(null)}
+        onOpenLedger={openCreditLedger}
+      />
 
       {/* Credit Ledger */}
       <Modal

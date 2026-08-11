@@ -303,6 +303,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
     # `outstanding` so the two intents don't sign-flip on each other.
     ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
+    ("customers", "key_account_manager", "VARCHAR"),
+    ("customers", "credit_terms", "VARCHAR"),
+    ("items", "wholesale_discount_pct", "FLOAT DEFAULT 0"),
+    ("items", "staff_discount_pct", "FLOAT DEFAULT 0"),
     # 2026-05-24: parity with sale_invoices.payment_mode on vendor bills.
     ("purchase_bills", "payment_mode", "VARCHAR"),
     # 2026-05-24: per-line discount on purchase bills (percent).

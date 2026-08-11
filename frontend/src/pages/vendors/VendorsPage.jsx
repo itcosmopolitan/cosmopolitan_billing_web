@@ -3,9 +3,11 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
+import { tableRowClickProps } from '@/utils/tableRowClick'
+import VendorDetailPanel from './VendorDetailPanel'
 
 export default function VendorsPage() {
   const can = useCan()
@@ -245,7 +247,7 @@ export default function VendorsPage() {
             </thead>
             <tbody>
               {vendors.map(v => (
-                <tr key={v.id}>
+                <tr key={v.id} {...tableRowClickProps(() => setShowDetail(v))}>
                   <td>
                     <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
                     <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || '—'}</div>
@@ -262,7 +264,7 @@ export default function VendorsPage() {
                   </td>
                   <td className="text-right mono">{fmt(v.totalPurchases)}</td>
                   <td><Chip status={v.active ? 'active' : 'inactive'} /></td>
-                  <td>
+                  <td data-no-row-click>
                     <div style={{display:'flex',gap:4}}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(v)}>View</button>
                       {can('vendors.edit') && (
@@ -307,42 +309,12 @@ export default function VendorsPage() {
         <FormGroup label="Payment Terms"><AutocompleteDropdown value={form.payment_terms} onChange={(v) => pf('payment_terms', v)} options={VENDOR_PAYMENT_TERMS_OPTIONS} isSearchFieldRequired={false} /></FormGroup></FormRow>
       </Modal>
 
-      <Modal open={!!showDetail} onClose={()=>setShowDetail(null)} title={showDetail?.name} icon="🏭" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowDetail(null)}>Close</button><button className="btn btn-primary" onClick={()=>{ openCreditLedger(showDetail); setShowDetail(null) }}>View Credit Ledger</button></>}>
-        {showDetail && (
-          <>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
-              {[
-                { label:'Contact Person', value: showDetail.contact_person || '—' },
-                { label:'Phone', value: showDetail.phone || '—' },
-                { label:'Email', value: showDetail.email || '—' },
-                { label:'GSTIN', value: showDetail.gstin || '—' },
-                { label:'Payment Terms', value: showDetail.payment_terms || '—' },
-                { label:'Outstanding', value: <span style={{ color: showDetail.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(showDetail.outstanding)}</span> },
-                { label:'Vendor Credit', value: <span style={{ color: showDetail.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{showDetail.creditBalance > 0 ? fmt(showDetail.creditBalance) : '—'}</span> },
-                { label:'Total Purchases', value: fmt(showDetail.totalPurchases) },
-                { label:'Status', value: <Chip status={showDetail.active ? 'active' : 'inactive'} /> },
-              ].map(r => (
-                <div key={r.label} style={{ padding:'10px 12px', background:'var(--bg-raised)', borderRadius:8 }}>
-                  <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:3 }}>{r.label}</div>
-                  <div style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)' }}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            {showDetail.address && (
-              <div style={{ padding:'10px 12px', background:'var(--bg-raised)', borderRadius:8, marginBottom:16 }}>
-                <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:3 }}>Address</div>
-                <div style={{ fontSize:13, fontWeight:500, color:'var(--text-primary)' }}>{showDetail.address}</div>
-              </div>
-            )}
-            {showDetail.outstanding > 0 && (
-              <AlertBar type="amber" icon="⚠️">
-                Outstanding payable of <strong>{fmt(showDetail.outstanding)}</strong>.
-              </AlertBar>
-            )}
-          </>
-        )}
-      </Modal>
+      <VendorDetailPanel
+        open={!!showDetail}
+        vendor={showDetail}
+        onClose={() => setShowDetail(null)}
+        onOpenLedger={openCreditLedger}
+      />
 
       <Modal
         open={!!ledgerVendor}

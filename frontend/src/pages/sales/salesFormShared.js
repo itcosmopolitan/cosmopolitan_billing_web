@@ -1,5 +1,12 @@
 /** Shared helpers for sales document form pages. */
 
+export {
+  suggestedDiscountForCustomer,
+  customerPricingType,
+  discountPatternFromItem,
+  applySuggestedDiscountsToSaleLines,
+} from '@/utils/pricingDiscounts'
+
 export function lineDiscountToPercent(line) {
   const qty = Number(line.qty || 0)
   const price = Number(line.price || 0)
@@ -21,6 +28,8 @@ export const emptySaleLine = () => ({
   taxRate: 0,
   lineDiscount: 0,
   lineDiscountType: '%',
+  wholesale_discount_pct: 0,
+  staff_discount_pct: 0,
   batchTracking: false,
   expiryTracking: false,
   batchAllocation: [],
@@ -38,6 +47,8 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
     lineDiscountType: '%',
+    wholesale_discount_pct: Number(it.wholesale_discount_pct ?? it.wholesaleDiscountPct ?? 0) || 0,
+    staff_discount_pct: Number(it.staff_discount_pct ?? it.staffDiscountPct ?? 0) || 0,
     batchAllocation: it.batchAllocation || [],
     batchAllocationCustom: Boolean(it.batchAllocation?.length),
     ...(withOrderLineId && it.id ? { orderLineId: it.id } : {}),
@@ -47,6 +58,7 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
 export const emptyQuoteForm = (branchId) => ({
   customerName: '',
   customerId: '',
+  customerType: 'retail',
   branchId,
   number: '',
   items: [emptySaleLine()],
@@ -64,6 +76,7 @@ export const emptyQuoteForm = (branchId) => ({
 export const emptyOrderForm = (branchId) => ({
   customerName: '',
   customerId: '',
+  customerType: 'retail',
   branchId,
   number: '',
   items: [emptySaleLine()],
@@ -76,6 +89,7 @@ export const emptyOrderForm = (branchId) => ({
 export const emptyInvoiceForm = (branchId) => ({
   customerName: '',
   customerId: '',
+  customerType: 'retail',
   branchId,
   number: '',
   items: [emptySaleLine()],

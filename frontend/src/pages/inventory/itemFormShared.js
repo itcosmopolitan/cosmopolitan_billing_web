@@ -1,6 +1,7 @@
 export const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', country_of_origin: '', categoryId: '', categoryName: '', brand: '',
-  unit: '', cost_price: '', selling_price: '', tax_rate: '8',
+  unit: '', cost_price: '', selling_price: '', wholesale_discount_pct: '', staff_discount_pct: '',
+  tax_rate: '8',
   hsn_code: '', reorder_level: '10', active: true,
   is_packaging: false, packaging_quantity: '',
   batch_tracking: false, expiry_tracking: false, emoji: '📦',
@@ -53,6 +54,8 @@ export function formFromItem(item) {
     unit: item.unit || '',
     cost_price: item.default_cost_price ?? item.cost_price ?? '',
     selling_price: item.default_selling_price ?? item.selling_price ?? '',
+    wholesale_discount_pct: item.wholesale_discount_pct ?? '',
+    staff_discount_pct: item.staff_discount_pct ?? '',
     tax_rate: item.tax_rate ?? '8',
     hsn_code: item.hsn_code || '',
     reorder_level: item.default_reorder_level ?? item.reorder_level ?? '10',
@@ -74,6 +77,14 @@ export function validateItemForm(form, branchConfigs) {
     return { ok: false, error: 'Quantity per pack/set is required when packaging is enabled' }
   }
   if (!form.selling_price) return { ok: false, error: 'Selling price is required' }
+  const wholesaleDisc = Number(form.wholesale_discount_pct || 0)
+  const staffDisc = Number(form.staff_discount_pct || 0)
+  if (wholesaleDisc < 0 || wholesaleDisc > 100) {
+    return { ok: false, error: 'Wholesale discount must be between 0 and 100%' }
+  }
+  if (staffDisc < 0 || staffDisc > 100) {
+    return { ok: false, error: 'Staff discount must be between 0 and 100%' }
+  }
 
   const listed = branchConfigs.filter((bc) => bc.branch_id)
   if (listed.length === 0) {
@@ -119,6 +130,8 @@ export function buildCatalogPayload(form, branchFilter) {
     unit: form.unit,
     cost_price: Number(form.cost_price),
     selling_price: Number(form.selling_price),
+    wholesale_discount_pct: Number(form.wholesale_discount_pct || 0),
+    staff_discount_pct: Number(form.staff_discount_pct || 0),
     tax_rate: Number(form.tax_rate),
     hsn_code: form.hsn_code,
     reorder_level: Number(form.reorder_level),

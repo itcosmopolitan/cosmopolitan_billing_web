@@ -21,8 +21,15 @@ export const PAYMENT_MODE_LABEL_OPTIONS = [
 
 export const CUSTOMER_TYPE_OPTIONS = [
   { id: 'retail', label: 'Retail' },
-  { id: 'wholesale', label: 'Wholesale / B2B' },
+  { id: 'wholesale', label: 'Wholesale' },
+  { id: 'staff', label: 'Staff' },
 ]
+
+export const CUSTOMER_TYPE_LABELS = {
+  retail: 'Retail',
+  wholesale: 'Wholesale',
+  staff: 'Staff',
+}
 
 export const VENDOR_PAYMENT_TERMS_OPTIONS = [
   'Advance', 'COD', '7 days', '15 days', '30 days', '45 days', '60 days', 'Weekly',

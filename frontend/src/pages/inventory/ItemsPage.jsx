@@ -13,8 +13,10 @@ import {
   TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 import BatchesModal from './BatchesModal'
 import RowActionsMenu from './RowActionsMenu'
+import ItemDetailPanel from './ItemDetailPanel'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 
 const BRANCH_TABS = [
@@ -550,7 +552,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                   // shape of stockStatus() stays self-documenting.
                   const { label } = stockStatus(branchStock, p.reorder_level)
                   return (
-                    <tr key={p.id}>
+                    <tr key={p.id} {...tableRowClickProps(() => setShowDetail(p))}>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                           <span style={{ fontSize: 20 }}>{p.emoji}</span>
@@ -673,6 +675,10 @@ export default function ItemsPage({ mode = 'branch' }) {
                             ariaLabel={`Actions for ${p.name}`}
                             actions={isMaster ? [
                               {
+                                label: 'View details',
+                                onClick: () => setShowDetail(p),
+                              },
+                              {
                                 label: 'Activity',
                                 hidden: !canActivity,
                                 disabled: itemActionBusy === p.id,
@@ -695,6 +701,10 @@ export default function ItemsPage({ mode = 'branch' }) {
                                 onClick: () => setConfirmAction({ type: 'delete', item: p }),
                               },
                             ] : [
+                              {
+                                label: 'View details',
+                                onClick: () => setShowDetail(p),
+                              },
                               {
                                 label: 'Request adjustment',
                                 hidden: !can('adjustments.create'),
@@ -782,81 +792,16 @@ export default function ItemsPage({ mode = 'branch' }) {
         </div>
       </Modal>
 
-      <Modal
+      <ItemDetailPanel
         open={!!showDetail}
+        item={showDetail}
+        mode={isMaster ? 'master' : 'branch'}
         onClose={() => !itemActionBusy && setShowDetail(null)}
-        title={showDetail ? `Item — ${showDetail.name}` : 'Item'}
-        icon="📦"
-        size="md"
-        footer={showDetail?.status === 'pending' && (can('item_master.approve') || can('item_master.delete') || can('item_master.create')) ? (
-          <>
-            {can('item_master.create') && (
-              <button className="btn btn-secondary" style={{ marginRight: can('item_master.delete') ? 0 : 'auto' }} onClick={() => {
-                const id = showDetail.id
-                setShowDetail(null)
-                navigate(`/item-master/${id}/edit`)
-              }} disabled={!!itemActionBusy}>
-                Edit
-              </button>
-            )}
-            {can('item_master.delete') && (
-              <button className="btn btn-secondary" style={{ marginRight: 'auto', color: 'var(--red)', marginLeft: can('item_master.create') ? 8 : 0 }} onClick={() => setConfirmAction({ type: 'delete', item: showDetail })} disabled={!!itemActionBusy}>
-                Delete
-              </button>
-            )}
-            {can('item_master.approve') && (
-              <>
-                <button className="btn btn-secondary" onClick={openRejectFromDetail} disabled={!!itemActionBusy}>
-                  {itemActionBusy && actionKind === 'reject' ? 'Rejecting…' : 'Reject'}
-                </button>
-                <button className="btn btn-primary" onClick={approveFromDetail} disabled={!!itemActionBusy}>
-                  {itemActionBusy && actionKind === 'approve' ? 'Approving…' : 'Approve'}
-                </button>
-              </>
-            )}
-          </>
-        ) : (
-          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-        )}
-      >
-        {showDetail && (
-          <>
-            <div style={{ marginBottom: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Item</span>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)', marginTop: 6 }}>{showDetail.name}</div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-              {[
-                { label: 'SKU', value: showDetail.sku || '—' },
-                { label: 'Category', value: showDetail.categoryName || '—' },
-                { label: 'Status', value: (() => { const s = (showDetail.status || showDetail.approval_status || 'approved'); return <Chip status={s === 'approved' ? 'active' : s === 'pending' ? 'pending' : s === 'rejected' ? 'draft' : 'draft'} label={s.charAt(0).toUpperCase() + s.slice(1)} /> })() },
-                { label: 'Requested by', value: showDetail.created_by || '—' },
-              ].map((r) => (
-                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Price</div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(showDetail.default_selling_price ?? showDetail.selling_price)}</div>
-              </div>
-              <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Cost</div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(showDetail.default_cost_price ?? showDetail.cost_price)}</div>
-              </div>
-            </div>
-            {showDetail.rejection_reason && (
-              <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8, color: 'var(--red)' }}>
-                <div style={{ fontWeight: 700 }}>Rejection reason</div>
-                <div style={{ marginTop: 6 }}>{showDetail.rejection_reason}</div>
-              </div>
-            )}
-          </>
-        )}
-      </Modal>
+        actionBusy={!!itemActionBusy}
+        onApprove={approveFromDetail}
+        onReject={openRejectFromDetail}
+        onDelete={(item) => setConfirmAction({ type: 'delete', item })}
+      />
 
       {!isMaster && (
         <>

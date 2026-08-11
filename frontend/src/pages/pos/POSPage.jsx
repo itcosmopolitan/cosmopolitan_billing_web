@@ -479,6 +479,8 @@ export default function POSPage() {
           costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
           availableStock: stock, batchTracking: Boolean(inMemory.batch_tracking),
           expiryTracking: Boolean(inMemory.expiry_tracking),
+          wholesale_discount_pct: inMemory.wholesale_discount_pct || 0,
+          staff_discount_pct: inMemory.staff_discount_pct || 0,
         })
         toast.success(inMemory.name, { duration: 800 })
         setSearch('')
@@ -510,6 +512,8 @@ export default function POSPage() {
             costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
             availableStock: stock, batchTracking: Boolean(hit.batch_tracking),
             expiryTracking: Boolean(hit.expiry_tracking),
+            wholesale_discount_pct: hit.wholesale_discount_pct || 0,
+            staff_discount_pct: hit.staff_discount_pct || 0,
           })
           toast.success(hit.name, { duration: 800 })
           setSearch('')
@@ -780,6 +784,8 @@ export default function POSPage() {
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
                       availableStock: stock,
+                      wholesale_discount_pct: p.wholesale_discount_pct || 0,
+                      staff_discount_pct: p.staff_discount_pct || 0,
                       // Carry batch-tracking flags forward so CartRow knows
                       // whether to render the source batch picker.
                       batchTracking: Boolean(p.batch_tracking),

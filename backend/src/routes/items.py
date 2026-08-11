@@ -569,6 +569,8 @@ class ItemCreate(BaseModel):
     unit: str = "Pcs"
     cost_price: float
     selling_price: float
+    wholesale_discount_pct: float = 0
+    staff_discount_pct: float = 0
     tax_rate: float = 18
     hsn_code: Optional[str] = None
     reorder_level: int = 10
@@ -652,6 +654,8 @@ class ItemPatch(BaseModel):
     unit: Optional[str] = None
     cost_price: Optional[float] = None
     selling_price: Optional[float] = None
+    wholesale_discount_pct: Optional[float] = None
+    staff_discount_pct: Optional[float] = None
     tax_rate: Optional[float] = None
     hsn_code: Optional[str] = None
     reorder_level: Optional[int] = None
@@ -890,6 +894,8 @@ async def list_items(
             "cost_price": item.cost_price if master_mode else eff_cost,
             "default_selling_price": item.selling_price,
             "selling_price": eff_price,
+            "wholesale_discount_pct": float(getattr(item, "wholesale_discount_pct", 0) or 0),
+            "staff_discount_pct": float(getattr(item, "staff_discount_pct", 0) or 0),
             "tax_rate": item.tax_rate,
             "hsn_code": item.hsn_code,
             "reorder_level": eff_reorder,
@@ -957,6 +963,8 @@ async def create_item(
         unit=data.unit,
         cost_price=data.cost_price,
         selling_price=data.selling_price,
+        wholesale_discount_pct=float(data.wholesale_discount_pct or 0),
+        staff_discount_pct=float(data.staff_discount_pct or 0),
         tax_rate=data.tax_rate,
         hsn_code=data.hsn_code,
         reorder_level=data.reorder_level,
@@ -1119,6 +1127,8 @@ async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
         "cost_price": item.cost_price,
         "default_selling_price": item.selling_price,
         "selling_price": item.selling_price,
+        "wholesale_discount_pct": float(getattr(item, "wholesale_discount_pct", 0) or 0),
+        "staff_discount_pct": float(getattr(item, "staff_discount_pct", 0) or 0),
         "tax_rate": item.tax_rate,
         "hsn_code": item.hsn_code,
         "default_reorder_level": item.reorder_level,
@@ -1283,6 +1293,8 @@ async def update_item(
         "country_of_origin": item.country_of_origin,
         "cost_price": item.cost_price,
         "selling_price": item.selling_price,
+        "wholesale_discount_pct": getattr(item, "wholesale_discount_pct", 0) or 0,
+        "staff_discount_pct": getattr(item, "staff_discount_pct", 0) or 0,
         "tax_rate": item.tax_rate,
         "reorder_level": item.reorder_level,
         "batch_tracking": item.batch_tracking,
@@ -1297,6 +1309,8 @@ async def update_item(
     item.unit = data.unit
     item.cost_price = data.cost_price
     item.selling_price = data.selling_price
+    item.wholesale_discount_pct = float(data.wholesale_discount_pct or 0)
+    item.staff_discount_pct = float(data.staff_discount_pct or 0)
     item.tax_rate = data.tax_rate
     item.hsn_code = data.hsn_code
     item.reorder_level = data.reorder_level
@@ -1604,6 +1618,8 @@ async def patch_item(
             "country_of_origin",
             "cost_price",
             "selling_price",
+            "wholesale_discount_pct",
+            "staff_discount_pct",
             "is_packaging",
             "packaging_quantity",
             "tax_rate",
