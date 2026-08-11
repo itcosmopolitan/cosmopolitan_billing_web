@@ -15,6 +15,10 @@ export default function VendorsPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importFile, setImportFile] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importResult, setImportResult] = useState(null)
   const [vendors, setVendors] = useState([])
   const [vendorTotal, setVendorTotal] = useState(0)
   const [venSkip, setVenSkip] = useState(0)
@@ -194,7 +198,10 @@ export default function VendorsPage() {
     <div className="page-container">
       <SectionHeader title="Vendor Master" subtitle="Manage suppliers, payment terms, and outstanding payables">
         {can('vendors.create') && (
-          <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
+          <>
+            <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setImportOpen(true)} style={{ marginLeft: 8 }}>Import</button>
+          </>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
           onExport: () => {
@@ -315,6 +322,73 @@ export default function VendorsPage() {
         onClose={() => setShowDetail(null)}
         onOpenLedger={openCreditLedger}
       />
+
+      <Modal
+        open={importOpen}
+        onClose={() => !importBusy && setImportOpen(false)}
+        title="Import Vendors"
+        icon="⬆️"
+        size="lg"
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setImportOpen(false)} disabled={importBusy}>Close</button>
+          <button className="btn btn-primary" onClick={async () => {
+            if (!importFile) { toast.error('Select a file to upload'); return }
+            setImportBusy(true)
+            try {
+              const res = await vendorsAPI.import(importFile)
+              setImportResult(res)
+              toast.success(`${res.created || 0} vendors imported`)
+              setListVersion((v) => v + 1)
+              setImportFile(null)
+            } catch (err) {
+              console.error('Vendor import failed', err)
+              toast.error(err?.response?.data?.detail || err?.message || 'Vendor import failed')
+            } finally {
+              setImportBusy(false)
+            }
+          }} disabled={importBusy}>{importBusy ? 'Uploading…' : 'Upload'}</button>
+        </>}
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Upload instructions</div>
+            <div>Upload an Excel (.xlsx) file with a header row. Recognized columns are case-insensitive:</div>
+            <div style={{ marginTop: 6 }}>
+              <strong>Columns:</strong> Vendor Name, Contact Person, Phone, Email, Address, GST Reg No, Payment Terms, Active
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <strong>Formats:</strong> booleans accept <code>1/0</code>, <code>true/false</code>, or <code>yes/no</code> (case-insensitive).
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
+            <button className="btn btn-ghost btn-sm" onClick={async () => {
+              try {
+                const blob = await vendorsAPI.downloadTemplate()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'vendor_import_template.xlsx'
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+                URL.revokeObjectURL(url)
+              } catch (err) {
+                console.error('Failed to download vendor template', err)
+                toast.error(err?.response?.data?.detail || err?.message || 'Failed to download vendor template')
+              }
+            }}>Download template</button>
+          </div>
+          {importResult && importResult.errors && importResult.errors.length > 0 && (
+            <div style={{ maxHeight: 200, overflowY: 'auto', padding: 8, background: 'var(--bg-raised)', borderRadius: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Errors</div>
+              {importResult.errors.map((err) => (
+                <div key={err.row} style={{ fontSize: 13 }}>[Row {err.row}] {err.error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         open={!!ledgerVendor}

@@ -1,17 +1,20 @@
 import uuid
+from io import BytesIO
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import openpyxl
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Vendor, VendorCreditEntry
+from src.models import User, Vendor, VendorCreditEntry
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_vendor
 from src.permissions import VENDOR_PICKER_READ
-from src.security import require_perm
+from src.security import current_user, require_perm
 
 router = APIRouter()
 
@@ -96,6 +99,121 @@ async def list_vendors(
         lim,
         summary={"outstandingTotal": outstanding_total, "withBalanceCount": with_balance},
     )
+
+@router.post("/import", dependencies=[Depends(require_perm("vendors.create"))])
+async def import_vendors(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Bulk import vendors from an Excel file."""
+    try:
+        content = await file.read()
+    except Exception as e:
+        raise HTTPException(400, detail=str(e))
+
+    try:
+        wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+        ws = wb.active
+    except Exception as e:
+        raise HTTPException(400, detail=f"Failed to read Excel file: {e}")
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows or len(rows) < 2:
+        raise HTTPException(400, detail="Spreadsheet must have a header row and at least one data row")
+
+    headers = [str(h).strip().lower() if h is not None else None for h in rows[0]]
+    map_keys = {
+        'name': 'name',
+        'vendor name': 'name',
+        'company': 'name',
+        'company / vendor name': 'name',
+        'contact person': 'contact_person',
+        'contact': 'contact_person',
+        'phone': 'phone',
+        'email': 'email',
+        'address': 'address',
+        'gst reg no': 'gstin',
+        'gst number': 'gstin',
+        'gstin': 'gstin',
+        'payment terms': 'payment_terms',
+        'terms': 'payment_terms',
+        'active': 'active',
+    }
+
+    created = 0
+    errors = []
+
+    def _as_text(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip()
+        return str(value).strip()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        try:
+            data = {}
+            for col_idx, cell in enumerate(row):
+                key = headers[col_idx] if col_idx < len(headers) else None
+                if not key:
+                    continue
+                mapped = map_keys.get(key)
+                if not mapped:
+                    continue
+                val = cell
+                if mapped == 'active' and val is not None:
+                    sval = str(val).strip().lower()
+                    val = sval in {'1', 'true', 'yes', 'y'}
+                data[mapped] = val
+
+            raw_name = _as_text(data.get('name'))
+            if not raw_name:
+                raise ValueError('Vendor name is required')
+
+            vendor = Vendor(
+                id=str(uuid.uuid4()),
+                name=raw_name,
+                contact_person=_as_text(data.get('contact_person')) or None,
+                phone=_as_text(data.get('phone')) or None,
+                email=_as_text(data.get('email')) or None,
+                address=_as_text(data.get('address')) or None,
+                gstin=_as_text(data.get('gstin')) or None,
+                payment_terms=(_as_text(data.get('payment_terms')) or '30 days') or '30 days',
+                active=bool(data.get('active', True)),
+                created_at=None,
+            )
+            db.add(vendor)
+            await db.flush()
+            created += 1
+        except Exception as e:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            errors.append({'row': idx, 'error': str(e)})
+
+    await db.commit()
+    return {'created': created, 'errors': errors}
+
+
+@router.get("/import/template", dependencies=[Depends(require_perm("vendors.create"))])
+async def download_vendor_import_template():
+    """Generate an Excel template for bulk vendor imports."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Vendors"
+    ws.append(["Vendor Name", "Contact Person", "Phone", "Email", "Address", "GST Reg No", "Payment Terms", "Active"])
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return StreamingResponse(
+        bio,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="vendor_import_template.xlsx"'},
+    )
+
 
 @router.get("/{vendor_id}", dependencies=[Depends(require_perm(*VENDOR_PICKER_READ))])
 async def get_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):

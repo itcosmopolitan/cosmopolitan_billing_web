@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import String, and_, asc, cast, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -52,6 +52,10 @@ from src.pagination import (
     pagination_from_page,
     resolve_sort,
 )
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+import openpyxl
+import re
 from src.routes._atomic import (
     add_batch_atomic,
     adjust_stock_atomic,
@@ -1099,6 +1103,307 @@ async def create_item(
         "status": status,
         "active": bool(item.active),
     }
+
+
+@router.post("/import", dependencies=[Depends(require_perm("item_master.create"))])
+async def import_items(
+    file: UploadFile = File(...),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Bulk import items from an Excel file. Returns a report with successes and row-level errors."""
+    try:
+        content = await file.read()
+    except Exception as e:
+        raise HTTPException(400, detail=str(e))
+
+    try:
+        from io import BytesIO
+        import openpyxl
+
+        wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+        ws = wb.active
+    except Exception as e:
+        raise HTTPException(400, detail=f"Failed to read Excel file: {e}")
+
+    # Read header row and map column names to indices
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows or len(rows) < 2:
+        raise HTTPException(400, detail="Spreadsheet must have a header row and at least one data row")
+    headers = [str(h).strip().lower() if h is not None else None for h in rows[0]]
+
+    # Simple mapping from common header names to model fields
+    map_keys = {
+        'name': 'name',
+        'item name': 'name',
+        'sku': 'sku',
+        'barcode': 'barcode',
+        'category': 'category_id',
+        'brand': 'brand',
+        'unit': 'unit',
+        'cost': 'cost_price',
+        'cost price': 'cost_price',
+        'selling price': 'selling_price',
+        'price': 'selling_price',
+        'tax': 'tax_rate',
+        'tax rate': 'tax_rate',
+        'reorder': 'reorder_level',
+        'reorder level': 'reorder_level',
+        'batch tracking': 'batch_tracking',
+        'expiry tracking': 'expiry_tracking',
+        'active': 'active',
+    }
+
+    created = 0
+    errors = []
+    # Process rows starting from second row
+    for idx, row in enumerate(rows[1:], start=2):
+        try:
+            data = {}
+            branch_cells = {}
+            for col_idx, cell in enumerate(row):
+                key = headers[col_idx] if col_idx < len(headers) else None
+                if not key:
+                    continue
+                mapped = map_keys.get(key)
+                if not mapped:
+                    # detect per-branch columns like "Opening Stock - Branch Name",
+                    # "Opening Batch Number - Branch Name", "Cost Price - Branch Name",
+                    # "Selling Price - Branch Name"
+                    m = re.match(r'^(opening stock|opening batch number|cost price|selling price)\s*-\s*(.+)$', key)
+                    if m:
+                        col = m.group(1).strip()
+                        branch_label = m.group(2).strip()
+                        bmap = branch_cells.setdefault(branch_label, {})
+                        bmap[col] = cell
+                        continue
+                    continue
+                val = cell
+                if mapped in {'cost_price', 'selling_price', 'tax_rate'} and val is not None:
+                    try:
+                        val = float(val)
+                    except Exception:
+                        raise ValueError(f"Invalid numeric value for {key}: {val}")
+                if mapped in {'reorder_level'} and val is not None:
+                    try:
+                        val = int(val)
+                    except Exception:
+                        raise ValueError(f"Invalid integer for {key}: {val}")
+                if mapped in {'batch_tracking', 'expiry_tracking', 'active'} and val is not None:
+                    sval = str(val).strip().lower()
+                    val = sval in {'1', 'true', 'yes', 'y'}
+                data[mapped] = val
+
+            if 'name' not in data or not data['name']:
+                raise ValueError('Name is required')
+
+            # Resolve category value -> id if provided. Try id first, then name.
+            category_id = None
+            if data.get('category_id'):
+                cat_val = str(data.get('category_id')).strip()
+                if cat_val:
+                    # Try matching by id first
+                    res = await db.execute(select(Category).where(Category.id == cat_val))
+                    cat = res.scalar_one_or_none()
+                    if not cat:
+                        # Fallback to case-insensitive name match
+                        res = await db.execute(select(Category).where(func.lower(Category.name) == cat_val.lower()))
+                        cat = res.scalar_one_or_none()
+                    if cat:
+                        category_id = cat.id
+                    else:
+                        # Create the category automatically and use it
+                        new_cat = Category(id=f"cat-{uuid.uuid4().hex[:8]}", name=cat_val, icon="📦")
+                        db.add(new_cat)
+                        await db.flush()
+                        category_id = new_cat.id
+            # Determine direct approval
+            direct = await can_direct_commit(user, db, 'item_master.approve')
+            initial_status = ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
+
+            item = Item(
+                id=str(uuid.uuid4()),
+                name=str(data.get('name')).strip(),
+                sku=(data.get('sku') or f"SKU-{uuid.uuid4().hex[:6].upper()}"),
+                barcode=data.get('barcode'),
+                country_of_origin=None,
+                category_id=category_id,
+                brand=data.get('brand'),
+                unit=data.get('unit') or 'Pcs',
+                cost_price=float(data.get('cost_price') or 0),
+                selling_price=float(data.get('selling_price') or 0),
+                wholesale_discount_pct=0,
+                staff_discount_pct=0,
+                tax_rate=float(data.get('tax_rate') or 0),
+                hsn_code=None,
+                reorder_level=int(data.get('reorder_level') or 0),
+                is_packaging=False,
+                packaging_quantity=None,
+                emoji='📦',
+                batch_tracking=bool(data.get('batch_tracking') or False),
+                expiry_tracking=bool(data.get('expiry_tracking') or False),
+                active=bool(direct),
+                approval_status=initial_status,
+                status=initial_status,
+                created_by=user.name,
+            )
+            db.add(item)
+            await db.flush()
+            # Process per-branch columns (if any)
+            if branch_cells:
+                for branch_label, cols in branch_cells.items():
+                    try:
+                        # find branch by name (case-insensitive) or id
+                        branch_res = await db.execute(select(Branch).where(func.lower(Branch.name) == branch_label.lower()))
+                        branch = branch_res.scalar_one_or_none()
+                        if branch is None:
+                            # also try matching by id
+                            branch_res = await db.execute(select(Branch).where(Branch.id == branch_label))
+                            branch = branch_res.scalar_one_or_none()
+                        if branch is None:
+                            errors.append({'row': idx, 'error': f'Unknown branch: {branch_label}'})
+                            continue
+                        # ensure user may access this branch
+                        try:
+                            await enforce_branch_access(branch.id, user=user, db=db)
+                        except Exception as e:
+                            errors.append({'row': idx, 'error': f'No access to branch {branch_label}: {e}'})
+                            continue
+
+                        # upsert branch config with provided cost/selling price if present
+                        branch_cost = None
+                        branch_selling = None
+                        if 'cost price' in cols and cols.get('cost price') is not None and cols.get('cost price') != '':
+                            try:
+                                branch_cost = float(cols.get('cost price'))
+                            except Exception:
+                                errors.append({'row': idx, 'error': f'Invalid cost price for branch {branch_label}: {cols.get("cost price")}'})
+                                branch_cost = None
+                        if 'selling price' in cols and cols.get('selling price') is not None and cols.get('selling price') != '':
+                            try:
+                                branch_selling = float(cols.get('selling price'))
+                            except Exception:
+                                errors.append({'row': idx, 'error': f'Invalid selling price for branch {branch_label}: {cols.get("selling price")}'})
+                                branch_selling = None
+
+                        await _upsert_branch_config(
+                            db,
+                            item_id=item.id,
+                            branch_id=branch.id,
+                            is_available=True,
+                            cost_price=branch_cost,
+                            selling_price=branch_selling,
+                        )
+
+                        # Seed opening stock if provided
+                        if 'opening stock' in cols and cols.get('opening stock') not in (None, ''):
+                            try:
+                                qty = int(cols.get('opening stock'))
+                            except Exception:
+                                errors.append({'row': idx, 'error': f'Invalid opening stock for branch {branch_label}: {cols.get("opening stock")}'})
+                                qty = 0
+                            if qty > 0:
+                                batch_number = cols.get('opening batch number') or None
+                                # prefer branch-specific cost if provided otherwise use item's cost_price
+                                cost_for_seed = branch_cost if branch_cost is not None else float(data.get('cost_price') or 0)
+                                await _seed_opening_stock(
+                                    db,
+                                    item=item,
+                                    branch_id=branch.id,
+                                    qty=qty,
+                                    cost_price=cost_for_seed,
+                                    batch_number=batch_number,
+                                )
+                    except Exception as e:
+                        errors.append({'row': idx, 'error': f'Failed processing branch {branch_label}: {e}'})
+            # Do not seed opening stock from imports — operator can set per-branch later
+            if direct:
+                item.active = True
+                item.status = ItemApprovalStatus.approved
+                item.approval_status = ItemApprovalStatus.approved
+                item.approved_by = user.name
+                item.approved_at = datetime.utcnow()
+
+            _log_item_history(
+                db,
+                user=user,
+                item=item,
+                event_type='item_created',
+                action='Item Created (import)',
+                detail=f'Imported item {item.name} ({item.sku})',
+                metadata={'sku': item.sku, 'name': item.name},
+            )
+            created += 1
+        except Exception as e:
+            # If a DB error (e.g. IntegrityError) occurred during flush/insert,
+            # the session transaction will be in rollback state. Roll back to
+            # clear the session so we can continue processing remaining rows.
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
+            # Provide a concise, user-friendly message for duplicate-SKU errors
+            from sqlalchemy.exc import IntegrityError as SAIntegrityError
+            orig = getattr(e, 'orig', None)
+            msg = str(e)
+            if isinstance(e, SAIntegrityError) or (orig is not None and 'duplicate key value violates unique constraint' in str(orig)):
+                # Check for items_sku_key or mention of (sku)= in the DB error
+                if (('items_sku_key' in msg) or (orig is not None and 'items_sku_key' in str(orig))) or ('Key (sku)' in msg) or (orig is not None and 'Key (sku)' in str(orig)):
+                    sku_val = data.get('sku') if isinstance(data, dict) else None
+                    sku_display = sku_val or '<unknown>'
+                    errors.append({'row': idx, 'error': f"SKU already exists - {sku_display}"})
+                    continue
+            # Fallback: generic error string
+            errors.append({'row': idx, 'error': msg})
+
+    await db.commit()
+    return {'created': created, 'errors': errors}
+
+
+@router.get("/import/template", dependencies=[Depends(require_perm("item_master.create"))])
+async def download_import_template(db: AsyncSession = Depends(get_db)):
+    """Generate an Excel import template that includes current branches as per-branch columns."""
+    res = await db.execute(select(Branch).order_by(asc(Branch.name)))
+    branches = res.scalars().all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Items"
+
+    headers = [
+        "Name",
+        "SKU",
+        "Barcode",
+        "Category",
+        "Brand",
+        "Unit",
+        "Cost Price",
+        "Selling Price",
+        "Tax Rate",
+        "Reorder Level",
+        "Batch Tracking",
+        "Expiry Tracking",
+        "Active",
+    ]
+
+    for b in branches:
+        # Use branch name in header to be user-friendly
+        label = b.name or b.id
+        headers.append(f"Opening Stock - {label}")
+        headers.append(f"Opening Batch Number - {label}")
+        headers.append(f"Cost Price - {label}")
+        headers.append(f"Selling Price - {label}")
+
+    ws.append(headers)
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return StreamingResponse(bio, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={
+        'Content-Disposition': 'attachment; filename="item_import_template.xlsx"'
+    })
 
 
 
