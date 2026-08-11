@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.date_utils import MAX_REPORT_DATE_RANGE_DAYS, parse_date_range
 from src.models import (
+    AdjustmentRequest,
     Branch,
     Category,
     CashEntry,
@@ -17,6 +18,7 @@ from src.models import (
     DailySalesSummary,
     InventorySnapshot,
     Item,
+    ItemBatch,
     ItemStock,
     PaymentSummary,
     ProductSalesSummary,
@@ -24,6 +26,7 @@ from src.models import (
     PurchaseLineItem,
     SaleInvoice,
     SaleLineItem,
+    StockAdjustment,
     StockMovement,
     StockTransfer,
     TransferLineItem,
@@ -1363,7 +1366,7 @@ async def current_stock(
         "product_code": Item.sku,
         "product_name": Item.name,
         "category": Category.name,
-        "branch": ItemStock.branch_id,
+        "branch": Branch.name,
         "available_stock": ItemStock.quantity,
         "reserved_stock": Item.reorder_level,
         "stock_value": ItemStock.quantity * func.coalesce(Item.cost_price, 0),
@@ -1377,12 +1380,13 @@ async def current_stock(
             Item.sku.label("product_code"),
             Item.name.label("product_name"),
             Category.name.label("category"),
-            ItemStock.branch_id.label("branch"),
+            Branch.name.label("branch"),
             ItemStock.quantity.label("available_stock"),
             Item.reorder_level.label("reserved_stock"),
             (ItemStock.quantity * func.coalesce(Item.cost_price, 0)).label("stock_value"),
         )
         .join(Item, Item.id == ItemStock.item_id)
+        .join(Branch, Branch.id == ItemStock.branch_id)
         .join(Category, Category.id == Item.category_id, isouter=True)
         .where(and_(*conds) if conds else True)
     )
@@ -1413,7 +1417,7 @@ async def low_stock(
         "product": Item.name,
         "available_quantity": ItemStock.quantity,
         "reorder_level": Item.reorder_level,
-        "branch": ItemStock.branch_id,
+        "branch": Branch.name,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product", "asc")
@@ -1424,9 +1428,10 @@ async def low_stock(
             Item.name.label("product"),
             ItemStock.quantity.label("available_quantity"),
             Item.reorder_level.label("reorder_level"),
-            ItemStock.branch_id.label("branch"),
+            Branch.name.label("branch"),
         )
         .join(Item, Item.id == ItemStock.item_id)
+        .join(Branch, Branch.id == ItemStock.branch_id)
         .where(and_(*conds))
     )
     total_q = select(func.count()).select_from(base.subquery())
@@ -1455,7 +1460,7 @@ async def out_of_stock(
     sort_map = {
         "product": Item.name,
         "category": Category.name,
-        "branch": ItemStock.branch_id,
+        "branch": Branch.name,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product", "asc")
@@ -1465,9 +1470,10 @@ async def out_of_stock(
         select(
             Item.name.label("product"),
             Category.name.label("category"),
-            ItemStock.branch_id.label("branch"),
+            Branch.name.label("branch"),
         )
         .join(Item, Item.id == ItemStock.item_id)
+        .join(Branch, Branch.id == ItemStock.branch_id)
         .join(Category, Category.id == Item.category_id, isouter=True)
         .where(and_(*conds))
     )
@@ -1532,6 +1538,177 @@ async def stock_transfers(
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
+    return paged(rows, total, sk, lim)
+
+
+SPOILAGE_REASONS = ("Damaged / Spoilage", "Expiry removal")
+
+
+@router.get("/spoilage-damage", dependencies=[Depends(require_perm("reports.view"))])
+async def spoilage_damage(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Approved stock write-offs for damage, spoilage, and expiry removal."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    start_dt, end_dt = _parse_period(date_from, date_to)
+
+    qty_lost = StockAdjustment.before_qty - StockAdjustment.after_qty
+    conds = [StockAdjustment.reason.in_(SPOILAGE_REASONS)]
+    if branch_id:
+        conds.append(StockAdjustment.branch_id == branch_id)
+    if search:
+        like = f"%{search}%"
+        conds.append(
+            Item.name.ilike(like)
+            | Item.sku.ilike(like)
+            | AdjustmentRequest.ref_number.ilike(like)
+            | StockAdjustment.reason.ilike(like)
+        )
+    if start_dt:
+        conds.append(StockAdjustment.created_at >= start_dt)
+    if end_dt:
+        conds.append(StockAdjustment.created_at <= end_dt)
+
+    sort_map = {
+        "date": StockAdjustment.created_at,
+        "reference_number": AdjustmentRequest.ref_number,
+        "product_code": Item.sku,
+        "product": Item.name,
+        "branch": Branch.name,
+        "before_qty": StockAdjustment.before_qty,
+        "after_qty": StockAdjustment.after_qty,
+        "quantity_lost": qty_lost,
+        "reason": StockAdjustment.reason,
+        "adjusted_by": StockAdjustment.adjusted_by,
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
+
+    base = (
+        select(
+            StockAdjustment.created_at.label("date"),
+            AdjustmentRequest.ref_number.label("reference_number"),
+            Item.sku.label("product_code"),
+            Item.name.label("product"),
+            Branch.name.label("branch"),
+            StockAdjustment.before_qty.label("before_qty"),
+            StockAdjustment.after_qty.label("after_qty"),
+            qty_lost.label("quantity_lost"),
+            StockAdjustment.reason.label("reason"),
+            StockAdjustment.notes.label("notes"),
+            StockAdjustment.adjusted_by.label("adjusted_by"),
+        )
+        .select_from(StockAdjustment)
+        .join(Item, Item.id == StockAdjustment.item_id)
+        .join(Branch, Branch.id == StockAdjustment.branch_id)
+        .outerjoin(AdjustmentRequest, AdjustmentRequest.id == StockAdjustment.request_id)
+        .where(and_(*conds))
+    )
+
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = []
+    for r in result.fetchall():
+        row = dict(r._mapping)
+        if row.get("date") is not None:
+            row["date"] = row["date"].isoformat()
+        rows.append(row)
+    return paged(rows, total, sk, lim)
+
+
+@router.get("/expiry-batches", dependencies=[Depends(require_perm("reports.view"))])
+async def expiry_batches(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    within_days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """Active batches that are expired or due to expire within `within_days`."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    today = date.today()
+    horizon_str = (today + timedelta(days=int(within_days))).isoformat()
+
+    conds = [
+        ItemBatch.active == True,  # noqa: E712
+        ItemBatch.quantity > 0,
+        ItemBatch.expiry_date.isnot(None),
+        ItemBatch.expiry_date <= horizon_str,
+    ]
+    if branch_id:
+        conds.append(ItemBatch.branch_id == branch_id)
+    if search:
+        like = f"%{search}%"
+        conds.append(
+            Item.name.ilike(like)
+            | Item.sku.ilike(like)
+            | ItemBatch.batch_number.ilike(like)
+        )
+
+    stock_value = ItemBatch.quantity * func.coalesce(ItemBatch.cost_price, Item.cost_price, 0)
+    sort_map = {
+        "product_code": Item.sku,
+        "product": Item.name,
+        "batch_number": ItemBatch.batch_number,
+        "branch": Branch.name,
+        "expiry_date": ItemBatch.expiry_date,
+        "quantity": ItemBatch.quantity,
+        "mfg_date": ItemBatch.mfg_date,
+        "stock_value": stock_value,
+        "status": ItemBatch.expiry_date,
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "expiry_date", "asc")
+
+    base = (
+        select(
+            Item.sku.label("product_code"),
+            Item.name.label("product"),
+            ItemBatch.batch_number.label("batch_number"),
+            Branch.name.label("branch"),
+            ItemBatch.mfg_date.label("mfg_date"),
+            ItemBatch.expiry_date.label("expiry_date"),
+            ItemBatch.quantity.label("quantity"),
+            stock_value.label("stock_value"),
+            ItemBatch.received_date.label("received_date"),
+        )
+        .select_from(ItemBatch)
+        .join(Item, Item.id == ItemBatch.item_id)
+        .join(Branch, Branch.id == ItemBatch.branch_id)
+        .where(and_(*conds))
+    )
+
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = []
+    for r in result.fetchall():
+        row = dict(r._mapping)
+        exp = row.get("expiry_date")
+        try:
+            exp_date = date.fromisoformat(exp) if exp else None
+        except ValueError:
+            exp_date = None
+        if exp_date is None:
+            row["days_to_expiry"] = None
+            row["status"] = "—"
+        else:
+            days = (exp_date - today).days
+            row["days_to_expiry"] = days
+            row["status"] = "Expired" if days < 0 else "Near Expiry"
+        rows.append(row)
     return paged(rows, total, sk, lim)
 
 
@@ -1834,7 +2011,7 @@ async def petty_cash(
         "expense_category": CashEntry.category,
         "description": CashEntry.description,
         "amount": CashEntry.amount,
-        "branch": CashEntry.branch_id,
+        "branch": Branch.name,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
     sk = normalize_skip(skip)
@@ -1845,14 +2022,20 @@ async def petty_cash(
             CashEntry.category.label("expense_category"),
             CashEntry.description.label("description"),
             CashEntry.amount.label("amount"),
-            CashEntry.branch_id.label("branch"),
+            Branch.name.label("branch"),
         )
+        .join(Branch, Branch.id == CashEntry.branch_id)
         .where(and_(*conds))
         .order_by(order_by_expr)
         .offset(sk)
         .limit(lim)
     )
-    total_q = select(func.count()).select_from(CashEntry).where(and_(*conds))
+    total_q = (
+        select(func.count())
+        .select_from(CashEntry)
+        .join(Branch, Branch.id == CashEntry.branch_id)
+        .where(and_(*conds))
+    )
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(query)
     rows = [dict(r._mapping) for r in result.fetchall()]
