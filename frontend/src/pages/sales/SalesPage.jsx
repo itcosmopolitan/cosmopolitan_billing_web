@@ -14,6 +14,7 @@ import {
 } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import openInvoicePrintWindow, { openQuotePrintWindow } from '@/utils/printInvoice'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
@@ -883,8 +884,13 @@ export default function SalesPage() {
                 </thead>
                 <tbody>
                   {invoices.map((inv) => (
-                    <tr key={inv.id} style={selectedIds.has(inv.id) ? { background: 'var(--accent-bg)' } : null}>
-                      <td>
+                    <tr
+                      key={inv.id}
+                      {...tableRowClickProps(() => setShowDetail(inv), {
+                        style: selectedIds.has(inv.id) ? { background: 'var(--accent-bg)' } : undefined,
+                      })}
+                    >
+                      <td data-no-row-click>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(inv.id)}
@@ -1045,8 +1051,13 @@ export default function SalesPage() {
                 </thead>
                 <tbody>
                   {quotations.map((q) => (
-                    <tr key={q.id} style={selectedIds.has(q.id) ? { background: 'var(--accent-bg)' } : null}>
-                      <td>
+                    <tr
+                      key={q.id}
+                      {...tableRowClickProps(() => navigate(`/sales/quotations/${q.id}/edit?view=1`), {
+                        style: selectedIds.has(q.id) ? { background: 'var(--accent-bg)' } : undefined,
+                      })}
+                    >
+                      <td data-no-row-click>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(q.id)}
@@ -1399,8 +1410,13 @@ export default function SalesPage() {
                   {payments.map((p) => {
                     const allocCount = p.invoiceCount ?? (p.allocations?.length || 0)
                     return (
-                      <tr key={p.id} style={selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : null}>
-                        <td>
+                      <tr
+                        key={p.id}
+                        {...tableRowClickProps(() => setPayDetail(p), {
+                          style: selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : undefined,
+                        })}
+                      >
+                        <td data-no-row-click>
                           <input
                             type="checkbox"
                             checked={selectedIds.has(p.id)}
@@ -1513,8 +1529,13 @@ export default function SalesPage() {
                     const isPendingApproval = o.status === 'pending_approval'
                     const isConfirmed = o.status === 'confirmed'
                     return (
-                      <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
-                        <td>
+                      <tr
+                        key={o.id}
+                        {...tableRowClickProps(() => navigate(`/sales/orders/${o.id}/edit?view=1`), {
+                          style: selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : undefined,
+                        })}
+                      >
+                        <td data-no-row-click>
                           <input
                             type="checkbox"
                             checked={selectedIds.has(o.id)}

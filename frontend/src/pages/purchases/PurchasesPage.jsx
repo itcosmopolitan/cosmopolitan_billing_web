@@ -29,6 +29,7 @@ import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar,
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
@@ -825,8 +826,13 @@ export default function PurchasesPage() {
                     const canEdit = !['paid', 'cancelled', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     const canCancel = !['cancelled', 'draft', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     return (
-                      <tr key={b.id} style={selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : null}>
-                        <td>
+                      <tr
+                        key={b.id}
+                        {...tableRowClickProps(() => setShowDetail(b), {
+                          style: selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : undefined,
+                        })}
+                      >
+                        <td data-no-row-click>
                           <input
                             type="checkbox"
                             checked={selectedIds.has(b.id)}
@@ -996,8 +1002,13 @@ export default function PurchasesPage() {
                     // Bill form creates a draft bill (no stock) for create-only; approvers post stock on bill approve.
                     const canConvertToBill = canReceiveOrConvert && can('purchases.create')
                     return (
-                      <tr key={o.id} style={selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : null}>
-                        <td>
+                      <tr
+                        key={o.id}
+                        {...tableRowClickProps(() => navigate(`/purchases/orders/${o.id}/edit?view=1`), {
+                          style: selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : undefined,
+                        })}
+                      >
+                        <td data-no-row-click>
                           <input
                             type="checkbox"
                             checked={selectedIds.has(o.id)}
@@ -1295,8 +1306,13 @@ export default function PurchasesPage() {
                 </thead>
                 <tbody>
                   {returns.map((r) => (
-                    <tr key={r.id} style={selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : null}>
-                      <td>
+                    <tr
+                      key={r.id}
+                      {...tableRowClickProps(() => setReturnDetail(r), {
+                        style: selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : undefined,
+                      })}
+                    >
+                      <td data-no-row-click>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(r.id)}
@@ -1409,8 +1425,13 @@ export default function PurchasesPage() {
                   {payments.map((p) => {
                     const allocCount = p.billCount ?? (p.allocations?.length || 0)
                     return (
-                      <tr key={p.id} style={selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : null}>
-                        <td>
+                      <tr
+                        key={p.id}
+                        {...tableRowClickProps(() => setPayDetail(p), {
+                          style: selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : undefined,
+                        })}
+                      >
+                        <td data-no-row-click>
                           <input
                             type="checkbox"
                             checked={selectedIds.has(p.id)}

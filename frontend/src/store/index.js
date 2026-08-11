@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { suggestedDiscountForCustomer, customerPricingType, discountPatternFromItem } from '@/utils/pricingDiscounts'
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100
 
@@ -53,8 +54,10 @@ const normalizeCartItem = (raw) => {
       lineDiscountValue = round2(Number(raw.lineDiscount) * qty)
     }
   }
+  const pattern = discountPatternFromItem(raw)
   return applyLineCalc({
     ...raw,
+    ...pattern,
     qty,
     price,
     lineDiscountType,
@@ -215,7 +218,12 @@ export const usePOSStore = create((set, get) => ({
 
   // Cart actions
   addItem: (product) => {
-    const { cart } = get()
+    const { cart, customer } = get()
+    const pattern = discountPatternFromItem(product)
+    const suggested = suggestedDiscountForCustomer(
+      { ...product, ...pattern },
+      customerPricingType(customer),
+    )
     const existing = cart.find((i) => i.id === product.id)
     if (existing) {
       set({
@@ -226,7 +234,12 @@ export const usePOSStore = create((set, get) => ({
         // backend would later 400 with "Allocation sum does not match line qty".
         cart: cart.map((i) =>
           i.id === product.id
-            ? applyLineCalc({ ...i, qty: i.qty + 1, batchAllocationCustom: false })
+            ? applyLineCalc({
+                ...i,
+                ...pattern,
+                qty: i.qty + 1,
+                batchAllocationCustom: false,
+              })
             : i
         ),
       })
@@ -236,9 +249,10 @@ export const usePOSStore = create((set, get) => ({
           ...cart,
           normalizeCartItem({
             ...product,
+            ...pattern,
             qty: 1,
-            lineDiscountType: product.lineDiscountType || 'pct',
-            lineDiscountValue: Number(product.lineDiscountValue) || 0,
+            lineDiscountType: 'pct',
+            lineDiscountValue: suggested,
           }),
         ],
       })
@@ -306,7 +320,17 @@ export const usePOSStore = create((set, get) => ({
     paymentReceived: false, paymentMethod: null,
   }),
 
-  setCustomer: (customer) => set({ customer }),
+  setCustomer: (customer) => {
+    const type = customerPricingType(customer)
+    set((s) => ({
+      customer,
+      cart: s.cart.map((i) => applyLineCalc({
+        ...i,
+        lineDiscountType: 'pct',
+        lineDiscountValue: suggestedDiscountForCustomer(i, type),
+      })),
+    }))
+  },
   setDiscount: (pct, amt) => set({ discountPct: pct, discountAmt: amt }),
   // PR 1: dual-setter for the new payment UX. setPaymentReceived(true)
   // is harmless without a method (POSPage validates at submit); setting

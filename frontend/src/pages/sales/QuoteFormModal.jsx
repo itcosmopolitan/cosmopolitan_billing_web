@@ -21,7 +21,7 @@ import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine } from './salesFormShared'
+import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
@@ -52,6 +52,8 @@ export default function QuoteFormModal({
   const pickedIds = quoteForm.items.map((it) => it.item_id).filter(Boolean)
 
   const handlePick = (i, inv) => {
+    const pattern = discountPatternFromItem(inv)
+    const suggested = suggestedDiscountForCustomer({ ...inv, ...pattern }, quoteForm.customerType)
     const next = [...quoteForm.items]
     next[i] = {
       ...next[i],
@@ -60,6 +62,9 @@ export default function QuoteFormModal({
       price: inv.selling_price,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
+      ...pattern,
+      lineDiscount: suggested,
+      lineDiscountType: '%',
     }
     pqf('items', next)
   }
@@ -122,10 +127,15 @@ export default function QuoteFormModal({
               if (!opt) {
                 pqf('customerId', '')
                 pqf('customerName', '')
+                pqf('customerType', 'retail')
+                pqf('items', applySuggestedDiscountsToSaleLines(quoteForm.items, 'retail'))
                 return
               }
+              const type = customerPricingType(opt.raw?.customer_type || 'retail')
               pqf('customerId', opt.id)
               pqf('customerName', opt.label)
+              pqf('customerType', type)
+              pqf('items', applySuggestedDiscountsToSaleLines(quoteForm.items, type))
             }}
             fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
             isSearchFieldRequired

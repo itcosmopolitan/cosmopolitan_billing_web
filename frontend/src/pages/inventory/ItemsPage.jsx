@@ -13,6 +13,7 @@ import {
   TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 import BatchesModal from './BatchesModal'
 import RowActionsMenu from './RowActionsMenu'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -550,7 +551,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                   // shape of stockStatus() stays self-documenting.
                   const { label } = stockStatus(branchStock, p.reorder_level)
                   return (
-                    <tr key={p.id}>
+                    <tr key={p.id} {...tableRowClickProps(() => setShowDetail(p))}>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                           <span style={{ fontSize: 20 }}>{p.emoji}</span>
@@ -673,6 +674,10 @@ export default function ItemsPage({ mode = 'branch' }) {
                             ariaLabel={`Actions for ${p.name}`}
                             actions={isMaster ? [
                               {
+                                label: 'View details',
+                                onClick: () => setShowDetail(p),
+                              },
+                              {
                                 label: 'Activity',
                                 hidden: !canActivity,
                                 disabled: itemActionBusy === p.id,
@@ -695,6 +700,10 @@ export default function ItemsPage({ mode = 'branch' }) {
                                 onClick: () => setConfirmAction({ type: 'delete', item: p }),
                               },
                             ] : [
+                              {
+                                label: 'View details',
+                                onClick: () => setShowDetail(p),
+                              },
                               {
                                 label: 'Request adjustment',
                                 hidden: !can('adjustments.create'),
@@ -840,12 +849,20 @@ export default function ItemsPage({ mode = 'branch' }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Price</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Retail price</div>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(showDetail.default_selling_price ?? showDetail.selling_price)}</div>
               </div>
               <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Cost</div>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{fmt(showDetail.default_cost_price ?? showDetail.cost_price)}</div>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Wholesale discount</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{Number(showDetail.wholesale_discount_pct || 0)}%</div>
+              </div>
+              <div style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Staff discount</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{Number(showDetail.staff_discount_pct || 0)}%</div>
               </div>
             </div>
             {showDetail.rejection_reason && (

@@ -9,6 +9,7 @@ import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, Paginatio
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate } from '@/utils/helpers'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 import RowActionsMenu from './RowActionsMenu'
 
 // In-flight request cache to avoid duplicate identical fetches across
@@ -442,9 +443,9 @@ export default function TransfersPage() {
                   {transfers.map((t) => {
                     const chip = transferStatusChip(t.status)
                     return (
-                    <tr key={t.id}>
+                    <tr key={t.id} {...tableRowClickProps(() => setShowDetail(t))}>
                       {canDelete && (
-                        <td>
+                        <td data-no-row-click>
                           {t.status === 'pending' ? (
                             <input
                               type="checkbox"

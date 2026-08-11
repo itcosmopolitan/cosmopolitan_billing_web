@@ -150,7 +150,7 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
   ) : null
 
   return (
-    <>
+    <span data-no-row-click style={{ display: 'inline-flex' }}>
       <button
         ref={triggerRef}
         type="button"
@@ -169,7 +169,7 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
         {menuBusy && pendingLabel ? <MiniSpinner size={14} /> : <Icon.MoreVertical size={16} />}
       </button>
       {menu}
-    </>
+    </span>
   )
 }
 

@@ -37,7 +37,13 @@ async def autocomplete_customer(
     rows = (
         await db.execute(q.order_by(Customer.name.asc()).limit(limit))
     ).scalars().all()
-    return [{"id": c.id, "text": c.name} for c in rows]
+    return [{
+        "id": c.id,
+        "text": c.name,
+        "customer_type": c.type,
+        "credit_terms": getattr(c, "credit_terms", None),
+        "key_account_manager": getattr(c, "key_account_manager", None),
+    } for c in rows]
 
 
 @router.get("/vendor", dependencies=[Depends(require_perm("vendors.view"))])
@@ -245,6 +251,34 @@ async def autocomplete_staff(
 ):
     """Return `{ id, text }` rows for staff filter dropdowns."""
     q = select(User).where(User.active.is_(True))
+    if search_text:
+        term = f"%{search_text.strip()}%"
+        q = q.where(or_(User.name.ilike(term), User.email.ilike(term)))
+    rows = (
+        await db.execute(q.order_by(User.name.asc()).limit(limit))
+    ).scalars().all()
+    return [{"id": u.id, "text": u.name} for u in rows]
+
+
+@router.get(
+    "/branch-managers",
+    dependencies=[Depends(require_perm("customers.view", "customers.create", "customers.edit"))],
+)
+async def autocomplete_branch_managers(
+    search_text: Optional[str] = None,
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Active users with the Branch Manager role — for customer KAM dropdown."""
+    from src.models import UserRole
+
+    q = select(User).where(
+        User.active.is_(True),
+        or_(
+            User.role == UserRole.branch_manager,
+            User.role_id == "role-branch-manager",
+        ),
+    )
     if search_text:
         term = f"%{search_text.strip()}%"
         q = q.where(or_(User.name.ilike(term), User.email.ilike(term)))

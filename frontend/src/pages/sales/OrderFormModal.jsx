@@ -24,7 +24,7 @@ import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine } from './salesFormShared'
+import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
@@ -65,6 +65,8 @@ export default function OrderFormModal({
   const pickedIds = orderForm.items.map((it) => it.item_id).filter(Boolean)
 
   const handlePick = (i, inv) => {
+    const pattern = discountPatternFromItem(inv)
+    const suggested = suggestedDiscountForCustomer({ ...inv, ...pattern }, orderForm.customerType)
     const next = [...orderForm.items]
     next[i] = {
       ...next[i],
@@ -73,6 +75,9 @@ export default function OrderFormModal({
       price: inv.selling_price,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
+      ...pattern,
+      lineDiscount: suggested,
+      lineDiscountType: '%',
     }
     pof('items', next)
   }
@@ -142,10 +147,15 @@ export default function OrderFormModal({
                 if (!opt) {
                   pof('customerId', '')
                   pof('customerName', '')
+                  pof('customerType', 'retail')
+                  pof('items', applySuggestedDiscountsToSaleLines(orderForm.items, 'retail'))
                   return
                 }
+                const type = customerPricingType(opt.raw?.customer_type || 'retail')
                 pof('customerId', opt.id)
                 pof('customerName', opt.label)
+                pof('customerType', type)
+                pof('items', applySuggestedDiscountsToSaleLines(orderForm.items, type))
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
               isSearchFieldRequired

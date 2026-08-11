@@ -6,6 +6,7 @@ import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 
 export default function VendorsPage() {
   const can = useCan()
@@ -245,7 +246,7 @@ export default function VendorsPage() {
             </thead>
             <tbody>
               {vendors.map(v => (
-                <tr key={v.id}>
+                <tr key={v.id} {...tableRowClickProps(() => setShowDetail(v))}>
                   <td>
                     <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
                     <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || '—'}</div>
@@ -262,7 +263,7 @@ export default function VendorsPage() {
                   </td>
                   <td className="text-right mono">{fmt(v.totalPurchases)}</td>
                   <td><Chip status={v.active ? 'active' : 'inactive'} /></td>
-                  <td>
+                  <td data-no-row-click>
                     <div style={{display:'flex',gap:4}}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(v)}>View</button>
                       {can('vendors.edit') && (

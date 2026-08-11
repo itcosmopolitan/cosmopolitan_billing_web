@@ -10,7 +10,7 @@ import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import { emptySaleLine } from './salesFormShared'
+import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt } from '@/utils/helpers'
 import MarginBadge from '@/components/MarginBadge'
@@ -44,12 +44,17 @@ export default function InvoiceFormModal({
   }
 
   const handlePick = (i, inv) => {
+    const pattern = discountPatternFromItem(inv)
+    const suggested = suggestedDiscountForCustomer({ ...inv, ...pattern }, invoiceForm.customerType)
     patchLine(i, {
       item_id: inv.id,
       name: inv.name,
       price: inv.selling_price,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
+      ...pattern,
+      lineDiscount: suggested,
+      lineDiscountType: '%',
       batchTracking: Boolean(inv.batch_tracking),
       expiryTracking: Boolean(inv.expiry_tracking),
       batchAllocation: [],
@@ -126,10 +131,15 @@ export default function InvoiceFormModal({
                 if (!opt) {
                   pif('customerId', '')
                   pif('customerName', '')
+                  pif('customerType', 'retail')
+                  pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, 'retail'))
                   return
                 }
+                const type = customerPricingType(opt.raw?.customer_type || 'retail')
                 pif('customerId', opt.id)
                 pif('customerName', opt.label)
+                pif('customerType', type)
+                pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, type))
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
               isSearchFieldRequired
@@ -348,6 +358,9 @@ export default function InvoiceFormModal({
           showWhenEmpty
           notes={invoiceForm.notes}
           onNotesChange={(v) => pif('notes', v)}
+          notesLabel="Remarks"
+          notesPlaceholder="Delivery instructions / details…"
+          notesHint="Shown on the invoice for delivery and special instructions"
         />
       </div>
     </div>

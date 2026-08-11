@@ -12,6 +12,7 @@ import {
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
+import { tableRowClickProps } from '@/utils/tableRowClick'
 import RowActionsMenu from './RowActionsMenu'
 
 // In-flight request cache to avoid duplicate identical fetches across
@@ -494,9 +495,9 @@ export default function AdjustmentsPage() {
                 </thead>
                 <tbody>
                   {requests.map((r) => (
-                    <tr key={r.id}>
+                    <tr key={r.id} {...tableRowClickProps(() => setShowDetail(r))}>
                       {canDelete && (
-                        <td>
+                        <td data-no-row-click>
                           {r.status === 'pending' ? (
                             <input
                               type="checkbox"

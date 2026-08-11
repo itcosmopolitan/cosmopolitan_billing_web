@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, Customer, CustomerCreditEntry
+from src.models import Branch, Customer, CustomerCreditEntry, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import _build_customer_code, serialize_customer
 from src.permissions import CUSTOMER_PICKER_READ
@@ -15,6 +15,9 @@ from src.security import require_perm, current_user, enforce_branch_access
 from src.models import User
 
 router = APIRouter()
+
+_VALID_CUSTOMER_TYPES = frozenset({"retail", "wholesale", "staff"})
+
 
 class CustomerCreate(BaseModel):
     name: str
@@ -25,6 +28,8 @@ class CustomerCreate(BaseModel):
     branch_id: str
     credit_limit: float = 10000
     customer_type: str = "retail"
+    key_account_manager: Optional[str] = None
+    credit_terms: Optional[str] = None
     street1: str
     street2: Optional[str] = None
     street3: Optional[str] = None
@@ -54,6 +59,8 @@ class CustomerUpdate(BaseModel):
     branch_id: Optional[str] = None
     credit_limit: Optional[float] = None
     customer_type: Optional[str] = None
+    key_account_manager: Optional[str] = None
+    credit_terms: Optional[str] = None
     street1: Optional[str] = None
     street2: Optional[str] = None
     street3: Optional[str] = None
@@ -63,6 +70,16 @@ class CustomerUpdate(BaseModel):
     postal_code: Optional[str] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+
+
+def _normalize_customer_type(customer_type: Optional[str]) -> str:
+    value = (customer_type or "retail").strip().lower()
+    if value not in _VALID_CUSTOMER_TYPES:
+        raise HTTPException(
+            400,
+            f"Invalid customer_type '{customer_type}'. Expected one of: retail, wholesale, staff",
+        )
+    return value
 
 
 # Map CustomerUpdate field names → Customer ORM column names where they
@@ -152,6 +169,7 @@ async def list_customers(
     )
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     customers = result.scalars().all()
+    await _attach_kam_names(db, customers)
     items = [serialize_customer(c) for c in customers]
     return paged(
         items,
@@ -167,6 +185,7 @@ async def get_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
     c = result.scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Customer not found")
+    await _attach_kam_names(db, [c])
     return serialize_customer(c)
 
 
@@ -253,17 +272,39 @@ def _compose_address_from_parts(data: Union[CustomerCreate, CustomerUpdate]) -> 
     return ", ".join([p.strip() for p in parts if isinstance(p, str) and p.strip()])
 
 
+async def _attach_kam_names(db: AsyncSession, customers: list[Customer]) -> None:
+    """Resolve key_account_manager user ids → display names on each customer."""
+    kam_ids = {
+        c.key_account_manager
+        for c in customers
+        if getattr(c, "key_account_manager", None)
+    }
+    if not kam_ids:
+        return
+    rows = (
+        await db.execute(select(User.id, User.name).where(User.id.in_(kam_ids)))
+    ).all()
+    name_by_id = {row.id: row.name for row in rows}
+    for c in customers:
+        kam = getattr(c, "key_account_manager", None)
+        # Fall back to the raw value for legacy free-text entries.
+        c._key_account_manager_name = name_by_id.get(kam) or kam
+
+
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create"))])
 async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)
+    customer_type = _normalize_customer_type(data.customer_type)
     address = _compose_address_from_parts(data)
     customer_id = str(uuid.uuid4())
     customer_code = _build_customer_code(customer_id)
     c = Customer(id=customer_id, name=data.name, phone=data.phone,
                  email=data.email, address=address, customer_code=customer_code,
                  gstin=data.gst_in, branch_id=data.branch_id,
-                 credit_limit=data.credit_limit, type=data.customer_type,
+                 credit_limit=data.credit_limit, type=customer_type,
+                 key_account_manager=(data.key_account_manager or None),
+                 credit_terms=(data.credit_terms or None),
                  street1=data.street1, street2=data.street2, street3=data.street3,
                  city=data.city, state_province=data.state_province,
                  country=data.country, postal_code=data.postal_code)
@@ -281,6 +322,8 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
     if "branch_id" in items:
         await _validate_branch_id(items["branch_id"], db)
         await enforce_branch_access(items["branch_id"], user=user, db=db)
+    if "customer_type" in items:
+        items["customer_type"] = _normalize_customer_type(items["customer_type"])
 
     if any(k in items for k in [
         "street1", "street2", "street3", "city", "state_province", "country", "postal_code"

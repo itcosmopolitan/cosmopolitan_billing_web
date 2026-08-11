@@ -277,6 +277,9 @@ class Item(Base):
     unit            = Column(String, default="Pcs")
     cost_price      = Column(Float, default=0)
     selling_price   = Column(Float, default=0)
+    # Suggested off-list discounts vs retail selling_price (cashier applies at bill).
+    wholesale_discount_pct = Column(Float, default=0)
+    staff_discount_pct     = Column(Float, default=0)
     tax_rate        = Column(Float, default=18)
     hsn_code        = Column(String)
     reorder_level   = Column(Integer, default=10)
@@ -416,7 +419,9 @@ class Customer(Base):
     # writes a CustomerCreditEntry row.
     credit_balance  = Column(Float, default=0, nullable=False)
     total_purchases = Column(Float, default=0)
-    type            = Column(String, default="retail")  # retail | wholesale
+    type            = Column(String, default="retail")  # retail | wholesale | staff
+    key_account_manager = Column(String)  # users.id of a branch manager (optional)
+    credit_terms    = Column(String)  # free text, e.g. Cash / Credit - 7 Days
     active          = Column(Boolean, default=True)
     notes           = Column(Text)
     created_at      = Column(DateTime, default=datetime.utcnow)
