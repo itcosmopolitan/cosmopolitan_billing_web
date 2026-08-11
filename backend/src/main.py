@@ -207,8 +207,11 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
-        index_path = FRONTEND_DIST / "index.html"
+        requested_path = FRONTEND_DIST / full_path
+        if requested_path.exists() and requested_path.is_file():
+            return FileResponse(requested_path)
 
+        index_path = FRONTEND_DIST / "index.html"
         if index_path.exists():
             return FileResponse(index_path)
 
