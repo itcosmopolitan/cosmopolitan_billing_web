@@ -14,6 +14,7 @@ import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import RowActionsMenu from './RowActionsMenu'
+import AdjustmentDetailPanel from './AdjustmentDetailPanel'
 
 // In-flight request cache to avoid duplicate identical fetches across
 // remounts (helps reduce dev StrictMode double-calls showing in Network).
@@ -721,101 +722,17 @@ export default function AdjustmentsPage() {
         </FormGroup>
       </Modal>
 
-      <Modal
+      <AdjustmentDetailPanel
         open={!!showDetail}
+        adjustment={showDetail}
         onClose={() => !actionBusy && !deleteBusy && setShowDetail(null)}
-        title={showDetail ? `Adjustment — ${showDetail.ref_number}` : 'Adjustment Request'}
-        icon="⚖"
-        size="md"
-        footer={showDetail?.status === 'pending' && (can('adjustments.approve') || canDelete) ? (
-          <>
-            {canDelete && (
-              <button
-                className="btn btn-secondary"
-                style={{ marginRight: 'auto', color: 'var(--red)' }}
-                onClick={() => deleteRequest(showDetail)}
-                disabled={!!actionBusy || deleteBusy}
-              >
-                Delete
-              </button>
-            )}
-            {can('adjustments.approve') && (
-              <>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => reject(showDetail)}
-                  disabled={!!actionBusy}
-                >
-                  {actionKind === 'reject' && actionBusy === showDetail.id ? 'Rejecting…' : 'Reject'}
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => approve(showDetail)}
-                  disabled={!!actionBusy}
-                >
-                  {actionKind === 'approve' && actionBusy === showDetail.id ? 'Approving…' : 'Approve'}
-                </button>
-              </>
-            )}
-          </>
-        ) : (
-          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-        )}>
-        {showDetail && (
-          <>
-            <div style={{ fontSize: 13, lineHeight: 1.7, marginBottom: 16 }}>
-              <div style={{ marginBottom: 10 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                  Adjustment #
-                </span>
-                <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)', marginTop: 2 }}>
-                  {showDetail.ref_number}
-                </div>
-              </div>
-              <div><strong>Branch:</strong> {showDetail.branch_name}</div>
-              <div><strong>Item:</strong> {showDetail.item_name}</div>
-              <div><strong>Quantity:</strong> {showDetail.before_qty} → {showDetail.new_qty} ({showDetail.delta >= 0 ? '+' : ''}{showDetail.delta})</div>
-              <div><strong>Reason:</strong> {showDetail.reason}</div>
-              {showDetail.notes && <div><strong>Notes:</strong> {showDetail.notes}</div>}
-              {showDetail.batch_id && <div><strong>Batch target:</strong> <span className="mono">{showDetail.batch_id}</span></div>}
-              <div style={{ marginTop: 8 }}>
-                <strong>Status:</strong>{' '}
-                <Chip
-                  status={showDetail.status === 'approved' ? 'active' : showDetail.status === 'pending' ? 'pending' : 'draft'}
-                  label={showDetail.status?.charAt(0).toUpperCase() + showDetail.status?.slice(1)}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div style={{ padding: '12px 14px', background: 'var(--bg-raised)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
-                  Requested
-                </div>
-                <PersonWhen name={showDetail.requested_by} at={showDetail.requested_at || showDetail.created_at} />
-              </div>
-              <div style={{ padding: '12px 14px', background: 'var(--bg-raised)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
-                  {showDetail.status === 'approved' ? 'Approved' : showDetail.status === 'rejected' ? 'Rejected' : 'Resolution'}
-                </div>
-                {showDetail.status === 'pending' ? (
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Awaiting manager approval</span>
-                ) : (
-                  <PersonWhen
-                    name={showDetail.resolved_by || showDetail.approved_by || showDetail.rejected_by}
-                    at={showDetail.resolved_at}
-                  />
-                )}
-              </div>
-            </div>
-            {showDetail.rejection_notes && (
-              <div style={{ marginTop: 12, fontSize: 13 }}>
-                <strong>Rejection notes:</strong> {showDetail.rejection_notes}
-              </div>
-            )}
-          </>
-        )}
-      </Modal>
+        onApprove={approve}
+        onReject={reject}
+        onDelete={deleteRequest}
+        actionBusy={actionBusy}
+        deleteBusy={deleteBusy}
+        actionKind={actionKind}
+      />
 
       <Modal
         open={!!deleteTargets?.length}

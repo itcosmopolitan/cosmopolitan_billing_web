@@ -5,10 +5,11 @@ import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { decomposeAddress } from '@/utils/address'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, AlertBar, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import CustomerDetailPanel from './CustomerDetailPanel'
 
 export default function CustomersPage() {
   const can = useCan()
@@ -564,36 +565,12 @@ export default function CustomersPage() {
         </FormGroup>
       </Modal>
 
-      {/* Detail Modal */}
-      <Modal open={!!showDetail} onClose={()=>setShowDetail(null)} title={showDetail?.name} icon="👤" size="md"
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowDetail(null)}>Close</button><button className="btn btn-primary" onClick={()=>{ openCreditLedger(showDetail); setShowDetail(null) }}>View Credit Ledger</button></>}>
-        {showDetail && (
-          <>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
-              {[
-                {label:'Phone', value:showDetail.phone},{label:'Email', value:showDetail.email||'—'},
-                {label:'GST Reg No', value:showDetail.gstIn||'—'},{label:'Pricing', value:CUSTOMER_TYPE_LABELS[showDetail.type] || 'Retail'},
-                {label:'KAM', value:showDetail.keyAccountManager || '—'},
-                {label:'Credit Terms', value:showDetail.creditTerms || '—'},
-                {label:'Credit Limit', value:fmt(showDetail.creditLimit)},
-                {label:'Outstanding', value:<span style={{color:showDetail.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(showDetail.outstanding)}</span>},
-                {label:'Store Credit', value:<span style={{color:showDetail.creditBalance>0?'var(--accent)':'var(--text-muted)'}}>{showDetail.creditBalance>0?fmt(showDetail.creditBalance):'—'}</span>},
-                {label:'Total Purchases', value:fmt(showDetail.totalPurchases)},{label:'Status', value:<Chip status={showDetail.active?'active':'inactive'}/>},
-              ].map(r=>(
-                <div key={r.label} style={{padding:'10px 12px',background:'var(--bg-raised)',borderRadius:8}}>
-                  <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:3}}>{r.label}</div>
-                  <div style={{fontSize:13,fontWeight:500,color:'var(--text-primary)'}}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            {showDetail.outstanding > 0 && (
-              <AlertBar type="amber" icon="⚠️">
-                Outstanding balance of <strong>{fmt(showDetail.outstanding)}</strong> — {Math.round(creditUsedPct(showDetail))}% of credit limit used.
-              </AlertBar>
-            )}
-          </>
-        )}
-      </Modal>
+      <CustomerDetailPanel
+        open={!!showDetail}
+        customer={showDetail}
+        onClose={() => setShowDetail(null)}
+        onOpenLedger={openCreditLedger}
+      />
 
       {/* Credit Ledger */}
       <Modal

@@ -8,9 +8,9 @@ import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
-import { fmtDate } from '@/utils/helpers'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import RowActionsMenu from './RowActionsMenu'
+import TransferDetailPanel from './TransferDetailPanel'
 
 // In-flight request cache to avoid duplicate identical fetches across
 // remounts (helps reduce dev StrictMode double-calls showing in Network).
@@ -545,163 +545,18 @@ export default function TransfersPage() {
         </div>
       </div>
 
-      <Modal
+      <TransferDetailPanel
         open={!!showDetail}
+        transfer={showDetail}
         onClose={() => !actionBusy && !deleteBusy && setShowDetail(null)}
-        title={showDetail ? `Transfer — ${showDetail.ref_number}` : 'Transfer'}
-        icon="↔"
-        size="md"
-        footer={showDetail?.status === 'pending' && (can('transfers.approve') || canDelete || canCreate) ? (
-          <>
-            {canCreate && (
-              <button
-                className="btn btn-secondary"
-                style={{ marginRight: canDelete ? 0 : 'auto' }}
-                onClick={() => {
-                  const id = showDetail.id
-                  setShowDetail(null)
-                  navigate(`/transfers/${id}/edit`)
-                }}
-                disabled={!!actionBusy || deleteBusy}
-              >
-                Edit
-              </button>
-            )}
-            {canDelete && (
-              <button
-                className="btn btn-secondary"
-                style={{ marginRight: 'auto', color: 'var(--red)', marginLeft: canCreate ? 8 : 0 }}
-                onClick={() => deleteRequest(showDetail)}
-                disabled={!!actionBusy || deleteBusy}
-              >
-                Delete
-              </button>
-            )}
-            {can('transfers.approve') && (
-              <>
-                <button className="btn btn-secondary" onClick={() => reject(showDetail)} disabled={!!actionBusy}>
-                  {actionKind === 'reject' && actionBusy === showDetail.id ? 'Rejecting…' : 'Reject'}
-                </button>
-                <button className="btn btn-primary" onClick={() => approve(showDetail)} disabled={!!actionBusy}>
-                  {actionKind === 'approve' && actionBusy === showDetail.id ? 'Approving…' : 'Approve & dispatch'}
-                </button>
-              </>
-            )}
-          </>
-        ) : showDetail?.status === 'transit' && can('transfers.receive') ? (
-          <>
-            <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-            <button className="btn btn-primary" onClick={() => receive(showDetail)} disabled={!!actionBusy}>
-              {actionKind === 'receive' && actionBusy === showDetail.id ? 'Receiving…' : 'Receive'}
-            </button>
-          </>
-        ) : (
-          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-        )}>
-        {showDetail && (
-          <>
-            <div style={{ marginBottom: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                Transfer #
-              </span>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)', marginTop: 2 }}>
-                {showDetail.ref_number}
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-              {[
-                { label: 'From', value: showDetail.from_branch_name || showDetail.from_branch_id },
-                { label: 'To', value: showDetail.to_branch_name || showDetail.to_branch_id },
-                { label: 'Status', value: (() => { const c = transferStatusChip(showDetail.status); return <Chip status={c.status} label={c.label} /> })() },
-                { label: 'Requested by', value: showDetail.requested_by || '—' },
-              ].map((r) => (
-                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            {showDetail.items?.length > 0 && (
-              <>
-                <div className="form-label" style={{ marginBottom: 8 }}>Items</div>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th className="text-right">Qty</th>
-                      <th>Source batches drained</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {showDetail.items.map((item, idx) => {
-                      // Approved/received: actual lots drained at source.
-                      // Pending: operator-pre-allocated split (if any).
-                      const drained = item.batches || []
-                      const requested = item.requested_allocation || []
-                      const showRequested = drained.length === 0 && requested.length > 0
-                      const lots = showRequested
-                        ? requested.map((r) => ({
-                            batch_id: r.batch_id,
-                            batch_number: r.batch_id?.slice(-8),
-                            consumed: r.qty,
-                          }))
-                        : drained
-                      return (
-                        <tr key={idx} style={{ verticalAlign: 'top' }}>
-                          <td>
-                            <div style={{ fontSize: 13 }}>{item.name || 'Unknown'}</div>
-                            {item.preferred_batch_id && requested.length === 0 && (
-                              <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                                Operator pick: <span className="mono">{item.preferred_batch_id.slice(-8)}</span>
-                              </div>
-                            )}
-                          </td>
-                          <td className="text-right mono">{item.qty}</td>
-                          <td>
-                            {lots.length === 0 ? (
-                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                {showDetail.status === 'pending' ? '— auto-allocate on approval' : 'untracked / no allocation'}
-                              </span>
-                            ) : (
-                              <>
-                                {showRequested && (
-                                  <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: 0.4, marginBottom: 4 }}>
-                                    PLANNED SPLIT
-                                  </div>
-                                )}
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                                  {lots.map((b, bi) => (
-                                    <div key={bi} style={{ fontSize: 11, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                                      <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>
-                                        {b.batch_number || b.batch_id?.slice(-8)}
-                                      </span>
-                                      <span style={{ color: 'var(--text-muted)' }}>×{b.consumed}</span>
-                                      {b.expiry_date && (
-                                        <span style={{ color: 'var(--amber)' }}>exp {fmtDate(b.expiry_date)}</span>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-                {showDetail.status === 'received' && showDetail.items.some((it) => it.batches?.length) && (
-                  <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    ℹ Each batch above was recreated at <strong>{showDetail.to_branch_name || showDetail.to_branch_id}</strong> with the original
-                    lot number, mfg / expiry date and cost — so FIFO/FEFO ordering carries across the transfer.
-                  </div>
-                )}
-              </>
-            )}
-            {showDetail.notes && <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8, fontSize: 12.5, color: 'var(--text-secondary)' }}>{showDetail.notes}</div>}
-          </>
-        )}
-      </Modal>
+        onApprove={approve}
+        onReject={reject}
+        onReceive={receive}
+        onDelete={deleteRequest}
+        actionBusy={actionBusy}
+        deleteBusy={deleteBusy}
+        actionKind={actionKind}
+      />
 
       <ActivityDrawer
         open={!!activityTarget}

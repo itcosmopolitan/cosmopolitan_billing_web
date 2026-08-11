@@ -16,6 +16,8 @@ import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import openInvoicePrintWindow, { openQuotePrintWindow } from '@/utils/printInvoice'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
+import SalesTxnDetailPanel from './SalesTxnDetailPanel'
+import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
 // reachable via Invoices tab + payment_mode filter. Sales Orders + Returns
@@ -72,7 +74,7 @@ export default function SalesPage() {
   // invoice tab was duplicative and confusing.
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
-  const [showDetail, setShowDetail] = useState(null)
+  const [salesDoc, setSalesDoc] = useState(null) // { kind: 'invoice'|'quote'|'order'|'return', data }
   const [showPayment, setShowPayment] = useState(null)
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
@@ -623,7 +625,7 @@ export default function SalesPage() {
       setSalesListVersion((v) => v + 1)
       toast.success(`${showCancelInvoice.number} cancelled — stock restored`)
       setShowCancelInvoice(null)
-      setShowDetail(null)
+      setSalesDoc(null)
     } catch (err) {
       console.error('Failed to cancel invoice:', err)
     } finally {
@@ -697,6 +699,7 @@ export default function SalesPage() {
       setRetListVersion((v) => v + 1)
       setSalesListVersion((v) => v + 1)
       toast.success(`Credit note ${ret.number} voided — invoice recalculated`)
+      setSalesDoc(null)
     })
   }
 
@@ -886,7 +889,7 @@ export default function SalesPage() {
                   {invoices.map((inv) => (
                     <tr
                       key={inv.id}
-                      {...tableRowClickProps(() => setShowDetail(inv), {
+                      {...tableRowClickProps(() => setSalesDoc({ kind: 'invoice', data: inv }), {
                         style: selectedIds.has(inv.id) ? { background: 'var(--accent-bg)' } : undefined,
                       })}
                     >
@@ -918,7 +921,7 @@ export default function SalesPage() {
                           busy={!!actionBusy}
                           ariaLabel={`Actions for ${inv.number}`}
                           actions={[
-                            { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setShowDetail(inv) },
+                            { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setSalesDoc({ kind: 'invoice', data: inv }) },
                             {
                               label: 'Activity',
                               hidden: !canActivity,
@@ -1053,7 +1056,7 @@ export default function SalesPage() {
                   {quotations.map((q) => (
                     <tr
                       key={q.id}
-                      {...tableRowClickProps(() => navigate(`/sales/quotations/${q.id}/edit?view=1`), {
+                      {...tableRowClickProps(() => setSalesDoc({ kind: 'quote', data: q }), {
                         style: selectedIds.has(q.id) ? { background: 'var(--accent-bg)' } : undefined,
                       })}
                     >
@@ -1122,9 +1125,8 @@ export default function SalesPage() {
                               },
                               {
                                 label: 'View',
-                                hidden: !['converted', 'accepted', 'rejected'].includes(q.status),
                                 disabled: isRowBusy(q.id),
-                                onClick: () => navigate(`/sales/quotations/${q.id}/edit?view=1`),
+                                onClick: () => setSalesDoc({ kind: 'quote', data: q }),
                               },
                               {
                                 label: 'Activity',
@@ -1189,70 +1191,15 @@ export default function SalesPage() {
       />
 
       {/* Payment detail (read-only) — shows allocations + credit. */}
-      <Modal
+      <PaymentDetailPanel
         open={!!payDetail}
+        payment={payDetail}
         onClose={() => setPayDetail(null)}
-        title={payDetail ? `Payment — ${payDetail.number}` : 'Payment'}
-        icon="💰"
-        size="md"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>
-          {can('invoices.edit') && !payDetail?.voided && (
-            <button className="btn btn-danger" onClick={() => voidPayment(payDetail)}>Void Payment</button>
-          )}
-        </>}
-      >
-        {payDetail && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-              {[
-                { label: 'Customer', value: payDetail.customerName || 'Walk-in' },
-                { label: 'Date', value: payDetail.date },
-                { label: 'Method', value: payDetail.paymentMode
-                  ? <Chip status={payDetail.paymentMode} label={String(payDetail.paymentMode).replace('_', ' ').toUpperCase()} />
-                  : '—' },
-                { label: 'Reference', value: payDetail.paymentRef || '—' },
-                { label: 'Total Amount', value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(payDetail.totalAmount)}</span> },
-                { label: 'Credit Applied', value: (payDetail.creditApplied || 0) > 0
-                  ? <span className="mono" style={{ color: 'var(--amber)' }}>{fmt(payDetail.creditApplied)}</span>
-                  : <span style={{ color: 'var(--text-muted)' }}>—</span> },
-              ].map((r) => (
-                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>
-              Allocations
-            </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Invoice #</th>
-                  <th className="text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(payDetail.allocations || []).map((a) => (
-                  <tr key={a.id}>
-                    <td><CopyableId value={a.invoiceNumber} label={a.invoiceNumber} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                    <td className="text-right mono">{fmt(a.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {payDetail.notes && (
-              <div style={{ marginTop: 14 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Notes</div>
-                <div style={{ fontSize: 13, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6 }}>
-                  {payDetail.notes}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </Modal>
+        partyLabel="Customer"
+        partyName={payDetail?.customerName || 'Walk-in'}
+        canVoid={can('invoices.edit')}
+        onVoid={voidPayment}
+      />
 
       {/* Credit Purchases tab removed 2026-05-23 (Sales Phase 1). */}
 
@@ -1300,8 +1247,13 @@ export default function SalesPage() {
                 </thead>
                 <tbody>
                   {returns.map((r) => (
-                    <tr key={r.id} style={selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : null}>
-                      <td>
+                    <tr
+                      key={r.id}
+                      {...tableRowClickProps(() => setSalesDoc({ kind: 'return', data: r }), {
+                        style: selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : undefined,
+                      })}
+                    >
+                      <td data-no-row-click>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(r.id)}
@@ -1329,6 +1281,11 @@ export default function SalesPage() {
                           busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
+                            {
+                              label: 'View',
+                              disabled: isRowBusy(r.id),
+                              onClick: () => setSalesDoc({ kind: 'return', data: r }),
+                            },
                             {
                               label: 'Activity',
                               hidden: !canActivity,
@@ -1524,14 +1481,13 @@ export default function SalesPage() {
                   {orders.map((o) => {
                     const isConverted = o.status === 'converted'
                     const isPartial = o.status === 'partially_invoiced'
-                    const isCancelled = o.status === 'cancelled'
                     const isDraft = o.status === 'draft'
                     const isPendingApproval = o.status === 'pending_approval'
                     const isConfirmed = o.status === 'confirmed'
                     return (
                       <tr
                         key={o.id}
-                        {...tableRowClickProps(() => navigate(`/sales/orders/${o.id}/edit?view=1`), {
+                        {...tableRowClickProps(() => setSalesDoc({ kind: 'order', data: o }), {
                           style: selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : undefined,
                         })}
                       >
@@ -1597,18 +1553,21 @@ export default function SalesPage() {
                                 },
                                 {
                                   label: 'View',
-                                  hidden: !(isConverted || isCancelled || isPendingApproval),
                                   disabled: isRowBusy(o.id),
-                                  onClick: () => navigate(`/sales/orders/${o.id}/edit?view=1`),
+                                  onClick: () => setSalesDoc({ kind: 'order', data: o }),
                                 },
                                 {
                                   label: 'View invoice',
                                   hidden: !(isConverted || isPartial) || !o.convertedInvoiceId,
                                   disabled: isRowBusy(o.id),
-                                  onClick: () => {
-                                    const inv = invoices.find((i) => i.id === o.convertedInvoiceId)
-                                    if (inv) setShowDetail(inv)
-                                    else toast('Invoice not in current page — switch to Invoices tab')
+                                  onClick: async () => {
+                                    try {
+                                      const inv = await salesAPI.get(o.convertedInvoiceId)
+                                      if (inv) setSalesDoc({ kind: 'invoice', data: inv })
+                                    } catch (err) {
+                                      console.error(err)
+                                      toast.error('Failed to load invoice')
+                                    }
                                   },
                                 },
                                 {
@@ -1643,87 +1602,18 @@ export default function SalesPage() {
         </>
       )}
 
-      {/* Invoice Detail Modal */}
-      <Modal open={!!showDetail} onClose={() => setShowDetail(null)} title={`Invoice — ${showDetail?.number}`} icon="🧾" size="lg"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-          <button className="btn btn-secondary" onClick={() => { openInvoicePrintWindow(showDetail, branches.find(b => b.id === showDetail.branchId)); setShowDetail(null) }}>🖨 Invoice</button>
-          {showDetail?.status !== 'cancelled' && !(showDetail?.paidAmount > 0) && can('invoices.cancel') && (
-            <button className="btn btn-danger" onClick={() => { setShowCancelInvoice(showDetail); setShowDetail(null) }}>Cancel Invoice</button>
-          )}
-          {['pending','partial','overdue'].includes(showDetail?.status) && <button className="btn btn-primary" onClick={() => { setShowPayment(showDetail); setShowDetail(null) }}>Record Payment</button>}
-        </>}>
-        {showDetail && (() => {
-          const customerAddressLines = [
-            showDetail.customerStreet1 || showDetail.customer_street1,
-            showDetail.customerStreet2 || showDetail.customer_street2,
-            showDetail.customerStreet3 || showDetail.customer_street3,
-            showDetail.customerCity || showDetail.customer_city || showDetail.city,
-            showDetail.customerStateProvince || showDetail.customer_state_province,
-            showDetail.customerCountry || showDetail.customer_country || showDetail.country,
-            showDetail.customerPostalCode || showDetail.customer_postal_code || showDetail.postal_code,
-          ].filter((line) => typeof line === 'string' && line.trim()).map((line) => line.trim())
-
-          const customerValue = (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div>{showDetail.customerName || 'Walk-in'}</div>
-              {customerAddressLines.length > 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                  {customerAddressLines.map((line, index) => (
-                    <div key={index}>{line}</div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          )
-
-          return (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
-                {[
-                  { label: 'Customer', value: customerValue },
-                  { label: 'Branch', value: showDetail.branchName || showDetail.branchId },
-                  { label: 'Cashier', value: showDetail.cashier || 'N/A' },
-                  { label: 'Date', value: showDetail.date },
-                  { label: 'Payment Mode', value: displayPaymentMode(showDetail.paymentMode) },
-                  { label: 'Status', value: <Chip status={showDetail.status} /> },
-                  { label: 'Return Status', value: <ReturnStatusChip status={showDetail.returnStatus} /> },
-                  { label: 'Credited (returns)', value: showDetail.creditedAmount > 0 ? fmt(showDetail.creditedAmount) : '—' },
-                ].map((r) => (
-                  <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
-                  </div>
-                ))}
-              </div>
-            <table className="data-table" style={{ marginBottom: 14 }}>
-              <thead><tr><th>Item</th><th className="text-right">Qty</th><th className="text-right">Price</th><th className="text-right">GST</th><th className="text-right">Total</th></tr></thead>
-              <tbody>
-                {(showDetail.items || []).map((item, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
-                    <td className="text-right mono">{item.qty}</td>
-                    <td className="text-right mono">{fmt(item.price)}</td>
-                    <td className="text-right mono">{item.taxRate || 0}%</td>
-                    <td className="text-right mono">{fmt(item.lineTotal || (item.qty * item.price))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--text-muted)' }}><span>Subtotal</span><span className="mono">{fmt(showDetail.subtotal || (showDetail.total - (showDetail.taxTotal || 0)))}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--text-muted)' }}><span>GST</span><span className="mono">{fmt(showDetail.taxTotal || 0)}</span></div>
-              {(showDetail.discount || 0) > 0 && <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--green)' }}><span>Discount</span><span className="mono">-{fmt(showDetail.discount)}</span></div>}
-              <div style={{ display: 'flex', gap: 80, fontSize: 17, fontWeight: 700 }}><span>Total</span><span className="mono" style={{ color: 'var(--accent)' }}>{fmt(showDetail.total)}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--green)' }}><span>Paid</span><span className="mono">{fmt(showDetail.paidAmount || 0)}</span></div>
-              {(() => {
-                const balDue = Math.round(((showDetail.total || 0) - (showDetail.paidAmount || 0) - (showDetail.creditedAmount || 0)) * 100) / 100
-                return balDue > 0.01 ? <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--red)' }}><span>Balance Due</span><span className="mono">{fmt(balDue)}</span></div> : null
-              })()}
-            </div>
-          </>
-        )})()}
-      </Modal>
+      {/* Unified sales document detail drawer */}
+      <SalesTxnDetailPanel
+        open={!!salesDoc}
+        kind={salesDoc?.kind || 'invoice'}
+        document={salesDoc?.data}
+        onClose={() => setSalesDoc(null)}
+        onPrint={(inv, branch) => openInvoicePrintWindow(inv, branch)}
+        onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
+        onRecordPayment={(inv) => setShowPayment(inv)}
+        onVoidReturn={(ret) => voidReturn(ret)}
+        branchLookup={(inv) => branches.find((b) => b.id === inv?.branchId)}
+      />
       {/* Payment Modal */}
       <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm" busy={paySaving}
         footer={<>

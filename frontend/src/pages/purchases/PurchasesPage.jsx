@@ -33,6 +33,8 @@ import { tableRowClickProps } from '@/utils/tableRowClick'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
+import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
+import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
 
@@ -251,10 +253,9 @@ export default function PurchasesPage() {
   const createAction = tabCreateAction()
 
   // Modals + sub-state
-  const [showDetail, setShowDetail] = useState(null)
+  const [purchaseDoc, setPurchaseDoc] = useState(null) // { kind: 'bill'|'order'|'grn'|'return', data }
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
-  const [returnDetail, setReturnDetail] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
   const [paySaving, setPaySaving] = useState(false)
@@ -564,7 +565,7 @@ export default function PurchasesPage() {
       await purchasesAPI.returns.void(ret.id)
       setListVersion((v) => v + 1)
       toast.success(`Return ${ret.number} voided — bill recalculated`)
-      setReturnDetail(null)
+      setPurchaseDoc(null)
     })
   }
 
@@ -574,7 +575,7 @@ export default function PurchasesPage() {
       await purchasesAPI.returns.undoVoid(ret.id)
       setListVersion((v) => v + 1)
       toast.success(`Return ${ret.number} restored — bill recalculated`)
-      setReturnDetail(null)
+      setPurchaseDoc(null)
     })
   }
 
@@ -828,7 +829,7 @@ export default function PurchasesPage() {
                     return (
                       <tr
                         key={b.id}
-                        {...tableRowClickProps(() => setShowDetail(b), {
+                        {...tableRowClickProps(() => setPurchaseDoc({ kind: 'bill', data: b }), {
                           style: selectedIds.has(b.id) ? { background: 'var(--accent-bg)' } : undefined,
                         })}
                       >
@@ -857,7 +858,7 @@ export default function PurchasesPage() {
                             busy={!!actionBusy}
                             ariaLabel={`Actions for ${b.number}`}
                             actions={[
-                              { label: 'View', disabled: isRowBusy(b.id), onClick: () => setShowDetail(b) },
+                              { label: 'View', disabled: isRowBusy(b.id), onClick: () => setPurchaseDoc({ kind: 'bill', data: b }) },
                               {
                                 label: 'Activity',
                                 hidden: !canActivity,
@@ -1004,7 +1005,7 @@ export default function PurchasesPage() {
                     return (
                       <tr
                         key={o.id}
-                        {...tableRowClickProps(() => navigate(`/purchases/orders/${o.id}/edit?view=1`), {
+                        {...tableRowClickProps(() => setPurchaseDoc({ kind: 'order', data: o }), {
                           style: selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : undefined,
                         })}
                       >
@@ -1049,9 +1050,8 @@ export default function PurchasesPage() {
                                 },
                                 {
                                   label: 'View',
-                                  hidden: !(isConverted || isCancelled || isPartiallyReceived || isPendingApproval) || !can('purchases.edit'),
                                   disabled: isRowBusy(o.id),
-                                  onClick: () => navigate(`/purchases/orders/${o.id}/edit?view=1`),
+                                  onClick: () => setPurchaseDoc({ kind: 'order', data: o }),
                                 },
                                 {
                                   label: 'Activity',
@@ -1084,10 +1084,14 @@ export default function PurchasesPage() {
                                   label: 'View bill',
                                   hidden: !isConverted || !o.convertedBillId,
                                   disabled: isRowBusy(o.id),
-                                  onClick: () => {
-                                    const bill = bills.find((x) => x.id === o.convertedBillId)
-                                    if (bill) setShowDetail(bill)
-                                    else toast('Bill not in current page — switch to Bills tab')
+                                  onClick: async () => {
+                                    try {
+                                      const bill = await purchasesAPI.get(o.convertedBillId)
+                                      if (bill) setPurchaseDoc({ kind: 'bill', data: bill })
+                                    } catch (err) {
+                                      console.error(err)
+                                      toast.error('Failed to load bill')
+                                    }
                                   },
                                 },
                                 {
@@ -1181,7 +1185,10 @@ export default function PurchasesPage() {
                     const isPendingApproval = g.status === 'pending_approval'
                     const isReceived = g.status === 'received'
                     return (
-                      <tr key={g.id}>
+                      <tr
+                        key={g.id}
+                        {...tableRowClickProps(() => setPurchaseDoc({ kind: 'grn', data: g }))}
+                      >
                         <td><CopyableId value={g.number} label={g.number} style={{ color: 'var(--green)', fontSize: 12 }} /></td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.poNumber || '—'}</td>
                         <td style={{ fontWeight: 500, fontSize: 13 }}>{g.vendorName || 'N/A'}</td>
@@ -1194,6 +1201,11 @@ export default function PurchasesPage() {
                             busy={!!actionBusy}
                             ariaLabel={`Actions for ${g.number}`}
                             actions={[
+                              {
+                                label: 'View',
+                                disabled: isRowBusy(g.id),
+                                onClick: () => setPurchaseDoc({ kind: 'grn', data: g }),
+                              },
                               {
                                 label: 'Activity',
                                 hidden: !canActivity,
@@ -1308,7 +1320,7 @@ export default function PurchasesPage() {
                   {returns.map((r) => (
                     <tr
                       key={r.id}
-                      {...tableRowClickProps(() => setReturnDetail(r), {
+                      {...tableRowClickProps(() => setPurchaseDoc({ kind: 'return', data: r }), {
                         style: selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : undefined,
                       })}
                     >
@@ -1332,7 +1344,7 @@ export default function PurchasesPage() {
                           busy={!!actionBusy}
                           ariaLabel={`Actions for ${r.number}`}
                           actions={[
-                            { label: 'View', disabled: isRowBusy(r.id), onClick: () => setReturnDetail(r) },
+                            { label: 'View', disabled: isRowBusy(r.id), onClick: () => setPurchaseDoc({ kind: 'return', data: r }) },
                             {
                               label: 'Activity',
                               hidden: !canActivity,
@@ -1489,56 +1501,16 @@ export default function PurchasesPage() {
         </>
       )}
 
-      {/* ── Bill Detail Modal ─────────────────────────────────────── */}
-      <Modal open={!!showDetail} onClose={() => setShowDetail(null)} title={`Purchase Bill — ${showDetail?.number}`} icon="📋" size="lg"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowDetail(null)}>Close</button>
-          {showDetail?.status !== 'paid' && showDetail?.status !== 'cancelled' && (
-            <button className="btn btn-primary" onClick={() => { setShowPay(showDetail); setShowDetail(null) }}>Record Payment</button>
-          )}
-        </>}>
-        {showDetail && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 18 }}>
-              {[
-                { label: 'Vendor', value: showDetail.vendorName },
-                { label: 'Branch', value: showDetail.branchName },
-                { label: 'Bill Date', value: showDetail.date },
-                { label: 'Due Date', value: showDetail.dueDate || '—' },
-                { label: 'Payment Mode', value: displayPaymentMode(showDetail.paymentMode) },
-                { label: 'Status', value: <Chip status={showDetail.status} /> },
-                { label: 'Return Status', value: <ReturnStatusChip status={showDetail.returnStatus} /> },
-                { label: 'Credited (returns)', value: (showDetail.creditedAmount || 0) > 0 ? fmt(showDetail.creditedAmount) : '—' },
-              ].map((r) => (
-                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            <table className="data-table" style={{ marginBottom: 14 }}>
-              <thead><tr><th>Item</th><th className="text-right">Qty</th><th className="text-right">Cost</th><th className="text-right">Discount %</th><th className="text-right">Total</th></tr></thead>
-              <tbody>
-                {(showDetail.items || []).map((item, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
-                    <td className="text-right mono">{item.qty}</td>
-                    <td className="text-right mono">{fmt(item.cost)}</td>
-                    <td className="text-right mono">{item.discount || 0}%</td>
-                    <td className="text-right mono">{fmt(item.lineTotal || item.qty * item.cost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--text-muted)' }}><span>Subtotal</span><span className="mono">{fmt(showDetail.subtotal || 0)}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--text-muted)' }}><span>GST</span><span className="mono">{fmt(showDetail.taxTotal || 0)}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 17, fontWeight: 700 }}><span>Total</span><span className="mono" style={{ color: 'var(--purple)' }}>{fmt(showDetail.total || 0)}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--green)' }}><span>Paid</span><span className="mono">{fmt(showDetail.paidAmount || 0)}</span></div>
-            </div>
-          </>
-        )}
-      </Modal>
+      {/* ── Unified purchase document detail drawer ───────────────── */}
+      <PurchaseTxnDetailPanel
+        open={!!purchaseDoc}
+        kind={purchaseDoc?.kind || 'bill'}
+        document={purchaseDoc?.data}
+        onClose={() => setPurchaseDoc(null)}
+        onRecordPayment={(b) => setShowPay(b)}
+        onVoidReturn={voidVendorReturn}
+        onBillFromGrn={billFromGrn}
+      />
 
       {/* ── Payment Modal ─────────────────────────────────────────── */}
       <Modal open={!!showPay} onClose={() => setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm" busy={paySaving}
@@ -1603,107 +1575,16 @@ export default function PurchasesPage() {
       </Modal>
 
       {/* ── Payment Detail (read-only) ────────────────────────────── */}
-      <Modal
+      <PaymentDetailPanel
         open={!!payDetail}
+        payment={payDetail}
         onClose={() => setPayDetail(null)}
-        title={payDetail ? `Payment — ${payDetail.number}` : 'Payment'}
-        icon="💸"
-        size="md"
-        footer={<>
-          <button className="btn btn-secondary" onClick={() => setPayDetail(null)}>Close</button>
-          {can('purchases.edit') && !payDetail?.voided && (
-            <button className="btn btn-danger" onClick={() => voidVendorPayment(payDetail)}>Void Payment</button>
-          )}
-        </>}
-      >
-        {payDetail && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-              {[
-                { label: 'Vendor', value: payDetail.vendorName || '—' },
-                { label: 'Date', value: payDetail.date },
-                { label: 'Method', value: payDetail.paymentMode
-                  ? <Chip status={payDetail.paymentMode} label={String(payDetail.paymentMode).replace('_', ' ').toUpperCase()} />
-                  : '—' },
-                { label: 'Reference', value: payDetail.paymentRef || '—' },
-                { label: 'Total Amount', value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(payDetail.totalAmount)}</span> },
-                { label: 'Created By', value: payDetail.createdBy || '—' },
-              ].map((r) => (
-                <div key={r.label} style={{ padding: '10px 12px', background: 'var(--bg-raised)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{r.value}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>
-              Allocations
-            </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Bill #</th>
-                  <th className="text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(payDetail.allocations || []).map((a) => (
-                  <tr key={a.id}>
-                    <td><CopyableId value={a.billNumber} label={a.billNumber} style={{ color: 'var(--purple)', fontSize: 12 }} /></td>
-                    <td className="text-right mono">{fmt(a.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {payDetail.notes && (
-              <div style={{ marginTop: 14 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Notes</div>
-                <div style={{ fontSize: 13, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6 }}>
-                  {payDetail.notes}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </Modal>
-
-      {/* ── Return Detail ─────────────────────────────────────────── */}
-      <Modal open={!!returnDetail} onClose={() => setReturnDetail(null)} title={`Vendor Return — ${returnDetail?.number}`} icon="↩️" size="lg"
-        footer={
-          <>
-            <button className="btn btn-secondary" onClick={() => setReturnDetail(null)}>Close</button>
-            {can('purchases.edit') && returnDetail && returnDetail.status !== 'void' && !returnDetail.voided && (
-              <button className="btn btn-danger" onClick={() => voidVendorReturn(returnDetail)}>Void Return</button>
-            )}
-          </>
-        }>
-        {returnDetail && (
-          <>
-            <AlertBar type="blue" icon="ℹ">
-              Against bill <strong>{returnDetail.billNumber}</strong> · Vendor {returnDetail.vendorName} ·
-              Reason: <strong>{returnDetail.reason}</strong>
-            </AlertBar>
-            <div style={{ height: 14 }} />
-            <table className="data-table" style={{ marginBottom: 14 }}>
-              <thead><tr><th>Item</th><th className="text-right">Return Qty</th><th className="text-right">Cost</th><th className="text-right">Total</th></tr></thead>
-              <tbody>
-                {(returnDetail.items || []).map((item, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
-                    <td className="text-right mono">{item.returnQty}</td>
-                    <td className="text-right mono">{fmt(item.cost)}</td>
-                    <td className="text-right mono">{fmt(item.lineTotal || item.returnQty * item.cost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--text-muted)' }}><span>Subtotal</span><span className="mono">{fmt(returnDetail.subtotal || 0)}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 13, color: 'var(--text-muted)' }}><span>GST</span><span className="mono">{fmt(returnDetail.taxTotal || 0)}</span></div>
-              <div style={{ display: 'flex', gap: 80, fontSize: 17, fontWeight: 700 }}><span>Total Credit</span><span className="mono" style={{ color: 'var(--pink)' }}>{fmt(returnDetail.total || 0)}</span></div>
-            </div>
-          </>
-        )}
-      </Modal>
+        partyLabel="Vendor"
+        partyName={payDetail?.vendorName || '—'}
+        accentColor="var(--purple)"
+        canVoid={can('purchases.edit')}
+        onVoid={voidVendorPayment}
+      />
 
       <ActivityDrawer
         open={!!activityTarget}
