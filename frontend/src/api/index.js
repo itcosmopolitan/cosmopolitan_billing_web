@@ -448,6 +448,15 @@ export const vendorsAPI = {
   creditLedger: (id, params) => api.get(`/vendors/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/vendors/', data),
   update: (id, data) => api.put(`/vendors/${id}`, data),
+  import: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post('/vendors/import', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120_000 })
+  },
+  downloadTemplate: async () => {
+    const data = await api.get('/vendors/import/template', { responseType: 'arraybuffer', noBranchScope: true })
+    return new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  },
 }
 
 // ─── Branches ────────────────────────────────────────────────────────────────
