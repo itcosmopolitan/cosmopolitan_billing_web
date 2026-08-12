@@ -141,6 +141,7 @@ async def list_customers(
         conds.append(Customer.type == customer_type)
     if branch_id:
         conds.append(Customer.branch_id == branch_id)
+
     outstanding_total = float(
         (
             await db.execute(
