@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI, AUTOCOMPLETE_CUSTOMER_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
+import { useDebouncedFilters } from '@/features/dashboard/hooks/useDebouncedFilters'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
@@ -66,6 +67,7 @@ export default function SalesPage() {
     navigate(`/sales?tab=${id}`, { replace: true })
   }, [navigate])
   const [search, setSearch]       = useState('')
+  const debouncedSearch = useDebouncedFilters(search, 300)
   const [invStatusF, setInvStatusF]     = useState('')
   const [paymentModeF, setPaymentModeF] = useState('')
   const [customerF, setCustomerF] = useState('')
@@ -340,7 +342,7 @@ export default function SalesPage() {
     setOrderSkip(0)
     setRetSkip(0)
     setPaySkip(0)
-  }, [search, invStatusF, paymentModeF, customerF, categoryF, discountF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
+  }, [debouncedSearch, invStatusF, paymentModeF, customerF, categoryF, discountF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
 
   // Re-fetch lists when active branch changes.
   useEffect(() => {
@@ -390,7 +392,7 @@ export default function SalesPage() {
           limit: invLimit,
           sort_by: invSortBy,
           sort_order: invSortOrder,
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           status: invStatusF || undefined,
           payment_mode: paymentModeF || undefined,
           customer_id: customerF || undefined,
@@ -416,7 +418,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, invSkip, invLimit, search, invStatusF, paymentModeF, customerF, categoryF, discountF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
+  }, [tab, activeBranch?.id, invSkip, invLimit, debouncedSearch, invStatusF, paymentModeF, customerF, categoryF, discountF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
 
   useEffect(() => {
     if (tab !== 'quotes') return
@@ -429,7 +431,7 @@ export default function SalesPage() {
           limit: quoteLimit,
           sort_by: quoteSortBy,
           sort_order: quoteSortOrder,
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           status: quoteStatusF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
@@ -449,7 +451,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, debouncedSearch, quoteStatusF, dateFrom, dateTo])
 
   // Credit Purchases tab was removed 2026-05-23 (Sales Phase 1). No
   // separate data-fetch effect — same invoices are available via the main
@@ -468,7 +470,7 @@ export default function SalesPage() {
           limit: orderLimit,
           sort_by: orderSortBy,
           sort_order: orderSortOrder,
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           status: orderStatusF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
@@ -485,7 +487,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, debouncedSearch, orderStatusF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'returns') return
@@ -498,7 +500,7 @@ export default function SalesPage() {
           limit: retLimit,
           sort_by: retSortBy,
           sort_order: retSortOrder,
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           status: retStatusF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
@@ -518,7 +520,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, search, retStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, debouncedSearch, retStatusF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'payments') return
@@ -531,7 +533,7 @@ export default function SalesPage() {
           limit: payLimit,
           sort_by: paySortBy,
           sort_order: paySortOrder,
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -550,7 +552,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, debouncedSearch, dateFrom, dateTo])
 
   // Tab-aware sort handler for the four list tabs in this page. Each tab
   // owns its own sortBy/sortOrder pair; the closure picks them up.

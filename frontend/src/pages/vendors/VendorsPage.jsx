@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
+import { useDebouncedFilters } from '@/features/dashboard/hooks/useDebouncedFilters'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
@@ -12,6 +13,7 @@ import VendorDetailPanel from './VendorDetailPanel'
 export default function VendorsPage() {
   const can = useCan()
   const [search, setSearch]   = useState('')
+  const debouncedSearch = useDebouncedFilters(search, 300)
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
@@ -45,7 +47,7 @@ export default function VendorsPage() {
         limit: venLimit,
         sort_by: venSortBy,
         sort_order: venSortOrder,
-        search: search || undefined,
+        search: debouncedSearch || undefined,
       })
       const { items, total, summary } = unwrapPaged(raw)
       const mapped = (items || []).map((v) => ({
@@ -68,7 +70,7 @@ export default function VendorsPage() {
     // listVersion is the manual cache-bust knob — bumping it triggers a
     // re-fetch (used by save/edit handlers below). Keep it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [venSkip, venLimit, search, listVersion, venSortBy, venSortOrder])
+  }, [venSkip, venLimit, debouncedSearch, listVersion, venSortBy, venSortOrder])
 
   const onSort = (key) => {
     setVenSkip(0)
@@ -86,7 +88,7 @@ export default function VendorsPage() {
 
   useEffect(() => {
     setVenSkip(0)
-  }, [search])
+  }, [debouncedSearch])
 
   const totals = useMemo(() => ({
     total: vendorTotal,
