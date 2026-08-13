@@ -106,6 +106,58 @@ function CustomerDisplayLive({ roomId }) {
 
   const { customer, branchName, cashierName, items, subtotal, tax, discount, total, taxMode } = display
   const code = normalizeDisplayCode(display.displayCode || roomId)
+  const gridCss = `
+  .customer-display-grid{
+    display:grid;
+    grid-template-columns:1fr 2fr;
+    gap:20px;
+    align-items:start;
+  }
+  @media (max-width:768px){
+    .customer-display-grid{ grid-template-columns:1fr; }
+  }
+  .customer-left{ display:flex; flex-direction:column; gap:16px; }
+  .customer-right{ }
+  `
+
+  const bgFiles = [
+    'Firefly island with palm and water surrounding, studio light, high definition, super detailed 286.jpg',
+    'Firefly island with palm and water surrounding, studio light, high definition, super detailed 77285.jpg',
+    'Firefly island with palm and water surrounding, studio light, high definition, super detailed 91799.jpg',
+  ]
+
+  // Use encodeURI (keeps commas) and preload images so we only switch to successfully loaded images.
+  const bgUrls = bgFiles.map(f => `/assets/${encodeURI(f)}`)
+  const [bgIndex, setBgIndex] = useState(0)
+  const [loadedBgUrls, setLoadedBgUrls] = useState([])
+
+  useEffect(() => {
+    let mounted = true
+    const loaded = []
+    bgUrls.forEach((u) => {
+      const img = new Image()
+      img.src = u
+      img.onload = () => {
+        if (!mounted) return
+        loaded.push(u)
+        // when first image loads, set it immediately
+        if (loaded.length === 1) setBgIndex(0)
+        setLoadedBgUrls([...loaded])
+      }
+      img.onerror = () => {
+        // ignore
+      }
+    })
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
+    if (loadedBgUrls.length === 0) return
+    const id = setInterval(() => setBgIndex(i => (i + 1) % loadedBgUrls.length), 6000)
+    return () => clearInterval(id)
+  }, [loadedBgUrls])
+
+  const currentBg = loadedBgUrls.length ? loadedBgUrls[bgIndex] : '/assets/login-hero.jpg'
 
   return (
     <div style={{
@@ -115,132 +167,145 @@ function CustomerDisplayLive({ roomId }) {
       padding: '32px 24px',
       fontFamily: 'inherit',
     }}>
-      <header style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 28,
-        paddingBottom: 16,
-        borderBottom: '1px solid var(--border-default)',
-      }}>
-        <div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 4 }}>Your order</div>
-          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 700 }}>{organisation?.name || 'Cosmopolitan'}</h1>
-          {branchName && (
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>{branchName}</div>
-          )}
-          {cashierName && (
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Terminal: {cashierName}</div>
-          )}
-        </div>
+      <style>{gridCss}</style>
+      <div style={{ marginBottom: 24 }}>
         <div style={{
-          fontSize: 12,
-          padding: '6px 12px',
-          borderRadius: 20,
-          background: connected ? 'var(--green-bg)' : 'var(--red-bg)',
-          color: connected ? 'var(--green)' : 'var(--red)',
-          fontWeight: 600,
-        }}>
-          {connected ? 'Live' : 'Connecting…'}
-        </div>
-      </header>
-
-      <section style={{
-        marginBottom: 24,
-        padding: '16px 18px',
-        background: 'var(--bg-surface)',
-        borderRadius: 12,
-        border: '1px solid var(--border-default)',
-      }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Customer</div>
-        <div style={{ fontSize: 18, fontWeight: 600 }}>{customer?.name || 'Walk-in'}</div>
-        {customer?.phone && (
-          <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 4 }}>{customer.phone}</div>
-        )}
-      </section>
-
-      <section style={{
-        background: 'var(--bg-surface)',
-        borderRadius: 12,
-        border: '1px solid var(--border-default)',
-        overflow: 'hidden',
-      }}>
-        <table className="data-table" style={{ margin: 0 }}>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th className="text-right">Qty</th>
-              <th className="text-right">Rate</th>
-              <th className="text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={4} style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
-                  Waiting for POS cart…
-                </td>
-              </tr>
-            ) : (
-              items.map((row, i) => (
-                <tr key={`${row.name}-${i}`}>
-                  <td style={{ fontWeight: 500, fontSize: 15 }}>{row.name || '—'}</td>
-                  <td className="text-right mono">{row.qty}</td>
-                  <td className="text-right mono">{fmt(row.price)}</td>
-                  <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(row.subtotal)}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </section>
-
-      {items.length > 0 && (
-        <section style={{
-          marginTop: 20,
-          padding: '18px 22px',
-          background: 'var(--bg-raised)',
+          height: 140,
           borderRadius: 12,
-          border: '1px solid var(--border-default)',
+          overflow: 'hidden',
+          position: 'relative',
+          backgroundImage: `url("${currentBg}")`,
+          // Use a 'zoomed-out' fit so more of the island is visible
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
         }}>
-          {taxMode === 'inclusive' && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
-              Amounts include tax
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(0,0,0,0.18), rgba(0,0,0,0.28))' }} />
+          <div style={{ position: 'relative', zIndex: 2, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'white' }}>
+            <div>
+              <div style={{ fontSize: 13, opacity: 0.9 }}>Your order</div>
+              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>{organisation?.name || 'Cosmopolitan'}</h1>
+              {branchName && (
+                <div style={{ fontSize: 13, opacity: 0.9, marginTop: 6 }}>{branchName}</div>
+              )}
+              {cashierName && (
+                <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>Terminal: {cashierName}</div>
+              )}
             </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-            <span>Taxable amount</span>
-            <span className="mono">{fmt(subtotal)}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-            <span>Tax amount</span>
-            <span className="mono">{fmt(tax)}</span>
-          </div>
-          {discount > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--green)', marginBottom: 6 }}>
-              <span>Discount</span>
-              <span className="mono">−{fmt(discount)}</span>
+            <div style={{
+              fontSize: 12,
+              padding: '6px 12px',
+              borderRadius: 20,
+              background: connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
+              color: connected ? 'var(--green)' : 'var(--red)',
+              fontWeight: 600,
+            }}>
+              {connected ? 'Live' : 'Connecting…'}
             </div>
-          )}
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginTop: 14,
-            paddingTop: 14,
-            borderTop: '1px solid var(--border-default)',
-          }}>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>Total</span>
-            <span style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>
-              {fmt(total)}
-            </span>
           </div>
-        </section>
-      )}
+        </div>
+      </div>
 
-      <p style={{ marginTop: 20, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
-        Session code: <span className="mono" style={{ fontWeight: 600 }}>{code}</span>
-      </p>
+      <div className="customer-display-grid" style={{ marginBottom: 24 }}>
+        <div className="customer-left">
+          <section style={{
+            padding: '16px 18px',
+            background: 'var(--bg-surface)',
+            borderRadius: 12,
+            border: '1px solid var(--border-default)',
+          }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Customer</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>{customer?.name || 'Walk-in'}</div>
+            {customer?.phone && (
+              <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 4 }}>{customer.phone}</div>
+            )}
+          </section>
+
+          {items.length > 0 && (
+            <section style={{
+              padding: '18px 22px',
+              background: 'var(--bg-raised)',
+              borderRadius: 12,
+              border: '1px solid var(--border-default)',
+            }}>
+              {taxMode === 'inclusive' && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+                  Amounts include tax
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
+                <span>Taxable amount</span>
+                <span className="mono">{fmt(subtotal)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
+                <span>Tax amount</span>
+                <span className="mono">{fmt(tax)}</span>
+              </div>
+              {discount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--green)', marginBottom: 6 }}>
+                  <span>Discount</span>
+                  <span className="mono">−{fmt(discount)}</span>
+                </div>
+              )}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: 14,
+                paddingTop: 14,
+                borderTop: '1px solid var(--border-default)',
+              }}>
+                <span style={{ fontSize: 16, fontWeight: 600 }}>Total</span>
+                <span style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>
+                  {fmt(total)}
+                </span>
+              </div>
+            </section>
+          )}
+
+          <p style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+            Session code: <span className="mono" style={{ fontWeight: 600 }}>{code}</span>
+          </p>
+        </div>
+
+        <div className="customer-right">
+          <section style={{
+            background: 'var(--bg-surface)',
+            borderRadius: 12,
+            border: '1px solid var(--border-default)',
+            overflow: 'hidden',
+          }}>
+            <table className="data-table" style={{ margin: 0 }}>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th className="text-right">Qty</th>
+                  <th className="text-right">Rate</th>
+                  <th className="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>
+                      Waiting for POS cart…
+                    </td>
+                  </tr>
+                ) : (
+                  items.map((row, i) => (
+                    <tr key={`${row.name}-${i}`}>
+                      <td style={{ fontWeight: 500, fontSize: 15 }}>{row.name || '—'}</td>
+                      <td className="text-right mono">{row.qty}</td>
+                      <td className="text-right mono">{fmt(row.price)}</td>
+                      <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(row.subtotal)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </section>
+        </div>
+      </div>
     </div>
   )
 }
