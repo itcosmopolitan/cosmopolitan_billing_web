@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { setupAPI } from '@/api'
@@ -14,38 +14,38 @@ import LoginPage from '@/pages/auth/LoginPage'
 import SetupPage from '@/pages/auth/SetupPage'
 import ChangePasswordPage from '@/pages/auth/ChangePasswordPage'
 
-const Dashboard = lazy(() => import('@/features/dashboard/DashboardPage'))
-const POSPage = lazy(() => import('@/pages/pos/POSPage'))
-const ItemsPage = lazy(() => import('@/pages/inventory/ItemsPage'))
-const ItemMasterPage = lazy(() => import('@/pages/inventory/ItemMasterPage'))
-const NewItemPage = lazy(() => import('@/pages/inventory/NewItemPage'))
-const EditItemPage = lazy(() => import('@/pages/inventory/EditItemPage'))
-const TransfersPage = lazy(() => import('@/pages/inventory/TransfersPage'))
-const NewTransferPage = lazy(() => import('@/pages/inventory/NewTransferPage'))
-const EditTransferPage = lazy(() => import('@/pages/inventory/EditTransferPage'))
-const AdjustmentsPage = lazy(() => import('@/pages/inventory/AdjustmentsPage'))
-const SalesPage = lazy(() => import('@/pages/sales/SalesPage'))
-const QuoteFormPage = lazy(() => import('@/pages/sales/QuoteFormPage'))
-const OrderFormPage = lazy(() => import('@/pages/sales/OrderFormPage'))
-const InvoiceFormPage = lazy(() => import('@/pages/sales/InvoiceFormPage'))
-const InvoiceEditPage = lazy(() => import('@/pages/sales/InvoiceEditPage'))
-const PaymentFormPage = lazy(() => import('@/pages/sales/PaymentFormPage'))
-const ReturnFormPage = lazy(() => import('@/pages/sales/ReturnFormPage'))
-const PurchasesPage = lazy(() => import('@/pages/purchases/PurchasesPage'))
-const PurchaseOrderFormPage = lazy(() => import('@/pages/purchases/PurchaseOrderFormPage'))
-const BillFormPage = lazy(() => import('@/pages/purchases/BillFormPage'))
-const BillEditPage = lazy(() => import('@/pages/purchases/BillEditPage'))
-const VendorPaymentFormPage = lazy(() => import('@/pages/purchases/VendorPaymentFormPage'))
-const VendorReturnFormPage = lazy(() => import('@/pages/purchases/VendorReturnFormPage'))
-const CustomersPage = lazy(() => import('@/pages/customers/CustomersPage'))
-const VendorsPage = lazy(() => import('@/pages/vendors/VendorsPage'))
-const CashPage = lazy(() => import('@/pages/cash/CashPage'))
-const CashMonitorPage = lazy(() => import('@/pages/cash/CashMonitorPage'))
-const ReportsPage = lazy(() => import('@/pages/reports/ReportsPage'))
-const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'))
-const AuditTrailPage = lazy(() => import('@/pages/AuditTrail'))
-const CustomerDisplayPage = lazy(() => import('@/pages/display/CustomerDisplayPage'))
-const SalesTaxInvoicePreview = lazy(() => import('@/pages/invoices/SalesTaxInvoicePreview'))
+import Dashboard     from '@/features/dashboard/DashboardPage'
+import POSPage       from '@/pages/pos/POSPage'
+import ItemsPage     from '@/pages/inventory/ItemsPage'
+import ItemMasterPage from '@/pages/inventory/ItemMasterPage'
+import NewItemPage from '@/pages/inventory/NewItemPage'
+import EditItemPage from '@/pages/inventory/EditItemPage'
+import TransfersPage from '@/pages/inventory/TransfersPage'
+import NewTransferPage from '@/pages/inventory/NewTransferPage'
+import EditTransferPage from '@/pages/inventory/EditTransferPage'
+import AdjustmentsPage from '@/pages/inventory/AdjustmentsPage'
+import SalesPage     from '@/pages/sales/SalesPage'
+import QuoteFormPage from '@/pages/sales/QuoteFormPage'
+import OrderFormPage from '@/pages/sales/OrderFormPage'
+import InvoiceFormPage from '@/pages/sales/InvoiceFormPage'
+import InvoiceEditPage from '@/pages/sales/InvoiceEditPage'
+import PaymentFormPage from '@/pages/sales/PaymentFormPage'
+import ReturnFormPage from '@/pages/sales/ReturnFormPage'
+import PurchasesPage from '@/pages/purchases/PurchasesPage'
+import PurchaseOrderFormPage from '@/pages/purchases/PurchaseOrderFormPage'
+import BillFormPage from '@/pages/purchases/BillFormPage'
+import BillEditPage from '@/pages/purchases/BillEditPage'
+import VendorPaymentFormPage from '@/pages/purchases/VendorPaymentFormPage'
+import VendorReturnFormPage from '@/pages/purchases/VendorReturnFormPage'
+import CustomersPage from '@/pages/customers/CustomersPage'
+import VendorsPage   from '@/pages/vendors/VendorsPage'
+import CashPage        from '@/pages/cash/CashPage'
+import CashMonitorPage from '@/pages/cash/CashMonitorPage'
+import ReportsPage   from '@/pages/reports/ReportsPage'
+import SettingsPage  from '@/pages/settings/SettingsPage'
+import AuditTrailPage from '@/pages/AuditTrail'
+import CustomerDisplayPage from '@/pages/display/CustomerDisplayPage'
+import SalesTaxInvoicePreview from '@/pages/invoices/SalesTaxInvoicePreview'
 
 function AppShell() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
@@ -152,22 +152,10 @@ export default function App() {
         }
 
         const data = token
-          ? await bootstrapAuthenticatedData({ includeBranches: false })
+          ? await bootstrapAuthenticatedData()
           : { ...(await bootstrapPublicData()), branches: [], user: null, permissions: [] }
         if (cancelled) return
         applyBootstrapToStore(data, { setSession, setPermCatalog, setBranches })
-
-        if (token) {
-          const branchData = await bootstrapAuthenticatedData({ includeBranches: true }).catch(() => ({
-            catalog: {},
-            branches: [],
-            user: null,
-            permissions: [],
-          }))
-          if (!cancelled) {
-            applyBootstrapToStore(branchData, { setSession, setPermCatalog, setBranches })
-          }
-        }
       } finally {
         if (!cancelled) {
           setBooting(false)
@@ -176,42 +164,40 @@ export default function App() {
       }
     })()
     return () => { cancelled = true }
-  }, [setSession, setPermCatalog, setBranches])
+  }, [setSession, setPermCatalog, setBranches, location.pathname])
 
   if (!setupStatusResolved || booting) return <BootSplash />
   if (setupRequired && location.pathname !== '/setup') return <Navigate to="/setup" replace />
 
   return (
-    <Suspense fallback={<BootSplash />}>
-      <Routes>
-        {/* Public live display routes — no login; open on second device/monitor. */}
-        <Route path="/customer-view" element={<CustomerDisplayPage />} />
-        <Route path="/customer-view/:roomId" element={<CustomerDisplayPage />} />
-        <Route path="/setup" element={<SetupPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        {/* /change-password sits OUTSIDE the RequirePasswordSet wrap on purpose
-            — that's the one route users with must_change_password=true need to
-            reach. RequireAuth still applies, so visiting it without a JWT
-            bounces to /login. */}
-        <Route
-          path="/change-password"
-          element={
-            <RequireAuth>
-              <ChangePasswordPage />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/*"
-          element={
-            <RequireAuth>
-              <RequirePasswordSet>
-                <AppShell />
-              </RequirePasswordSet>
-            </RequireAuth>
-          }
-        />
-      </Routes>
-    </Suspense>
+    <Routes>
+      {/* Public live display routes — no login; open on second device/monitor. */}
+      <Route path="/customer-view" element={<CustomerDisplayPage />} />
+      <Route path="/customer-view/:roomId" element={<CustomerDisplayPage />} />
+      <Route path="/setup" element={<SetupPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      {/* /change-password sits OUTSIDE the RequirePasswordSet wrap on purpose
+          — that's the one route users with must_change_password=true need to
+          reach. RequireAuth still applies, so visiting it without a JWT
+          bounces to /login. */}
+      <Route
+        path="/change-password"
+        element={
+          <RequireAuth>
+            <ChangePasswordPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/*"
+        element={
+          <RequireAuth>
+            <RequirePasswordSet>
+              <AppShell />
+            </RequirePasswordSet>
+          </RequireAuth>
+        }
+      />
+    </Routes>
   )
 }
