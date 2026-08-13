@@ -262,10 +262,6 @@ function CustomerDisplayLive({ roomId }) {
               </div>
             </section>
           )}
-
-          <p style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-            Session code: <span className="mono" style={{ fontWeight: 600 }}>{code}</span>
-          </p>
         </div>
 
         <div className="customer-right">

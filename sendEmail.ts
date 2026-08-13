@@ -61,7 +61,7 @@ function buildEmailHtml(emailType: EmailType, variables: Record<string, string |
 }
 
 export async function sendEmail(options: SendEmailOptions) {
-  const { emailType, to, variables, fromEmail = 'support@indogreeninternational.com', resendApiKey = process.env.RESEND_API_KEY } = options;
+  const { emailType, to, variables, fromEmail = 'it@cosmopolitan.com.mv', resendApiKey = process.env.RESEND_API_KEY } = options;
 
   ensureRequiredVariables(emailType, variables);
 

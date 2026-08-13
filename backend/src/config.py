@@ -58,9 +58,14 @@ class Settings(BaseSettings):
     demo_mode: bool = True
     # ─── Email / Resend ───────────────────────────────────────────────────
     resend_api_key: str = ""
-    resend_from_email: str = "onboarding@resend.dev"
+    resend_from_email: str = "it@cosmopolitan.com.mv"
     frontend_url: str = "http://localhost:5173"
-    support_email: str = "support@indogreeninternational.com"
+    support_email: str = "it@cosmopolitan.com.mv"
+    company_name: str = "Cosmopolitan Champa Brothers Maldives Pvt Ltd"
+    company_address: str = (
+        "LOT NO-10627, Haivakaru Magu, Hulhumale', Republic of Maldives\n"
+        "T: +960 331 0477 | E: info@cosmopolitan.com.mv"
+    )
     # ─── Dashboard Read Models ────────────────────────────────────────────
     dashboard_use_materialized_views: bool = False
 

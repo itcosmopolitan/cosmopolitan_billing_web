@@ -685,8 +685,8 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
     }
   }
 
-  const previewCompany = orgPreview.name || 'Your Company Name'
-  const previewAddress = orgPreview.address || 'Registered address'
+  const previewCompany = orgPreview.name || 'Cosmopolitian Campa brothers'
+  const previewAddress = orgPreview.address || '-'
   const previewPhone = orgPreview.phone || '—'
   const previewGst = orgPreview.gstin || '—'
 
