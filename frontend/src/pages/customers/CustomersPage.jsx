@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_MANAGERS_URL } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
-import { useDebouncedFilters } from '@/features/dashboard/hooks/useDebouncedFilters'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { decomposeAddress } from '@/utils/address'
@@ -33,7 +32,6 @@ export default function CustomersPage() {
   const [custSummary, setCustSummary] = useState(null)
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
-  const debouncedSearch = useDebouncedFilters(search, 300)
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -142,7 +140,7 @@ export default function CustomersPage() {
 
   useEffect(() => {
     setCustSkip(0)
-  }, [debouncedSearch, typeF])
+  }, [search, typeF])
 
   useEffect(() => {
     const unsub = subscribeToBranchChanged(() => {
@@ -162,7 +160,7 @@ export default function CustomersPage() {
           limit: custLimit,
           sort_by: custSortBy,
           sort_order: custSortOrder,
-          search: debouncedSearch || undefined,
+          search: search || undefined,
           customer_type: typeF || undefined,
         })
         const { items, total, summary } = unwrapPaged(raw)
@@ -200,7 +198,7 @@ export default function CustomersPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [custSkip, custLimit, debouncedSearch, typeF, listVersion, custSortBy, custSortOrder, activeBranch?.id])
+  }, [custSkip, custLimit, search, typeF, listVersion, custSortBy, custSortOrder, activeBranch?.id])
 
   const onSort = (key) => {
     setCustSkip(0)

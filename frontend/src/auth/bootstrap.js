@@ -11,22 +11,17 @@ export async function bootstrapPublicData() {
   return { catalog: catalog || {} }
 }
 
-export async function bootstrapAuthenticatedData({ includeBranches = false } = {}) {
+export async function bootstrapAuthenticatedData() {
   const token = localStorage.getItem('retailos_token')
   if (!token) {
     return { catalog: {}, branches: [], user: null, permissions: [] }
   }
 
-  const requests = [
+  const [catalog, branches, me] = await Promise.all([
     permissionsAPI.catalog().catch(() => ({})),
+    fetchAllList(branchesAPI.list).catch(() => []),
     authAPI.me().catch(() => null),
-  ]
-
-  if (includeBranches) {
-    requests.push(fetchAllList(branchesAPI.list).catch(() => []))
-  }
-
-  const [catalog, me, branches = []] = await Promise.all(requests)
+  ])
 
   return {
     catalog: catalog || {},

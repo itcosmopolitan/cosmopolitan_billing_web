@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
-import { useDebouncedFilters } from '@/features/dashboard/hooks/useDebouncedFilters'
 import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
 import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
@@ -477,7 +476,6 @@ export default function ReportsPage() {
   const [dateTo, setDateTo] = useState(today)
   const [branchId, setBranchId] = useState('')
   const [search, setSearch] = useState('')
-  const debouncedSearch = useDebouncedFilters(search, 300)
   const [sortBy, setSortBy] = useState(REPORT_MAP[DEFAULT_REPORT].defaultSort)
   const [sortOrder, setSortOrder] = useState('desc')
   const [skip, setSkip] = useState(0)
@@ -536,7 +534,7 @@ export default function ReportsPage() {
           branch_id: branchId || undefined,
           date_from: dateFrom,
           date_to: dateTo,
-          search: debouncedSearch || undefined,
+          search: search || undefined,
           sort_by: sortBy,
           sort_order: sortOrder,
           skip,
@@ -582,7 +580,7 @@ export default function ReportsPage() {
     }
 
     fetchData()
-  }, [selectedReport, branchId, dateFrom, dateTo, debouncedSearch, sortBy, sortOrder, skip, limit, runKey])
+  }, [selectedReport, branchId, dateFrom, dateTo, search, sortBy, sortOrder, skip, limit, runKey])
   // Helpers — fall back to seed-derived numbers when the API hasn't replied
   // yet, so the page stays usable on first paint.
   const seedSalesTotal = useMemo(() => SALES_INVOICES.reduce((s, i) => s + i.total, 0), [])

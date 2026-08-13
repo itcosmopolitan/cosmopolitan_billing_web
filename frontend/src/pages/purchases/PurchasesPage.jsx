@@ -22,7 +22,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
-import { useDebouncedFilters } from '@/features/dashboard/hooks/useDebouncedFilters'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
@@ -66,7 +65,6 @@ export default function PurchasesPage() {
   const can = useCan()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const [search, setSearch]       = useState('')
-  const debouncedSearch = useDebouncedFilters(search, 300)
   const [billStatusF, setBillStatusF]   = useState('')
   const [orderStatusF, setOrderStatusF] = useState('')
   const [grnStatusF, setGrnStatusF]     = useState('')
@@ -288,7 +286,7 @@ export default function PurchasesPage() {
     setGrnSkip(0)
     setRetSkip(0)
     setPaySkip(0)
-  }, [debouncedSearch, billStatusF, orderStatusF, grnStatusF, retStatusF, vendorF, dateFrom, dateTo])
+  }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, vendorF, dateFrom, dateTo])
 
   // Re-fetch when active branch changes
   useEffect(() => {
@@ -319,7 +317,7 @@ export default function PurchasesPage() {
             limit: billLimit,
             sort_by: billSortBy,
             sort_order: billSortOrder,
-            search: debouncedSearch || undefined,
+            search: search || undefined,
             status: billStatusF || undefined,
             vendor_id: vendorF || undefined,
             date_from: dateFrom || undefined,
@@ -347,7 +345,7 @@ export default function PurchasesPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, billSkip, billLimit, debouncedSearch, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
+  }, [tab, activeBranch?.id, billSkip, billLimit, search, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
 
   // Orders list — same no-branch-filter policy as bills (see above).
   useEffect(() => {
@@ -364,7 +362,7 @@ export default function PurchasesPage() {
             limit: orderLimit,
             sort_by: orderSortBy,
             sort_order: orderSortOrder,
-            search: debouncedSearch || undefined,
+            search: search || undefined,
             status: orderStatusF || undefined,
             vendor_id: vendorF || undefined,
             date_from: dateFrom || undefined,
@@ -391,7 +389,7 @@ export default function PurchasesPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, orderSkip, orderLimit, debouncedSearch, orderStatusF, vendorF, dateFrom, dateTo, listVersion, orderSortBy, orderSortOrder])
+  }, [tab, activeBranch?.id, orderSkip, orderLimit, search, orderStatusF, vendorF, dateFrom, dateTo, listVersion, orderSortBy, orderSortOrder])
 
   // GRNs list
   useEffect(() => {
@@ -405,7 +403,7 @@ export default function PurchasesPage() {
           limit: grnLimit,
           sort_by: grnSortBy,
           sort_order: grnSortOrder,
-          search: debouncedSearch || undefined,
+          search: search || undefined,
           status: grnStatusF || undefined,
           vendor_id: vendorF || undefined,
           date_from: dateFrom || undefined,
@@ -427,7 +425,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, grnSkip, grnLimit, debouncedSearch, grnStatusF, vendorF, dateFrom, dateTo, listVersion, grnSortBy, grnSortOrder])
+  }, [tab, activeBranch?.id, grnSkip, grnLimit, search, grnStatusF, vendorF, dateFrom, dateTo, listVersion, grnSortBy, grnSortOrder])
 
   // Returns list
   useEffect(() => {
@@ -441,7 +439,7 @@ export default function PurchasesPage() {
           limit: retLimit,
           sort_by: retSortBy,
           sort_order: retSortOrder,
-          search: debouncedSearch || undefined,
+          search: search || undefined,
           status: retStatusF || undefined,
           vendor_id: vendorF || undefined,
           date_from: dateFrom || undefined,
@@ -462,7 +460,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, retSkip, retLimit, listVersion, retSortBy, retSortOrder, debouncedSearch, retStatusF, vendorF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, retSkip, retLimit, listVersion, retSortBy, retSortOrder, search, retStatusF, vendorF, dateFrom, dateTo])
 
   // Payments list
   useEffect(() => {
@@ -476,7 +474,7 @@ export default function PurchasesPage() {
           limit: payLimit,
           sort_by: paySortBy,
           sort_order: paySortOrder,
-          search: debouncedSearch || undefined,
+          search: search || undefined,
           vendor_id: vendorF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
@@ -496,7 +494,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, debouncedSearch, vendorF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, dateFrom, dateTo])
 
   // Prefill payment amount when the modal opens — same UX as
   // SalesPage's record-payment flow.

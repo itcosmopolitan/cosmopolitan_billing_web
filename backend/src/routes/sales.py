@@ -193,7 +193,6 @@ def _log_sales_invoice_history(
     metadata: Optional[dict] = None,
     action: Optional[str] = None,
     risk: str = "low",
-    branch_id: Optional[str] = None,
 ) -> None:
     """Shared sales_invoice activity logger (Phase D incremental rollout)."""
     db.add(AuditLog(
@@ -210,7 +209,6 @@ def _log_sales_invoice_history(
         detail=detail,
         risk=risk,
         ip_address=None,
-        branch_id=branch_id,
     ))
 
 
@@ -285,7 +283,6 @@ def _log_sales_return_history(
     metadata: Optional[dict] = None,
     action: Optional[str] = None,
     risk: str = "low",
-    branch_id: Optional[str] = None,
 ) -> None:
     """Shared sales_return activity logger (Phase D incremental rollout)."""
     db.add(AuditLog(
@@ -302,7 +299,6 @@ def _log_sales_return_history(
         detail=detail,
         risk=risk,
         ip_address=None,
-        branch_id=branch_id,
     ))
 
 
@@ -1316,7 +1312,6 @@ async def create_invoice(
             ),
             risk="low",
             ip_address=None,
-            branch_id=data.branch_id,
         ))
         # Also write a CustomerPayment row so the Payments tab shows
         # this sale alongside cash/upi/etc payments. Parity with the
@@ -1416,7 +1411,6 @@ async def create_invoice(
         event_type="created",
         detail=f"Created sales invoice {inv.number}",
         metadata={"invoice_id": inv.id, "total": round(float(total or 0), 2), "status": status},
-        branch_id=data.branch_id,
     )
 
     await _write_post_commit_audit(
@@ -1450,7 +1444,6 @@ async def create_invoice(
             action="record_payment",
             detail=f"Recorded payment of {round(float(paid), 2)} for {inv.number}",
             metadata={"invoice_id": inv.id, "amount": round(float(paid), 2), "payment_mode": data.payment_mode},
-            branch_id=data.branch_id,
         )
         # Log a status change if the paid-at-create altered the invoice status
         prev_status = "pending"
@@ -1463,7 +1456,6 @@ async def create_invoice(
                 action="update_invoice_status",
                 detail=f"Status changed: {prev_status} -> {next_status}",
                 metadata={"from": prev_status, "to": next_status},
-                branch_id=inv.branch_id,
             )
         await _write_post_commit_audit(
             db,
@@ -1621,8 +1613,20 @@ async def record_payment(
                 ),
                 risk="low",
                 ip_address=None,
-                branch_id=getattr(pre_row, "branch_id", None),
             ))
+
+    # 2026-05-24: also write a CustomerPayment + 1 allocation so the
+    # legacy single-invoice flow shows up in the new Payments tab.
+    # Same data as the per-invoice update — just a parallel record for
+    # reporting. Generated number uses the same PAY-YYYY-NNNN pattern as
+    # the multi-invoice flow so payment numbers are contiguous regardless
+    # of entry point.
+    #
+    # 2026-05-25: simplified — earlier version tried to reuse the `cust`
+    # variable from the credit-bump block above, but that variable is
+    # only assigned when credit_applied > 0. Defensive scoping was
+    # confusing readers (and easy to break). Now always look up the
+    # customer name fresh (cheap — one indexed query). Walk-in invoices
     # (no customer_id) get "Walk-in" without a query.
     pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
     if pre_row.customer_id:
@@ -1698,7 +1702,6 @@ async def record_payment(
             ),
             risk="low",
             ip_address=None,
-            branch_id=getattr(pre_row, "branch_id", None),
         ))
 
     if pre_row.customer_id:
@@ -1773,7 +1776,6 @@ async def submit_invoice(
         event_type="submitted", action="submit_invoice",
         detail=f"Invoice {inv.number} submitted for approval by {user.name}",
         metadata={"status": "pending_approval"},
-        branch_id=inv.branch_id,
     )
     await _write_post_commit_audit(
         db, action="Invoice Submitted", module="Sales", reference_id=inv.number,
@@ -1889,7 +1891,6 @@ async def approve_invoice(
                     detail=(f"Credit-mode invoice {inv.number} approved: −MVR{total} from "
                             f"{cust.name}'s credit (was MVR{prev_bal:.2f}, now MVR{new_bal:.2f})"),
                     risk="low", ip_address=None,
-                    branch_id=inv.branch_id,
                 ))
                 pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
                 pay = CustomerPayment(
@@ -1970,7 +1971,6 @@ async def approve_invoice(
         event_type="approved", action="approve_invoice",
         detail=f"Invoice {inv.number} approved by {user.name}",
         metadata={"status": new_status, "approved_by": user.name},
-        branch_id=inv.branch_id,
     )
     await _write_post_commit_audit(
         db, action="Invoice Approved", module="Sales", reference_id=inv.number,
@@ -2015,7 +2015,6 @@ async def reject_invoice(
         event_type="rejected", action="reject_invoice",
         detail=f"Invoice {inv.number} rejected by {user.name}",
         metadata={"rejected_by": user.name, "reason": body.notes or ""},
-        branch_id=inv.branch_id,
     )
     await _write_post_commit_audit(
         db, action="Invoice Rejected", module="Sales", reference_id=inv.number,
@@ -2213,7 +2212,6 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
             user_name=getattr(user, "name", None),
         risk="medium",
         ip_address=None,
-        branch_id=pay.branch_id,
     ))
 
     for invoice_id, amount in alloc_amount_by_invoice.items():
@@ -2232,7 +2230,6 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
                 "amount": round(float(amount), 2),
             },
             risk="medium",
-            branch_id=inv.branch_id,
         )
         prev_status = status_before.get(inv.id)
         next_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
@@ -2244,7 +2241,6 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
                 action="update_invoice_status",
                 detail=f"Status changed: {prev_status} -> {next_status}",
                 metadata={"from": prev_status, "to": next_status},
-                branch_id=inv.branch_id,
             )
 
     await db.commit()
@@ -2383,7 +2379,6 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             ),
             risk="low",
             ip_address=None,
-            branch_id=data.branch_id,
         ))
 
     # Create the Payment record + per-allocation rows.
@@ -2454,7 +2449,6 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             ),
             risk="low",
             ip_address=None,
-            branch_id=data.branch_id,
         ))
 
     for a in data.allocations:
@@ -2472,7 +2466,6 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
                 "payment_mode": data.payment_mode,
                 "payment_ref": data.payment_ref or "",
             },
-            branch_id=inv.branch_id,
         )
         prev_status = status_before.get(inv.id)
         next_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
@@ -2484,7 +2477,6 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
                 action="update_invoice_status",
                 detail=f"Status changed: {prev_status} -> {next_status}",
                 metadata={"from": prev_status, "to": next_status},
-                branch_id=inv.branch_id,
             )
 
     await sync_customer_outstanding(db, data.customer_id)
@@ -2835,7 +2827,6 @@ async def cancel_invoice(
         detail=f"Voided invoice {inv.number}",
         metadata={"invoice_id": inv.id, "stock_restored": stock_restored},
         risk="high",
-        branch_id=inv.branch_id,
     )
     _log_sales_invoice_history(db, user=user,
         invoice_id=inv.id,
@@ -2844,7 +2835,6 @@ async def cancel_invoice(
         action="update_invoice_status",
         detail=f"Status changed: {prev_status} -> cancelled",
         metadata={"from": prev_status, "to": "cancelled"},
-        branch_id=inv.branch_id,
     )
 
     await _write_post_commit_audit(
@@ -4933,7 +4923,6 @@ async def void_return(return_id: str, db: AsyncSession = Depends(get_db), user: 
             "target_record_number": ret.invoice_number,
         },
         risk="medium",
-        branch_id=ret.branch_id,
     )
 
     await db.commit()
@@ -5084,7 +5073,6 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
             "target_record_number": ret.invoice_number,
         },
         risk="medium",
-        branch_id=ret.branch_id,
     )
 
     await db.commit()
@@ -5426,15 +5414,21 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
                 ),
                 risk="low",
                 ip_address=None,
-                branch_id=inv.branch_id,
-                date=ret.date,
-                description=f"Refund for return {ret.number} on {inv.number}",
-                category="Sale Return — Refund",
-                source_type="sale_return",
-                source_id=ret.id,
-                source_ref=ret.number,
-                recorded_by=data.created_by or "Staff",
             ))
+
+    if method == "cash" and credited > 0:
+        await record_cash_out(
+            db,
+            branch_id=inv.branch_id,
+            amount=credited,
+            date=ret.date,
+            description=f"Refund for return {ret.number} on {inv.number}",
+            category="Sale Return — Refund",
+            source_type="sale_return",
+            source_id=ret.id,
+            source_ref=ret.number,
+            recorded_by=data.created_by or "Staff",
+        )
 
     _recompute_invoice_status(inv)
 
@@ -5455,7 +5449,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             "target_record_number": ret.number,
             "credited_amount": round(float(credited or 0), 2),
         },
-        branch_id=inv.branch_id,
     )
     next_invoice_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
     if prev_invoice_status != next_invoice_status:
@@ -5466,7 +5459,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             action="update_invoice_status",
             detail=f"Status changed: {prev_invoice_status} -> {next_invoice_status}",
             metadata={"from": prev_invoice_status, "to": next_invoice_status},
-            branch_id=inv.branch_id,
         )
 
     _log_sales_return_history(db, user=user,
@@ -5483,7 +5475,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             "target_record_id": ret.invoice_id,
             "target_record_number": ret.invoice_number,
         },
-        branch_id=ret.branch_id,
     )
     _log_sales_return_history(db, user=user,
         return_id=ret.id,
@@ -5492,7 +5483,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
         action="set_sales_return_reason",
         detail=f"Set reason for sales return {ret.number}",
         metadata={"reason": ret.reason or ""},
-        branch_id=ret.branch_id,
     )
     _log_sales_return_history(db, user=user,
         return_id=ret.id,
@@ -5507,7 +5497,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
             "target_record_id": ret.invoice_id,
             "target_record_number": ret.invoice_number,
         },
-        branch_id=ret.branch_id,
     )
     if method in ("cash", "credit") and credited > 0:
         _log_sales_return_history(db, user=user,
@@ -5520,7 +5509,6 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
                 "refund_method": method,
                 "credited_amount": round(float(credited), 2),
             },
-            branch_id=ret.branch_id,
         )
 
     await db.commit()
@@ -5814,7 +5802,6 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
             detail=f"Deleted sales invoice {inv.number}",
             metadata={"reason": "bulk_delete"},
             risk="medium",
-            branch_id=inv.branch_id,
         )
         _audit_delete(db, action="delete_invoice", ref=inv.number, snapshot=snapshot, user=user)
         await db.delete(inv)
@@ -5864,7 +5851,6 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
                 detail=f"Deleted sales return {ret.number}",
                 metadata={"reason": "bulk_delete"},
                 risk="medium",
-                branch_id=ret.branch_id,
             )
             _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot, user=user)
             await db.delete(ret)
@@ -5897,7 +5883,6 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
                 "target_record_number": ret.invoice_number,
             },
             risk="medium",
-            branch_id=ret.branch_id,
         )
         _audit_delete(db, action="delete_sales_return", ref=ret.number, snapshot=snapshot, user=user)
         invoice_ids_to_recalc.add(ret.invoice_id)
@@ -5968,7 +5953,6 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                         "amount": round(float(alloc.amount or 0), 2),
                     },
                     risk="medium",
-                    branch_id=inv.branch_id,
                 )
                 next_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
                 prev_status = status_before.get(inv.id)
@@ -5980,7 +5964,6 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                         action="update_invoice_status",
                         detail=f"Status changed: {prev_status} -> {next_status}",
                         metadata={"from": prev_status, "to": next_status},
-                        branch_id=inv.branch_id,
                     )
         # Reversal #2: credit-mode payment → refund the credit balance.
         if pay.payment_mode == "credit" and pay.customer_id and (pay.total_amount or 0) > 0:
