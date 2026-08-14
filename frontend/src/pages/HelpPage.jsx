@@ -409,23 +409,23 @@ export default function HelpPage() {
         textAlign: 'center',
       }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: 'var(--text-primary)' }}>
-          Need More Help?
+          📖 Need a Detailed User Guide?
         </h3>
         <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
-          For detailed documentation and guides, check out the complete documentation or contact your administrator.
+          Read step-by-step instructions for every task in the comprehensive user guide, written in simple language for everyone.
         </p>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
           <button
             className="btn btn-primary btn-sm"
-            onClick={() => window.open('/docs/FEATURES.md', '_blank')}
+            onClick={() => navigate('/docs/USER_GUIDE.md')}
           >
-            View Documentation
+            📖 Read User Guide
           </button>
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => navigate('/settings')}
+            onClick={() => navigate('/docs')}
           >
-            Settings
+            View All Documentation
           </button>
         </div>
       </div>
