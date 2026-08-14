@@ -58,6 +58,18 @@ def _to_datetime_bounds(date_from: Optional[date], date_to: Optional[date]) -> T
     return start_dt, end_dt
 
 
+def _coerce_query_value(value):
+    """FastAPI can hand routed Query(...)/Depends(...) objects to internal calls.
+    When a route function is invoked directly, normalize those placeholders to
+    their default values so internal callers can reuse the same logic safely.
+    """
+    if hasattr(value, "default") and value.default is not None:
+        return value.default
+    if hasattr(value, "default") and value.default is None:
+        return None
+    return value
+
+
 def _build_operation_type_filter(operation_type: str):
     key = operation_type.strip().lower()
     action = func.lower(AuditLog.action)
@@ -75,6 +87,7 @@ async def list_audit_logs(
     module: Optional[str] = Query(None),
     risk: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     operation_type: Optional[str] = Query(None),
@@ -85,6 +98,19 @@ async def list_audit_logs(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    module = _coerce_query_value(module)
+    risk = _coerce_query_value(risk)
+    user_id = _coerce_query_value(user_id)
+    branch_id = _coerce_query_value(branch_id)
+    date_from = _coerce_query_value(date_from)
+    date_to = _coerce_query_value(date_to)
+    operation_type = _coerce_query_value(operation_type)
+    operation_type_not = _coerce_query_value(operation_type_not)
+    search = _coerce_query_value(search)
+
+    if branch_id:
+        branch_id = await enforce_branch_access_optional(branch_id, user=user, db=db)
+
     stmt = select(AuditLog)
     count_stmt = select(func.count()).select_from(AuditLog)
 
@@ -96,6 +122,8 @@ async def list_audit_logs(
         filters.append(func.upper(AuditLog.risk) == risk.upper())
     if user_id:
         filters.append(AuditLog.user_id == user_id)
+    if branch_id:
+        filters.append(AuditLog.branch_id == branch_id)
 
     start_dt, end_dt = _to_datetime_bounds(date_from, date_to)
     if start_dt is not None:
