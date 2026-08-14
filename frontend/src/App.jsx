@@ -44,6 +44,7 @@ import CashMonitorPage from '@/pages/cash/CashMonitorPage'
 import ReportsPage   from '@/pages/reports/ReportsPage'
 import SettingsPage  from '@/pages/settings/SettingsPage'
 import AuditTrailPage from '@/pages/AuditTrail'
+import HelpPage from '@/pages/HelpPage'
 import CustomerDisplayPage from '@/pages/display/CustomerDisplayPage'
 import SalesTaxInvoicePreview from '@/pages/invoices/SalesTaxInvoicePreview'
 
@@ -101,6 +102,7 @@ function AppShell() {
             <Route path="/reports"    element={<RequirePerm perm="reports.view"><ReportsPage /></RequirePerm>} />
             <Route path="/settings"   element={<RequirePerm perm="settings.view"><SettingsPage /></RequirePerm>} />
             <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditTrailPage /></RequirePerm>} />
+            <Route path="/help"       element={<HelpPage />} />
             <Route path="/invoice-preview" element={<SalesTaxInvoicePreview />} />
           </Routes>
         </main>

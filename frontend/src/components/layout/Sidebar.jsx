@@ -29,6 +29,7 @@ const navItems = [
   { section: null,        path: '/reports',    Icon: Icon.BarChart,    label: 'Reports',         perm: 'reports.view' },
   { section: 'Admin',     path: '/settings',   Icon: Icon.Settings,    label: 'Settings',        perm: 'settings.view' },
   { section: null,        path: '/audit',      Icon: Icon.Search,      label: 'Audit Trail',     perm: 'audit.view' },
+  { section: null,        path: '/help',       Icon: Icon.HelpCircle,  label: 'Help',            perm: null },
 ]
 
 const SIDEBAR_W          = 220
