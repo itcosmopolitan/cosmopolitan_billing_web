@@ -674,7 +674,14 @@ async def list_quotations(
 @router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Get a specific quotation"""
-    result = await db.execute(select(Quotation).options(selectinload(Quotation.line_items), selectinload(Quotation.customer)).where(Quotation.id == quote_id))
+    result = await db.execute(
+        select(Quotation)
+        .options(
+            selectinload(Quotation.line_items).selectinload(QuotationLineItem.item),
+            selectinload(Quotation.customer),
+        )
+        .where(Quotation.id == quote_id)
+    )
     quote = result.unique().scalar_one_or_none()
     if not quote:
         raise HTTPException(404, "Quotation not found")
@@ -2925,7 +2932,7 @@ def _quote_dict(quote, items=None):
         d["items"] = [{
             "id": i.id,
             "itemId": i.item_id,
-            "sku": (i.item.sku if getattr(i, 'item', None) else None),
+            "sku": getattr(_loaded_rel(i, "item"), "sku", None),
             "name": i.name,
             "qty": i.qty,
             "price": i.price,
@@ -2998,7 +3005,7 @@ def _inv_dict(inv, items=None, sales_order_number=None):
     if items is not None:
         out_lines = []
         for i in items:
-            item_obj = getattr(i, "item", None)
+            item_obj = _loaded_rel(i, "item")
             def _snapshot_field(field_name):
                 value = getattr(i, field_name, None)
                 if value is not None:
