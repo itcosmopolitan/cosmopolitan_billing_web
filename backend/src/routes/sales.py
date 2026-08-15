@@ -1016,7 +1016,10 @@ async def update_invoice(
 
     res = await db.execute(
         select(SaleInvoice)
-        .options(selectinload(SaleInvoice.line_items))
+        .options(
+            selectinload(SaleInvoice.line_items),
+            selectinload(SaleInvoice.customer),
+        )
         .where(SaleInvoice.id == invoice_id)
     )
     inv = res.unique().scalar_one_or_none()

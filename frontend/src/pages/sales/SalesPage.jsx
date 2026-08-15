@@ -26,9 +26,9 @@ import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 // still placeholder shells today; PR 2 makes them real (model + endpoints +
 // CRUD). See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
 const TABS = [
-  { id: 'invoices',  label: 'Invoices' },
-  { id: 'orders',    label: 'Sales Orders' },
   { id: 'quotes',    label: 'Quotations' },
+  { id: 'orders',    label: 'Sales Orders' },
+  { id: 'invoices',  label: 'Invoices' },
   { id: 'returns',   label: 'Credit Notes / Returns' },
   // 2026-05-24: standalone Payments record — lists every payment ever
   // recorded (single-invoice via the row Pay button OR multi-invoice
