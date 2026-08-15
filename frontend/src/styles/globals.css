@@ -813,6 +813,62 @@ h4 { font-size: 14px; font-weight: 600; }
   min-width: 0;
 }
 
+.taxed-price-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.taxed-price-breakdown em {
+  font-style: normal;
+}
+
+.taxed-price-breakdown strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.taxed-price-input--compact {
+  width: 148px;
+  max-width: 100%;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.taxed-price-breakdown--compact {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  margin-top: 6px;
+  padding: 7px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.taxed-price-breakdown--compact span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.branch-pricing-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.branch-pricing-table td {
+  overflow: hidden;
+}
+
 .invoice-form-shell {
   display: grid;
   gap: 12px;
@@ -1184,6 +1240,10 @@ h4 { font-size: 14px; font-weight: 600; }
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
+}
+.data-table.branch-pricing-table th,
+.data-table.branch-pricing-table td {
+  vertical-align: top;
 }
 .data-table tbody tr:hover { background: var(--bg-raised); }
 .data-table tbody tr:last-child td { border-bottom: none; }

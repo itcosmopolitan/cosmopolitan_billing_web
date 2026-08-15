@@ -37,7 +37,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload, formatAllocationSummary } from '@/utils/batchAllocation'
@@ -290,10 +290,10 @@ export default function ConvertToInvoiceModal({
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
                       {line.order_line_id ? (
                         <span>
-                          {convertQty} of {line.qty} {line.qty === 1 ? 'unit' : 'units'} to invoice
+                          {fmtQty(convertQty)} of {fmtQty(line.qty)} {Number(line.qty) === 1 ? 'unit' : 'units'} to invoice
                         </span>
                       ) : (
-                        <span>{line.qty} {line.qty === 1 ? 'unit' : 'units'}</span>
+                        <span>{fmtQty(line.qty)} {Number(line.qty) === 1 ? 'unit' : 'units'}</span>
                       )}
                     </div>
                   </div>

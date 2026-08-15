@@ -5,7 +5,7 @@ import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel, AutocompleteDropdown } from '@/components/ui'
-import { FINANCIAL_YEAR_OPTIONS } from '@/utils/dropdownOptions'
+import { FINANCIAL_YEAR_OPTIONS, DECIMAL_PRECISION_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
@@ -22,6 +22,8 @@ const EMPTY_ORG_FORM = {
   state_code: '33',
   financial_year: 'Apr-Mar',
   allow_overselling: true,
+  amount_decimal_precision: 2,
+  quantity_decimal_precision: 2,
 }
 
 const TABS = [
@@ -110,6 +112,7 @@ export default function SettingsPage() {
   const peuf = (k,v) => setEditUserForm(f=>({...f,[k]:v}))
 
   // RBAC: roles + permission catalog (Phase 1 of Users & Roles)
+  const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const storeBranches = useAppStore((s) => s.branches)
   const setStoreBranches = useAppStore((s) => s.setBranches)
   const roles = useAppStore((s) => s.roles)
@@ -310,6 +313,8 @@ export default function SettingsPage() {
             state_code: data.state_code || '33',
             financial_year: data.financial_year || 'Apr-Mar',
             allow_overselling: data.allowOverselling !== false,
+            amount_decimal_precision: data.amountDecimalPrecision ?? 2,
+            quantity_decimal_precision: data.quantityDecimalPrecision ?? 2,
           })
         }
       } catch (err) {
@@ -341,6 +346,8 @@ export default function SettingsPage() {
         state_code: orgForm.state_code?.trim() || '33',
         financial_year: orgForm.financial_year || 'Apr-Mar',
         allow_overselling: orgForm.allow_overselling,
+        amount_decimal_precision: Number(orgForm.amount_decimal_precision),
+        quantity_decimal_precision: Number(orgForm.quantity_decimal_precision),
       })
       setOrgForm((prev) => ({
         ...prev,
@@ -355,7 +362,10 @@ export default function SettingsPage() {
         state_code: saved?.state_code ?? prev.state_code,
         financial_year: saved?.financial_year ?? prev.financial_year,
         allow_overselling: saved?.allowOverselling !== false,
+        amount_decimal_precision: saved?.amountDecimalPrecision ?? prev.amount_decimal_precision,
+        quantity_decimal_precision: saved?.quantityDecimalPrecision ?? prev.quantity_decimal_precision,
       }))
+      setDecimalPrecisionPrefs(saved)
       toast.success('Organisation profile saved')
     } catch (err) {
       console.error(err)
@@ -589,6 +599,32 @@ export default function SettingsPage() {
                 When off, POS, invoices, and sales orders block sales that exceed available stock.
               </div>
             </FormGroup>
+            <FormRow>
+              <FormGroup label="Amount decimal precision">
+                <AutocompleteDropdown
+                  value={String(orgForm.amount_decimal_precision ?? 2)}
+                  onChange={(v) => pof('amount_decimal_precision', Number(v))}
+                  options={DECIMAL_PRECISION_OPTIONS}
+                  isSearchFieldRequired={false}
+                  disabled={!can('settings.edit')}
+                />
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  How many decimal places to show for prices, totals, and payments. Default is 2.
+                </div>
+              </FormGroup>
+              <FormGroup label="Quantity decimal precision">
+                <AutocompleteDropdown
+                  value={String(orgForm.quantity_decimal_precision ?? 2)}
+                  onChange={(v) => pof('quantity_decimal_precision', Number(v))}
+                  options={DECIMAL_PRECISION_OPTIONS}
+                  isSearchFieldRequired={false}
+                  disabled={!can('settings.edit')}
+                />
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  How many decimal places to show for quantities and stock. Default is 2.
+                </div>
+              </FormGroup>
+            </FormRow>
             {can('settings.edit') && (
               <div style={{marginTop:6}}>
                 <button className="btn btn-primary btn-sm" onClick={saveOrg} disabled={orgSaving || loading}>

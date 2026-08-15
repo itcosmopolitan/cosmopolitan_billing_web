@@ -5,13 +5,13 @@ from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number, resolve_number
-from src.tax_calc import line_tax_amount, line_taxable_amount
+from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
 from src.models import (
     AuditLog,
     Customer,
@@ -712,21 +712,25 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     #      would silently change the total.
     #   3. line_total stored gross+tax−discount instead of net+tax,
     #      which interpreted the discount as a post-tax deduction.
-    # Now: line_discount is always a percent (0-100). Frontend is the
+    # Line discount is always a percent (0-100). Frontend is the
     # source of conversion (it offers a %/MVR toggle and converts MVR → %
     # before POST). See OrderFormModal / QuoteFormModal.
-    tax_mode = await _get_org_tax_mode(db)
+    # Line discount first, then document discount, then GST extract.
     line_rows = []  # list[(item, line_net, line_tax)]
-    subtotal = 0.0
-    tax_total = 0.0
+    inclusives = []
+    rates = []
     for item in data.items:
-        gross = round(item.qty * item.price, 2)
-        line_net = round(gross * (1 - (item.line_discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
-        line_rows.append((item, line_net, line_tax))
-        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
-        tax_total += line_tax
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+        line_net = _inclusive_after_line_discount(item.qty, item.price, item.line_discount)
+        line_rows.append((item, line_net, 0.0))
+        inclusives.append(line_net)
+        rates.append(item.tax_rate or 0)
+    taxed, subtotal, tax_total, total = rollup_inclusive_lines(
+        inclusives, rates, data.discount or 0,
+    )
+    line_rows = [
+        (item, line_net, tax)
+        for (item, line_net, _), (_, _, tax) in zip(line_rows, taxed)
+    ]
 
     # Create quotation
     quote = Quotation(
@@ -820,18 +824,21 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     # (matches the invoice/sales convention); QuotationLineItem stores
     # discount as a number too — we mirror what's already done in
     # create_quotation.
-    tax_mode = await _get_org_tax_mode(db)
-    subtotal = 0.0
-    tax_total = 0.0
     line_rows = []
+    inclusives = []
+    rates = []
     for i in data.items:
-        gross = round(i.qty * i.price, 2)
-        line_net = round(gross * (1 - (i.line_discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
-        line_rows.append((i, line_net, line_tax))
-        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
-        tax_total += line_tax
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+        line_net = _inclusive_after_line_discount(i.qty, i.price, i.line_discount)
+        line_rows.append((i, line_net, 0.0))
+        inclusives.append(line_net)
+        rates.append(i.tax_rate or 0)
+    taxed, subtotal, tax_total, total = rollup_inclusive_lines(
+        inclusives, rates, data.discount or 0,
+    )
+    line_rows = [
+        (i, line_net, tax)
+        for (i, line_net, _), (_, _, tax) in zip(line_rows, taxed)
+    ]
 
     quote.customer_id = data.customer_id
     quote.customer_name = data.customer_name
@@ -1039,26 +1046,11 @@ async def update_invoice(
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
 
-    tax_mode = "inclusive"
-    line_rows = []
-    for i in data.items:
-        gross = round(i.qty * i.price, 2)
-        line_disc_amt = max(0.0, min(gross, round(i.line_discount_amount or 0, 2)))
-        if line_disc_amt > 0:
-            line_amount = round(gross - line_disc_amt, 2)
-        else:
-            line_amount = round(gross * (1 - i.line_discount / 100), 2)
-        line_tax = line_tax_amount(line_amount, i.tax_rate, tax_mode)
-        line_taxable = line_taxable_amount(line_amount, i.tax_rate, tax_mode)
-        line_rows.append((i, line_amount, line_taxable, line_tax))
-    subtotal = sum(r[2] for r in line_rows)
-    tax_total = sum(r[3] for r in line_rows)
-    # Inclusive: document total is line amounts (tax already inside) minus discount.
-    total = round(sum(r[1] for r in line_rows) - data.discount, 2)
+    line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
 
     prev_customer_id = inv.customer_id
     if data.customer_id is not None:
-        inv.customer_id = data.customer_id
+        inv.customer_id = await _resolve_customer_id(db, data.customer_id)
     if data.customer_name is not None:
         inv.customer_name = data.customer_name
     if data.date:
@@ -1083,14 +1075,15 @@ async def update_invoice(
     item_ids = {item.item_id for item in data.items if item.item_id}
     item_map = await _load_items_by_id(db, item_ids)
     allow_oversell = await get_allow_overselling(db)
-    for item, _line_amount, line_taxable, _line_tax in line_rows:
+    for item, line_amount, _line_taxable, _line_tax in line_rows:
         item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=item.item_id, name=item.name,
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
-            line_total=line_taxable,
+            discount=_stored_line_discount_pct(item),
+            line_total=line_amount,
             **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
@@ -1112,7 +1105,15 @@ async def update_invoice(
             await sync_customer_outstanding(db, inv.customer_id)
 
     await db.commit()
-    li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
+    result = await db.execute(
+        select(SaleInvoice)
+        .options(
+            selectinload(SaleInvoice.line_items).selectinload(SaleLineItem.item),
+            selectinload(SaleInvoice.customer),
+        )
+        .where(SaleInvoice.id == invoice_id)
+    )
+    inv = result.scalar_one()
     sales_order_number = None
     if getattr(inv, "pending_order_id", None):
         so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
@@ -1122,7 +1123,7 @@ async def update_invoice(
     else:
         so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
         sales_order_number = so_res.scalar_one_or_none()
-    return _inv_dict(inv, li_res.scalars().all(), sales_order_number=sales_order_number)
+    return _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
@@ -1157,22 +1158,9 @@ async def create_invoice(
             )
     else:
         direct = await can_direct_commit(user, db, "invoices.approve")
-    tax_mode = "inclusive"
-    # Line amount after line discount; tax is extracted from inclusive prices.
-    line_rows = []
-    for i in data.items:
-        gross = round(i.qty * i.price, 2)
-        line_disc_amt = max(0.0, min(gross, round(i.line_discount_amount or 0, 2)))
-        if line_disc_amt > 0:
-            line_amount = round(gross - line_disc_amt, 2)
-        else:
-            line_amount = round(gross * (1 - i.line_discount / 100), 2)
-        line_tax = line_tax_amount(line_amount, i.tax_rate, tax_mode)
-        line_taxable = line_taxable_amount(line_amount, i.tax_rate, tax_mode)
-        line_rows.append((i, line_amount, line_taxable, line_tax))
-    subtotal  = sum(r[2] for r in line_rows)
-    tax_total = sum(r[3] for r in line_rows)
-    total = round(sum(r[1] for r in line_rows) - data.discount, 2)
+    # Line amount after line discount; document discount is applied next,
+    # then GST is extracted from the remaining inclusive amount.
+    line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
     is_paid_at_create = data.payment_mode is not None
     if direct:
         paid   = total if is_paid_at_create else 0.0
@@ -1263,15 +1251,15 @@ async def create_invoice(
     item_map = await _load_items_by_id(db, item_ids)
     allow_oversell = await get_allow_overselling(db)
 
-    for item, _line_amount, line_taxable, _line_tax in line_rows:
+    for item, line_amount, _line_taxable, _line_tax in line_rows:
         item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=item.item_id, name=item.name,
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
-            discount=item.line_discount or 0,
-            line_total=line_taxable,
+            discount=_stored_line_discount_pct(item),
+            line_total=line_amount,
             **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
@@ -2860,10 +2848,21 @@ async def cancel_invoice(
     )
     return {"status": "cancelled", "stock_restored": stock_restored}
 
+def _loaded_rel(obj, name):
+    """Return a relationship if already loaded; never trigger async lazy-load."""
+    if obj is None:
+        return None
+    state = sa_inspect(obj)
+    if name in state.unloaded:
+        return None
+    return getattr(obj, name, None)
+
+
 def _quote_dict(quote, items=None):
+    customer = _loaded_rel(quote, "customer")
     customer_code = None
-    if quote.customer_id:
-        customer_code = getattr(quote.customer, "customer_code", None) or None
+    if customer is not None:
+        customer_code = getattr(customer, "customer_code", None) or None
     if not customer_code and quote.customer_id:
         try:
             customer_code = _build_customer_code(quote.customer_id)
@@ -2872,26 +2871,27 @@ def _quote_dict(quote, items=None):
 
     d = {
         "id": quote.id, "number": quote.number,
-        "customerId": customer_code or quote.customer_id,
+        "customerId": quote.customer_id,
+        "customerCode": customer_code,
         "customerName": quote.customer_name or "Walk-in",
-        "customerAddress": quote.customer.address if quote.customer else None,
-        "customer_address": quote.customer.address if quote.customer else None,
-        "customerStreet1": quote.customer.street1 if quote.customer else None,
-        "customer_street1": quote.customer.street1 if quote.customer else None,
-        "customerStreet2": quote.customer.street2 if quote.customer else None,
-        "customer_street2": quote.customer.street2 if quote.customer else None,
-        "customerStreet3": quote.customer.street3 if quote.customer else None,
-        "customer_street3": quote.customer.street3 if quote.customer else None,
-        "customerCity": quote.customer.city if quote.customer else None,
-        "customer_city": quote.customer.city if quote.customer else None,
-        "customerStateProvince": quote.customer.state_province if quote.customer else None,
-        "customer_state_province": quote.customer.state_province if quote.customer else None,
-        "customerCountry": quote.customer.country if quote.customer else None,
-        "customer_country": quote.customer.country if quote.customer else None,
-        "customerPostalCode": quote.customer.postal_code if quote.customer else None,
-        "customer_postal_code": quote.customer.postal_code if quote.customer else None,
-        "customerGstin": quote.customer.gstin if quote.customer else None,
-        "customer_gstin": quote.customer.gstin if quote.customer else None,
+        "customerAddress": customer.address if customer else None,
+        "customer_address": customer.address if customer else None,
+        "customerStreet1": customer.street1 if customer else None,
+        "customer_street1": customer.street1 if customer else None,
+        "customerStreet2": customer.street2 if customer else None,
+        "customer_street2": customer.street2 if customer else None,
+        "customerStreet3": customer.street3 if customer else None,
+        "customer_street3": customer.street3 if customer else None,
+        "customerCity": customer.city if customer else None,
+        "customer_city": customer.city if customer else None,
+        "customerStateProvince": customer.state_province if customer else None,
+        "customer_state_province": customer.state_province if customer else None,
+        "customerCountry": customer.country if customer else None,
+        "customer_country": customer.country if customer else None,
+        "customerPostalCode": customer.postal_code if customer else None,
+        "customer_postal_code": customer.postal_code if customer else None,
+        "customerGstin": customer.gstin if customer else None,
+        "customer_gstin": customer.gstin if customer else None,
         "branchId": quote.branch_id,
         "branchName": quote.branch_name,
         "createdBy": quote.created_by,
@@ -2937,9 +2937,10 @@ def _quote_dict(quote, items=None):
     return d
 
 def _inv_dict(inv, items=None, sales_order_number=None):
+    customer = _loaded_rel(inv, "customer")
     customer_code = None
-    if inv.customer_id:
-        customer_code = getattr(inv.customer, "customer_code", None) or None
+    if customer is not None:
+        customer_code = getattr(customer, "customer_code", None) or None
     if not customer_code and inv.customer_id:
         try:
             customer_code = _build_customer_code(inv.customer_id)
@@ -2948,29 +2949,30 @@ def _inv_dict(inv, items=None, sales_order_number=None):
 
     d = {
         "id": inv.id, "number": inv.number,
-        "customerId": customer_code or inv.customer_id,
+        "customerId": inv.customer_id,
+        "customerCode": customer_code,
         "customerName": inv.customer_name or "Walk-in",
-        "customerAddress": inv.customer.address if inv.customer else None,
-        "customer_address": inv.customer.address if inv.customer else None,
-        "customerStreet1": inv.customer.street1 if inv.customer else None,
-        "customer_street1": inv.customer.street1 if inv.customer else None,
-        "customerStreet2": inv.customer.street2 if inv.customer else None,
-        "customer_street2": inv.customer.street2 if inv.customer else None,
-        "customerStreet3": inv.customer.street3 if inv.customer else None,
-        "customer_street3": inv.customer.street3 if inv.customer else None,
-        "customerCity": inv.customer.city if inv.customer else None,
-        "customer_city": inv.customer.city if inv.customer else None,
-        "customerStateProvince": inv.customer.state_province if inv.customer else None,
-        "customer_state_province": inv.customer.state_province if inv.customer else None,
-        "customerCountry": inv.customer.country if inv.customer else None,
-        "customer_country": inv.customer.country if inv.customer else None,
-        "customerPostalCode": inv.customer.postal_code if inv.customer else None,
-        "customer_postal_code": inv.customer.postal_code if inv.customer else None,
-        "gstNo": inv.customer.gstin if inv.customer else None,
-        "gst_no": inv.customer.gstin if inv.customer else None,
-        "phoneNo": inv.customer.phone if inv.customer else None,
-        "phone_no": inv.customer.phone if inv.customer else None,
-        "email": inv.customer.email if inv.customer else None,
+        "customerAddress": customer.address if customer else None,
+        "customer_address": customer.address if customer else None,
+        "customerStreet1": customer.street1 if customer else None,
+        "customer_street1": customer.street1 if customer else None,
+        "customerStreet2": customer.street2 if customer else None,
+        "customer_street2": customer.street2 if customer else None,
+        "customerStreet3": customer.street3 if customer else None,
+        "customer_street3": customer.street3 if customer else None,
+        "customerCity": customer.city if customer else None,
+        "customer_city": customer.city if customer else None,
+        "customerStateProvince": customer.state_province if customer else None,
+        "customer_state_province": customer.state_province if customer else None,
+        "customerCountry": customer.country if customer else None,
+        "customer_country": customer.country if customer else None,
+        "customerPostalCode": customer.postal_code if customer else None,
+        "customer_postal_code": customer.postal_code if customer else None,
+        "gstNo": customer.gstin if customer else None,
+        "gst_no": customer.gstin if customer else None,
+        "phoneNo": customer.phone if customer else None,
+        "phone_no": customer.phone if customer else None,
+        "email": customer.email if customer else None,
         "branchId": inv.branch_id,
         "branchName": inv.branch_name,
         "cashier": inv.cashier,
@@ -3007,8 +3009,12 @@ def _inv_dict(inv, items=None, sales_order_number=None):
                 "qty": i.qty,
                 "price": i.price,
                 "taxRate": i.tax_rate,
-                "discount": float(i.discount or 0),
-                "lineTotal": i.line_total,
+                "discount": _display_line_discount_pct(
+                    i.qty, i.price, i.tax_rate, i.discount, i.line_total, inv.discount,
+                ),
+                "lineTotal": _inclusive_from_stored_line_total(
+                    i.qty, i.price, i.tax_rate, i.line_total,
+                ),
                 "batchAllocation": (
                     json.loads(i.batch_allocation) if getattr(i, "batch_allocation", None) else None
                 ),
@@ -3188,22 +3194,116 @@ async def _get_org_tax_mode(db: AsyncSession) -> str:
     return "inclusive"
 
 
-def _calc_lines(lines, tax_mode: str = "inclusive"):
-    """Compute line totals + roll up subtotal/tax for SO + quote shapes.
-    Returns (line_rows, subtotal, tax_total). Each row is (line, line_net,
-    line_tax) so callers can populate the ORM objects without re-doing the
-    math.
+async def _resolve_customer_id(db: AsyncSession, customer_ref: Optional[str]) -> Optional[str]:
+    """Map a customer UUID or display code to customers.id. Empty → walk-in."""
+    ref = (customer_ref or "").strip()
+    if not ref:
+        return None
+    row = (await db.execute(select(Customer).where(Customer.id == ref))).scalar_one_or_none()
+    if row:
+        return row.id
+    row = (
+        await db.execute(select(Customer).where(Customer.customer_code == ref))
+    ).scalar_one_or_none()
+    if row:
+        return row.id
+    raise HTTPException(400, f"Customer {ref} not found")
+
+
+def _inclusive_after_line_discount(qty, unit, discount_pct) -> float:
+    """GST-inclusive line amount after a percent line discount."""
+    gross = round(float(qty or 0) * float(unit or 0), 2)
+    return round(gross * (1 - (float(discount_pct or 0) / 100)), 2)
+
+
+def _invoice_line_amount(item) -> float:
+    """Inclusive line amount after line-item discount (percent or flat)."""
+    gross = round(item.qty * item.price, 2)
+    line_disc_amt = max(0.0, min(gross, round(item.line_discount_amount or 0, 2)))
+    if line_disc_amt > 0:
+        return round(gross - line_disc_amt, 2)
+    return round(gross * (1 - (item.line_discount or 0) / 100), 2)
+
+
+def _stored_line_discount_pct(item) -> float:
+    """Percent (0-100) persisted on sale_line_items.discount."""
+    gross = round(float(getattr(item, "qty", 0) or 0) * float(getattr(item, "price", 0) or 0), 2)
+    amt = max(0.0, min(gross, round(float(getattr(item, "line_discount_amount", 0) or 0), 2)))
+    if amt > 0 and gross > 0:
+        return round(min(100.0, (amt / gross) * 100), 4)
+    return round(float(getattr(item, "line_discount", 0) or 0), 4)
+
+
+def _inclusive_from_stored_line_total(qty, price, tax_rate, line_total) -> float:
+    """Normalize stored line_total to GST-inclusive (taxable writes inflate)."""
+    lt = float(line_total or 0)
+    rate = float(tax_rate or 0)
+    gross = round(float(qty or 0) * float(price or 0), 2)
+    if lt <= 0:
+        return lt
+    if rate > 0:
+        inflated = round(lt * (1 + rate / 100.0), 2)
+        if inflated <= gross + 0.05:
+            return inflated
+    return round(lt, 2)
+
+
+def _display_line_discount_pct(
+    qty, price, tax_rate, stored_discount, line_total, header_discount=0.0,
+) -> float:
+    """Line discount % for API/UI. Recovers wiped rows when header discount is 0."""
+    stored = float(stored_discount or 0)
+    if stored > 0:
+        return stored
+    if float(header_discount or 0) > 0:
+        return 0.0
+    gross = round(float(qty or 0) * float(price or 0), 2)
+    inclusive = _inclusive_from_stored_line_total(qty, price, tax_rate, line_total)
+    if gross <= 0 or inclusive <= 0 or inclusive >= gross - 0.005:
+        return 0.0
+    return round(max(0.0, min(100.0, (1.0 - inclusive / gross) * 100.0)), 2)
+
+
+def _invoice_line_rollups(items, entity_discount: float = 0.0):
+    """Line rows + header totals with discounts applied before GST extract.
+
+    Each row is (item, inclusive_after_all_discounts, taxable, tax).
     """
-    rows = []
-    subtotal = 0.0
-    tax_total = 0.0
+    prepared = [(i, _invoice_line_amount(i), i.tax_rate or 0) for i in items]
+    taxed, subtotal, tax_total, total = rollup_inclusive_lines(
+        [p[1] for p in prepared],
+        [p[2] for p in prepared],
+        entity_discount or 0,
+    )
+    line_rows = [
+        (i, after, taxable, tax)
+        for (i, _amt, _), (after, taxable, tax) in zip(prepared, taxed)
+    ]
+    return line_rows, subtotal, tax_total, total
+
+
+def _calc_lines(lines, tax_mode: str = "inclusive", entity_discount: float = 0.0):
+    """Compute line totals + roll up subtotal/tax for SO + quote shapes.
+
+    Line discount is applied first, then document discount, then GST is
+    extracted from the remaining inclusive amount. Returns
+    (line_rows, subtotal, tax_total). Each row is (line, line_net, line_tax)
+    where line_net is inclusive after the line discount only (stored on the
+    line); header tax already reflects the document discount.
+    """
+    prepared = []
     for i in lines:
-        gross = round(i.qty * i.price, 2)
-        line_net = round(gross * (1 - (i.discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
-        rows.append((i, line_net, line_tax))
-        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
-        tax_total += line_tax
+        line_net = _inclusive_after_line_discount(i.qty, i.price, i.discount)
+        prepared.append((i, line_net, i.tax_rate or 0))
+    taxed, subtotal, tax_total, _total = rollup_inclusive_lines(
+        [p[1] for p in prepared],
+        [p[2] for p in prepared],
+        entity_discount or 0,
+    )
+    rows = [
+        (i, line_net, tax)
+        for (i, line_net, _), (_, _, tax) in zip(prepared, taxed)
+    ]
     return rows, subtotal, tax_total
 
 
@@ -3450,17 +3550,21 @@ def _line_amounts(qty: int, price: float, discount: float, tax_rate: float, tax_
 
 def _recalc_so_header(so: SalesOrder, lines: list, tax_mode: str = "inclusive") -> None:
     """Recompute SO subtotal/tax/total from remaining line rows."""
-    subtotal = 0.0
-    tax_total = 0.0
+    inclusives = []
+    rates = []
     for li in lines:
-        line_net, line_tax, li.line_total = _line_amounts(
-            int(li.qty), float(li.price or 0), float(li.discount or 0), float(li.tax_rate or 0), tax_mode,
+        line_net = _inclusive_after_line_discount(
+            int(li.qty), float(li.price or 0), float(li.discount or 0),
         )
-        subtotal += line_net
-        tax_total += line_tax
-    so.subtotal = round(subtotal, 2)
-    so.tax_total = round(tax_total, 2)
-    so.total = round(max(0.0, subtotal + tax_total - float(so.discount or 0)), 2)
+        li.line_total = line_net
+        inclusives.append(line_net)
+        rates.append(float(li.tax_rate or 0))
+    _taxed, subtotal, tax_total, total = rollup_inclusive_lines(
+        inclusives, rates, float(so.discount or 0),
+    )
+    so.subtotal = subtotal
+    so.tax_total = tax_total
+    so.total = total
 
 
 async def _link_quotation_to_order(db: AsyncSession, quote_id: str, so: SalesOrder, user: Optional[User] = None) -> None:
@@ -3559,8 +3663,12 @@ async def _link_sales_order_to_invoice(
         raise HTTPException(400, "source_order_lines required when sales_order_id is set")
 
     tax_mode = await _get_org_tax_mode(db)
-    orig_subtotal = float(so.subtotal or 0)
-    inv_subtotal = 0.0
+    orig_inclusive = 0.0
+    for li in so.line_items:
+        orig_inclusive += _inclusive_after_line_discount(
+            int(li.qty), float(li.price or 0), float(li.discount or 0),
+        )
+    inv_inclusive = 0.0
     for entry in entries:
         so_line = line_by_id.get(entry.order_line_id)
         if not so_line:
@@ -3570,18 +3678,13 @@ async def _link_sales_order_to_invoice(
                 400,
                 f"Cannot invoice {entry.qty} of {so_line.name} — only {so_line.qty} remaining on the order",
             )
-        line_net, _, _ = _line_amounts(
-            entry.qty,
-            float(so_line.price or 0),
-            float(so_line.discount or 0),
-            float(so_line.tax_rate or 0),
-            tax_mode,
+        inv_inclusive += _inclusive_after_line_discount(
+            entry.qty, float(so_line.price or 0), float(so_line.discount or 0),
         )
-        inv_subtotal += line_net
 
     inv_discount = 0.0
-    if orig_subtotal > 0 and float(so.discount or 0) > 0:
-        inv_discount = round(float(so.discount) * (inv_subtotal / orig_subtotal), 2)
+    if orig_inclusive > 0 and float(so.discount or 0) > 0:
+        inv_discount = round(float(so.discount) * (inv_inclusive / orig_inclusive), 2)
 
     for entry in entries:
         so_line = line_by_id[entry.order_line_id]
@@ -3726,8 +3829,8 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
 
     direct = await can_direct_commit(user, db, "invoices.approve")
     tax_mode = await _get_org_tax_mode(db)
-    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
+    total = round(subtotal + tax_total, 2)
     today = datetime.now().strftime("%Y-%m-%d")
 
     async def _alloc_so() -> str:
@@ -3851,8 +3954,8 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
 
     # Replace fields (status preserved). Recompute totals from new items.
     tax_mode = await _get_org_tax_mode(db)
-    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode)
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+    line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
+    total = round(subtotal + tax_total, 2)
 
     # If branch is being changed, validate the target branch
     if data.branch_id and data.branch_id != so.branch_id:
@@ -4164,25 +4267,25 @@ async def convert_order_to_invoice(
 
     allow_oversell = await get_allow_overselling(db)
     tax_mode = await _get_org_tax_mode(db)
-    orig_subtotal = float(so.subtotal or 0)
-    inv_subtotal = 0.0
-    inv_tax_total = 0.0
-    for so_line, convert_qty in convert_plan:
-        line_net, line_tax, _ = _line_amounts(
-            convert_qty,
-            float(so_line.price or 0),
-            float(so_line.discount or 0),
-            float(so_line.tax_rate or 0),
-            tax_mode,
+    orig_inclusive = 0.0
+    for li in so.line_items:
+        orig_inclusive += _inclusive_after_line_discount(
+            int(li.qty), float(li.price or 0), float(li.discount or 0),
         )
-        inv_subtotal += line_net
-        inv_tax_total += line_tax
-    inv_subtotal = round(inv_subtotal, 2)
-    inv_tax_total = round(inv_tax_total, 2)
+    convert_inclusives = []
+    convert_rates = []
+    for so_line, convert_qty in convert_plan:
+        convert_inclusives.append(_inclusive_after_line_discount(
+            convert_qty, float(so_line.price or 0), float(so_line.discount or 0),
+        ))
+        convert_rates.append(float(so_line.tax_rate or 0))
+    inv_inclusive = round(sum(convert_inclusives), 2)
     inv_discount = 0.0
-    if orig_subtotal > 0 and float(so.discount or 0) > 0:
-        inv_discount = round(float(so.discount) * (inv_subtotal / orig_subtotal), 2)
-    inv_total = round(max(0.0, inv_subtotal + inv_tax_total - inv_discount), 2)
+    if orig_inclusive > 0 and float(so.discount or 0) > 0:
+        inv_discount = round(float(so.discount) * (inv_inclusive / orig_inclusive), 2)
+    convert_taxed, inv_subtotal, inv_tax_total, inv_total = rollup_inclusive_lines(
+        convert_inclusives, convert_rates, inv_discount,
+    )
 
     today = datetime.now().strftime("%Y-%m-%d")
     inv_num = await allocate_number(db, "sales_invoice", branch_id=so.branch_id)
@@ -4218,14 +4321,7 @@ async def convert_order_to_invoice(
         for a in data.line_allocations:
             alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
 
-    for so_line, convert_qty in convert_plan:
-        line_net, line_tax, line_total = _line_amounts(
-            convert_qty,
-            float(so_line.price or 0),
-            float(so_line.discount or 0),
-            float(so_line.tax_rate or 0),
-            tax_mode,
-        )
+    for (so_line, convert_qty), (after, _taxable, _tax) in zip(convert_plan, convert_taxed):
         item_obj = item_map.get(so_line.item_id) if so_line.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
@@ -4233,7 +4329,7 @@ async def convert_order_to_invoice(
             qty=convert_qty, price=so_line.price,
             tax_rate=so_line.tax_rate,
             discount=so_line.discount or 0,
-            line_total=line_total,
+            line_total=after,
             **_snapshot_item_metadata(item_obj),
         )
         db.add(li)
@@ -4584,6 +4680,7 @@ async def convert_quote_to_invoice(
             item_id=line.item_id, name=line.name,
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate,
+            discount=line.discount or 0,
             line_total=line.line_total,
             **_snapshot_item_metadata(item_obj),
         )

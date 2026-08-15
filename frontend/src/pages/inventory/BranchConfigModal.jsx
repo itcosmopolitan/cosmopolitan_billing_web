@@ -2,7 +2,10 @@ import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
+import { qtyInputStep } from '@/utils/decimalPrecision'
+import { catalogInclusiveAmount, convertEnteredTaxAmount } from '@/utils/taxCalc'
 import { Modal, AlertBar } from '@/components/ui'
+import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './TaxedPriceInput'
 
 const emptyRow = (branch) => ({
   branch_id: branch.id,
@@ -24,6 +27,7 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
   const [defaultReorder, setDefaultReorder] = useState(10)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [priceTaxMode, setPriceTaxMode] = useState('inclusive')
 
   useEffect(() => {
     if (!open || !item?.id) return
@@ -50,6 +54,7 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
           return emptyRow(b)
         })
         setRows(merged)
+        setPriceTaxMode('inclusive')
       } catch (err) {
         console.error('Failed to load branch config:', err)
         toast.error('Failed to load branch configuration')
@@ -74,6 +79,22 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
     )))
   }
 
+  const changePriceTaxMode = (next) => {
+    const normalized = normalizeTaxMode(next)
+    const current = normalizeTaxMode(priceTaxMode)
+    if (normalized === current) return
+    const rate = item?.tax_rate
+    setRows((prev) => prev.map((r) => ({
+      ...r,
+      cost_price: convertEnteredTaxAmount(r.cost_price, current, normalized, rate),
+      selling_price: convertEnteredTaxAmount(r.selling_price, current, normalized, rate),
+    })))
+    setPriceTaxMode(normalized)
+  }
+
+  const shownDefaultCost = convertEnteredTaxAmount(defaultCost, 'inclusive', priceTaxMode, item?.tax_rate)
+  const shownDefaultPrice = convertEnteredTaxAmount(defaultPrice, 'inclusive', priceTaxMode, item?.tax_rate)
+
   const save = async () => {
     try {
       setSaving(true)
@@ -81,12 +102,8 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
         branches: rows.map((r) => ({
           branch_id: r.branch_id,
           is_available: Boolean(r.is_available),
-          cost_price: r.cost_price === '' || r.cost_price == null
-            ? null
-            : Number(r.cost_price),
-          selling_price: r.selling_price === '' || r.selling_price == null
-            ? null
-            : Number(r.selling_price),
+          cost_price: catalogInclusiveAmount(r.cost_price, priceTaxMode, item?.tax_rate),
+          selling_price: catalogInclusiveAmount(r.selling_price, priceTaxMode, item?.tax_rate),
           reorder_level: r.reorder_level === '' || r.reorder_level == null
             ? null
             : Number(r.reorder_level),
@@ -126,7 +143,20 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
         {' · '}Uncheck a branch to hide this item there (POS & branch inventory).
       </AlertBar>
 
-      <div style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap', alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+          Price entry
+          <select
+            className="form-input"
+            value={normalizeTaxMode(priceTaxMode)}
+            onChange={(e) => changePriceTaxMode(e.target.value)}
+            style={{ width: 140 }}
+          >
+            {GST_TAX_MODE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </label>
         <button type="button" className="btn btn-secondary btn-xs" onClick={enableAll}>Enable all branches</button>
         <button type="button" className="btn btn-secondary btn-xs" onClick={applyDefaults}>Reset cost &amp; price to defaults</button>
       </div>
@@ -135,13 +165,13 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
         <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
       ) : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
-          <table className="data-table" style={{ marginBottom: 0 }}>
+          <table className="data-table branch-pricing-table" style={{ marginBottom: 0 }}>
             <thead>
               <tr>
                 <th style={{ width: 44 }}>Listed</th>
                 <th>Branch</th>
-                <th className="text-right">Branch Cost (MVR)</th>
-                <th className="text-right">Branch Price (MVR)</th>
+                <th className="text-right" style={{ width: 176 }}>Branch Cost (MVR)</th>
+                <th className="text-right" style={{ width: 176 }}>Branch Price (MVR)</th>
                 <th className="text-right">Reorder</th>
                 <th className="text-right">Stock</th>
               </tr>
@@ -161,31 +191,33 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.branch_code}</div>
                   </td>
                   <td className="text-right">
-                    <input
-                      className="form-input"
-                      type="number"
-                      style={{ width: 100, marginLeft: 'auto', textAlign: 'right' }}
-                      placeholder={`Default ${defaultCost}`}
+                    <TaxedPriceInput
+                      compact
                       disabled={!r.is_available}
                       value={r.cost_price}
-                      onChange={(e) => patchRow(r.branch_id, { cost_price: e.target.value })}
+                      mode={priceTaxMode}
+                      taxRate={item?.tax_rate}
+                      placeholder={`Default ${shownDefaultCost}`}
+                      onValueChange={(v) => patchRow(r.branch_id, { cost_price: v })}
                     />
                   </td>
                   <td className="text-right">
-                    <input
-                      className="form-input"
-                      type="number"
-                      style={{ width: 100, marginLeft: 'auto', textAlign: 'right' }}
-                      placeholder={`Default ${defaultPrice}`}
+                    <TaxedPriceInput
+                      compact
                       disabled={!r.is_available}
                       value={r.selling_price}
-                      onChange={(e) => patchRow(r.branch_id, { selling_price: e.target.value })}
+                      mode={priceTaxMode}
+                      taxRate={item?.tax_rate}
+                      placeholder={`Default ${shownDefaultPrice}`}
+                      onValueChange={(v) => patchRow(r.branch_id, { selling_price: v })}
                     />
                   </td>
                   <td className="text-right">
                     <input
                       className="form-input"
                       type="number"
+                      min="0"
+                      step={qtyInputStep()}
                       style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
                       placeholder={String(defaultReorder)}
                       disabled={!r.is_available}

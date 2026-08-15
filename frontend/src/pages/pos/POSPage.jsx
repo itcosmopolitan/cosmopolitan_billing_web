@@ -9,7 +9,7 @@ import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
 import { useDisplaySocket } from '@/hooks/useDisplaySocket'
 import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/displayShared'
 import { unwrapPaged } from '@/utils/pagination'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
@@ -94,6 +94,7 @@ export default function POSPage() {
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const cashierUser = useAppStore((s) => s.user)
+  const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod, paymentRef } = store
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
   // unpaid invoice" case — there's no-one to follow up with for collection.
@@ -121,6 +122,7 @@ export default function POSPage() {
       .then((res) => {
         const data = res?.data ?? res
         setAllowOverselling(data?.allowOverselling !== false)
+        setDecimalPrecisionPrefs(data)
       })
       .catch(() => setAllowOverselling(true))
   }, [])
@@ -317,7 +319,7 @@ export default function POSPage() {
       const avail = Number(customer.credit_balance || 0)
       if (avail < total) {
         toast.error(
-          `Insufficient credit — MVR${avail.toFixed(2)} available, MVR${total.toFixed(2)} needed`,
+          `Insufficient credit — ${fmt(avail)} available, ${fmt(total)} needed`,
         )
         return
       }
@@ -327,7 +329,7 @@ export default function POSPage() {
       for (const line of cart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
         if (line.qty > stock) {
-          toast.error(`Insufficient stock for ${line.name}: need ${line.qty}, available ${stock}`)
+          toast.error(`Insufficient stock for ${line.name}: need ${fmtQty(line.qty)}, available ${fmtQty(stock)}`)
           return
         }
       }
@@ -549,7 +551,7 @@ export default function POSPage() {
     { id: 'bank_transfer', label: '🏦 Bank Transfer' },
     ...(customer?.id ? [{
       id: 'credit',
-      label: `🏦 Credit (₹${Number(customer.credit_balance || 0).toFixed(2)})`,
+      label: `🏦 Credit (${fmt(Number(customer.credit_balance || 0))})`,
       disabled: Number(customer.credit_balance || 0) < total,
     }] : []),
   ]
@@ -806,7 +808,7 @@ export default function POSPage() {
                 <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginTop: 7, lineHeight: 1.3 }}>{p.name}</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}>{fmt(p.selling_price)}</div>
                 <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {isOut ? 'Out of stock' : `${stock} in stock${inCart > 0 ? ` (${inCart} in cart)` : ''}`}
+                  {isOut ? 'Out of stock' : `${fmtQty(stock)} in stock${inCart > 0 ? ` (${fmtQty(inCart)} in cart)` : ''}`}
                 </div>
               </div>
             )
@@ -933,7 +935,7 @@ export default function POSPage() {
                 }}
                 title="Available customer credit"
               >
-                ₹{Number(customer.credit_balance || 0).toFixed(2)}
+                {fmt(Number(customer.credit_balance || 0))}
               </span>
             )}
             <button
@@ -1180,7 +1182,7 @@ export default function POSPage() {
                         lineHeight: 1.45,
                       }}
                     >
-                      Credit short by ₹{(total - Number(customer.credit_balance || 0)).toFixed(2)} — pick another method.
+                      Credit short by {fmt(total - Number(customer.credit_balance || 0))} — pick another method.
                     </div>
                   )}
                 </>
@@ -1194,6 +1196,21 @@ export default function POSPage() {
             <div style={{ textAlign: 'right', flexShrink: 0, paddingLeft: 8, minWidth: 120 }}>
               {cart.length > 0 && (
                 <div style={{ marginBottom: 6 }}>
+                  {discount > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--green)',
+                        marginBottom: 3,
+                      }}
+                    >
+                      <span>Disc</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+                    </div>
+                  )}
                   <div
                     style={{
                       display: 'flex',
@@ -1214,27 +1231,12 @@ export default function POSPage() {
                       gap: 16,
                       fontSize: 11.5,
                       color: 'var(--text-muted)',
-                      marginBottom: discount > 0 ? 3 : 0,
+                      marginBottom: cartMargin ? 3 : 0,
                     }}
                   >
                     <span>Tax</span>
                     <span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
                   </div>
-                  {discount > 0 && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        gap: 16,
-                        fontSize: 11.5,
-                        color: 'var(--green)',
-                        marginBottom: 3,
-                      }}
-                    >
-                      <span>Disc</span>
-                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
-                    </div>
-                  )}
                   {cartMargin && (
                     <div
                       style={{

@@ -8,6 +8,7 @@
  */
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
+import { formatAmountNumber, formatQtyNumber } from '@/utils/decimalPrecision'
 import { settingsAPI, taxRatesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { Card, AlertBar, Tag, Modal, FormGroup, FormRow, PaginationBar, SortableHeader, Chip, RowActionsMenu, AutocompleteDropdown } from '@/components/ui'
@@ -657,8 +658,8 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
   }, [load, refreshKey])
 
   const sampleItems = [
-    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', origin: 'IN', units: 'Kg', disc: '0', qty: '1', price: '270.00', gst: '0.00', total: '270.00' },
-    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', origin: 'IN', units: 'Ltr', disc: '5', qty: '2', price: '17.80', gst: '1.60', total: '35.60' },
+    { name: 'Milk Powder 2.5Kg', hsn: '1901', attr: 'Fine Quality', size: '2.5KG', origin: 'IN', units: 'Kg', disc: '0', qty: 1, price: 270, gst: 0, total: 270 },
+    { name: 'milky mist Milk Full Cream', hsn: '0401', attr: 'Fresh', size: '1Ltr', origin: 'IN', units: 'Ltr', disc: '5', qty: 2, price: 17.8, gst: 1.6, total: 35.6 },
   ]
 
   const currentConfig = useMemo(() => ({
@@ -850,11 +851,11 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
                   case 'packing': value = item.size; break
                   case 'origin': value = item.origin || 'IN'; break
                   case 'units': value = item.units || 'Can'; break
-                  case 'qty': value = item.qty; break
-                  case 'rate': value = item.price; break
+                  case 'qty': value = formatQtyNumber(item.qty); break
+                  case 'rate': value = formatAmountNumber(item.price); break
                   case 'disc': value = `${item.disc}%`; break
-                  case 'gst': value = item.gst || '0'; break
-                  case 'amount': value = item.total; break
+                  case 'gst': value = formatAmountNumber(item.gst || 0); break
+                  case 'amount': value = formatAmountNumber(item.total); break
                   default: value = ''
                 }
                 return (
@@ -870,17 +871,17 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
             <div>Subtotal</div>
-            <div>MVR305.60</div>
+            <div>MVR{formatAmountNumber(305.6)}</div>
           </div>
           {taxMode === 'itemized' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
               <div>Tax (18%)</div>
-              <div>MVR27.50</div>
+              <div>MVR{formatAmountNumber(27.5)}</div>
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontWeight: 700, fontSize: 11, marginBottom: 2 }}>
             <div>TOTAL</div>
-            <div>MVR333.10</div>
+            <div>MVR{formatAmountNumber(333.1)}</div>
           </div>
 
           {showPayment && (

@@ -42,6 +42,16 @@ export const FINANCIAL_YEAR_OPTIONS = [
   { id: 'Jul-Jun', label: 'Jul–Jun' },
 ]
 
+export const DECIMAL_PRECISION_OPTIONS = [
+  { id: '0', label: '0 (whole numbers)' },
+  { id: '1', label: '1 (e.g. 12.5)' },
+  { id: '2', label: '2 (e.g. 12.50)' },
+  { id: '3', label: '3 (e.g. 12.505)' },
+  { id: '4', label: '4 (e.g. 12.5050)' },
+  { id: '5', label: '5' },
+  { id: '6', label: '6' },
+]
+
 export const ADJUSTMENT_REASON_OPTIONS = [
   'Physical count',
   'Damage',

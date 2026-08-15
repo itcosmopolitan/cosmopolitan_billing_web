@@ -2,7 +2,7 @@
  * Invoice template config — persisted via GET/PUT /settings/invoice-template.
  */
 import { useEffect, useState } from 'react'
-import { settingsAPI } from '@/api'
+import { formatAmountNumber, formatQtyNumber, roundAmount } from '@/utils/decimalPrecision'
 
 export const INVOICE_CONFIG_CHANGED_EVENT = 'invoice-template-config-changed'
 
@@ -134,8 +134,8 @@ export function getItemCell(item, field, config) {
   if (field === 'origin') return item.origin || item.country || item.manufacturer || ''
   if (field === 'units') return item.units || item.unit || ''
   if (field === 'disc' && config.showDisc) return `${item.discount ?? item.discPercent ?? 0}%`
-  if (field === 'qty') return item.qty || item.quantity || 0
-  if (field === 'rate') return item.price ?? item.rate
+  if (field === 'qty') return formatQtyNumber(item.qty || item.quantity || 0)
+  if (field === 'rate') return formatAmountNumber(item.price ?? item.rate)
   if (field === 'gst') {
     const qty = Number(item.qty || item.quantity || 0)
     const rate = Number(item.price ?? item.rate ?? 0)
@@ -143,8 +143,8 @@ export function getItemCell(item, field, config) {
     const amount = Number(item.lineTotal ?? item.total ?? qty * rate)
     const taxable = discountPct ? amount * (1 - discountPct / 100) : amount
     const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    return Math.round((taxable * taxRate) / 100 * 100) / 100
+    return formatAmountNumber(roundAmount((taxable * taxRate) / 100))
   }
-  if (field === 'amount') return item.lineTotal || item.total || (item.qty * item.price)
+  if (field === 'amount') return formatAmountNumber(item.lineTotal || item.total || (item.qty * item.price))
   return ''
 }

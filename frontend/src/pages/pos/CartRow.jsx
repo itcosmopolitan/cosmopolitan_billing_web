@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import MarginBadge from '@/components/MarginBadge'
+import { qtyInputStep, roundQty } from '@/utils/decimalPrecision'
 import {
   allocatableBatches,
   computeAutoAllocation,
@@ -123,7 +124,7 @@ export default function CartRow({
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               <span style={{ fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
-              <span style={{ fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty ?? '—'}</span>
+              <span style={{ fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty != null ? fmtQty(stockQty) : '—'}</span>
               {stockExceeded && (
                 <span title="Stock exceeded" style={{ color: 'var(--amber)', cursor: 'help', fontSize: 12, lineHeight: 1 }} aria-label="Stock exceeded">⚠️</span>
               )}
@@ -154,12 +155,12 @@ export default function CartRow({
         <input
           className="form-input"
           type="number"
-          min={1}
-          step={1}
+          min={qtyInputStep()}
+          step={qtyInputStep()}
           value={item.qty}
           onChange={(e) => {
-            const v = parseInt(e.target.value, 10)
-            if (Number.isFinite(v)) onQtyChange(v)
+            const v = Number(e.target.value)
+            if (Number.isFinite(v)) onQtyChange(roundQty(v))
           }}
           style={{ width: 56, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />

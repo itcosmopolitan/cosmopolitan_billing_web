@@ -14,6 +14,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
+import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_METHOD_WITH_CREDIT_OPTIONS } from '@/utils/dropdownOptions'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
@@ -65,7 +66,7 @@ export default function VendorPaymentFormPage() {
         const seed = {}
         rows.forEach((b) => {
           const balance = (b.total || 0) - (b.paidAmount || 0)
-          seed[b.id] = String(Math.max(0, balance).toFixed(2))
+          seed[b.id] = formatAmountInput(Math.max(0, balance))
         })
         setApplyById(seed)
       })
@@ -118,7 +119,7 @@ export default function VendorPaymentFormPage() {
     const seed = {}
     bills.forEach((b) => {
       const bal = Math.max(0, (b.total || 0) - (b.paidAmount || 0))
-      seed[b.id] = String(bal.toFixed(2))
+      seed[b.id] = formatAmountInput(bal)
     })
     setApplyById(seed)
   }
@@ -313,6 +314,8 @@ export default function VendorPaymentFormPage() {
                           <input
                             className="form-input"
                             type="number"
+                            min="0"
+                            step={amountInputStep()}
                             value={applyById[b.id] || ''}
                             disabled={!checked || creditMode}
                             onChange={(e) =>

@@ -35,6 +35,7 @@ from src.models import (
 )
 from src.routes._numbering import parse_numbering_config, serialize_numbering_config
 from src.services.audit_service import add_audit_log
+from src.decimal_precision import clamp_precision, org_precision
 from src.permissions import BILLING_SETTINGS_READ
 from src.security import current_user, require_perm
 
@@ -68,6 +69,8 @@ class OrganisationUpdate(BaseModel):
     logo_url: Optional[str] = Field(None, max_length=500, alias="logoUrl")
     allow_overselling: Optional[bool] = Field(None, alias="allowOverselling")
     numbering_config: Optional[NumberingConfig] = Field(None, alias="numberingConfig")
+    amount_decimal_precision: Optional[int] = Field(None, ge=0, le=6, alias="amountDecimalPrecision")
+    quantity_decimal_precision: Optional[int] = Field(None, ge=0, le=6, alias="quantityDecimalPrecision")
 
 
 def _numbering_out(raw: Optional[str]) -> dict[str, Any]:
@@ -79,6 +82,7 @@ def _numbering_out(raw: Optional[str]) -> dict[str, Any]:
 
 
 def _serialize_organisation(org: Organisation) -> dict:
+    amount_prec, qty_prec = org_precision(org)
     return {
         "id": org.id,
         "name": org.name,
@@ -93,6 +97,8 @@ def _serialize_organisation(org: Organisation) -> dict:
         "logo_url": org.logo_url or "",
         "allowOverselling": bool(getattr(org, "allow_overselling", True)),
         "numberingConfig": _numbering_out(getattr(org, "numbering_config", None)),
+        "amountDecimalPrecision": amount_prec,
+        "quantityDecimalPrecision": qty_prec,
     }
 
 
@@ -118,6 +124,8 @@ async def get_organisation(db: AsyncSession = Depends(get_db)):
             "logo_url": "",
             "allowOverselling": True,
             "numberingConfig": _numbering_out(None),
+            "amountDecimalPrecision": 2,
+            "quantityDecimalPrecision": 2,
         }
     return _serialize_organisation(org)
 
@@ -153,7 +161,12 @@ async def update_organisation(
 
     # Apply scalar fields from payload for create path / legacy PUT clients.
     for key, val in payload.items():
-        if key in ("allow_overselling", "numbering_config"):
+        if key in (
+            "allow_overselling",
+            "numbering_config",
+            "amount_decimal_precision",
+            "quantity_decimal_precision",
+        ):
             continue
         setattr(org, key, val if val is not None else "")
 
@@ -196,6 +209,10 @@ async def _apply_organisation_update(org: Organisation, data: OrganisationUpdate
         org.logo_url = data.logo_url
     if data.allow_overselling is not None:
         org.allow_overselling = data.allow_overselling
+    if data.amount_decimal_precision is not None:
+        org.amount_decimal_precision = clamp_precision(data.amount_decimal_precision)
+    if data.quantity_decimal_precision is not None:
+        org.quantity_decimal_precision = clamp_precision(data.quantity_decimal_precision)
     if data.numbering_config is not None:
         merged = parse_numbering_config(None)
         merged["pos"] = {

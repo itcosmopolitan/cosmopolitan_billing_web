@@ -26,6 +26,7 @@ import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
+import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
@@ -229,12 +230,16 @@ export default function OrderFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
+                      min={qtyInputStep()}
+                      step={qtyInputStep()}
                       style={numInputStyle}
                       value={it.qty}
                       onChange={e => { const n = [...orderForm.items]; n[i].qty = e.target.value; pof('items', n) }} />
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
+                      min="0"
+                      step={amountInputStep()}
                       style={numInputStyle}
                       value={it.price}
                       onChange={e => { const n = [...orderForm.items]; n[i].price = e.target.value; pof('items', n) }} />

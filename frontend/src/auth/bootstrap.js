@@ -33,11 +33,12 @@ export async function bootstrapAuthenticatedData() {
 
 export function applyBootstrapToStore(
   data,
-  { setSession, setPermCatalog, setBranches },
+  { setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs },
 ) {
   if (data.catalog) setPermCatalog(data.catalog)
   if (Array.isArray(data.branches)) setBranches(data.branches)
   if (data.user) {
+    setDecimalPrecisionPrefs?.(data.user)
     setSession({
       user: data.user,
       permissions: data.permissions || data.user.permissions || [],

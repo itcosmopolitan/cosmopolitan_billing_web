@@ -8,6 +8,7 @@ import { fetchAllList } from '@/utils/pagination'
 import { SectionHeader, Card } from '@/components/ui'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import TransferFormFields from './TransferFormFields'
+import { fmtQty } from '@/utils/helpers'
 import {
   allocatableBatches,
   computeAutoAllocation,
@@ -280,7 +281,7 @@ export default function TransferFormPage({ mode = 'create' }) {
             </div>
             <div className="transfer-stat">
               <span>Total qty</span>
-              <strong>{transferSummary.qty}</strong>
+              <strong>{fmtQty(transferSummary.qty)}</strong>
             </div>
             <div className="transfer-stat">
               <span>Tracked</span>

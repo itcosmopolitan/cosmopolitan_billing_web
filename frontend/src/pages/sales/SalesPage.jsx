@@ -5,6 +5,7 @@ import { salesAPI, branchesAPI, customersAPI, AUTOCOMPLETE_CUSTOMER_URL, AUTOCOM
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
+import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
@@ -1693,6 +1694,8 @@ export default function SalesPage() {
                 <input
                   className="form-input"
                   type="number"
+                  min="0"
+                  step={amountInputStep()}
                   value={creditMode ? String(Math.max(0, balance)) : payAmt}
                   onChange={(e) => setPayAmt(e.target.value)}
                   disabled={isWalkin || creditMode}

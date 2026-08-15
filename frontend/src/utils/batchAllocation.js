@@ -10,6 +10,8 @@
  * other way for hydration (e.g. when resuming a held bill).
  */
 
+import { formatQtyNumber } from '@/utils/decimalPrecision'
+
 /**
  * Greedy FIFO/FEFO fill across `batches` (already sorted by the API in the
  * desired order — backend returns FEFO-first, which collapses to oldest-
@@ -114,7 +116,7 @@ export function fromApiPayload(payload, batches) {
  */
 export function formatAllocationSummary(allocation, max = 3) {
   if (!Array.isArray(allocation) || allocation.length === 0) return ''
-  const head = allocation.slice(0, max).map((e) => `${e.batchNumber} (${e.qty})`)
+  const head = allocation.slice(0, max).map((e) => `${e.batchNumber} (${formatQtyNumber(e.qty)})`)
   const tail = allocation.length - max
   return tail > 0 ? `${head.join(' + ')} +${tail} more` : head.join(' + ')
 }
