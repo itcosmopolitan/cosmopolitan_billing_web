@@ -8,7 +8,25 @@ import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/de
 
 function displayPaymentMode(raw) {
   if (!raw) return '—'
-  return String(raw).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+  const value = String(raw).trim()
+  const standardMap = {
+    cash: 'Cash',
+    card: 'Card',
+    credit: 'Credit',
+    upi: 'UPI',
+    bank_transfer: 'Bank Transfer',
+    banktransfer: 'Bank Transfer',
+    bank: 'Bank',
+    cheque: 'Cheque',
+    check: 'Cheque',
+    wallet: 'Wallet',
+  }
+
+  const direct = standardMap[value.toLowerCase()]
+  if (direct) return direct
+
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function formatDiscPct(item) {
@@ -211,11 +229,11 @@ export default function SalesTxnDetailPanel({
                 value: (
                   <div>
                     <div>{detail?.customerName || 'Walk-in'}</div>
-                    {customerAddressLines.length > 0 && (
+                    {/* {customerAddressLines.length > 0 && (
                       <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 4 }}>
                         {customerAddressLines.map((line) => <div key={line}>{line}</div>)}
                       </div>
-                    )}
+                    )} */}
                   </div>
                 ),
               },
@@ -223,6 +241,7 @@ export default function SalesTxnDetailPanel({
               ...(kind === 'invoice' ? [
                 { label: 'Cashier', value: detail?.cashier || 'N/A' },
                 { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode) },
+                { label: 'Payment ref', value: detail?.paymentRef || '—' },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
                 { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
                 { label: 'Sales order', value: detail?.salesOrderNumber || '—' },

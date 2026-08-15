@@ -479,6 +479,7 @@ class SaleInvoice(Base):
     # routes/sales.py. Setting `default="cash"` here used to clobber
     # explicit `None` values during INSERT, masking the unpaid state.
     payment_mode  = Column(String, nullable=True)
+    payment_ref   = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.paid)
     due_date      = Column(String)   # credit-term due; drives overdue flag
     # Phase 0: cumulative return value + derived flag (see recalc_invoice_after_cn).

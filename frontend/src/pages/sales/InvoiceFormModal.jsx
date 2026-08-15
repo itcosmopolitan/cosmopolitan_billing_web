@@ -160,34 +160,52 @@ export default function InvoiceFormModal({
 
         <div className="invoice-form-payment">
           <FormGroup label="Payment">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 420 }}>
-              <label style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 10px',
-                border: `1.5px solid ${invoiceForm.paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
-                background: invoiceForm.paymentReceived ? 'var(--accent-bg)' : 'transparent',
-                borderRadius: 6, cursor: 'pointer',
-                fontSize: 13, fontWeight: 500,
-                color: invoiceForm.paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
-              }}>
-                <input
-                  type="checkbox"
-                  checked={!!invoiceForm.paymentReceived}
-                  onChange={(e) => pif('paymentReceived', e.target.checked)}
-                  style={{ accentColor: 'var(--accent)' }}
-                />
-                <span>Payment received?</span>
-              </label>
-              {invoiceForm.paymentReceived && (
-                <AutocompleteDropdown
-                  value={invoiceForm.paymentMethod || ''}
-                  onChange={(v) => pif('paymentMethod', v || null)}
-                  options={PAYMENT_METHOD_OPTIONS}
-                  prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
-                  isSearchFieldRequired={false}
-                  placeholder="Select method…"
-                  style={{ fontSize: 13 }}
-                />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: 520 }}>
+              {PAYMENT_METHOD_OPTIONS.map((option) => {
+                const selected = invoiceForm.paymentMethod === option.id
+                const disabled = Boolean(option.disabled)
+
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      if (disabled) return
+                      const nextMethod = selected ? null : option.id
+                      pif('paymentMethod', nextMethod)
+                      pif('paymentReceived', !!nextMethod)
+                      if (!['upi', 'bank_transfer'].includes(nextMethod || '')) {
+                        pif('paymentRef', '')
+                      }
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 999,
+                      border: `1.5px solid ${selected ? 'var(--accent)' : 'var(--border-default)'}`,
+                      background: selected ? 'var(--accent-bg)' : 'transparent',
+                      color: selected ? 'var(--accent)' : disabled ? 'var(--text-muted)' : 'var(--text-secondary)',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                      opacity: disabled ? 0.6 : 1,
+                      transition: 'all 0.12s ease',
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+              {['upi', 'bank_transfer'].includes(invoiceForm.paymentMethod || '') && (
+                <div style={{ width: '100%', maxWidth: 300 }}>
+                  <input
+                    className="form-input"
+                    value={invoiceForm.paymentRef || ''}
+                    onChange={(e) => pif('paymentRef', e.target.value)}
+                    placeholder="Payment reference"
+                    style={{ fontSize: 13, width: '100%' }}
+                  />
+                </div>
               )}
             </div>
           </FormGroup>

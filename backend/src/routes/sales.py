@@ -378,6 +378,8 @@ class InvoiceUpdate(BaseModel):
     due_date: Optional[str] = None
     items: List[LineItemIn]
     discount: float = 0
+    payment_mode: Optional[PaymentMode] = None
+    payment_ref: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -1069,6 +1071,10 @@ async def update_invoice(
         inv.due_date = data.due_date
     elif inv.status in (InvoiceStatus.pending, InvoiceStatus.partial, InvoiceStatus.overdue):
         inv.due_date = compute_due_date(inv.date, None)
+    if data.payment_mode is not None:
+        inv.payment_mode = data.payment_mode
+    if data.payment_ref is not None:
+        inv.payment_ref = data.payment_ref or None
     inv.subtotal = round(subtotal, 2)
     inv.tax_total = round(tax_total, 2)
     inv.discount = round(data.discount, 2)
@@ -1247,6 +1253,7 @@ async def create_invoice(
         # 2026-05-23 tightening and stay as-is — read paths still
         # tolerate them, but no new writes produce that value.
         payment_mode=data.payment_mode,
+        payment_ref=(data.payment_ref or '').strip() or None,
         status=status,
         due_date=due_date,
         origin=inv_origin,
@@ -2993,6 +3000,7 @@ def _inv_dict(inv, items=None, sales_order_number=None):
         "total": inv.total,
         "paidAmount": inv.paid_amount,
         "paymentMode": inv.payment_mode,
+        "paymentRef": getattr(inv, "payment_ref", None),
         "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status),
         "dueDate": getattr(inv, "due_date", None),
         "creditedAmount": float(getattr(inv, "credited_amount", 0) or 0),

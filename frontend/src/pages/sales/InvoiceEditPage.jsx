@@ -104,6 +104,10 @@ export default function InvoiceEditPage() {
       toast.error('Each item must have name, qty, and price')
       return
     }
+    if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
+      toast.error('Enter the payment reference for UPI or Bank Transfer')
+      return
+    }
     setSaving(true)
     try {
       const payload = {
@@ -123,6 +127,10 @@ export default function InvoiceEditPage() {
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
           lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),
         }),
+        payment_mode: form.paymentMethod || null,
+        payment_ref: (form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer')
+          ? (form.paymentRef || '').trim() || null
+          : null,
         notes: form.notes || null,
       }
       await salesAPI.update(invoiceId, payload)

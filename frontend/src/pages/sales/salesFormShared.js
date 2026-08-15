@@ -99,6 +99,7 @@ export const emptyInvoiceForm = (branchId) => ({
   dueDate: '',
   paymentReceived: false,
   paymentMethod: null,
+  paymentRef: '',
   notes: '',
 })
 
@@ -145,6 +146,9 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) 
     discountType: 'MVR',
     invoiceDate: doc.date || doc.invoiceDate || new Date().toISOString().split('T')[0],
     dueDate: doc.dueDate || '',
+    paymentReceived: Boolean(doc.paymentMode),
+    paymentMethod: doc.paymentMode || null,
+    paymentRef: doc.paymentRef || '',
     notes: doc.notes || '',
   }
 }

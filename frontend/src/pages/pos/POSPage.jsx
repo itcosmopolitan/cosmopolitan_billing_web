@@ -1114,50 +1114,46 @@ export default function POSPage() {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 10,
+                  gap: 8,
                   flexWrap: 'wrap',
                 }}
               >
-                <label
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 10px',
-                    height: 34,
-                    boxSizing: 'border-box',
-                    border: `1.5px solid ${paymentReceived ? 'var(--accent)' : 'var(--border-default)'}`,
-                    background: paymentReceived ? 'var(--accent-bg)' : 'var(--bg-surface)',
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    color: paymentReceived ? 'var(--accent)' : 'var(--text-secondary)',
-                    transition: 'all 0.12s',
-                    flexShrink: 0,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={paymentReceived}
-                    onChange={(e) => store.setPaymentReceived(e.target.checked)}
-                    style={{ accentColor: 'var(--accent)' }}
-                  />
-                  <span>Payment received?</span>
-                </label>
-                {paymentReceived && (
-                  <AutocompleteDropdown
-                    value={paymentMethod || ''}
-                    onChange={(id) => store.setPaymentMethod(id || null)}
-                    options={paymentMethodOptions}
-                    isSearchFieldRequired={false}
-                    placeholder="Method…"
-                    direction="up"
-                    style={{ width: 152, minWidth: 132, maxWidth: '100%' }}
-                  />
-                )}
-                {paymentReceived && (paymentMethod === 'upi' || paymentMethod === 'bank_transfer') && (
+                {paymentMethodOptions.map((option) => {
+                  const isSelected = paymentMethod === option.id
+                  const isDisabled = Boolean(option.disabled)
+
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => {
+                        if (isDisabled) return
+                        store.setPaymentMethod(isSelected ? null : option.id)
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '6px 10px',
+                        minHeight: 34,
+                        border: `1.5px solid ${isSelected ? 'var(--accent)' : 'var(--border-default)'}`,
+                        background: isSelected ? 'var(--accent-bg)' : 'var(--bg-surface)',
+                        color: isSelected ? 'var(--accent)' : isDisabled ? 'var(--text-muted)' : 'var(--text-secondary)',
+                        borderRadius: 999,
+                        cursor: isDisabled ? 'not-allowed' : 'pointer',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        opacity: isDisabled ? 0.6 : 1,
+                        transition: 'all 0.12s ease',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+                {paymentMethod && (paymentMethod === 'upi' || paymentMethod === 'bank_transfer') && (
                   <input
                     className="form-input"
                     placeholder="REF number"

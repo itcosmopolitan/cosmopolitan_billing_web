@@ -112,6 +112,10 @@ export default function InvoiceFormPage() {
       toast.error('Pick a payment method (or uncheck Payment received?)')
       return
     }
+    if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
+      toast.error('Enter the payment reference for UPI or Bank Transfer')
+      return
+    }
     if (fromOrderId) {
       const sourceLines = form.items
         .filter((i) => i.orderLineId && Number(i.qty) > 0)
@@ -143,6 +147,9 @@ export default function InvoiceFormPage() {
           lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),
         }),
         payment_mode: form.paymentReceived ? form.paymentMethod : null,
+        payment_ref: form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer'
+          ? (form.paymentRef || '').trim() || null
+          : null,
         notes: form.notes,
       }
       const n = form.number?.trim()

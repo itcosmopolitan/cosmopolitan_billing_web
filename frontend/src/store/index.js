@@ -360,7 +360,10 @@ export const usePOSStore = create((set, get) => ({
     paymentReceived: !!received,
     paymentMethod: received ? s.paymentMethod : null,
   })),
-  setPaymentMethod: (m) => set({ paymentMethod: m }),
+  setPaymentMethod: (m) => set((s) => ({
+    paymentMethod: m || null,
+    paymentReceived: !!(m || null),
+  })),
   setPaymentRef: (r) => set({ paymentRef: r }),
   setNotes: (n) => set({ notes: n }),
 
