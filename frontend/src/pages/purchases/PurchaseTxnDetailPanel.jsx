@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { purchasesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 import { Chip, ReturnStatusChip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
@@ -231,21 +231,21 @@ export default function PurchaseTxnDetailPanel({
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
                   {kind === 'return' ? (
                     <>
-                      <td className="text-right mono">{item.returnQty}</td>
+                      <td className="text-right mono">{fmtQty(item.returnQty)}</td>
                       <td className="text-right mono">{fmt(item.cost)}</td>
                       <td className="text-right mono">{fmt(item.lineTotal || item.returnQty * item.cost)}</td>
                     </>
                   ) : kind === 'grn' ? (
                     <>
-                      <td className="text-right mono">{item.orderedQty ?? '—'}</td>
-                      <td className="text-right mono">{item.receivedQty ?? item.qty ?? '—'}</td>
+                      <td className="text-right mono">{item.orderedQty != null ? fmtQty(item.orderedQty) : '—'}</td>
+                      <td className="text-right mono">{fmtQty(item.receivedQty ?? item.qty)}</td>
                       <td className="text-right mono">{fmt(item.cost)}</td>
                       <td className="mono" style={{ fontSize: 12 }}>{item.batchNumber || '—'}</td>
                       <td className="text-right mono">{fmt(item.lineTotal || (item.receivedQty || item.qty || 0) * (item.cost || 0))}</td>
                     </>
                   ) : (
                     <>
-                      <td className="text-right mono">{item.qty}</td>
+                      <td className="text-right mono">{fmtQty(item.qty)}</td>
                       <td className="text-right mono">{fmt(item.cost)}</td>
                       <td className="text-right mono">{item.discount || 0}%</td>
                       <td className="text-right mono">{fmt(item.lineTotal || item.qty * item.cost)}</td>

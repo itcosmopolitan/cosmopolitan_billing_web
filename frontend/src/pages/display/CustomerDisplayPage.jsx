@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useDisplaySocket } from '@/hooks/useDisplaySocket'
 import { settingsAPI } from '@/api'
 import { EMPTY_POS_DISPLAY, isValidDisplayCode, normalizeDisplayCode } from './displayShared'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
+import { setDecimalPrecision } from '@/utils/decimalPrecision'
 
 function DisplayCodeEntry() {
   const navigate = useNavigate()
@@ -93,13 +94,28 @@ function DisplayCodeEntry() {
 function CustomerDisplayLive({ roomId }) {
   const [display, setDisplay] = useState(EMPTY_POS_DISPLAY)
   const [organisation, setOrganisation] = useState(null)
-  const { connected } = useDisplaySocket(roomId, 'viewer', setDisplay)
+  const onDisplay = (payload) => {
+    if (payload) {
+      setDecimalPrecision({
+        amountDecimalPrecision: payload.amountDecimalPrecision,
+        quantityDecimalPrecision: payload.quantityDecimalPrecision,
+      })
+    }
+    setDisplay(payload)
+  }
+  const { connected } = useDisplaySocket(roomId, 'viewer', onDisplay)
 
   useEffect(() => {
     settingsAPI.getOrganisation()
       .then((res) => {
         const data = res?.data ?? res
         if (data?.name) setOrganisation(data)
+        if (data) {
+          setDecimalPrecision({
+            amountDecimalPrecision: data.amountDecimalPrecision,
+            quantityDecimalPrecision: data.quantityDecimalPrecision,
+          })
+        }
       })
       .catch(() => null)
   }, [])
@@ -233,6 +249,12 @@ function CustomerDisplayLive({ roomId }) {
                   Amounts include tax
                 </div>
               )}
+              {discount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--green)', marginBottom: 6 }}>
+                  <span>Discount</span>
+                  <span className="mono">−{fmt(discount)}</span>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
                 <span>Taxable amount</span>
                 <span className="mono">{fmt(subtotal)}</span>
@@ -241,12 +263,6 @@ function CustomerDisplayLive({ roomId }) {
                 <span>Tax amount</span>
                 <span className="mono">{fmt(tax)}</span>
               </div>
-              {discount > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--green)', marginBottom: 6 }}>
-                  <span>Discount</span>
-                  <span className="mono">−{fmt(discount)}</span>
-                </div>
-              )}
               <div style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -291,7 +307,7 @@ function CustomerDisplayLive({ roomId }) {
                   items.map((row, i) => (
                     <tr key={`${row.name}-${i}`}>
                       <td style={{ fontWeight: 500, fontSize: 15 }}>{row.name || '—'}</td>
-                      <td className="text-right mono">{row.qty}</td>
+                      <td className="text-right mono">{fmtQty(row.qty)}</td>
                       <td className="text-right mono">{fmt(row.price)}</td>
                       <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(row.subtotal)}</td>
                     </tr>

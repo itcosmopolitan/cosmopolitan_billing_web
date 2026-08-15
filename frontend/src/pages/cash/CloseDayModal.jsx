@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
 import { FormGroup, Modal } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
+import { amountInputStep } from '@/utils/decimalPrecision'
 
 export default function CloseDayModal({ open, onClose, branchId, summary, date, onClosed, currentUser }) {
   const [physicalCount, setPhysicalCount] = useState('')
@@ -92,7 +93,7 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
           className="form-input"
           type="number"
           min="0"
-          step="0.01"
+          step={amountInputStep()}
           value={physicalCount}
           onChange={(e) => setPhysicalCount(e.target.value)}
           autoFocus

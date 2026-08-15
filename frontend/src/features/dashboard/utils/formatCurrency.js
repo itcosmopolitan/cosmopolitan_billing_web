@@ -1,9 +1,9 @@
+import { formatAmountNumber, getAmountDecimals } from '@/utils/decimalPrecision'
+
 export const formatCurrency = (value, options = {}) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return 'MVR 0'
-    return `MVR ${Number(value).toLocaleString('en-MV', {
-    maximumFractionDigits: options.decimals ?? 0,
-    minimumFractionDigits: options.decimals ?? 0,
-  })}`
+  const decimals = options.decimals ?? getAmountDecimals()
+  return `MVR ${formatAmountNumber(value, decimals)}`
 }
 
 export const formatCompactCurrency = (value) => {
@@ -13,7 +13,7 @@ export const formatCompactCurrency = (value) => {
     if (abs >= 1000000000) return `${sign}MVR ${(abs / 1000000000).toFixed(1)}B`
     if (abs >= 1000000) return `${sign}MVR ${(abs / 1000000).toFixed(1)}M`
     if (abs >= 1000) return `${sign}MVR ${(abs / 1000).toFixed(1)}K`
-    return `${sign}MVR ${abs.toLocaleString('en-MV', { maximumFractionDigits: 0 })}`
+    return `${sign}MVR ${formatAmountNumber(abs)}`
 }
 
 export const formatNumber = (value) => Number(value || 0).toLocaleString('en-MV')

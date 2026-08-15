@@ -6,7 +6,8 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { salesAPI } from '@/api'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
+import { qtyInputStep } from '@/utils/decimalPrecision'
 
 export default function POSRefundModal({ open, onClose, branchId, onSuccess }) {
   const [searchNum, setSearchNum] = useState('')
@@ -221,13 +222,14 @@ export default function POSRefundModal({ open, onClose, branchId, onSuccess }) {
               {(invoice.items || []).map((line) => (
                 <tr key={line.id}>
                   <td style={{ fontSize: 13 }}>{line.name}</td>
-                  <td className="text-right mono">{line.qty}</td>
+                  <td className="text-right mono">{fmtQty(line.qty)}</td>
                   <td className="text-right">
                     <input
                       className="form-input"
                       type="number"
                       min={0}
                       max={line.qty}
+                      step={qtyInputStep()}
                       value={returnQty[line.id] ?? 0}
                       onChange={(e) => setReturnQty((prev) => ({
                         ...prev,

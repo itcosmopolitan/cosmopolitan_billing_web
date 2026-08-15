@@ -21,7 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
 from src.database import get_db
-from src.models import Role, User
+from src.models import Organisation, Role, User
+from src.decimal_precision import org_precision
 from src.permissions import expand
 
 # ─── Password hashing ────────────────────────────────────────────────────────
@@ -299,6 +300,8 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
     # Local import keeps this module free of routes/* circular risk.
     from src.routes._serializers import get_user_branch_ids
     branch_ids = await get_user_branch_ids(db, user.id)
+    org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    amount_prec, qty_prec = org_precision(org)
     return {
         "id": user.id,
         "name": user.name,
@@ -317,4 +320,6 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         # endpoints); keep both in sync.
         "must_change_password": bool(getattr(user, "must_change_password", False)),
         "permissions": sorted(expand(granted)),
+        "amountDecimalPrecision": amount_prec,
+        "quantityDecimalPrecision": qty_prec,
     }

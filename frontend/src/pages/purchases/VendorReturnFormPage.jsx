@@ -12,7 +12,8 @@ import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/compone
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI, itemsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
+import { qtyInputStep } from '@/utils/decimalPrecision'
 
 const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Damaged', 'Other']
 
@@ -359,9 +360,9 @@ export default function VendorReturnFormPage() {
                                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Fully returned</div>
                               )}
                             </td>
-                            <td className="text-right mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>{cap}</td>
+                            <td className="text-right mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtQty(cap)}</td>
                             <td className="text-right mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                              {remaining}
+                              {fmtQty(remaining)}
                             </td>
                             <td className="text-right">
                               <input
@@ -369,6 +370,7 @@ export default function VendorReturnFormPage() {
                                 type="number"
                                 min={0}
                                 max={remaining}
+                                step={qtyInputStep()}
                                 value={q}
                                 disabled={disabled}
                                 onChange={(e) => setQtyFor(li, e.target.value)}

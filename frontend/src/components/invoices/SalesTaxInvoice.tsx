@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 
 export interface InvoiceLineItem {
@@ -131,7 +132,8 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   const totalGst = parseNumber(sale?.taxTotal ?? sale?.tax_total ?? 0)
   const totalInclGst = parseNumber(sale?.total ?? subtotal + totalGst)
   const discountAmount = parseNumber(sale?.discount ?? sale?.discount_amount ?? sale?.discount_amt ?? 0)
-  const discountPct = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
+  const discountBase = totalInclGst + discountAmount
+  const discountPct = discountBase && discountAmount ? Math.round((discountAmount / discountBase) * 100) : 0
   const gstRatePercent = parseNumber(sale?.gstRatePercent ?? sale?.tax_rate_percent ?? sale?.taxRate ?? sale?.tax_rate ?? sale?.taxPercent ?? sale?.tax_percent ?? 0)
   const postingDate = `${sale?.date || sale?.invoiceDate || sale?.invoice_date || ''}`.trim()
 
@@ -154,7 +156,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
         ? customerAddressLines
         : sale?.addressLines || sale?.address_lines || (sale?.customerAddress ? [sale.customerAddress] : []) || (sale?.customer_address ? [sale.customer_address] : []),
     },
-    billToCustomerNo: sale?.customerId || sale?.customer_id || '',
+    billToCustomerNo: sale?.customerCode || sale?.customer_code || sale?.customerId || sale?.customer_id || '',
     gstNo: sale?.gstNo || sale?.gst_no || '',
     invoiceNo: `${sale?.number || sale?.invoiceNo || sale?.invoice_no || ''}`,
     orderNo: sale?.orderNo || sale?.order_no || '',
@@ -177,13 +179,14 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   }
 }
 
-function formatNumber(value: number | string | undefined | null, digits = 2) {
+function formatNumber(value: number | string | undefined | null, digits?: number) {
   if (value === null || value === undefined || value === '') return ''
   const number = Number(value)
   if (Number.isNaN(number)) return ''
+  const d = digits ?? getAmountDecimals()
   return number.toLocaleString('en-MV', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
   })
 }
 
@@ -373,7 +376,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <td>{item.packing ?? ''}</td>
                     <td>{item.origin ?? ''}</td>
                     <td>{item.units ?? ''}</td>
-                    <td>{formatNumber(item.qty, 0)}</td>
+                    <td>{formatQtyNumber(item.qty)}</td>
                     <td>{formatNumber(item.rate)}</td>
                     <td>{item.discountPct ? `${formatNumber(item.discountPct, 2)}%` : ''}</td>
                     <td>{formatNumber(item.gstAmount)}</td>
@@ -386,6 +389,12 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
             {pageNumber === totalPages ? (
               <>
                 <div className="totals-block">
+                  {invoice.discountAmount ? (
+                    <div className="totals-row">
+                      <span>Discount ({invoice.discountPct ?? 0}%)</span>
+                      <span>-{formatNumber(invoice.discountAmount)}</span>
+                    </div>
+                  ) : null}
                   <div className="totals-row">
                     <span>Total MRF Excl. GST</span>
                     <span>{formatNumber(invoice.totalExclGst)}</span>
@@ -394,12 +403,6 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <span>{invoice.gstRatePercent}% GST</span>
                     <span>{formatNumber(invoice.totalGst)}</span>
                   </div>
-                  {invoice.discountAmount ? (
-                    <div className="totals-row">
-                      <span>Discount ({invoice.discountPct ?? 0}%)</span>
-                      <span>-{formatNumber(invoice.discountAmount)}</span>
-                    </div>
-                  ) : null}
                   <div className="totals-row totals-row--total">
                     <span>Total MRF Incl. GST</span>
                     <span>{formatNumber(invoice.totalInclGst)}</span>

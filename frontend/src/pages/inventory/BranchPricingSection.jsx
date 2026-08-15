@@ -3,6 +3,10 @@ import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
 import { AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import { createBranchRow, retailBranches } from './itemFormShared'
+import TaxedPriceInput from './TaxedPriceInput'
+import { qtyInputStep } from '@/utils/decimalPrecision'
+import { catalogInclusiveAmount } from '@/utils/taxCalc'
+import { fmtQty } from '@/utils/helpers'
 
 /**
  * Branch listing and price overrides on Item Master create/edit.
@@ -15,7 +19,9 @@ export default function BranchPricingSection({
   initialListedIds = [],
   defaultCost,
   defaultPrice,
+  priceTaxMode = 'inclusive',
   defaultReorder,
+  taxRate,
   batchTracking = false,
   onChange,
   itemId = null,
@@ -35,13 +41,16 @@ export default function BranchPricingSection({
   )
 
   const patchRow = (rowId, field, value) => {
+    const patch = typeof field === 'object' && field !== null && value === undefined
+      ? field
+      : { [field]: value }
     onChange(branchConfigs.map((r) => {
       if (r._rowId !== rowId) return r
-      if (field === 'branch_id') {
-        const br = options.find((b) => b.id === value)
-        return { ...r, branch_id: value, branch_name: br?.name || '' }
+      if (patch.branch_id !== undefined) {
+        const br = options.find((b) => b.id === patch.branch_id)
+        return { ...r, ...patch, branch_name: br?.name || r.branch_name }
       }
-      return { ...r, [field]: value }
+      return { ...r, ...patch }
     }))
   }
 
@@ -113,12 +122,16 @@ export default function BranchPricingSection({
   const reorderPlaceholder = String(defaultReorder || 10)
 
   const getProfitPercentage = (row) => {
-    const cost = row.cost_price === '' || row.cost_price == null
-      ? Number(defaultCost ?? 0)
-      : Number(row.cost_price)
-    const price = row.selling_price === '' || row.selling_price == null
-      ? Number(defaultPrice ?? 0)
-      : Number(row.selling_price)
+    const cost = catalogInclusiveAmount(
+      row.cost_price === '' || row.cost_price == null ? defaultCost : row.cost_price,
+      priceTaxMode,
+      taxRate,
+    )
+    const price = catalogInclusiveAmount(
+      row.selling_price === '' || row.selling_price == null ? defaultPrice : row.selling_price,
+      priceTaxMode,
+      taxRate,
+    )
 
     if (!Number.isFinite(cost) || !Number.isFinite(price) || cost === 0) {
       return ''
@@ -150,6 +163,7 @@ export default function BranchPricingSection({
       </div>
       <AlertBar type="blue" icon="ℹ️">
         Add each branch where this item is sold. Leave cost or sell price blank to use item defaults.
+        Branch amounts use the same Incl. GST / Excl. GST setting as the prices above.
         {isEdit && ' Removing a branch row unlists the item there.'}
         {' '}Stock and batches are added per branch from <strong>Items &amp; Stock</strong>.
       </AlertBar>
@@ -164,13 +178,13 @@ export default function BranchPricingSection({
         </div>
       ) : (
         <div style={{ overflowX: 'auto', marginTop: 10 }}>
-          <table className="data-table" style={{ marginBottom: 0 }}>
+          <table className="data-table branch-pricing-table" style={{ marginBottom: 0 }}>
             <thead>
               <tr>
                 <th>Branch</th>
-                <th className="text-right">Cost Price (MVR)</th>
-                <th className="text-right">Selling Price (MVR)</th>
-                <th className="text-right">Profit %</th>
+                <th className="text-right" style={{ width: 176 }}>Cost Price (MVR)</th>
+                <th className="text-right" style={{ width: 176 }}>Selling Price (MVR)</th>
+                <th className="text-right" style={{ width: 96 }}>Profit %</th>
                 {(showCreateOpeningStock || showEditOpeningStock) && <th className="text-right">Opening Qty</th>}
                 <th className="text-right">Reorder</th>
                 {isEdit && <th className="text-right">Stock</th>}
@@ -200,25 +214,25 @@ export default function BranchPricingSection({
                     />
                   </td>
                   <td className="text-right">
-                    <input
-                      className="form-input"
-                      type="number"
-                      style={{ width: 88, marginLeft: 'auto', textAlign: 'right' }}
+                    <TaxedPriceInput
+                      compact
                       disabled={!r.branch_id}
-                      placeholder={costPlaceholder(r.cost_price)}
                       value={r.cost_price ?? ''}
-                      onChange={(e) => patchRow(r._rowId, 'cost_price', e.target.value)}
+                      mode={priceTaxMode}
+                      taxRate={taxRate}
+                      placeholder={costPlaceholder(r.cost_price)}
+                      onValueChange={(v) => patchRow(r._rowId, 'cost_price', v)}
                     />
                   </td>
                   <td className="text-right">
-                    <input
-                      className="form-input"
-                      type="number"
-                      style={{ width: 88, marginLeft: 'auto', textAlign: 'right' }}
+                    <TaxedPriceInput
+                      compact
                       disabled={!r.branch_id}
+                      value={r.selling_price ?? ''}
+                      mode={priceTaxMode}
+                      taxRate={taxRate}
                       placeholder={pricePlaceholder(r.selling_price)}
-                      value={r.selling_price}
-                      onChange={(e) => patchRow(r._rowId, 'selling_price', e.target.value)}
+                      onValueChange={(v) => patchRow(r._rowId, 'selling_price', v)}
                     />
                   </td>
                   <td className="text-right">
@@ -246,6 +260,8 @@ export default function BranchPricingSection({
                         <input
                           className="form-input"
                           type="number"
+                          min="0"
+                          step={qtyInputStep()}
                           style={{ width: 80, marginLeft: 'auto', textAlign: 'right' }}
                           disabled={!r.branch_id}
                           placeholder={openingStockPlaceholder}
@@ -259,6 +275,8 @@ export default function BranchPricingSection({
                     <input
                       className="form-input"
                       type="number"
+                      min="0"
+                      step={qtyInputStep()}
                       style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
                       disabled={!r.branch_id}
                       placeholder={reorderPlaceholder}
@@ -269,7 +287,7 @@ export default function BranchPricingSection({
                   {isEdit && (
                     <td className="text-right">
                       <span className="mono" style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                        {r.available_stock ?? 0}
+                        {fmtQty(r.available_stock ?? 0)}
                       </span>
                     </td>
                   )}

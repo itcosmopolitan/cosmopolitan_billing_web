@@ -11,7 +11,8 @@ import {
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
-import { fmtDate, fmtDateTime } from '@/utils/helpers'
+import { fmtDate, fmtDateTime, fmtQty } from '@/utils/helpers'
+import { qtyInputStep } from '@/utils/decimalPrecision'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import RowActionsMenu from './RowActionsMenu'
 import AdjustmentDetailPanel from './AdjustmentDetailPanel'
@@ -517,9 +518,9 @@ export default function AdjustmentsPage() {
                         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.reason}</div>
                       </td>
                       <td className="mono" style={{ fontSize: 12 }}>
-                        {r.before_qty} → <strong>{r.new_qty}</strong>
+                        {fmtQty(r.before_qty)} → <strong>{fmtQty(r.new_qty)}</strong>
                         <span style={{ color: (r.delta || 0) >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
-                          ({(r.delta || 0) >= 0 ? '+' : ''}{r.delta ?? (r.new_qty - r.before_qty)})
+                          ({(r.delta || 0) >= 0 ? '+' : ''}{fmtQty(r.delta ?? (r.new_qty - r.before_qty))})
                         </span>
                       </td>
                       <td>
@@ -638,7 +639,7 @@ export default function AdjustmentsPage() {
               placeholder="Select item…"
               searchPlaceholder="Search by name, SKU, or barcode…"
               emptyLabel="No items at this branch"
-              selectedLabel={picked?.name ? `${picked.name} — stock ${picked.available_stock ?? 0}` : undefined}
+              selectedLabel={picked?.name ? `${picked.name} — stock ${fmtQty(picked.available_stock ?? 0)}` : undefined}
               onSelectOption={(opt) => {
                 const raw = opt?.raw
                 setPickedItem(raw ? {
@@ -672,7 +673,7 @@ export default function AdjustmentsPage() {
                   >
                     <td style={{ width: 30 }}><input type="radio" readOnly checked={!newForm.batch_id} /></td>
                     <td colSpan={2} style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>Aggregate ({trackingLabel(picked)})</td>
-                    <td className="text-right mono">{picked.available_stock ?? 0}</td>
+                    <td className="text-right mono">{fmtQty(picked.available_stock ?? 0)}</td>
                   </tr>
                   {adjLoading ? (
                     <tr><td colSpan={4} style={{ textAlign: 'center', padding: 12 }}>Loading batches…</td></tr>
@@ -685,7 +686,7 @@ export default function AdjustmentsPage() {
                       <td><input type="radio" readOnly checked={newForm.batch_id === b.id} /></td>
                       <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : '—'}</td>
-                      <td className="text-right mono">{b.quantity}</td>
+                      <td className="text-right mono">{fmtQty(b.quantity)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -699,6 +700,7 @@ export default function AdjustmentsPage() {
             className="form-input"
             type="number"
             min={0}
+            step={qtyInputStep()}
             value={newForm.new_qty}
             onChange={(e) => setNewForm((f) => ({ ...f, new_qty: e.target.value }))}
           />

@@ -60,6 +60,7 @@ export default function LoginPage() {
   const setSession = useAppStore((s) => s.setSession)
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
+  const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [rememberMe, setRememberMe] = useState(true)
@@ -80,8 +81,9 @@ export default function LoginPage() {
       resetSessionExpiryGuard()
       // Set session immediately so route guards pass, then load branches + fresh /me.
       setSession({ user, permissions: user.permissions || [] })
+      setDecimalPrecisionPrefs(user)
       const boot = await bootstrapAuthenticatedData()
-      applyBootstrapToStore(boot, { setSession, setPermCatalog, setBranches })
+      applyBootstrapToStore(boot, { setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs })
       if (user.must_change_password) {
         toast('Please set a new password to continue', { icon: '🔐' })
         navigate('/change-password', { replace: true })

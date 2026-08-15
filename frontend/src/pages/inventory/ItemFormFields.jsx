@@ -1,6 +1,9 @@
 import { FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { AUTOCOMPLETE_CATEGORY_URL, AUTOCOMPLETE_UNIT_URL, AUTOCOMPLETE_TAX_RATE_URL } from '@/api'
 import BranchPricingSection from './BranchPricingSection'
+import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './TaxedPriceInput'
+import { qtyInputStep } from '@/utils/decimalPrecision'
+import { convertEnteredTaxAmount } from '@/utils/taxCalc'
 
 /** Shared catalog + branch fields for New / Edit Item pages. */
 export default function ItemFormFields({
@@ -26,6 +29,23 @@ export default function ItemFormFields({
       : 'FIFO — add batches per branch from Items & Stock; oldest received consumed first.'
   const compactSelectStyle = { width: '100%', maxWidth: 420 }
   const dropdownStyle = { flex: 1, width: '100%', minWidth: 0 }
+  const priceTaxMode = normalizeTaxMode(form.priceTaxMode)
+
+  const setPriceTaxMode = (next) => {
+    const normalized = normalizeTaxMode(next)
+    if (normalized === priceTaxMode) return
+    const rate = form.tax_rate
+    patchForm('cost_price', convertEnteredTaxAmount(form.cost_price, priceTaxMode, normalized, rate))
+    patchForm('selling_price', convertEnteredTaxAmount(form.selling_price, priceTaxMode, normalized, rate))
+    patchForm('priceTaxMode', normalized)
+    if (onBranchConfigsChange) {
+      onBranchConfigsChange((prev) => (prev || []).map((r) => ({
+        ...r,
+        cost_price: convertEnteredTaxAmount(r.cost_price, priceTaxMode, normalized, rate),
+        selling_price: convertEnteredTaxAmount(r.selling_price, priceTaxMode, normalized, rate),
+      })))
+    }
+  }
 
   return (
     <>
@@ -121,8 +141,8 @@ export default function ItemFormFields({
                       <input
                         className="form-input"
                         type="number"
-                        min="1"
-                        step="1"
+                        min={qtyInputStep()}
+                        step={qtyInputStep()}
                         value={form.packaging_quantity ?? ''}
                         onChange={(e) => patchForm('packaging_quantity', e.target.value)}
                         placeholder="e.g. 12"
@@ -137,10 +157,39 @@ export default function ItemFormFields({
         <div className="item-form-column">
           <div className="item-form-panel">
             <div className="item-form-panel__head">Pricing</div>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+              Choose how amounts are entered. Catalog prices are saved GST-inclusive.
+            </p>
             <div className="item-form-grid item-form-grid--single">
-              <FormGroup label="Default Cost Price (MVR)" required><input className="form-input" type="number" value={form.cost_price} onChange={(e) => patchForm('cost_price', e.target.value)} placeholder="0.00" /></FormGroup>
-              <FormGroup label="Default Selling Price — Retail (MVR)" required><input className="form-input" type="number" value={form.selling_price} onChange={(e) => patchForm('selling_price', e.target.value)} placeholder="0.00" /></FormGroup>
-              <FormGroup label="Default Reorder Level"><input className="form-input" type="number" value={form.reorder_level} onChange={(e) => patchForm('reorder_level', e.target.value)} placeholder="Min stock trigger" /></FormGroup>
+              <FormGroup label="Price entry">
+                <select
+                  className="form-input"
+                  value={priceTaxMode}
+                  onChange={(e) => setPriceTaxMode(e.target.value)}
+                  style={compactSelectStyle}
+                >
+                  {GST_TAX_MODE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </FormGroup>
+              <TaxedPriceInput
+                label="Default Cost Price (MVR)"
+                required
+                value={form.cost_price}
+                mode={priceTaxMode}
+                taxRate={form.tax_rate}
+                onValueChange={(v) => patchForm('cost_price', v)}
+              />
+              <TaxedPriceInput
+                label="Default Selling Price — Retail (MVR)"
+                required
+                value={form.selling_price}
+                mode={priceTaxMode}
+                taxRate={form.tax_rate}
+                onValueChange={(v) => patchForm('selling_price', v)}
+              />
+              <FormGroup label="Default Reorder Level"><input className="form-input" type="number" min="0" step={qtyInputStep()} value={form.reorder_level} onChange={(e) => patchForm('reorder_level', e.target.value)} placeholder="Min stock trigger" /></FormGroup>
             </div>
             <div className="item-form-panel__head" style={{ marginTop: 14 }}>Discount pattern</div>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 10px' }}>
@@ -219,7 +268,9 @@ export default function ItemFormFields({
           initialListedIds={initialListedIds}
           defaultCost={form.cost_price}
           defaultPrice={form.selling_price}
+          priceTaxMode={priceTaxMode}
           defaultReorder={form.reorder_level}
+          taxRate={form.tax_rate}
           batchTracking={Boolean(form.batch_tracking)}
           onChange={onBranchConfigsChange}
           itemId={itemId}

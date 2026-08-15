@@ -12,6 +12,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
+import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
@@ -63,7 +64,7 @@ export default function PaymentFormPage() {
         const seed = {}
         rows.forEach((inv) => {
           const balance = (inv.total || 0) - (inv.paidAmount || 0)
-          seed[inv.id] = String(Math.max(0, balance).toFixed(2))
+          seed[inv.id] = formatAmountInput(Math.max(0, balance))
         })
         setApplyById(seed)
       })
@@ -125,7 +126,7 @@ export default function PaymentFormPage() {
     const seed = {}
     invoices.forEach((inv) => {
       const bal = Math.max(0, (inv.total || 0) - (inv.paidAmount || 0))
-      seed[inv.id] = String(bal.toFixed(2))
+      seed[inv.id] = formatAmountInput(bal)
     })
     setApplyById(seed)
   }
@@ -320,6 +321,8 @@ export default function PaymentFormPage() {
                           <input
                             className="form-input"
                             type="number"
+                            min="0"
+                            step={amountInputStep()}
                             value={applyById[inv.id] || ''}
                             disabled={!checked || creditMode}
                             onChange={(e) =>

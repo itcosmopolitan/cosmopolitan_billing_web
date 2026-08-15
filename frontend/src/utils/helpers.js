@@ -1,13 +1,13 @@
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
+import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 
 // ─── Currency formatting ──────────────────────────────────────────────────────
-export const fmt = (amount, decimals = 0) => {
+export const fmt = (amount, decimals) => {
   if (amount === null || amount === undefined) return '—'
-  return 'MVR ' + Number(amount).toLocaleString('en-MV', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  })
+  return 'MVR ' + formatAmountNumber(amount, decimals ?? getAmountDecimals())
 }
+
+export const fmtQty = (n, decimals) => formatQtyNumber(n, decimals)
 
 export const fmtNum = (n) => Number(n).toLocaleString('en-MV')
 

@@ -49,6 +49,8 @@ import SalesTaxInvoicePreview from '@/pages/invoices/SalesTaxInvoicePreview'
 
 function AppShell() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
+  // Subscribe so amount/qty formatters re-render across the app when settings change.
+  useAppStore((s) => `${s.amountDecimalPrecision}:${s.quantityDecimalPrecision}`)
   // Must stay in sync with the SIDEBAR_W / SIDEBAR_W_COLLAPSED constants in
   // components/layout/Sidebar.jsx — single source of truth there, mirrored
   // here for the main-content margin.
@@ -125,6 +127,7 @@ export default function App() {
   const setSession = useAppStore((s) => s.setSession)
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
+  const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const location = useLocation()
   const [booting, setBooting] = useState(true)
   const [setupStatusResolved, setSetupStatusResolved] = useState(false)
@@ -155,7 +158,7 @@ export default function App() {
           ? await bootstrapAuthenticatedData()
           : { ...(await bootstrapPublicData()), branches: [], user: null, permissions: [] }
         if (cancelled) return
-        applyBootstrapToStore(data, { setSession, setPermCatalog, setBranches })
+        applyBootstrapToStore(data, { setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs })
       } finally {
         if (!cancelled) {
           setBooting(false)
@@ -164,7 +167,7 @@ export default function App() {
       }
     })()
     return () => { cancelled = true }
-  }, [setSession, setPermCatalog, setBranches, location.pathname])
+  }, [setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs, location.pathname])
 
   if (!setupStatusResolved || booting) return <BootSplash />
   if (setupRequired && location.pathname !== '/setup') return <Navigate to="/setup" replace />

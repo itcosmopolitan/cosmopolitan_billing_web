@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
 import { FormGroup, Modal, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { amountInputStep } from '@/utils/decimalPrecision'
 
 const DEFAULT_FORM = {
   type: 'out',
@@ -126,8 +127,8 @@ export default function CashEntryModal({ open, onClose, branchId, onSaved, editE
         <input
           className="form-input"
           type="number"
-          min="0.01"
-          step="0.01"
+          min={amountInputStep()}
+          step={amountInputStep()}
           value={form.amount}
           onChange={(e) => pf('amount', e.target.value)}
           autoFocus

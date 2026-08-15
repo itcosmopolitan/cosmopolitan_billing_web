@@ -40,7 +40,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { itemsAPI } from '@/api'
 import { unwrapPaged } from '@/utils/pagination'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 
 const DEBOUNCE_MS = 250
 const PAGE_SIZE = 30
@@ -227,7 +227,7 @@ export default function InventoryItemPicker({
                       }}
                     >
                       {fmt(r.selling_price)} ·{' '}
-                      {oos ? 'Out of stock' : `${stock} in stock`}
+                      {oos ? 'Out of stock' : `${fmtQty(stock)} in stock`}
                     </span>
                   </div>
                 )
@@ -378,7 +378,7 @@ export default function InventoryItemPicker({
                     }}
                   >
                     {fmt(r.selling_price)} ·{' '}
-                    {oos ? 'Out of stock' : `${stock} in stock`}
+                    {oos ? 'Out of stock' : `${fmtQty(stock)} in stock`}
                   </span>
                 </div>
               )

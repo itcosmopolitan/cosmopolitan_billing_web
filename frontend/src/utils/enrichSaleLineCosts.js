@@ -1,7 +1,21 @@
 import { itemsAPI } from '@/api'
 
-/** Fill missing costPrice (and batch flags) from item master for edit forms. */
-export async function enrichSaleLinesWithCosts(items, _branchId) {
+function masterCost(item) {
+  return Number(item?.cost_price ?? item?.costPrice) || 0
+}
+
+/** Branch-effective cost (same source as InventoryItemPicker / items list). */
+function effectiveCostFromBranches(branchData, branchId, fallback) {
+  const rows = branchData?.branches || []
+  const row = rows.find((b) => b.branch_id === branchId)
+  if (!row) return fallback
+  const n = Number(row.effective_cost_price ?? row.cost_price)
+  return Number.isFinite(n) ? n : fallback
+}
+
+/** Fill missing costPrice (and batch flags) for edit forms.
+ * Cost uses the branch-effective price when `branchId` is set, matching create. */
+export async function enrichSaleLinesWithCosts(items, branchId) {
   const out = []
   for (const line of items || []) {
     if (!line.item_id) {
@@ -15,11 +29,17 @@ export async function enrichSaleLinesWithCosts(items, _branchId) {
       continue
     }
     try {
-      const item = await itemsAPI.get(line.item_id)
+      const [item, branchData] = await Promise.all([
+        itemsAPI.get(line.item_id),
+        needsCost && branchId
+          ? itemsAPI.getBranches(line.item_id).catch(() => null)
+          : Promise.resolve(null),
+      ])
+      const fallback = masterCost(item)
       out.push({
         ...line,
         costPrice: needsCost
-          ? (Number(item?.cost_price ?? item?.costPrice) || 0)
+          ? (branchId ? effectiveCostFromBranches(branchData, branchId, fallback) : fallback)
           : line.costPrice,
         batchTracking: line.batchTracking || Boolean(item?.batch_tracking),
         expiryTracking: line.expiryTracking || Boolean(item?.expiry_tracking),

@@ -28,6 +28,7 @@ import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/Doc
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { emptyPurchaseLine } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
+import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
@@ -278,12 +279,16 @@ export default function BillFormModal({
                     </td>
                     <td>
                       <input className="form-input" type="number"
+                        min={qtyInputStep()}
+                        step={qtyInputStep()}
                         style={numInputStyle}
                         value={it.qty}
                         onChange={(e) => { const n = [...billForm.items]; n[i].qty = e.target.value; pbf('items', n) }} />
                     </td>
                     <td>
                       <input className="form-input" type="number"
+                        min="0"
+                        step={amountInputStep()}
                         style={numInputStyle}
                         value={it.cost}
                         onChange={(e) => { const n = [...billForm.items]; n[i].cost = e.target.value; pbf('items', n) }} />
