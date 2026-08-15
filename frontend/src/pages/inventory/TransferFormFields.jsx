@@ -7,6 +7,7 @@ import {
   formatAllocationSummary,
   isAllocationValid,
 } from '@/utils/batchAllocation'
+import { qtyInputStep } from '@/utils/decimalPrecision'
 
 export default function TransferFormFields({
   form,
@@ -158,7 +159,8 @@ export default function TransferFormFields({
                       <input
                         className="form-input"
                         type="number"
-                        min="1"
+                        min={qtyInputStep()}
+                        step={qtyInputStep()}
                         placeholder="Qty"
                         value={row.qty}
                         onChange={(e) => patchItem(i, 'qty', e.target.value)}

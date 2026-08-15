@@ -1,5 +1,6 @@
 import { fmt } from '@/utils/helpers'
 import MarginBadge from '@/components/MarginBadge'
+import { amountInputStep } from '@/utils/decimalPrecision'
 import {
   computeDocumentTotals,
   hasLineLevelDiscount,
@@ -64,7 +65,7 @@ export default function DocumentTotalsStrip({
         type="number"
         min="0"
         max={entityDiscountType === '%' ? 100 : undefined}
-        step={entityDiscountType === '%' ? 0.5 : 0.01}
+        step={entityDiscountType === '%' ? 0.5 : amountInputStep()}
         placeholder={entityDiscountType === '%' ? '0' : '0.00'}
         value={entityDiscount || ''}
         onChange={(e) => onEntityDiscountChange(e.target.value)}
@@ -99,7 +100,7 @@ export default function DocumentTotalsStrip({
   const summaryCard = (
     <div className="document-summary-card">
       {items.length > 0 && (
-        <div className="document-summary-card__hint">Item amounts include tax</div>
+        <div className="document-summary-card__hint">Item amounts include tax. Discounts apply before tax.</div>
       )}
 
       {!readOnly && onEntityDiscountChange && (

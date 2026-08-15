@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
 import { Modal, FormGroup, FormRow, EmptyState, Chip, AlertBar, DatePicker } from '@/components/ui'
-import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
+import { fmt, fmtDate, fmtDateTime, fmtQty } from '@/utils/helpers'
+import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import { validateBatchDates, todayISO } from '@/utils/batchDates'
 
@@ -231,6 +232,8 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
               <input
                 className="form-input"
                 type="number"
+                min={qtyInputStep()}
+                step={qtyInputStep()}
                 value={form.qty}
                 onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))}
                 disabled={isEdit}
@@ -260,6 +263,8 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
               <input
                 className="form-input"
                 type="number"
+                min="0"
+                step={amountInputStep()}
                 value={form.cost_price}
                 onChange={(e) => setForm((f) => ({ ...f, cost_price: e.target.value }))}
                 placeholder={isAdd ? `Defaults to ${fmt(item.cost_price)}` : ''}
@@ -330,7 +335,7 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
                   >
                     {b.expiryDate ? fmtDate(b.expiryDate) : '—'}
                   </td>
-                  <td className="text-right mono" style={{ fontWeight: 600 }}>{b.quantity}<span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 10.5 }}> / {b.initialQty}</span></td>
+                  <td className="text-right mono" style={{ fontWeight: 600 }}>{fmtQty(b.quantity)}<span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 10.5 }}> / {fmtQty(b.initialQty)}</span></td>
                   <td title={expInfo.title}>
                     {expInfo.status
                       ? <Chip status={expInfo.status} label={expInfo.statusLabel} />

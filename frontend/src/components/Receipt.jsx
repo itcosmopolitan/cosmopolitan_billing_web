@@ -1,5 +1,6 @@
 import { useRef } from 'react'
-import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
+import { fmtDate, fmtDateTime } from '@/utils/helpers'
+import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import SalesTaxInvoice, { mapSaleToInvoice } from '@/components/invoices/SalesTaxInvoice'
 import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
@@ -8,9 +9,10 @@ import openInvoicePrintWindow from '@/utils/printInvoice'
 const formatNumber = (value, options = {}) => {
   const number = Number(value)
   if (value === null || value === undefined || Number.isNaN(number)) return '—'
+  const amountDecimals = getAmountDecimals()
   return number.toLocaleString('en-MV', {
-    minimumFractionDigits: options.minimumFractionDigits ?? 0,
-    maximumFractionDigits: options.maximumFractionDigits ?? 2,
+    minimumFractionDigits: options.minimumFractionDigits ?? amountDecimals,
+    maximumFractionDigits: options.maximumFractionDigits ?? amountDecimals,
   })
 }
 
@@ -51,7 +53,7 @@ const amountToWords = (value) => {
   return `${rupeesText} RUFIYAA AND ${laariText} LAARI ONLY`
 }
 
-const formatCurrency = (value) => formatNumber(value, { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+const formatCurrency = (value) => formatAmountNumber(value)
 
 // ─── Invoice Print Component ────────────────────────────────────────────────
 export function Receipt({ sale, branch }) {
@@ -118,7 +120,7 @@ export function Receipt({ sale, branch }) {
     const invoiceDate = sale.date || sale.invoiceDate || sale.invoice_date || ''
     const dueDate = sale.dueDate || sale.due_date || null
     const paymentTerms = sale.paymentTerms || sale.payment_terms || '30 DAYS'
-    const customerId = sale.customerId || sale.customer_id || '—'
+    const customerId = sale.customerCode || sale.customer_code || sale.customerId || sale.customer_id || '—'
     const totalInWords = amountToWords(sale.total || 0)
 
     const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0) || (sale.subtotal ? Math.round(((sale.taxTotal || sale.tax_total || 0) / sale.subtotal) * 100) : 0)
@@ -225,6 +227,9 @@ export function Receipt({ sale, branch }) {
                 if (col.key === 'rate' || col.key === 'gst' || col.key === 'amount') {
                   return `<td class="item-cell right">${formatCurrency(raw)}</td>`
                 }
+                if (col.key === 'qty') {
+                  return `<td class="item-cell right">${formatQtyNumber(raw)}</td>`
+                }
                 if (col.key === 'disc') {
                   return `<td class="item-cell right">${raw}%</td>`
                 }
@@ -237,19 +242,25 @@ export function Receipt({ sale, branch }) {
 
         <div class="divider"></div>
         <table class="summary">
+          ${sale.discount ? `
+          <tr>
+            <td>Discount</td>
+            <td class="right">-${formatNumber(sale.discount)}</td>
+          </tr>
+          ` : ''}
           <tr>
             <td>Total MRF Excl. GST</td>
-              <td class="right">${formatNumber(sale.subtotal || sale.items?.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0) || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+              <td class="right">${formatNumber(sale.subtotal || sale.items?.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0) || 0)}</td>
           </tr>
           ${`
             <tr>
               <td>${taxPercent}% GST</td>
-              <td class="right">${formatNumber(sale.taxTotal || sale.tax_total || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+              <td class="right">${formatNumber(sale.taxTotal || sale.tax_total || 0)}</td>
             </tr>
           `}
           <tr class="bold">
             <td>TOTAL</td>
-            <td class="right">${formatNumber(sale.total || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td class="right">${formatNumber(sale.total || 0)}</td>
           </tr>
         </table>
 

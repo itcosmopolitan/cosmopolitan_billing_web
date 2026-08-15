@@ -8,6 +8,7 @@ import DataTable from '../components/DataTable'
 import KpiCard from '../components/KpiCard'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 import { formatCompactCurrency, formatCurrency, formatNumber, formatPercent } from '../utils/formatCurrency'
+import { formatQtyNumber } from '@/utils/decimalPrecision'
 
 const spark = (rows = [], key) => rows.map((row) => ({ value: row[key] || 0 }))
 
@@ -193,7 +194,7 @@ function TargetMetric({ label, value, emphasis = false }) {
 
 const topProductColumns = [
   { key: 'name', header: 'Product' },
-  { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
+  { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatQtyNumber(row.qty) },
   { key: 'revenue', header: 'Revenue', align: 'right', render: (row) => formatCompactCurrency(row.revenue) },
 ]
 

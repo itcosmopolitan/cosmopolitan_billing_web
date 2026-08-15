@@ -13,6 +13,7 @@ import InventoryItemPicker from './InventoryItemPicker'
 import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt } from '@/utils/helpers'
+import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
@@ -242,6 +243,8 @@ export default function InvoiceFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number"
+                      min={qtyInputStep()}
+                      step={qtyInputStep()}
                       style={numInputStyle}
                       value={it.qty}
                       onChange={(e) => {
@@ -253,6 +256,8 @@ export default function InvoiceFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number"
+                      min="0"
+                      step={amountInputStep()}
                       style={numInputStyle}
                       value={it.price}
                       onChange={(e) => { const n = [...invoiceForm.items]; n[i].price = e.target.value; pif('items', n) }} />

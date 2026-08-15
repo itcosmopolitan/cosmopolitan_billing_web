@@ -25,7 +25,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 
 export default function ConvertPOToBillModal({
@@ -253,7 +253,7 @@ export default function ConvertPOToBillModal({
                         {line.name}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-                        {line.qty} {line.qty === 1 ? 'unit' : 'units'}
+                        {fmtQty(line.qty)} {Number(line.qty) === 1 ? 'unit' : 'units'}
                       </div>
                     </div>
                     {!tracked && (

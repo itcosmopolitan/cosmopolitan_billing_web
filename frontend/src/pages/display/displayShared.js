@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import { calcCartTotals } from '@/utils/taxCalc'
+import { getAmountDecimals, getQtyDecimals } from '@/utils/decimalPrecision'
 
 const DISPLAY_CODE_STORAGE_KEY = 'pos-display-session-code'
 const DISPLAY_CODE_LENGTH = 6
@@ -113,5 +114,7 @@ export function buildPosDisplayPayload(
     discount: totals.discount,
     total: totals.total,
     taxMode: totals.mode,
+    amountDecimalPrecision: getAmountDecimals(),
+    quantityDecimalPrecision: getQtyDecimals(),
   }
 }

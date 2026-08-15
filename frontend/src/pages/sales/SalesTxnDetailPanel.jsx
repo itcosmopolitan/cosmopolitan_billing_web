@@ -2,13 +2,20 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 import { Chip, ReturnStatusChip, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
 function displayPaymentMode(raw) {
   if (!raw) return '—'
   return String(raw).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function formatDiscPct(item) {
+  const n = Number(item?.discount ?? item?.lineDiscount ?? 0)
+  if (!n) return '0%'
+  const rounded = Math.round(n * 10) / 10
+  return `${rounded}%`
 }
 
 const META = {
@@ -288,17 +295,17 @@ export default function SalesTxnDetailPanel({
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
                   {kind === 'return' ? (
                     <>
-                      <td className="text-right mono">{item.originalQty ?? '—'}</td>
-                      <td className="text-right mono">{item.returnQty}</td>
+                      <td className="text-right mono">{fmtQty(item.originalQty ?? item.qty)}</td>
+                      <td className="text-right mono">{fmtQty(item.returnQty)}</td>
                       <td className="text-right mono">{fmt(item.price)}</td>
                       <td className="text-right mono">{item.taxRate || 0}%</td>
                       <td className="text-right mono">{fmt(item.lineTotal || (item.returnQty * item.price))}</td>
                     </>
                   ) : (
                     <>
-                      <td className="text-right mono">{item.qty}</td>
+                      <td className="text-right mono">{fmtQty(item.qty)}</td>
                       <td className="text-right mono">{fmt(item.price)}</td>
-                      <td className="text-right mono">{item.discount || 0}%</td>
+                      <td className="text-right mono">{formatDiscPct(item)}</td>
                       <td className="text-right mono">{item.taxRate || 0}%</td>
                       <td className="text-right mono">{fmt(item.lineTotal || (item.qty * item.price))}</td>
                     </>

@@ -21,6 +21,7 @@ import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { emptyPurchaseLine } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
+import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
@@ -192,12 +193,16 @@ export default function PurchaseOrderFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
+                      min={qtyInputStep()}
+                      step={qtyInputStep()}
                       style={numInputStyle}
                       value={it.qty}
                       onChange={e => { const n = [...poForm.items]; n[i].qty = e.target.value; ppof('items', n) }} />
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
+                      min="0"
+                      step={amountInputStep()}
                       style={numInputStyle}
                       value={it.cost}
                       onChange={e => { const n = [...poForm.items]; n[i].cost = e.target.value; ppof('items', n) }} />

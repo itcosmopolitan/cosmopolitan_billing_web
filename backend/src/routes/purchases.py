@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.document_numbering import allocate_number, resolve_number
-from src.tax_calc import line_tax_amount, line_taxable_amount
+from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
 from src.models import (
     AuditLog,
     GRNLineItem,
@@ -676,23 +676,11 @@ async def create_bill(
     today = datetime.now().strftime("%Y-%m-%d")
     direct = await can_direct_commit(user, db, "purchases.approve")
 
-    # 2026-05-24: rewrote totals to use percent-discount line math (parity
-    # with sales create_invoice / _calc_lines). Old code summed gross
-    # without subtracting line discount + treated cart discount as a flat
-    # subtract from post-tax total. New: per-line net = gross × (1 − pct/100),
-    # tax computed on net, cart discount applied post-tax.
+    # Per-line net = gross × (1 − pct/100). Document discount is applied
+    # next, then GST is extracted from the remaining inclusive amount.
     tax_mode = await _get_org_tax_mode(db)
-    line_rows = []  # list[(item, line_net, line_tax)]
-    subtotal = 0.0
-    tax_total = 0.0
-    for item in data.items:
-        gross = round(item.qty * item.cost, 2)
-        line_net = round(gross * (1 - (item.discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
-        line_rows.append((item, line_net, line_tax))
-        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
-        tax_total += line_tax
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
+    total = round(subtotal + tax_total, 2)
 
     bill_num = await resolve_number(
         db,
@@ -1486,17 +1474,8 @@ async def update_bill(
     item_changes = _summarize_purchase_bill_item_changes(list(bill.line_items or []), data.items)
 
     tax_mode = await _get_org_tax_mode(db)
-    subtotal = 0.0
-    tax_total_val = 0.0
-    line_rows = []
-    for item in data.items:
-        gross = round(item.qty * item.cost, 2)
-        line_net = round(gross * (1 - (item.discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, item.tax_rate or 0, tax_mode)
-        line_rows.append((item, line_net, line_tax))
-        subtotal += line_taxable_amount(line_net, item.tax_rate or 0, tax_mode)
-        tax_total_val += line_tax
-    total = round(subtotal + tax_total_val - (data.discount or 0), 2)
+    line_rows, subtotal, tax_total_val = _calc_po_lines(data.items, tax_mode, data.discount or 0)
+    total = round(subtotal + tax_total_val, 2)
 
     if data.vendor_id:
         bill.vendor_id = data.vendor_id
@@ -2754,22 +2733,38 @@ async def _get_org_tax_mode(db: AsyncSession) -> str:
     return "inclusive"
 
 
-def _calc_po_lines(lines, tax_mode: str = "inclusive"):
-    """Compute line totals + roll up subtotal/tax for PO line shapes.
-    Mirrors routes/sales._calc_lines but reads `i.cost` instead of
-    `i.price` (purchases buy AT cost, sales sell AT price). Each row in
-    the returned list is (line, line_net, line_tax)."""
-    rows = []
-    subtotal = 0.0
-    tax_total = 0.0
+def _calc_po_lines(lines, tax_mode: str = "inclusive", entity_discount: float = 0.0):
+    """Compute line totals + roll up subtotal/tax for PO / bill line shapes.
+
+    Mirrors routes/sales._calc_lines but reads `i.cost` instead of `i.price`.
+    Line discount first, then document discount, then GST from remaining
+    inclusive amount. Each row is (line, line_net, line_tax).
+    """
+    prepared = []
     for i in lines:
         gross = round((i.qty or 0) * (i.cost or 0), 2)
         line_net = round(gross * (1 - (i.discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, i.tax_rate or 0, tax_mode)
-        rows.append((i, line_net, line_tax))
-        subtotal += line_taxable_amount(line_net, i.tax_rate or 0, tax_mode)
-        tax_total += line_tax
+        prepared.append((i, line_net, i.tax_rate or 0))
+    taxed, subtotal, tax_total, _total = rollup_inclusive_lines(
+        [p[1] for p in prepared],
+        [p[2] for p in prepared],
+        entity_discount or 0,
+    )
+    rows = [
+        (i, line_net, tax)
+        for (i, line_net, _), (_, _, tax) in zip(prepared, taxed)
+    ]
     return rows, subtotal, tax_total
+
+
+def _header_totals_after_discount(line_rows, discount: float = 0.0):
+    """Header subtotal/tax/total from inclusive line nets + document discount."""
+    inclusives = [ln for _, ln, _ in line_rows]
+    rates = [getattr(line, "tax_rate", 0) or 0 for line, _, _ in line_rows]
+    _taxed, subtotal, tax_total, total = rollup_inclusive_lines(
+        inclusives, rates, discount or 0,
+    )
+    return subtotal, tax_total, total
 
 
 def _po_terminal(po) -> bool:
@@ -2805,10 +2800,7 @@ async def _create_grn_draft(
     tax_mode: str = "inclusive",
 ) -> GoodsReceiptNote:
     """Create a draft GRN (pending approval). No stock movement — that runs on approval."""
-    # Inclusive: line_net is GST-inclusive; subtotal is taxable portion.
-    subtotal = sum(ln - lt for _, ln, lt in line_rows)
-    tax_total = sum(lt for _, _, lt in line_rows)
-    total = round(subtotal + tax_total - (discount or 0), 2)
+    subtotal, tax_total, total = _header_totals_after_discount(line_rows, discount)
 
     grn_number = await resolve_number(
         db, requested=number, model=GoodsReceiptNote,
@@ -2865,9 +2857,7 @@ async def _create_grn_received(
     """Create a received GRN and move stock. `line_rows` is
     [(line, line_net, line_tax), ...] where line has item_id, name, qty,
     cost, tax_rate, discount, batch_number, mfg_date, expiry_date."""
-    subtotal = sum(ln - lt for _, ln, lt in line_rows)
-    tax_total = sum(lt for _, _, lt in line_rows)
-    total = round(subtotal + tax_total - (discount or 0), 2)
+    subtotal, tax_total, total = _header_totals_after_discount(line_rows, discount)
 
     async def _alloc_grn() -> str:
         return await _next_grn_number(db)
@@ -3138,8 +3128,8 @@ async def create_order(
     )
 
     tax_mode = await _get_org_tax_mode(db)
-    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode)
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
+    total = round(subtotal + tax_total, 2)
 
     # Enforce operator may create POs for this branch
     await enforce_branch_access(data.branch_id, user=user, db=db)
@@ -3228,8 +3218,8 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
     await db.execute(sa_delete(PurchaseOrderLineItem).where(PurchaseOrderLineItem.order_id == po.id))
 
     tax_mode = await _get_org_tax_mode(db)
-    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode)
-    total = round(subtotal + tax_total - (data.discount or 0), 2)
+    line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
+    total = round(subtotal + tax_total, 2)
 
     po.vendor_id = data.vendor_id
     po.vendor_name = data.vendor_name

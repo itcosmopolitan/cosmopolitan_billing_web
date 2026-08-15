@@ -1,7 +1,10 @@
+import { catalogInclusiveAmount } from '@/utils/taxCalc'
+
 export const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', country_of_origin: '', categoryId: '', categoryName: '', brand: '',
   unit: '', cost_price: '', selling_price: '', wholesale_discount_pct: '', staff_discount_pct: '',
   tax_rate: '8',
+  priceTaxMode: 'inclusive',
   hsn_code: '', reorder_level: '10', active: true,
   is_packaging: false, packaging_quantity: '',
   batch_tracking: false, expiry_tracking: false, emoji: '📦',
@@ -57,6 +60,7 @@ export function formFromItem(item) {
     wholesale_discount_pct: item.wholesale_discount_pct ?? '',
     staff_discount_pct: item.staff_discount_pct ?? '',
     tax_rate: item.tax_rate ?? '8',
+    priceTaxMode: 'inclusive',
     hsn_code: item.hsn_code || '',
     reorder_level: item.default_reorder_level ?? item.reorder_level ?? '10',
     is_packaging: Boolean(item.is_packaging),
@@ -103,12 +107,12 @@ export function validateItemForm(form, branchConfigs) {
   return { ok: true }
 }
 
-function branchConfigFields(bc, { includeOpeningStock = false } = {}) {
+function branchConfigFields(bc, { includeOpeningStock = false, taxRate, priceTaxMode } = {}) {
   const out = {
     branch_id: bc.branch_id,
     is_available: true,
-    cost_price: bc.cost_price === '' || bc.cost_price == null ? null : Number(bc.cost_price),
-    selling_price: bc.selling_price === '' || bc.selling_price == null ? null : Number(bc.selling_price),
+    cost_price: catalogInclusiveAmount(bc.cost_price, priceTaxMode, taxRate),
+    selling_price: catalogInclusiveAmount(bc.selling_price, priceTaxMode, taxRate),
     reorder_level: bc.reorder_level === '' || bc.reorder_level == null ? null : Number(bc.reorder_level),
   }
   if (includeOpeningStock) {
@@ -128,8 +132,8 @@ export function buildCatalogPayload(form, branchFilter) {
     category_id: form.categoryId,
     brand: form.brand,
     unit: form.unit,
-    cost_price: Number(form.cost_price),
-    selling_price: Number(form.selling_price),
+    cost_price: catalogInclusiveAmount(form.cost_price, form.priceTaxMode, form.tax_rate),
+    selling_price: catalogInclusiveAmount(form.selling_price, form.priceTaxMode, form.tax_rate),
     wholesale_discount_pct: Number(form.wholesale_discount_pct || 0),
     staff_discount_pct: Number(form.staff_discount_pct || 0),
     tax_rate: Number(form.tax_rate),
@@ -151,21 +155,32 @@ export function buildCreatePayload(form, branchConfigs, branchFilter) {
   if (listed.length > 0) {
     payload.branch_configs = listed.map((bc) => branchConfigFields(
       bc,
-      { includeOpeningStock: !form.batch_tracking },
+      {
+        includeOpeningStock: !form.batch_tracking,
+        taxRate: form.tax_rate,
+        priceTaxMode: form.priceTaxMode,
+      },
     ))
   }
   return payload
 }
 
 /** Branch matrix for PUT /items/{id}/branches — includes unlisted branches removed from the grid. */
-export function buildBranchUpdatePayload(branchConfigs, previouslyListedIds = []) {
+export function buildBranchUpdatePayload(branchConfigs, previouslyListedIds = [], form = {}) {
   const previouslyListed = new Set(previouslyListedIds)
   const currentIds = new Set(branchConfigs.filter((bc) => bc.branch_id).map((bc) => bc.branch_id))
+  const taxOpts = {
+    taxRate: form.tax_rate,
+    priceTaxMode: form.priceTaxMode,
+  }
   const branches = branchConfigs
     .filter((bc) => bc.branch_id)
     .map((bc) => branchConfigFields(
       bc,
-      { includeOpeningStock: !previouslyListed.has(bc.branch_id) },
+      {
+        includeOpeningStock: !previouslyListed.has(bc.branch_id),
+        ...taxOpts,
+      },
     ))
 
   for (const id of previouslyListedIds) {

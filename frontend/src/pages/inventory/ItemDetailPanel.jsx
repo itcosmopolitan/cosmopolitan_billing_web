@@ -3,10 +3,25 @@ import { useNavigate } from 'react-router-dom'
 import { itemsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtDate, stockStatus } from '@/utils/helpers'
+import { fmt, fmtDate, fmtQty, stockStatus } from '@/utils/helpers'
+import { exclusiveFromInclusive } from '@/utils/taxCalc'
 import { Chip, Tag, EmptyState } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import { unwrapPaged } from '@/utils/pagination'
+
+function catalogPriceLabel(inclusive, taxRate) {
+  const inc = Number(inclusive)
+  if (!Number.isFinite(inc)) return '—'
+  const rate = Number(taxRate) || 0
+  if (rate <= 0) return fmt(inc)
+  const excl = exclusiveFromInclusive(inc, rate)
+  return (
+    <span>
+      {fmt(inc)} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>incl.</span>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{fmt(excl)} excl. GST</div>
+    </span>
+  )
+}
 
 const TABS = [
   { id: 'overview', label: 'Item details' },
@@ -85,7 +100,7 @@ export default function ItemDetailPanel({
   const { label: stockLabel } = stockStatus(stockOnHand, detail?.reorder_level ?? detail?.default_reorder_level ?? 10)
 
   const summary = [
-    { label: 'Stock on hand', value: stockOnHand },
+    { label: 'Stock on hand', value: fmtQty(stockOnHand) },
     { label: 'Retail price', value: fmt(detail?.default_selling_price ?? detail?.selling_price) },
     { label: 'Cost', value: fmt(detail?.default_cost_price ?? detail?.cost_price) },
     {
@@ -176,18 +191,18 @@ export default function ItemDetailPanel({
               { label: 'Tax rate', value: detail?.tax_rate != null ? `${detail.tax_rate}%` : '—' },
               { label: 'Status', value: statusChip(detail) },
               { label: 'Created by', value: detail?.created_by || '—' },
-              { label: 'Packaging', value: detail?.is_packaging ? `Yes (${detail.packaging_quantity || '—'} per pack)` : 'No' },
+              { label: 'Packaging', value: detail?.is_packaging ? `Yes (${detail.packaging_quantity != null ? fmtQty(detail.packaging_quantity) : '—'} per pack)` : 'No' },
             ]}
             />
           </DetailSection>
 
           <DetailSection title="Pricing">
             <DetailFields fields={[
-              { label: 'Default cost (MVR)', value: fmt(detail?.default_cost_price ?? detail?.cost_price) },
-              { label: 'Default selling — retail (MVR)', value: fmt(detail?.default_selling_price ?? detail?.selling_price) },
+              { label: 'Default cost (MVR)', value: catalogPriceLabel(detail?.default_cost_price ?? detail?.cost_price, detail?.tax_rate) },
+              { label: 'Default selling — retail (MVR)', value: catalogPriceLabel(detail?.default_selling_price ?? detail?.selling_price, detail?.tax_rate) },
               { label: 'Wholesale discount %', value: `${Number(detail?.wholesale_discount_pct || 0)}%` },
               { label: 'Staff discount %', value: `${Number(detail?.staff_discount_pct || 0)}%` },
-              { label: 'Default reorder level', value: detail?.default_reorder_level ?? detail?.reorder_level ?? '—' },
+              { label: 'Default reorder level', value: detail?.default_reorder_level != null || detail?.reorder_level != null ? fmtQty(detail?.default_reorder_level ?? detail?.reorder_level) : '—' },
             ]}
             />
           </DetailSection>
@@ -234,7 +249,7 @@ export default function ItemDetailPanel({
                         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{b.branch_code}</div>
                       </td>
                       <td>{b.is_available ? <Tag color="var(--green)">Yes</Tag> : <span style={{ color: 'var(--text-muted)' }}>No</span>}</td>
-                      <td className="text-right mono">{b.available_stock ?? 0}</td>
+                      <td className="text-right mono">{fmtQty(b.available_stock ?? 0)}</td>
                       <td className="text-right mono">
                         {fmt(b.effective_cost_price)}
                         {b.cost_price != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
@@ -243,14 +258,14 @@ export default function ItemDetailPanel({
                         {fmt(b.effective_selling_price)}
                         {b.selling_price != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
                       </td>
-                      <td className="text-right mono">{b.effective_reorder_level ?? '—'}</td>
+                      <td className="text-right mono">{b.effective_reorder_level != null ? fmtQty(b.effective_reorder_level) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               {branchMeta && (
                 <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
-                  Catalog defaults — cost {fmt(branchMeta.default_cost_price)}, sell {fmt(branchMeta.default_selling_price)}, reorder {branchMeta.default_reorder_level}
+                  Catalog defaults — cost {fmt(branchMeta.default_cost_price)}, sell {fmt(branchMeta.default_selling_price)}, reorder {fmtQty(branchMeta.default_reorder_level)}
                 </div>
               )}
             </div>
@@ -283,7 +298,7 @@ export default function ItemDetailPanel({
                     <tr key={b.id}>
                       <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber || b.batch_number}</td>
                       {isMaster && <td style={{ fontSize: 12 }}>{b.branchName || b.branch_name || b.branch_id || '—'}</td>}
-                      <td className="text-right mono">{b.quantity ?? b.qty ?? 0}</td>
+                      <td className="text-right mono">{fmtQty(b.quantity ?? b.qty ?? 0)}</td>
                       <td style={{ fontSize: 12 }}>{b.mfgDate || b.mfg_date ? fmtDate(b.mfgDate || b.mfg_date) : '—'}</td>
                       <td style={{ fontSize: 12 }}>{b.expiryDate || b.expiry_date ? fmtDate(b.expiryDate || b.expiry_date) : '—'}</td>
                       <td className="text-right mono">{fmt(b.costPrice ?? b.cost_price)}</td>

@@ -4,7 +4,8 @@ import toast from 'react-hot-toast'
 import { itemsAPI, adjustmentsAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtDate, stockStatus, exportToCSV } from '@/utils/helpers'
+import { fmt, fmtDate, fmtQty, stockStatus, exportToCSV } from '@/utils/helpers'
+import { qtyInputStep } from '@/utils/decimalPrecision'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import {
   SectionHeader, Card, Tabs, SearchBar, Chip, Modal,
@@ -506,7 +507,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                     <td style={{ fontSize: 12, fontWeight: 600, color: expInfo.dateColor }} title={expInfo.title}>
                       {b.expiryDate ? fmtDate(b.expiryDate) : '—'}
                     </td>
-                    <td className="text-right mono" style={{ fontWeight: 600 }}>{b.quantity}</td>
+                    <td className="text-right mono" style={{ fontWeight: 600 }}>{fmtQty(b.quantity)}</td>
                     <td title={expInfo.title}>
                       {expInfo.status
                         ? <Chip status={expInfo.status} label={expInfo.statusLabel} />
@@ -627,7 +628,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                       <td><Tag>{p.tax_rate}%</Tag></td>
                       {!isMaster && (
                         <td className="text-right">
-                          <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{branchStock}</div>
+                          <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{fmtQty(branchStock)}</div>
                         </td>
                       )}
                       {!isMaster && <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>}
@@ -825,7 +826,7 @@ export default function ItemsPage({ mode = 'branch' }) {
             <div style={{ padding: '10px 14px', background: 'var(--bg-raised)', borderRadius: 8, marginBottom: 16 }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>{showAdj.emoji} {showAdj.name}</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
-                Current stock: <strong>{showAdj.available_stock || 0}</strong> units
+                Current stock: <strong>{fmtQty(showAdj.available_stock || 0)}</strong> units
                 <span style={{ marginLeft: 10 }}>· Strategy: <strong>{trackingLabel(showAdj)}</strong></span>
               </div>
             </div>
@@ -853,7 +854,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                       <tr style={{ cursor: 'pointer', background: adjBatchId === '' ? 'rgba(79,142,247,.08)' : undefined }} onClick={() => { setAdjBatchId(''); setAdjQty(showAdj.available_stock || 0) }}>
                         <td><input type="radio" checked={adjBatchId === ''} readOnly /></td>
                         <td colSpan={3} style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>Aggregate (across all batches)</td>
-                        <td className="text-right mono">{showAdj.available_stock || 0}</td>
+                        <td className="text-right mono">{fmtQty(showAdj.available_stock || 0)}</td>
                       </tr>
                       {adjLoading ? (
                         <tr><td colSpan={5} style={{ textAlign: 'center', padding: 14, color: 'var(--text-muted)' }}>Loading batches…</td></tr>
@@ -865,7 +866,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                           <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : '—'}</td>
                           <td style={{ fontSize: 12, color: b.expiryDate && new Date(b.expiryDate) < new Date() ? 'var(--red)' : 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : '—'}</td>
-                          <td className="text-right mono">{b.quantity}</td>
+                          <td className="text-right mono">{fmtQty(b.quantity)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -875,7 +876,7 @@ export default function ItemsPage({ mode = 'branch' }) {
             )}
 
             <FormGroup label={adjBatchId ? 'New Batch Quantity' : 'New Aggregate Quantity (Physical Count)'} required>
-              <input className="form-input" type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} autoFocus />
+              <input className="form-input" type="number" min="0" step={qtyInputStep()} value={adjQty} onChange={(e) => setAdjQty(e.target.value)} autoFocus />
             </FormGroup>
             <FormGroup label="Reason">
               <AutocompleteDropdown
@@ -953,7 +954,7 @@ export default function ItemsPage({ mode = 'branch' }) {
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontWeight: 600, fontSize: 14, color: item.available_stock === 0 ? 'var(--red)' : item.available_stock <= item.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>
-                  {item.available_stock || 0}
+                  {fmtQty(item.available_stock || 0)}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Current stock</div>
               </div>

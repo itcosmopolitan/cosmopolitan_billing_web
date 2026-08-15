@@ -25,6 +25,7 @@ import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
+import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
@@ -1530,6 +1531,8 @@ export default function PurchasesPage() {
               <div style={{ height: 14 }} />
               <FormGroup label="Amount Paid (MVR)" required>
                 <input className="form-input" type="number"
+                  min="0"
+                  step={amountInputStep()}
                   value={payAmt}
                   onChange={(e) => setPayAmt(e.target.value)}
                   autoFocus

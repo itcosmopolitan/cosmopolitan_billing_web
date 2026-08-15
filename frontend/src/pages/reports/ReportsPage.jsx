@@ -2,13 +2,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
-import { fmt, fmtDate, fmtNum, exportToExcel } from '@/utils/helpers'
+import { fmt, fmtDate, fmtNum, fmtQty, exportToExcel } from '@/utils/helpers'
 import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
 import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
-const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value, 2))
+const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value))
 const formatNumber = (value) => (value === null || value === undefined ? '—' : fmtNum(value))
+const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
 const formatText = (value) => (value === null || value === undefined ? '—' : String(value))
 
 const REPORT_CATEGORIES = [
@@ -43,7 +44,7 @@ const REPORT_CATEGORIES = [
         columns: [
           { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
           { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
           { key: 'gross_sales', label: 'Gross Sales', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'discounts', label: 'Discounts', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'tax', label: 'Tax', align: 'right', sortable: true, formatter: formatCurrency },
@@ -59,7 +60,7 @@ const REPORT_CATEGORIES = [
           { key: 'product_code', label: 'Product Code', sortable: true },
           { key: 'product_name', label: 'Product Name', sortable: true },
           { key: 'category', label: 'Category', sortable: true },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
           { key: 'sales_value', label: 'Sales Value', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'cost_value', label: 'Cost Value', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'profit', label: 'Profit', align: 'right', sortable: true, formatter: formatCurrency },
@@ -73,7 +74,7 @@ const REPORT_CATEGORIES = [
         columns: [
           { key: 'payment_method', label: 'Payment Method', sortable: true },
           { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
           { key: 'sales_amount', label: 'Sales Amount', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'net_sales', label: 'Net Sales', align: 'right', sortable: true, formatter: formatCurrency },
@@ -86,7 +87,7 @@ const REPORT_CATEGORIES = [
         defaultSort: 'sales_value',
         columns: [
           { key: 'category', label: 'Category', sortable: true },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
           { key: 'sales_value', label: 'Sales Value', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'cost_value', label: 'Cost Value', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'profit', label: 'Profit', align: 'right', sortable: true, formatter: formatCurrency },
@@ -163,7 +164,7 @@ const REPORT_CATEGORIES = [
         defaultSort: 'quantity_purchased',
         columns: [
           { key: 'product', label: 'Product', sortable: true },
-          { key: 'quantity_purchased', label: 'Quantity Purchased', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity_purchased', label: 'Quantity Purchased', align: 'right', sortable: true, formatter: formatQty },
           { key: 'purchase_cost', label: 'Purchase Cost', align: 'right', sortable: true, formatter: formatCurrency },
           { key: 'average_cost', label: 'Average Cost', align: 'right', sortable: true, formatter: formatCurrency },
         ],
@@ -184,8 +185,8 @@ const REPORT_CATEGORIES = [
           { key: 'product_name', label: 'Product Name', sortable: true },
           { key: 'category', label: 'Category', sortable: true },
           { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'available_stock', label: 'Available Stock', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'reserved_stock', label: 'Reserved Stock', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'available_stock', label: 'Available Stock', align: 'right', sortable: true, formatter: formatQty },
+          { key: 'reserved_stock', label: 'Reserved Stock', align: 'right', sortable: true, formatter: formatQty },
           { key: 'stock_value', label: 'Stock Value', align: 'right', sortable: true, formatter: formatCurrency },
         ],
       },
@@ -198,7 +199,7 @@ const REPORT_CATEGORIES = [
           { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
           { key: 'product', label: 'Product', sortable: true },
           { key: 'movement_type', label: 'Movement Type', sortable: true },
-          { key: 'quantity', label: 'Quantity', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity', label: 'Quantity', align: 'right', sortable: true, formatter: formatQty },
           { key: 'reference_number', label: 'Reference Number', sortable: true },
           { key: 'branch', label: 'Branch', sortable: true },
         ],
@@ -210,8 +211,8 @@ const REPORT_CATEGORIES = [
         defaultSort: 'product_name',
         columns: [
           { key: 'product', label: 'Product', sortable: true },
-          { key: 'available_quantity', label: 'Available Quantity', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'reorder_level', label: 'Reorder Level', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'available_quantity', label: 'Available Quantity', align: 'right', sortable: true, formatter: formatQty },
+          { key: 'reorder_level', label: 'Reorder Level', align: 'right', sortable: true, formatter: formatQty },
           { key: 'branch', label: 'Branch', sortable: true },
         ],
       },
@@ -236,7 +237,7 @@ const REPORT_CATEGORIES = [
           { key: 'from_branch', label: 'From Branch', sortable: true },
           { key: 'to_branch', label: 'To Branch', sortable: true },
           { key: 'product', label: 'Product', sortable: true },
-          { key: 'quantity', label: 'Quantity', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity', label: 'Quantity', align: 'right', sortable: true, formatter: formatQty },
           { key: 'transfer_date', label: 'Transfer Date', sortable: true, formatter: formatDate },
         ],
       },
@@ -251,9 +252,9 @@ const REPORT_CATEGORIES = [
           { key: 'product_code', label: 'Product Code', sortable: true },
           { key: 'product', label: 'Product', sortable: true },
           { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'before_qty', label: 'Before Qty', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'after_qty', label: 'After Qty', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'quantity_lost', label: 'Qty Lost', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'before_qty', label: 'Before Qty', align: 'right', sortable: true, formatter: formatQty },
+          { key: 'after_qty', label: 'After Qty', align: 'right', sortable: true, formatter: formatQty },
+          { key: 'quantity_lost', label: 'Qty Lost', align: 'right', sortable: true, formatter: formatQty },
           { key: 'reason', label: 'Reason', sortable: true },
           { key: 'notes', label: 'Notes', sortable: false },
           { key: 'adjusted_by', label: 'Adjusted By', sortable: true },
@@ -273,7 +274,7 @@ const REPORT_CATEGORIES = [
           { key: 'expiry_date', label: 'Expiry Date', sortable: true, formatter: formatDate },
           { key: 'days_to_expiry', label: 'Days Left', align: 'right', sortable: false, formatter: formatNumber },
           { key: 'status', label: 'Status', sortable: true },
-          { key: 'quantity', label: 'Qty On Hand', align: 'right', sortable: true, formatter: formatNumber },
+          { key: 'quantity', label: 'Qty On Hand', align: 'right', sortable: true, formatter: formatQty },
           { key: 'stock_value', label: 'Stock Value', align: 'right', sortable: true, formatter: formatCurrency },
         ],
       },

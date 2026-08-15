@@ -1,14 +1,22 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { suggestedDiscountForCustomer, customerPricingType, discountPatternFromItem } from '@/utils/pricingDiscounts'
+import {
+  DEFAULT_AMOUNT_DECIMALS,
+  DEFAULT_QTY_DECIMALS,
+  parsePrecisionPayload,
+  roundAmount,
+  roundQty,
+  setDecimalPrecision,
+} from '@/utils/decimalPrecision'
 
-const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100
+const roundMoney = (n) => roundAmount(n)
 
 /** Pre-tax line amount after one line-level discount (pct or flat). */
 export const applyLineCalc = (item) => {
-  const qty = Math.max(0, Number(item.qty) || 0)
+  const qty = Math.max(0, roundQty(Number(item.qty) || 0))
   const price = Number(item.price) || 0
-  const gross = round2(qty * price)
+  const gross = roundMoney(qty * price)
   const lineDiscountType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
   const rawValue = Number(
     item.lineDiscountValue ??
@@ -18,9 +26,9 @@ export const applyLineCalc = (item) => {
     ? Math.min(100, Math.max(0, rawValue))
     : Math.max(0, rawValue)
   const totalDisc = lineDiscountType === 'pct'
-    ? round2(Math.min(gross, gross * (lineDiscountValue / 100)))
-    : round2(Math.min(gross, lineDiscountValue))
-  const lineTotal = round2(gross - totalDisc)
+    ? roundMoney(Math.min(gross, gross * (lineDiscountValue / 100)))
+    : roundMoney(Math.min(gross, lineDiscountValue))
+  const lineTotal = roundMoney(gross - totalDisc)
   return {
     ...item,
     qty,
@@ -51,7 +59,7 @@ const normalizeCartItem = (raw) => {
     } else if (raw.lineDiscount != null && Number(raw.lineDiscount) > 0) {
       // Old held bills stored per-unit line discount; convert to line flat amount.
       lineDiscountType = 'flat'
-      lineDiscountValue = round2(Number(raw.lineDiscount) * qty)
+      lineDiscountValue = roundMoney(Number(raw.lineDiscount) * qty)
     }
   }
   const pattern = discountPatternFromItem(raw)
@@ -110,6 +118,9 @@ export const useAppStore = create(
       permCatalog: {},
       roles: [],
 
+      amountDecimalPrecision: DEFAULT_AMOUNT_DECIMALS,
+      quantityDecimalPrecision: DEFAULT_QTY_DECIMALS,
+
       // Actions
       setActiveBranch: (branch) => set((s) => {
         const list = Array.isArray(s.branches) ? s.branches : []
@@ -156,6 +167,14 @@ export const useAppStore = create(
       setUser: (user) => set({ user }),
       setPermCatalog: (permCatalog) => set({ permCatalog }),
       setRoles: (roles) => set({ roles }),
+      setDecimalPrecisionPrefs: (payload) => {
+        const next = parsePrecisionPayload(payload)
+        setDecimalPrecision(next)
+        set({
+          amountDecimalPrecision: next.amountDecimalPrecision,
+          quantityDecimalPrecision: next.quantityDecimalPrecision,
+        })
+      },
       setSession: ({ user, permissions, permCatalog }) => set((s) => {
         // When the session changes (login / boot rehydrate), re-evaluate the
         // persisted activeBranch against the new user's allowed branches.
@@ -407,7 +426,7 @@ export const usePOSStore = create((set, get) => ({
     const rate = Number(i.taxRate) || 0
     const amt = Number(i.lineTotal) || 0
     if (amt <= 0 || rate <= 0) return s
-    return s + Math.round((amt * rate / (100 + rate)) * 100) / 100
+    return s + roundMoney(amt * rate / (100 + rate))
   }, 0),
   getDiscount: () => {
     const sub = get().getSubtotal()
@@ -416,6 +435,6 @@ export const usePOSStore = create((set, get) => ({
   getTotal: () => {
     const sub = get().getSubtotal()
     const disc = get().getDiscount()
-    return Math.max(0, Math.round((sub - disc) * 100) / 100)
+    return Math.max(0, roundMoney(sub - disc))
   },
 }))

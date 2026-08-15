@@ -250,7 +250,7 @@ export default function ItemFormPage({ mode = 'create' }) {
         const res = await itemsAPI.update(itemId, catalog)
         const branchRes = await itemsAPI.updateBranches(
           itemId,
-          buildBranchUpdatePayload(branchConfigs, initialListedIds),
+          buildBranchUpdatePayload(branchConfigs, initialListedIds, form),
         )
         const ch = res?.data?.batch_tracking_change
         const br = branchRes?.data

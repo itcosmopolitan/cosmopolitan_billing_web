@@ -11,7 +11,8 @@ import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/compone
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
+import { qtyInputStep } from '@/utils/decimalPrecision'
 import { lineTaxAmount } from '@/utils/taxCalc'
 
 export default function ReturnFormPage() {
@@ -386,9 +387,9 @@ export default function ReturnFormPage() {
                                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Fully returned</div>
                                 )}
                               </td>
-                              <td className="text-right mono" style={{ fontSize: 12 }}>{il.qty}</td>
+                              <td className="text-right mono" style={{ fontSize: 12 }}>{fmtQty(il.qty)}</td>
                               <td className="text-right mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                {remaining}
+                                {fmtQty(remaining)}
                               </td>
                               <td className="text-right">
                                 <input
@@ -396,6 +397,7 @@ export default function ReturnFormPage() {
                                   type="number"
                                   min={0}
                                   max={remaining}
+                                  step={qtyInputStep()}
                                   value={q}
                                   disabled={disabled}
                                   onChange={(e) => setQtyFor(il, e.target.value)}

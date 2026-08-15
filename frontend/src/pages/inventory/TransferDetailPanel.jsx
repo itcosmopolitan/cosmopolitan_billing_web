@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { transfersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmtDate } from '@/utils/helpers'
+import { fmtDate, fmtQty } from '@/utils/helpers'
 import { Chip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
@@ -196,7 +196,7 @@ export default function TransferDetailPanel({
                             </div>
                           )}
                         </td>
-                        <td className="text-right mono">{item.qty}</td>
+                        <td className="text-right mono">{fmtQty(item.qty)}</td>
                         <td>
                           {lots.length === 0 ? (
                             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -215,7 +215,7 @@ export default function TransferDetailPanel({
                                     <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>
                                       {b.batch_number || b.batch_id?.slice(-8)}
                                     </span>
-                                    <span style={{ color: 'var(--text-muted)' }}>×{b.consumed}</span>
+                                    <span style={{ color: 'var(--text-muted)' }}>×{fmtQty(b.consumed)}</span>
                                     {b.expiry_date && (
                                       <span style={{ color: 'var(--amber)' }}>exp {fmtDate(b.expiry_date)}</span>
                                     )}
