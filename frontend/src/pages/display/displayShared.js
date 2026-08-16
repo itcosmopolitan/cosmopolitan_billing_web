@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { calcCartTotals } from '@/utils/taxCalc'
 import { getAmountDecimals, getQtyDecimals } from '@/utils/decimalPrecision'
+import { cashTenderSummary } from '@/utils/cashTender'
 
 const DISPLAY_CODE_STORAGE_KEY = 'pos-display-session-code'
 const DISPLAY_CODE_LENGTH = 6
@@ -18,6 +19,8 @@ export const EMPTY_POS_DISPLAY = {
   discount: 0,
   total: 0,
   taxMode: 'inclusive',
+  cashCollected: null,
+  cashChange: 0,
 }
 
 export function generateDisplayCode(length = DISPLAY_CODE_LENGTH) {
@@ -90,6 +93,7 @@ export function buildPosDisplayPayload(
     branchName = '',
     displayCode = '',
     cashierName = '',
+    cashCollected = '',
   } = {},
 ) {
   const items = (cart || []).map((row) => ({
@@ -99,6 +103,7 @@ export function buildPosDisplayPayload(
     subtotal: Number(row.lineTotal) || 0,
   }))
   const totals = calcCartTotals(cart || [], { discountPct, discountAmt })
+  const tender = cashTenderSummary(cashCollected, totals.total)
 
   return {
     customer: {
@@ -114,6 +119,8 @@ export function buildPosDisplayPayload(
     discount: totals.discount,
     total: totals.total,
     taxMode: totals.mode,
+    cashCollected: tender.collected,
+    cashChange: tender.ready ? tender.change : 0,
     amountDecimalPrecision: getAmountDecimals(),
     quantityDecimalPrecision: getQtyDecimals(),
   }

@@ -120,7 +120,7 @@ function CustomerDisplayLive({ roomId }) {
       .catch(() => null)
   }, [])
 
-  const { customer, branchName, cashierName, items, subtotal, tax, discount, total, taxMode } = display
+  const { customer, branchName, cashierName, items, subtotal, tax, discount, total, taxMode, cashCollected, cashChange } = display
   const code = normalizeDisplayCode(display.displayCode || roomId)
   const gridCss = `
   .customer-display-grid{
@@ -276,6 +276,25 @@ function CustomerDisplayLive({ roomId }) {
                   {fmt(total)}
                 </span>
               </div>
+              {cashCollected != null && Number(cashCollected) > 0 && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginTop: 12 }}>
+                    <span>Cash collected</span>
+                    <span className="mono">{fmt(cashCollected)}</span>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: 8,
+                    color: 'var(--green)',
+                    fontWeight: 700,
+                  }}>
+                    <span style={{ fontSize: 16 }}>Change</span>
+                    <span style={{ fontSize: 24, fontFamily: 'DM Mono' }}>{fmt(cashChange || 0)}</span>
+                  </div>
+                </>
+              )}
             </section>
           )}
         </div>

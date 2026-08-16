@@ -17,6 +17,8 @@ import { PRODUCTS } from '@/utils/seedData'
 import { Modal, AutocompleteDropdown, Spinner } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
+import CashTenderFields from '@/components/CashTenderFields'
+import { cashTenderError, cashTenderSummary } from '@/utils/cashTender'
 import openInvoicePrintWindow from '@/utils/printInvoice'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload } from '@/utils/batchAllocation'
@@ -95,7 +97,7 @@ export default function POSPage() {
   const activeBranch = useAppStore((s) => s.activeBranch)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
-  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod, paymentRef } = store
+  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
   // unpaid invoice" case — there's no-one to follow up with for collection.
   // We surface this exactly once per Complete-Sale attempt via this ref so
@@ -311,6 +313,14 @@ export default function POSPage() {
     // option for walk-ins + when balance is insufficient, but a stale
     // selection (e.g. operator picked credit then changed customers)
     // could slip through. Re-check at submit.
+    if (paymentReceived && paymentMethod === 'cash') {
+      const err = cashTenderError(cashCollected, total)
+      if (err) {
+        toast.error(err)
+        return
+      }
+    }
+
     if (paymentReceived && paymentMethod === 'credit') {
       if (!customer?.id) {
         toast.error('Credit mode requires a customer — pick one or change the method')
@@ -394,6 +404,9 @@ export default function POSPage() {
 
       const selectedCustomerName = customer?.name || 'Walk-in'
       const selectedCustomerId = customer?.id || null
+      const cashTender = paymentReceived && paymentMethod === 'cash'
+        ? cashTenderSummary(cashCollected, result.total)
+        : null
       setLastSale({
         number: result.number,
         total: result.total,
@@ -401,6 +414,8 @@ export default function POSPage() {
         taxTotal: tax,
         discount: disc,
         method: paymentReceived ? paymentMethod : null,
+        cashCollected: cashTender?.collected ?? null,
+        cashChange: cashTender?.change ?? null,
         customerName: selectedCustomerName,
         customerId: selectedCustomerId,
         customerAddress: customer?.address,
@@ -567,9 +582,10 @@ export default function POSPage() {
         branchName: activeBranch?.name,
         displayCode,
         cashierName: cashierUser?.name || '',
+        cashCollected: paymentMethod === 'cash' ? cashCollected : '',
       }),
     )
-  }, [cart, customer, discountPct, discountAmt, activeBranch?.name, displayCode, cashierUser?.name, sendCartUpdate])
+  }, [cart, customer, discountPct, discountAmt, activeBranch?.name, displayCode, cashierUser?.name, paymentMethod, cashCollected, sendCartUpdate])
 
   const copyDisplayCode = async () => {
     try {
@@ -1083,7 +1099,9 @@ export default function POSPage() {
                 onChange={(e) => store.setDiscount(Number(e.target.value), 0)}
                 disabled={hasLineLevelDiscount}
               />
-              <input className="form-input" style={{ width: 90, padding: '7px 10px', fontSize: 12 }} placeholder="Coupon" />
+              {false && (
+                <input className="form-input" style={{ width: 90, padding: '7px 10px', fontSize: 12 }} placeholder="Coupon" />
+              )}
             </div>
             {(hasLineLevelDiscount || hasBillLevelDiscount) && (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
@@ -1163,6 +1181,15 @@ export default function POSPage() {
                   />
                 )}
               </div>
+              {paymentMethod === 'cash' && (
+                <CashTenderFields
+                  compact
+                  autoFocus
+                  due={total}
+                  value={cashCollected}
+                  onChange={store.setCashCollected}
+                />
+              )}
               {paymentReceived ? (
                 <>
                   {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
@@ -1378,6 +1405,8 @@ export default function POSPage() {
               taxTotal: lastSale.taxTotal,
               discount: lastSale.discount,
               paymentMode: lastSale.method,
+              cashCollected: lastSale.cashCollected,
+              cashChange: lastSale.cashChange,
               cashier: 'Staff',
               customerName: lastSale.customerName || 'Walk-in',
               customerId: lastSale.customerId || null,

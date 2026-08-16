@@ -35,9 +35,12 @@
  *   • confirming          — disable submit while parent is awaiting.
  */
 import { useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt, fmtQty } from '@/utils/helpers'
+import CashTenderFields from '@/components/CashTenderFields'
+import { cashTenderError } from '@/utils/cashTender'
 import { itemsAPI } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload, formatAllocationSummary } from '@/utils/batchAllocation'
@@ -54,6 +57,7 @@ export default function ConvertToInvoiceModal({
 }) {
   const [paymentReceived, setPaymentReceived] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState(null)
+  const [cashCollected, setCashCollected] = useState('')
   const [notes, setNotes] = useState('')
 
   // Per-item batch info populated lazily on modal open. Shape:
@@ -76,6 +80,7 @@ export default function ConvertToInvoiceModal({
     if (open) {
       setPaymentReceived(false)
       setPaymentMethod(null)
+      setCashCollected('')
       setNotes('')
       setStockByItem({})
       setPickerOpenFor(null)
@@ -142,6 +147,13 @@ export default function ConvertToInvoiceModal({
     if (paymentReceived && !paymentMethod) {
       return
     }
+    if (paymentReceived && paymentMethod === 'cash') {
+      const err = cashTenderError(cashCollected, previewTotal)
+      if (err) {
+        toast.error(err)
+        return
+      }
+    }
     const line_allocations = []
     for (const [item_id, info] of Object.entries(stockByItem)) {
       if (!info.tracked || !info.allocation || info.allocation.length === 0) continue
@@ -194,7 +206,9 @@ export default function ConvertToInvoiceModal({
     return Math.round(subtotal * 100) / 100
   }, [lines, lineQtys, source?.total])
 
-  const buttonDisabled = confirming || (paymentReceived && !paymentMethod)
+  const buttonDisabled = confirming
+    || (paymentReceived && !paymentMethod)
+    || (paymentReceived && paymentMethod === 'cash' && !!cashTenderError(cashCollected, previewTotal))
 
   // Convenience: line currently being edited in the BatchAllocationModal,
   // and its associated stock info.
@@ -372,7 +386,10 @@ export default function ConvertToInvoiceModal({
         <input
           type="checkbox"
           checked={paymentReceived}
-          onChange={(e) => setPaymentReceived(e.target.checked)}
+          onChange={(e) => {
+            setPaymentReceived(e.target.checked)
+            if (!e.target.checked) setCashCollected('')
+          }}
           style={{ accentColor: 'var(--accent)' }}
         />
         <span>Payment received?</span>
@@ -383,13 +400,24 @@ export default function ConvertToInvoiceModal({
           <FormGroup label="Method" required>
             <AutocompleteDropdown
               value={paymentMethod || ''}
-              onChange={(v) => setPaymentMethod(v || null)}
+              onChange={(v) => {
+                const next = v || null
+                setPaymentMethod(next)
+                if (next !== 'cash') setCashCollected('')
+              }}
               options={PAYMENT_METHOD_OPTIONS}
               prependOptions={[{ id: '', label: 'Select method…', disabled: true }]}
               isSearchFieldRequired={false}
               placeholder="Select method…"
             />
           </FormGroup>
+          {paymentMethod === 'cash' && (
+            <CashTenderFields
+              due={previewTotal}
+              value={cashCollected}
+              onChange={setCashCollected}
+            />
+          )}
         </div>
       )}
 

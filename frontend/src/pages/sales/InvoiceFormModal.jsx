@@ -12,6 +12,7 @@ import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/Doc
 import InventoryItemPicker from './InventoryItemPicker'
 import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
+import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -178,6 +179,7 @@ export default function InvoiceFormModal({
                       if (!['upi', 'bank_transfer'].includes(nextMethod || '')) {
                         pif('paymentRef', '')
                       }
+                      if (nextMethod !== 'cash') pif('cashCollected', '')
                     }}
                     style={{
                       padding: '8px 12px',
@@ -196,6 +198,15 @@ export default function InvoiceFormModal({
                   </button>
                 )
               })}
+              {invoiceForm.paymentMethod === 'cash' && !editMode && (
+                <div style={{ width: '100%', maxWidth: 300 }}>
+                  <CashTenderFields
+                    due={rollup.total}
+                    value={invoiceForm.cashCollected || ''}
+                    onChange={(v) => pif('cashCollected', v)}
+                  />
+                </div>
+              )}
               {['upi', 'bank_transfer'].includes(invoiceForm.paymentMethod || '') && (
                 <div style={{ width: '100%', maxWidth: 300 }}>
                   <input
