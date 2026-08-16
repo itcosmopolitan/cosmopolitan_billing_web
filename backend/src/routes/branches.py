@@ -58,6 +58,13 @@ class BranchCreate(BaseModel):
     code: str
     phone: Optional[str] = None
     address: Optional[str] = None
+    street1: Optional[str] = None
+    street2: Optional[str] = None
+    street3: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
     gstin: Optional[str] = None
     active: bool = True
 
@@ -68,6 +75,13 @@ class BranchUpdate(BaseModel):
     code: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    street1: Optional[str] = None
+    street2: Optional[str] = None
+    street3: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
     gstin: Optional[str] = None
     active: Optional[bool] = None
 
@@ -138,6 +152,9 @@ async def create_branch(
     code = _build_branch_code(data.name, existing_codes=existing_codes)
     b = Branch(id=str(uuid.uuid4()), name=data.name, code=code,
                phone=data.phone, address=data.address,
+               street1=data.street1, street2=data.street2, street3=data.street3,
+               city=data.city, state_province=data.state_province,
+               country=data.country, postal_code=data.postal_code,
                gstin=data.gstin, active=data.active)
     db.add(b)
     add_audit_log(
@@ -153,6 +170,13 @@ async def create_branch(
             "code": b.code,
             "phone": b.phone,
             "address": b.address,
+            "street1": b.street1,
+            "street2": b.street2,
+            "street3": b.street3,
+            "city": b.city,
+            "state_province": b.state_province,
+            "country": b.country,
+            "postal_code": b.postal_code,
             "gstin": b.gstin,
             "active": b.active,
         },

@@ -359,6 +359,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("quotations", "converted_invoice_id", "VARCHAR"),
     # 2026-06-09: credit-term due date for overdue automation on sales side.
     ("sale_invoices", "due_date", "VARCHAR"),
+    # 2026-08-16: payment reference on sales invoices for payment scans and
+    # child ledger reconciliation. Existing DBs created before this field was
+    # added must be upgraded at startup.
+    ("sale_invoices", "payment_ref", "VARCHAR"),
     # 2026-06-09: soft void for payments (audit trail vs hard delete).
     ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("customer_payments", "voided_at", "VARCHAR"),
@@ -384,6 +388,14 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("vendor_payments", "credit_applied", "FLOAT DEFAULT 0 NOT NULL"),
     ("vendor_returns", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("vendor_returns", "voided_at", "VARCHAR"),
+    # Branch structured address fields (2026-08-16): separate street, city, state, country, postal code.
+    ("branches", "street1", "VARCHAR(255)"),
+    ("branches", "street2", "VARCHAR(255)"),
+    ("branches", "street3", "VARCHAR(255)"),
+    ("branches", "city", "VARCHAR(100)"),
+    ("branches", "state_province", "VARCHAR(100)"),
+    ("branches", "country", "VARCHAR(100)"),
+    ("branches", "postal_code", "VARCHAR(20)"),
     # Cash Control (2026-06-14): per-branch petty cash settings.
     ("branches", "cash_opening_mode",       "VARCHAR DEFAULT 'carry_forward'"),
     ("branches", "cash_fixed_float",        "FLOAT DEFAULT 0"),

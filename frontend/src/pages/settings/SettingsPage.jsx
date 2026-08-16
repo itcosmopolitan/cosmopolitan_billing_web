@@ -87,7 +87,7 @@ export default function SettingsPage() {
   // confirmation modal (with copy). Cleared on close. null while the modal
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'' })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'' })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -524,13 +524,32 @@ export default function SettingsPage() {
     }
   }
 
+  const buildAddressString = (form) => {
+    const parts = []
+    if (form.street1?.trim()) parts.push(form.street1.trim())
+    if (form.street2?.trim()) parts.push(form.street2.trim())
+    if (form.street3?.trim()) parts.push(form.street3.trim())
+    if (form.city?.trim()) parts.push(form.city.trim())
+    if (form.stateProvince?.trim()) parts.push(form.stateProvince.trim())
+    if (form.country?.trim()) parts.push(form.country.trim())
+    if (form.postalCode?.trim()) parts.push(form.postalCode.trim())
+    return parts.join(', ')
+  }
+
   const saveBranch = async () => {
     try {
       await branchesAPI.create({
         name: branchForm.name,
         code: branchForm.code,
         phone: branchForm.phone,
-        address: branchForm.address,
+        address: buildAddressString(branchForm),
+        street1: branchForm.street1,
+        street2: branchForm.street2,
+        street3: branchForm.street3,
+        city: branchForm.city,
+        state_province: branchForm.stateProvince,
+        country: branchForm.country,
+        postal_code: branchForm.postalCode,
         gstin: '',
         active: true,
       })
@@ -546,11 +565,27 @@ export default function SettingsPage() {
 
   const updateBranch = async () => {
     try {
+      const addressForm = {
+        street1: editBranchForm.street1,
+        street2: editBranchForm.street2,
+        street3: editBranchForm.street3,
+        city: editBranchForm.city,
+        stateProvince: editBranchForm.state_province,
+        country: editBranchForm.country,
+        postalCode: editBranchForm.postal_code,
+      }
       await branchesAPI.update(editBranchForm.id, {
         name: editBranchForm.name,
         code: editBranchForm.code,
         phone: editBranchForm.phone,
-        address: editBranchForm.address,
+        address: buildAddressString(addressForm),
+        street1: editBranchForm.street1,
+        street2: editBranchForm.street2,
+        street3: editBranchForm.street3,
+        city: editBranchForm.city,
+        state_province: editBranchForm.state_province,
+        country: editBranchForm.country,
+        postal_code: editBranchForm.postal_code,
         gstin: editBranchForm.gstin || '',
         active: editBranchForm.active ?? true,
       })
@@ -698,7 +733,7 @@ export default function SettingsPage() {
                       <td style={{fontSize:12,color:'var(--text-muted)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{b.address}</td>
                       <td><Chip status={b.active?'active':'inactive'}/></td>
                       <td>
-                        <div style={{display:'flex',gap:4}}>
+                        <div style={{display:'flex',gap:2}}>
                           {can('settings.edit') && (
                             <button className="btn btn-secondary btn-xs" onClick={() => {
                                 setEditBranchForm(b)
@@ -722,21 +757,47 @@ export default function SettingsPage() {
               />
             </TablePanel>
           </Card>
-          <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="md"
+          <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="lg"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
-            <FormRow><FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)}/></FormGroup>
-            {/* <FormGroup label="Branch Code"><input className="form-input" value={branchForm.code} onChange={e=>pbf('code',e.target.value)} placeholder="e.g. KK"/></FormGroup> */}
+            <FormRow>
+              <FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)} placeholder="Branch name"/></FormGroup>
+              <FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)} placeholder="Phone number"/></FormGroup>
             </FormRow>
-            <FormRow><FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)}/></FormGroup></FormRow>
-            <FormGroup label="Address"><textarea className="form-input" style={{height:72}} value={branchForm.address} onChange={e=>pbf('address',e.target.value)}/></FormGroup>
+            <FormGroup label="Street 1" required>
+              <input className="form-input" value={branchForm.street1} onChange={e=>pbf('street1',e.target.value)} placeholder="Street address line 1"/>
+            </FormGroup>
+            <FormRow>
+              <FormGroup label="Street 2"><input className="form-input" value={branchForm.street2} onChange={e=>pbf('street2',e.target.value)} placeholder="Street address line 2"/></FormGroup>
+              <FormGroup label="Street 3"><input className="form-input" value={branchForm.street3} onChange={e=>pbf('street3',e.target.value)} placeholder="Street address line 3"/></FormGroup>
+            </FormRow>
+            <FormRow>
+              <FormGroup label="City" required><input className="form-input" value={branchForm.city} onChange={e=>pbf('city',e.target.value)} placeholder="City"/></FormGroup>
+              <FormGroup label="State / Province"><input className="form-input" value={branchForm.stateProvince} onChange={e=>pbf('stateProvince',e.target.value)} placeholder="State or province"/></FormGroup>
+            </FormRow>
+            <FormRow>
+              <FormGroup label="Country" required><input className="form-input" value={branchForm.country} onChange={e=>pbf('country',e.target.value)} placeholder="Country"/></FormGroup>
+              <FormGroup label="Postal Code / Zipcode"><input className="form-input" value={branchForm.postalCode} onChange={e=>pbf('postalCode',e.target.value)} placeholder="Postal code or zipcode"/></FormGroup>
+            </FormRow>
           </Modal>
-          <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="md"
+          <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="lg"
               footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
-              <FormRow><FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)}/></FormGroup>
-              {/* <FormGroup label="Branch Code"><input className="form-input" value={editBranchForm.code || ""} onChange={e => pbfEdit('code', e.target.value)} /></FormGroup>*/}
+              <FormRow>
+                <FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)} placeholder="Branch name"/></FormGroup>
+                <FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)} placeholder="Phone number"/></FormGroup>
               </FormRow>
-              <FormRow><FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)}/></FormGroup></FormRow>
-              <FormGroup label="Address"><textarea className="form-input" style={{ height: 72 }} value={editBranchForm.address || ""} onChange={e => pbfEdit('address', e.target.value)}/></FormGroup>
+              <FormGroup label="Street 1" required><input className="form-input" value={editBranchForm.street1 || ""} onChange={e => pbfEdit('street1', e.target.value)} placeholder="Street address line 1"/></FormGroup>
+              <FormRow>
+                <FormGroup label="Street 2"><input className="form-input" value={editBranchForm.street2 || ""} onChange={e => pbfEdit('street2', e.target.value)} placeholder="Street address line 2"/></FormGroup>
+                <FormGroup label="Street 3"><input className="form-input" value={editBranchForm.street3 || ""} onChange={e => pbfEdit('street3', e.target.value)} placeholder="Street address line 3"/></FormGroup>
+              </FormRow>
+              <FormRow>
+                <FormGroup label="City" required><input className="form-input" value={editBranchForm.city || ""} onChange={e => pbfEdit('city', e.target.value)} placeholder="City"/></FormGroup>
+                <FormGroup label="State / Province"><input className="form-input" value={editBranchForm.state_province || ""} onChange={e => pbfEdit('state_province', e.target.value)} placeholder="State or province"/></FormGroup>
+              </FormRow>
+              <FormRow>
+                <FormGroup label="Country" required><input className="form-input" value={editBranchForm.country || ""} onChange={e => pbfEdit('country', e.target.value)} placeholder="Country"/></FormGroup>
+                <FormGroup label="Postal Code / Zipcode"><input className="form-input" value={editBranchForm.postal_code || ""} onChange={e => pbfEdit('postal_code', e.target.value)} placeholder="Postal code or zipcode"/></FormGroup>
+              </FormRow>
           </Modal>
         </>
       )}
