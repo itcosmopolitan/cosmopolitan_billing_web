@@ -101,7 +101,7 @@ function AppShell() {
             <Route path="/reports"    element={<RequirePerm perm="reports.view"><ReportsPage /></RequirePerm>} />
             <Route path="/settings"   element={<RequirePerm perm="settings.view"><SettingsPage /></RequirePerm>} />
             <Route path="/audit"      element={<RequirePerm perm="audit.view"><AuditTrailPage /></RequirePerm>} />
-            <Route path="/help"       element={<HelpPage />} />
+            <Route path="/help"       element={<Navigate to="/dashboard" replace />} />
             <Route path="/invoice-preview" element={<SalesTaxInvoicePreview />} />
           </Routes>
         </main>
