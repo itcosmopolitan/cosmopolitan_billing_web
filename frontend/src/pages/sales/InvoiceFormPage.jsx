@@ -13,7 +13,8 @@ import {
   invoiceFromRow,
   lineDiscountToPercent,
 } from './salesFormShared'
-import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { cashTenderError } from '@/utils/cashTender'
+import { computeDocumentTotals, entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
@@ -115,6 +116,15 @@ export default function InvoiceFormPage() {
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
       toast.error('Enter the payment reference for UPI or Bank Transfer')
       return
+    }
+    if (form.paymentReceived && form.paymentMethod === 'cash') {
+      const due = computeDocumentTotals(form.items, {
+        entityDiscount: form.discount,
+        entityDiscountType: form.discountType || '%',
+        enforceExclusive: true,
+      }).total
+      const err = cashTenderError(form.cashCollected, due)
+      if (err) { toast.error(err); return }
     }
     if (fromOrderId) {
       const sourceLines = form.items

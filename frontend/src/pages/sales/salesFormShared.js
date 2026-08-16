@@ -100,6 +100,7 @@ export const emptyInvoiceForm = (branchId) => ({
   paymentReceived: false,
   paymentMethod: null,
   paymentRef: '',
+  cashCollected: '',
   notes: '',
 })
 

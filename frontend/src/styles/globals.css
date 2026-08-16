@@ -809,6 +809,55 @@ h4 { font-size: 14px; font-weight: 600; }
   width: 100%;
 }
 
+.cash-tender {
+  margin-top: 10px;
+  max-width: 320px;
+}
+
+.cash-tender--compact {
+  margin-top: 8px;
+  max-width: 260px;
+}
+
+.cash-tender__label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.cash-tender__msg {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cash-tender__msg strong {
+  font-family: 'DM Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cash-tender__msg--change {
+  background: var(--green-bg, rgba(16, 185, 129, 0.12));
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+
+.cash-tender__msg--short {
+  background: var(--red-bg, rgba(239, 68, 68, 0.1));
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
 .line-discount-field > .form-input {
   min-width: 0;
 }

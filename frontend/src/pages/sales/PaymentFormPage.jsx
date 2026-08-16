@@ -14,6 +14,8 @@ import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
+import CashTenderFields from '@/components/CashTenderFields'
+import { cashTenderError } from '@/utils/cashTender'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -27,6 +29,7 @@ export default function PaymentFormPage() {
   const [checkedIds, setCheckedIds] = useState(new Set())
   const [applyById, setApplyById] = useState({})
   const [paymentMode, setPaymentMode] = useState('cash')
+  const [cashCollected, setCashCollected] = useState('')
   const [paymentRef, setPaymentRef] = useState('')
   const [notes, setNotes] = useState('')
 
@@ -136,6 +139,10 @@ export default function PaymentFormPage() {
     if (!customer?.id) { toast.error('Pick a customer first'); return }
     if (totals.count === 0) { toast.error('Select at least one invoice'); return }
     if (!paymentMode) { toast.error('Pick a payment method'); return }
+    if (paymentMode === 'cash') {
+      const err = cashTenderError(cashCollected, totals.allocated)
+      if (err) { toast.error(err); return }
+    }
     if (creditMode && creditInsufficient) {
       toast.error(`Insufficient credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
       return
@@ -369,7 +376,10 @@ export default function PaymentFormPage() {
               <FormGroup label="Method" required>
                 <AutocompleteDropdown
                   value={paymentMode}
-                  onChange={setPaymentMode}
+                  onChange={(v) => {
+                    setPaymentMode(v)
+                    if (v !== 'cash') setCashCollected('')
+                  }}
                   onSelectOption={(opt) => {
                     if (opt?.id === 'credit') seedApplyToBalances()
                   }}
@@ -397,6 +407,13 @@ export default function PaymentFormPage() {
                 />
               </FormGroup>
             </div>
+            {paymentMode === 'cash' && (
+              <CashTenderFields
+                due={totals.allocated}
+                value={cashCollected}
+                onChange={setCashCollected}
+              />
+            )}
             {creditMode && creditInsufficient && (
               <AlertBar type="red" icon="⚠">
                 Insufficient credit — {fmt(avail)} available, {fmt(totals.allocated)} needed

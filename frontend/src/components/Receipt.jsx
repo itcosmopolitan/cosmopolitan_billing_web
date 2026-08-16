@@ -269,6 +269,16 @@ export function Receipt({ sale, branch }) {
             <div>Payment</div>
             <div style="text-align:right">${(sale.paymentMode || sale.payment_mode || 'CASH').toUpperCase()}</div>
           </div>
+          ${sale.cashCollected != null && Number(sale.cashCollected) > 0 ? `
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:4px;">
+            <div>Cash collected</div>
+            <div style="text-align:right">${formatNumber(sale.cashCollected)}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:12px;margin-top:4px;font-weight:700;">
+            <div>Change</div>
+            <div style="text-align:right">${formatNumber(sale.cashChange || 0)}</div>
+          </div>
+          ` : ''}
         ` : ''}
 
         ${paymentTerms ? `
@@ -470,8 +480,11 @@ export function Receipt({ sale, branch }) {
       (sale.discount ? `Discount: -MVR${sale.discount.toLocaleString('en-MV')}\n` : '') +
       `Tax amount: MVR${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-MV')}\n` +
       `*TOTAL: MVR${(sale.total || 0).toLocaleString('en-MV')}*\n` +
-      `Payment: ${(sale.paymentMode || sale.payment_mode || '').toUpperCase()}\n\n` +
-      `Thank you for your purchase! 🙏`
+      `Payment: ${(sale.paymentMode || sale.payment_mode || '').toUpperCase()}\n` +
+      (sale.cashCollected != null && Number(sale.cashCollected) > 0
+        ? `Cash collected: MVR${Number(sale.cashCollected).toLocaleString('en-MV')}\nChange: MVR${Number(sale.cashChange || 0).toLocaleString('en-MV')}\n`
+        : '') +
+      `\nThank you for your purchase! 🙏`
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')
   }
 

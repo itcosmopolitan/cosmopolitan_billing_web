@@ -705,7 +705,6 @@ export default function SettingsPage() {
                                 setShowEditBranch(true)
                                 }}>Edit</button>
                           )}
-                          <button className="btn btn-secondary btn-xs" onClick={()=>toast('Branch settings…')}>Settings</button>
                         </div>
                       </td>
                     </tr>

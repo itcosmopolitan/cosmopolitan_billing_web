@@ -232,6 +232,7 @@ export const usePOSStore = create((set, get) => ({
   paymentReceived: false,
   paymentMethod: null,
   paymentRef: '',
+  cashCollected: '',
   splitPayments: [],
   heldBills: [],
   notes: '',
@@ -337,7 +338,7 @@ export const usePOSStore = create((set, get) => ({
   clearCart: () => set({
     cart: [], customer: null, discountPct: 0, discountAmt: 0, notes: '',
     // PR 1: reset payment fields so the next sale starts fresh + unchecked.
-    paymentReceived: false, paymentMethod: null, paymentRef: '',
+    paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '',
   }),
 
   setCustomer: (customer) => {
@@ -359,16 +360,19 @@ export const usePOSStore = create((set, get) => ({
   setPaymentReceived: (received) => set((s) => ({
     paymentReceived: !!received,
     paymentMethod: received ? s.paymentMethod : null,
+    cashCollected: received && s.paymentMethod === 'cash' ? s.cashCollected : '',
   })),
   setPaymentMethod: (m) => set((s) => ({
     paymentMethod: m || null,
     paymentReceived: !!(m || null),
+    cashCollected: m === 'cash' ? s.cashCollected : '',
   })),
   setPaymentRef: (r) => set({ paymentRef: r }),
+  setCashCollected: (v) => set({ cashCollected: v }),
   setNotes: (n) => set({ notes: n }),
 
   holdBill: () => {
-    const { cart, customer, discountPct, heldBills, paymentReceived, paymentMethod } = get()
+    const { cart, customer, discountPct, heldBills, paymentReceived, paymentMethod, cashCollected } = get()
     if (cart.length === 0) return
     const label = `Hold #${heldBills.length + 1}`
     set({
@@ -384,10 +388,11 @@ export const usePOSStore = create((set, get) => ({
         // them.
         paymentReceived,
         paymentMethod,
+        cashCollected,
         heldAt: new Date(),
       }],
       cart: [], customer: null, discountPct: 0,
-      paymentReceived: false, paymentMethod: null,
+      paymentReceived: false, paymentMethod: null, cashCollected: '',
     })
   },
 
@@ -419,6 +424,7 @@ export const usePOSStore = create((set, get) => ({
       discountPct: bill.discountPct,
       paymentReceived: resumedReceived,
       paymentMethod: resumedMethod,
+      cashCollected: resumedMethod === 'cash' ? (bill.cashCollected || '') : '',
       heldBills: heldBills.filter((b) => b.id !== heldId),
     })
   },
