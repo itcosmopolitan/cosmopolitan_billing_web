@@ -453,10 +453,7 @@ export default function Topbar() {
       </IconButton>
 
       {/* Help */}
-      <IconButton
-        onClick={() => navigate('/help')}
-        title="Help & shortcuts"
-      >
+      <IconButton title="Help & shortcuts">
         <Icon.HelpCircle size={17} />
       </IconButton>
     </header>
