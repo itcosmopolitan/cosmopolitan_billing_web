@@ -200,7 +200,7 @@ export default function VendorsPage() {
         {can('vendors.create') && (
           <>
             <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Vendor</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setImportOpen(true)} style={{ marginLeft: 8 }}>Import</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setImportOpen(true)} style={{ marginLeft: 8 }}>Import</button>
           </>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
