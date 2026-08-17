@@ -583,6 +583,8 @@ export const settingsAPI = {
   }),
   getTaxSettings: (config) => api.get('/taxes/settings', config),
   updateTaxSettings: (data) => api.patch('/taxes/settings', data),
+  getDiscountReasons: (branchId) => api.get(`/settings/branches/${branchId}/discount-reasons`),
+  createDiscountReason: (branchId, data) => api.post(`/settings/branches/${branchId}/discount-reasons`, data),
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────

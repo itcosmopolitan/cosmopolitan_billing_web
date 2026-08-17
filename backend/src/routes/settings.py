@@ -26,6 +26,7 @@ from src.invoice_template_defaults import (
 from src.models import (
     DocumentNumberCounter,
     DocumentNumbering,
+    DiscountReason,
     GoodsReceiptNote,
     InvoiceTemplateSettings,
     Organisation,
@@ -534,3 +535,113 @@ async def update_invoice_template(
     await db.commit()
     await db.refresh(row)
     return _serialize_invoice_template(row)
+
+
+# ─── Discount Reasons ─────────────────────────────────────────────────────────
+
+class DiscountReasonCreate(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=100)
+
+
+class DiscountReasonResponse(BaseModel):
+    id: str
+    reason: str
+    created_at: datetime
+
+
+@router.get("/branches/{branch_id}/discount-reasons")
+async def get_discount_reasons(
+    branch_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all discount reasons for a branch (built-in + custom)."""
+    # Built-in default reasons
+    default_reasons = [
+        "Customer goodwill",
+        "Loyalty discount",
+        "Seasonal offer",
+        "Price match",
+        "Near expiry",
+        "Damaged packaging",
+        "Staff discount",
+        "Manager approval",
+        "Other",
+    ]
+    
+    # Fetch custom reasons from DB
+    custom = (
+        await db.execute(
+            select(DiscountReason)
+            .where(DiscountReason.branch_id == branch_id)
+            .order_by(DiscountReason.created_at.desc())
+        )
+    ).scalars().all()
+    
+    custom_reasons = [r.reason for r in custom]
+    # Merge and deduplicate: defaults first, then custom
+    all_reasons = []
+    seen = set()
+    for reason in default_reasons + custom_reasons:
+        reason_lower = reason.lower().strip()
+        if reason_lower not in seen:
+            seen.add(reason_lower)
+            all_reasons.append(reason)
+    
+    return {"reasons": all_reasons}
+
+
+@router.post("/branches/{branch_id}/discount-reasons")
+async def create_discount_reason(
+    branch_id: str,
+    data: DiscountReasonCreate,
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+    user: User = Depends(current_user),
+):
+    """Add a new custom discount reason for a branch."""
+    reason = data.reason.strip()
+    
+    if not reason:
+        raise HTTPException(400, "Discount reason cannot be empty")
+    
+    # Check if reason already exists (case-insensitive)
+    existing = (
+        await db.execute(
+            select(DiscountReason).where(
+                DiscountReason.branch_id == branch_id,
+                func.lower(DiscountReason.reason) == func.lower(reason),
+            )
+        )
+    ).scalar_one_or_none()
+    
+    if existing:
+        raise HTTPException(400, "This discount reason already exists for this branch")
+    
+    # Create new discount reason
+    new_reason = DiscountReason(
+        id=str(uuid.uuid4()),
+        branch_id=branch_id,
+        reason=reason,
+    )
+    
+    db.add(new_reason)
+    
+    add_audit_log(
+        db,
+        action="Discount reason added",
+        module="POS",
+        reference_id=new_reason.id,
+        detail=f"Added discount reason: {reason}",
+        user=user,
+        request=request,
+        metadata={"reason": reason},
+    )
+    
+    await db.commit()
+    await db.refresh(new_reason)
+    
+    return DiscountReasonResponse(
+        id=new_reason.id,
+        reason=new_reason.reason,
+        created_at=new_reason.created_at,
+    )

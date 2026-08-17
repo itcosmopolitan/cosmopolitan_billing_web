@@ -223,6 +223,7 @@ export const usePOSStore = create((set, get) => ({
   customer: null,
   discountPct: 0,
   discountAmt: 0,
+  discountReason: '',
   // Sales Phase 1 (2026-05-23): payment is now two fields — a checkbox
   // ("Payment received?") + a method dropdown (Cash / Card / UPI /
   // Bank Transfer). Default unchecked so the operator must consciously
@@ -336,7 +337,7 @@ export const usePOSStore = create((set, get) => ({
   setLineDiscountFlat: (id, amt) => get().setLineDiscount(id, amt, 'flat'),
 
   clearCart: () => set({
-    cart: [], customer: null, discountPct: 0, discountAmt: 0, notes: '',
+    cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '', notes: '',
     // PR 1: reset payment fields so the next sale starts fresh + unchecked.
     paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '',
   }),
@@ -353,6 +354,7 @@ export const usePOSStore = create((set, get) => ({
     }))
   },
   setDiscount: (pct, amt) => set({ discountPct: pct, discountAmt: amt }),
+  setDiscountReason: (reason) => set({ discountReason: reason || '' }),
   // PR 1: dual-setter for the new payment UX. setPaymentReceived(true)
   // is harmless without a method (POSPage validates at submit); setting
   // false also clears the method so a held bill resumed with the box
@@ -372,7 +374,7 @@ export const usePOSStore = create((set, get) => ({
   setNotes: (n) => set({ notes: n }),
 
   holdBill: () => {
-    const { cart, customer, discountPct, heldBills, paymentReceived, paymentMethod, cashCollected } = get()
+    const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, cashCollected } = get()
     if (cart.length === 0) return
     const label = `Hold #${heldBills.length + 1}`
     set({
@@ -382,6 +384,8 @@ export const usePOSStore = create((set, get) => ({
         cart: cart.map((i) => applyLineCalc(i)),
         customer,
         discountPct,
+        discountAmt,
+        discountReason,
         // PR 1: persist the new payment fields so resume restores the
         // operator's state. Older held bills (created before this version)
         // won't have these and the migration in resumeBill below handles
@@ -391,7 +395,7 @@ export const usePOSStore = create((set, get) => ({
         cashCollected,
         heldAt: new Date(),
       }],
-      cart: [], customer: null, discountPct: 0,
+      cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '',
       paymentReceived: false, paymentMethod: null, cashCollected: '',
     })
   },
@@ -422,6 +426,8 @@ export const usePOSStore = create((set, get) => ({
       cart: bill.cart.map((i) => normalizeCartItem(i)),
       customer: bill.customer,
       discountPct: bill.discountPct,
+      discountAmt: bill.discountAmt || 0,
+      discountReason: bill.discountReason || '',
       paymentReceived: resumedReceived,
       paymentMethod: resumedMethod,
       cashCollected: resumedMethod === 'cash' ? (bill.cashCollected || '') : '',

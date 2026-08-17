@@ -949,7 +949,6 @@ export default function SalesPage() {
                       <td><CopyableId value={inv.number} label={inv.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                       <td>
                         <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{inv.customerName || 'Walk-in'}</div>
-                        {inv.notes && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{inv.notes}</div>}
                       </td>
                       <td style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || 'N/A'}</td>
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.date}</td>

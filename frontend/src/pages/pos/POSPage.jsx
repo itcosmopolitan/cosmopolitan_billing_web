@@ -14,7 +14,7 @@ import { calcCartTotals } from '@/utils/taxCalc'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
 import { PRODUCTS } from '@/utils/seedData'
-import { Modal, AutocompleteDropdown, Spinner } from '@/components/ui'
+import { Modal, AutocompleteDropdown, FormGroup, Spinner } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import CashTenderFields from '@/components/CashTenderFields'
@@ -33,6 +33,76 @@ import {
   readStoredLeading,
   leadingPanelFromDrop,
 } from './posDrag'
+
+const DISCOUNT_REASON_OPTIONS = [
+  'Customer goodwill',
+  'Loyalty discount',
+  'Seasonal offer',
+  'Price match',
+  'Near expiry',
+  'Damaged packaging',
+  'Staff discount',
+  'Manager approval',
+  'Other',
+]
+
+const DISCOUNT_REASON_STORAGE_PREFIX = 'pos_discount_reasons'
+
+function discountReasonStorageKey(branchId) {
+  return `${DISCOUNT_REASON_STORAGE_PREFIX}:${branchId || 'default'}`
+}
+
+function uniqueDiscountReasons(rows) {
+  const seen = new Set()
+  const next = []
+  ;(rows || []).forEach((row) => {
+    const value = typeof row === 'string' ? row.trim() : ''
+    const key = value.toLowerCase()
+    if (!value || seen.has(key)) return
+    seen.add(key)
+    next.push(value)
+  })
+  return next
+}
+
+function readBranchDiscountReasons(branchId) {
+  if (typeof window === 'undefined') return DISCOUNT_REASON_OPTIONS
+  try {
+    const raw = window.localStorage.getItem(discountReasonStorageKey(branchId))
+    const custom = raw ? JSON.parse(raw) : []
+    return uniqueDiscountReasons([...DISCOUNT_REASON_OPTIONS, ...(Array.isArray(custom) ? custom : [])])
+  } catch {
+    return DISCOUNT_REASON_OPTIONS
+  }
+}
+
+// Async version that fetches from API
+async function fetchBranchDiscountReasons(branchId) {
+  try {
+    const response = await settingsAPI.getDiscountReasons(branchId)
+    const reasons = response?.data?.reasons ?? response?.reasons ?? []
+    // Cache in localStorage for offline access
+    const defaults = new Set(DISCOUNT_REASON_OPTIONS.map((row) => row.toLowerCase()))
+    const custom = reasons.filter((row) => !defaults.has(row.toLowerCase()))
+    writeBranchCustomDiscountReasons(branchId, reasons)
+    return reasons
+  } catch (error) {
+    console.error('Failed to fetch discount reasons from API:', error)
+    // Fallback to localStorage
+    return readBranchDiscountReasons(branchId)
+  }
+}
+
+function writeBranchCustomDiscountReasons(branchId, options) {
+  if (typeof window === 'undefined') return
+  const defaults = new Set(DISCOUNT_REASON_OPTIONS.map((row) => row.toLowerCase()))
+  const custom = uniqueDiscountReasons(options).filter((row) => !defaults.has(row.toLowerCase()))
+  try {
+    window.localStorage.setItem(discountReasonStorageKey(branchId), JSON.stringify(custom))
+  } catch {
+    /* ignore storage failures */
+  }
+}
 
 const mapSeedProductsForBranch = (branchId) =>
   (PRODUCTS || []).map((p) => ({
@@ -87,6 +157,9 @@ export default function POSPage() {
   const [allocEditor, setAllocEditor] = useState(null)
   const [allowOverselling, setAllowOverselling] = useState(true)
   const [showRefund, setShowRefund] = useState(false)
+  const [discountReasonOptions, setDiscountReasonOptions] = useState(DISCOUNT_REASON_OPTIONS)
+  const [showAddDiscountReason, setShowAddDiscountReason] = useState(false)
+  const [newDiscountReason, setNewDiscountReason] = useState('')
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -97,7 +170,7 @@ export default function POSPage() {
   const activeBranch = useAppStore((s) => s.activeBranch)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
-  const { cart, customer, discountPct, discountAmt, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
   // unpaid invoice" case — there's no-one to follow up with for collection.
   // We surface this exactly once per Complete-Sale attempt via this ref so
@@ -128,6 +201,18 @@ export default function POSPage() {
       })
       .catch(() => setAllowOverselling(true))
   }, [])
+
+  useEffect(() => {
+    const branchId = activeBranch?.id || 'default'
+    // Fetch discount reasons from API
+    fetchBranchDiscountReasons(branchId).then((reasons) => {
+      setDiscountReasonOptions(reasons)
+      const currentReason = usePOSStore.getState().discountReason
+      if (currentReason && !reasons.some((row) => row.toLowerCase() === currentReason.toLowerCase())) {
+        usePOSStore.getState().setDiscountReason('')
+      }
+    })
+  }, [activeBranch?.id])
 
   const updateCategories = (rows, reset = false) => {
     setCategories((prev) => {
@@ -300,6 +385,13 @@ export default function POSPage() {
   const handleComplete = async () => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
+    const hasBillDiscountForSubmit = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
+    const hasLineDiscountForSubmit = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
+    const hasDiscountForSubmit = hasBillDiscountForSubmit || hasLineDiscountForSubmit
+    if (hasDiscountForSubmit && !discountReason) {
+      toast.error('Pick a discount reason')
+      return
+    }
 
     // Sales Phase 1 validation: when "Payment received?" is checked, a
     // method MUST be picked. Backend would 422 on null mode + paid_amount
@@ -364,6 +456,10 @@ export default function POSPage() {
     try {
       const totals = calcCartTotals(cart, { discountPct, discountAmt })
       const { netSubtotal: sub, taxTotal: tax, discount: disc } = totals
+      const notes = [
+        store.notes?.trim(),
+        hasDiscountForSubmit ? `Discount reason: ${discountReason}` : '',
+      ].filter(Boolean).join('\n')
 
       // Call API to create sale
       const result = await salesAPI.create({
@@ -396,7 +492,7 @@ export default function POSPage() {
         // invoice. Operator records payment later via Sales → Invoices.
         payment_mode: paymentReceived ? paymentMethod : null,
         origin: 'pos',
-        notes: store.notes,
+        notes: notes || null,
         payment_ref: paymentReceived ? paymentRef || '' : undefined,
       })
 
@@ -413,6 +509,7 @@ export default function POSPage() {
         subtotal: sub,
         taxTotal: tax,
         discount: disc,
+        discountReason: hasDiscountForSubmit ? discountReason : '',
         method: paymentReceived ? paymentMethod : null,
         cashCollected: cashTender?.collected ?? null,
         cashChange: cashTender?.change ?? null,
@@ -554,6 +651,7 @@ export default function POSPage() {
   } = cartTotals
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
+  const hasAnyDiscount = hasLineLevelDiscount || hasBillLevelDiscount
   // Bill-level discount is allocated across lines for per-line margin; line discounts already sit in lineTotal.
   const lineEntityShares = hasBillLevelDiscount && !hasLineLevelDiscount
     ? posEntityDiscountShares(cart, discount)
@@ -599,6 +697,44 @@ export default function POSPage() {
   const onRegenerateDisplayCode = () => {
     regenerateDisplayCode()
     toast('New display code — enter it on the customer screen', { icon: '🔑' })
+  }
+
+  const openAddDiscountReason = () => {
+    setNewDiscountReason('')
+    setShowAddDiscountReason(true)
+  }
+
+  const submitNewDiscountReason = async () => {
+    const reason = newDiscountReason.trim()
+    if (!reason) {
+      toast.error('Discount reason is required')
+      return
+    }
+    const existing = discountReasonOptions.find((row) => row.trim().toLowerCase() === reason.toLowerCase())
+    const next = existing || reason
+    
+    if (!existing) {
+      // Call API to save the new discount reason
+      try {
+        const branchId = activeBranch?.id || 'default'
+        await settingsAPI.createDiscountReason(branchId, { reason: next })
+        
+        // Update local state
+        setDiscountReasonOptions((prev) => {
+          const updated = uniqueDiscountReasons([...prev, next])
+          writeBranchCustomDiscountReasons(branchId, updated)
+          return updated
+        })
+        toast.success('Discount reason added')
+      } catch (error) {
+        const msg = error?.response?.data?.detail || error?.message || 'Failed to add discount reason'
+        toast.error(msg)
+        return
+      }
+    }
+    
+    store.setDiscountReason(next)
+    setShowAddDiscountReason(false)
   }
 
   useEffect(() => {
@@ -1099,13 +1235,70 @@ export default function POSPage() {
                 onChange={(e) => store.setDiscount(Number(e.target.value), 0)}
                 disabled={hasLineLevelDiscount}
               />
+              <div style={{ display: 'flex', gap: 4, width: 218, minWidth: 0 }}>
+                <select
+                  className="form-input"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: '7px 10px',
+                    fontSize: 12,
+                    opacity: hasAnyDiscount ? 1 : 0.6,
+                    borderColor: hasAnyDiscount && !discountReason ? 'var(--red)' : undefined,
+                  }}
+                  value={discountReason || ''}
+                  onChange={(e) => store.setDiscountReason(e.target.value)}
+                  disabled={!hasAnyDiscount}
+                  aria-label="Discount reason"
+                  aria-required={hasAnyDiscount}
+                  required={hasAnyDiscount}
+                >
+                  <option value="">Reason</option>
+                  {discountReason && !discountReasonOptions.includes(discountReason) && (
+                    <option value={discountReason}>{discountReason}</option>
+                  )}
+                  {discountReasonOptions.map((reason) => (
+                    <option key={reason} value={reason}>{reason}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={openAddDiscountReason}
+                  disabled={!hasAnyDiscount}
+                  title="Add discount reason"
+                  style={{
+                    width: 36,
+                    minWidth: 36,
+                    height: 34,
+                    padding: 0,
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid var(--green)',
+                    borderRadius: 6,
+                    background: hasAnyDiscount ? 'var(--green)' : 'var(--bg-raised)',
+                    color: hasAnyDiscount ? '#fff' : 'var(--text-muted)',
+                    fontSize: 18,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                    cursor: hasAnyDiscount ? 'pointer' : 'not-allowed',
+                    opacity: hasAnyDiscount ? 1 : 0.6,
+                  }}
+                >
+                  +
+                </button>
+              </div>
               {false && (
                 <input className="form-input" style={{ width: 90, padding: '7px 10px', fontSize: 12 }} placeholder="Coupon" />
               )}
             </div>
             {(hasLineLevelDiscount || hasBillLevelDiscount) && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-                {hasLineLevelDiscount ? 'Using line-item discount mode.' : 'Using bill-level discount mode.'}
+              <div style={{ fontSize: 11, color: discountReason ? 'var(--text-muted)' : 'var(--red)', marginTop: 6 }}>
+                {discountReason
+                  ? (hasLineLevelDiscount ? 'Using line-item discount mode.' : 'Using bill-level discount mode.')
+                  : 'Discount reason is required.'}
               </div>
             )}
           </div>
@@ -1425,6 +1618,36 @@ export default function POSPage() {
         branchId={activeBranch?.id}
         onSuccess={refreshProductStock}
       />
+
+      <Modal
+        open={showAddDiscountReason}
+        onClose={() => setShowAddDiscountReason(false)}
+        title="Add Discount Reason"
+        icon="🏷️"
+        size="sm"
+        footer={(
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowAddDiscountReason(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitNewDiscountReason}>Add Reason</button>
+          </>
+        )}
+      >
+        <FormGroup label="Discount reason" required>
+          <input
+            className="form-input"
+            value={newDiscountReason}
+            onChange={(e) => setNewDiscountReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitNewDiscountReason()
+              }
+            }}
+            placeholder="e.g. Bulk purchase"
+            autoFocus
+          />
+        </FormGroup>
+      </Modal>
 
     </div>
   )

@@ -1515,3 +1515,18 @@ class ActivityView(Base):
     record_type   = Column(String, nullable=False)
     record_id     = Column(String, nullable=False)
     last_viewed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DiscountReason(Base):
+    """Custom discount reasons per branch. Built-in reasons are not stored here."""
+    __tablename__ = "discount_reasons"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "reason", name="uq_discount_reason_branch"),
+        Index("ix_discount_reason_branch", "branch_id"),
+    )
+    id         = Column(String, primary_key=True)
+    branch_id  = Column(String, ForeignKey("branches.id"), nullable=False)
+    reason     = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    branch = relationship("Branch", backref="discount_reasons")
