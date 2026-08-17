@@ -418,7 +418,7 @@ export default function ItemsPage({ mode = 'branch' }) {
         {isMaster && can('item_master.create') && (
           <>
             <button className="btn btn-primary btn-sm" onClick={() => navigate('/item-master/new')}>+ Add Item</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => { setImportOpen(true); setImportResult(null); setImportFile(null) }} style={{ marginLeft: 8 }}>Import</button>
+            <button className="btn btn-primary btn-sm" onClick={() => { setImportOpen(true); setImportResult(null); setImportFile(null) }} style={{ marginLeft: 8 }}>Import</button>
           </>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
