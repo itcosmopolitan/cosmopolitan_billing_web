@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_MANAGERS_URL } from '@/api'
+import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_USERS_URL } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
@@ -512,11 +512,9 @@ export default function CustomersPage() {
               fetchParams={{ retail_only: true }}
               prependOptions={[
                 { id: '', label: 'Select branch…' },
-                ...(form.branch_id && branches.find((b) => b.id === form.branch_id)
-                  ? [{ id: form.branch_id, label: branches.find((b) => b.id === form.branch_id).name }]
-                  : []),
               ]}
               isSearchFieldRequired={false}
+              selectedLabel={form.branch_id && branches.find((b) => b.id === form.branch_id)?.name || undefined}
               placeholder="Select branch…"
             />
           </FormGroup>
@@ -537,7 +535,8 @@ export default function CustomersPage() {
                 pf('key_account_manager', opt.id)
                 pf('key_account_manager_name', opt.label)
               }}
-              fetchUrl={AUTOCOMPLETE_BRANCH_MANAGERS_URL}
+              fetchUrl={AUTOCOMPLETE_BRANCH_USERS_URL}
+              fetchParams={{ branch_id: form.branch_id }}
               prependOptions={[{ id: '', label: 'None' }]}
               isSearchFieldRequired
               selectedLabel={form.key_account_manager_name || undefined}
@@ -546,9 +545,9 @@ export default function CustomersPage() {
                 pf('key_account_manager', '')
                 pf('key_account_manager_name', '')
               }}
-              placeholder="Select branch manager…"
-              searchPlaceholder="Search branch managers…"
-              emptyLabel="No branch managers found"
+              placeholder="Select user…"
+              searchPlaceholder="Search users…"
+              emptyLabel="No users found"
             />
           </FormGroup>
           <FormGroup label="Credit Limit (MVR)">

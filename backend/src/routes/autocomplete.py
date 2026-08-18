@@ -286,3 +286,45 @@ async def autocomplete_branch_managers(
         await db.execute(q.order_by(User.name.asc()).limit(limit))
     ).scalars().all()
     return [{"id": u.id, "text": u.name} for u in rows]
+
+
+@router.get(
+    "/branch-users",
+    dependencies=[Depends(require_perm("customers.view", "customers.create", "customers.edit"))],
+)
+async def autocomplete_branch_users(
+    branch_id: Optional[str] = None,
+    search_text: Optional[str] = None,
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """All active users who have access to a specific branch — irrespective of role, including super admins."""
+    from src.models import UserBranch, UserRole
+    
+    if not branch_id:
+        return []
+    
+    # Include users who either:
+    # 1. Are super_admin users (have global access)
+    # 2. Have explicit access to the branch (via user_branches table)
+    q = select(User).where(
+        User.active.is_(True),
+        or_(
+            # Super admins have global access
+            User.role == UserRole.super_admin,
+            User.role_id == "role-super-admin",
+            # Or users with explicit branch access
+            User.id.in_(
+                select(UserBranch.user_id).where(UserBranch.branch_id == branch_id)
+            )
+        )
+    )
+    
+    if search_text:
+        term = f"%{search_text.strip()}%"
+        q = q.where(or_(User.name.ilike(term), User.email.ilike(term)))
+    
+    rows = (
+        await db.execute(q.order_by(User.name.asc()).limit(limit))
+    ).scalars().all()
+    return [{"id": u.id, "text": u.name} for u in rows]
