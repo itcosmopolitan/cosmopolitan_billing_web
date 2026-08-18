@@ -62,7 +62,7 @@ export default function SalesPage() {
   const can = useCan()
   const canActivity = can('history.view', 'comments.view')
   const tabParam = searchParams.get('tab')
-  const tab = VALID_TABS.has(tabParam) ? tabParam : 'invoices'
+  const tab = VALID_TABS.has(tabParam) ? tabParam : 'quotes'
   const setTab = useCallback((id) => {
     navigate(`/sales?tab=${id}`, { replace: true })
   }, [navigate])
