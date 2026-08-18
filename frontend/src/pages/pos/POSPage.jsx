@@ -535,9 +535,11 @@ export default function POSPage() {
             ? i.batchAllocation.map((b) => b.batchNumber).filter(Boolean).join(', ')
             : '',
           discount: i.lineDiscountValue ?? i.lineDiscountPct ?? 0,
+          brand: i.brand || '',
+          unit: i.unit || i.unitOfMeasure || i.unit_of_measure || '',
         })),
         id: result.id,
-      })
+      });
 
       // 2026-05-25: refresh local customer credit_balance after a
       // credit-mode sale so the next cart sees the updated balance.
@@ -557,14 +559,8 @@ export default function POSPage() {
       await refreshProductStock()
       queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
       toast.success(`Sale ${result.number} completed!`)
-      if (result?.id) {
-        const url = `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(result.id))}`
-        const win = window.open(url, '_blank')
-        if (win) {
-          win.focus()
-        }
-        return
-      }
+      // Show the receipt modal for user to choose format and print
+      setShowComplete(true)
     } catch (err) {
       console.error('Failed to complete sale:', err)
       toast.error('Failed to save sale. Please try again.')
@@ -596,6 +592,8 @@ export default function POSPage() {
           expiryTracking: Boolean(inMemory.expiry_tracking),
           wholesale_discount_pct: inMemory.wholesale_discount_pct || 0,
           staff_discount_pct: inMemory.staff_discount_pct || 0,
+          brand: inMemory.brand || '',
+          unit: inMemory.unit || inMemory.unitOfMeasure || inMemory.unit_of_measure || '',
         })
         toast.success(inMemory.name, { duration: 800 })
         setSearch('')
@@ -629,6 +627,8 @@ export default function POSPage() {
             expiryTracking: Boolean(hit.expiry_tracking),
             wholesale_discount_pct: hit.wholesale_discount_pct || 0,
             staff_discount_pct: hit.staff_discount_pct || 0,
+            brand: hit.brand || '',
+            unit: hit.unit || hit.unitOfMeasure || hit.unit_of_measure || '',
           })
           toast.success(hit.name, { duration: 800 })
           setSearch('')
@@ -941,6 +941,8 @@ export default function POSPage() {
                       availableStock: stock,
                       wholesale_discount_pct: p.wholesale_discount_pct || 0,
                       staff_discount_pct: p.staff_discount_pct || 0,
+                      brand: p.brand || '',
+                      unit: p.unit || p.unitOfMeasure || p.unit_of_measure || '',
                       // Carry batch-tracking flags forward so CartRow knows
                       // whether to render the source batch picker.
                       batchTracking: Boolean(p.batch_tracking),
@@ -1588,27 +1590,38 @@ export default function POSPage() {
       />
 
       {/* Sale Complete Modal */}
-      <Modal open={showComplete} onClose={() => setShowComplete(false)} title="Sale Completed!" icon="✅" size="md">
+      <Modal open={showComplete} onClose={() => setShowComplete(false)} title="Sale Completed!" icon="✅" size="xl">
         {lastSale && (
-          <Receipt
-            sale={{
-              number: lastSale.number,
-              total: lastSale.total,
-              subtotal: lastSale.subtotal,
-              taxTotal: lastSale.taxTotal,
-              discount: lastSale.discount,
-              paymentMode: lastSale.method,
-              cashCollected: lastSale.cashCollected,
-              cashChange: lastSale.cashChange,
-              cashier: 'Staff',
-              customerName: lastSale.customerName || 'Walk-in',
-              customerId: lastSale.customerId || null,
-              date: new Date(),
-              items: lastSale.items || [],
-            }}
-            branch={activeBranch}
-            onClose={() => setShowComplete(false)}
-          />
+          <div style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+            <Receipt
+              sale={{
+                number: lastSale.number,
+                total: lastSale.total,
+                subtotal: lastSale.subtotal,
+                taxTotal: lastSale.taxTotal,
+                tax_total: lastSale.taxTotal,
+                discount: lastSale.discount,
+                paymentMode: lastSale.method,
+                payment_mode: lastSale.method,
+                cashCollected: lastSale.cashCollected,
+                cashChange: lastSale.cashChange,
+                cashier: 'Staff',
+                customerName: lastSale.customerName || 'Walk-in',
+                customerId: lastSale.customerId || null,
+                customerAddress: lastSale.customerAddress,
+                customerStreet1: lastSale.customerStreet1,
+                customerStreet2: lastSale.customerStreet2,
+                customerStreet3: lastSale.customerStreet3,
+                customerCity: lastSale.customerCity,
+                customerStateProvince: lastSale.customerStateProvince,
+                customerCountry: lastSale.customerCountry,
+                customerPostalCode: lastSale.customerPostalCode,
+                date: new Date(),
+                items: lastSale.items || [],
+              }}
+              branch={activeBranch}
+            />
+          </div>
         )}
       </Modal>
 

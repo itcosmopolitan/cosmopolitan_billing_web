@@ -1,10 +1,12 @@
-import { useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import SalesTaxInvoice, { mapSaleToInvoice } from '@/components/invoices/SalesTaxInvoice'
+import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
 import openInvoicePrintWindow from '@/utils/printInvoice'
+import { settingsAPI } from '@/api'
 
 const formatNumber = (value, options = {}) => {
   const number = Number(value)
@@ -58,8 +60,43 @@ const formatCurrency = (value) => formatAmountNumber(value)
 // ─── Invoice Print Component ────────────────────────────────────────────────
 export function Receipt({ sale, branch }) {
   const ref = useRef(null)
+  const thermalRef = useRef(null)
+  const [invoiceFormat, setInvoiceFormat] = useState('standard') // 'standard' or 'thermal'
+  const [orgProfile, setOrgProfile] = useState(null)
   const config = useInvoiceConfig()
   const columns = getColumnDefinitions(config)
+
+  useEffect(() => {
+    let active = true
+    settingsAPI.getOrganisation()
+      .then((res) => {
+        const data = res?.data ?? res
+        if (active) setOrgProfile(data)
+      })
+      .catch(() => {
+        if (active) setOrgProfile(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const mergedBranch = useMemo(() => {
+    const base = { ...(branch || {}) }
+    const org = orgProfile || {}
+
+    base.gstin = base.gstin || base.gst || base.gstNo || base.gst_no || org.gstin || ''
+    base.gst = base.gst || base.gstin || org.gstin || ''
+    base.gstNo = base.gstNo || base.gst || base.gstin || org.gstin || ''
+    base.gst_no = base.gst_no || base.gstin || org.gstin || ''
+
+    base.website = base.website || base.homepage || base.homePage || org.website || ''
+    base.homePage = base.homePage || base.homepage || base.website || org.website || org.homePage || ''
+    base.email = base.email || base.emailAddress || base.email_address || org.email || ''
+    base.phone = base.phone || base.tel || base.phoneNo || base.phone_no || org.phone || ''
+
+    return base
+  }, [branch, orgProfile])
 
   const getItemTaxAmount = (item) => {
     const qty = Number(item.qty || item.quantity || 0)
@@ -490,23 +527,50 @@ export function Receipt({ sale, branch }) {
 
   if (!sale) return null
 
-  const invoiceData = mapSaleToInvoice(sale, branch)
+  const invoiceData = mapSaleToInvoice(sale, mergedBranch)
+
+  const handlePrint = () => {
+    if (invoiceFormat === 'standard') {
+      printInvoiceCosmo()
+    } else if (invoiceFormat === 'thermal' && thermalRef.current) {
+      thermalRef.current.print()
+    }
+  }
 
   return (
     <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, justifyContent: 'center' }}>
+        <button 
+          className={`btn ${invoiceFormat === 'standard' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setInvoiceFormat('standard')}
+        >
+          📄 Standard Format
+        </button>
+        <button 
+          className={`btn ${invoiceFormat === 'thermal' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setInvoiceFormat('thermal')}
+        >
+          🖨 Thermal Receipt
+        </button>
+      </div>
+
       <div ref={ref} style={{
         background: '#fff',
         padding: 0,
         border: '1px solid var(--border-default)',
         borderRadius: 8,
-        maxWidth: 920,
+        maxWidth: invoiceFormat === 'thermal' ? 420 : 920,
         margin: '0 auto',
       }}>
-        <SalesTaxInvoice invoice={invoiceData} branch={branch} />
+        {invoiceFormat === 'standard' ? (
+          <SalesTaxInvoice invoice={invoiceData} branch={mergedBranch} />
+        ) : (
+          <ThermalReceipt ref={thermalRef} sale={sale} branch={mergedBranch} />
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
-        <button className="btn btn-primary" onClick={printInvoiceCosmo}>🖨 Print Invoice</button>
+        <button className="btn btn-primary" onClick={handlePrint}>🖨 Print</button>
       </div>
     </div>
   )
