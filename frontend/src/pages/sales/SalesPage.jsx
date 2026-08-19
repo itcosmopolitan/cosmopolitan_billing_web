@@ -63,6 +63,7 @@ export default function SalesPage() {
   const canActivity = can('history.view', 'comments.view')
   const tabParam = searchParams.get('tab')
   const tab = VALID_TABS.has(tabParam) ? tabParam : 'quotes'
+  const viewId = searchParams.get('view')
   const setTab = useCallback((id) => {
     navigate(`/sales?tab=${id}`, { replace: true })
   }, [navigate])
@@ -81,6 +82,14 @@ export default function SalesPage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
   const [salesDoc, setSalesDoc] = useState(null) // { kind: 'invoice'|'quote'|'order'|'return', data }
+
+  useEffect(() => {
+    if (!viewId) return
+    const kindByTab = { invoices: 'invoice', quotes: 'quote', orders: 'order', returns: 'return' }
+    const kind = kindByTab[tab]
+    if (!kind) return
+    setSalesDoc({ kind, data: { id: viewId } })
+  }, [tab, viewId])
   const [showPayment, setShowPayment] = useState(null)
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
@@ -1651,7 +1660,12 @@ export default function SalesPage() {
         open={!!salesDoc}
         kind={salesDoc?.kind || 'invoice'}
         document={salesDoc?.data}
-        onClose={() => setSalesDoc(null)}
+        onClose={() => {
+          setSalesDoc(null)
+          if (searchParams.get('view')) {
+            navigate(`/sales?tab=${tab}`, { replace: true })
+          }
+        }}
         onPrint={(inv, branch) => openInvoicePrintWindow(inv, branch)}
         onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
         onRecordPayment={(inv) => setShowPayment(inv)}
