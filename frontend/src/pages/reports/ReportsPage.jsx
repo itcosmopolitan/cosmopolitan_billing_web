@@ -1,16 +1,15 @@
 
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, fmtQty, exportToExcel } from '@/utils/helpers'
-import { SALES_INVOICES, PURCHASE_BILLS } from '@/utils/seedData'
-import { SectionHeader, Card, Tabs, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value))
 const formatNumber = (value) => (value === null || value === undefined ? '—' : fmtNum(value))
 const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
-const formatText = (value) => (value === null || value === undefined ? '—' : String(value))
 
 const REPORT_CATEGORIES = [
   {
@@ -22,6 +21,7 @@ const REPORT_CATEGORIES = [
         label: 'Sales Register',
         api: 'salesRegister',
         ReportdefaultSort: 'date',
+        getDetailPath: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
         columns: [
           { key: 'invoice_number', label: 'Invoice Number', sortable: true },
           { key: 'invoice_date', label: 'Invoice Date', sortable: true, formatter: formatDate },
@@ -131,6 +131,7 @@ const REPORT_CATEGORIES = [
         label: 'Purchase Register',
         api: 'purchaseRegister',
         defaultSort: 'date',
+        getDetailPath: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
         columns: [
           { key: 'bill_number', label: 'Bill Number', sortable: true },
           { key: 'bill_date', label: 'Bill Date', sortable: true, formatter: formatDate },
@@ -232,6 +233,7 @@ const REPORT_CATEGORIES = [
         label: 'Stock Transfer',
         api: 'stockTransfers',
         defaultSort: 'transfer_date',
+        getDetailPath: (row) => (row.transfer_id ? `/transfers/${encodeURIComponent(row.transfer_id)}/edit` : null),
         columns: [
           { key: 'transfer_number', label: 'Transfer Number', sortable: true },
           { key: 'from_branch', label: 'From Branch', sortable: true },
@@ -342,6 +344,7 @@ const REPORT_CATEGORIES = [
         label: 'Outstanding Receivables',
         api: 'outstandingReceivables',
         defaultSort: 'due_date',
+        getDetailPath: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
         columns: [
           { key: 'customer', label: 'Customer', sortable: true },
           { key: 'invoice_number', label: 'Invoice Number', sortable: true },
@@ -355,12 +358,29 @@ const REPORT_CATEGORIES = [
         label: 'Outstanding Payables',
         api: 'outstandingPayables',
         defaultSort: 'due_date',
+        getDetailPath: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
         columns: [
           { key: 'vendor', label: 'Vendor', sortable: true },
           { key: 'bill_number', label: 'Bill Number', sortable: true },
           { key: 'bill_date', label: 'Bill Date', sortable: true, formatter: formatDate },
           { key: 'due_date', label: 'Due Date', sortable: true, formatter: formatDate },
           { key: 'outstanding_amount', label: 'Outstanding Amount', align: 'right', sortable: true, formatter: formatCurrency },
+        ],
+      },
+      {
+        id: 'profit-loss',
+        label: 'Profit & Loss',
+        api: 'profitLoss',
+        defaultSort: 'sort_order',
+        columns: [
+          { key: 'account', label: 'ACCOUNT', sortable: false },
+          {
+            key: 'total',
+            label: 'TOTAL',
+            align: 'right',
+            sortable: false,
+            formatter: (value) => (value === null || value === undefined ? '' : formatCurrency(value)),
+          },
         ],
       },
       {
@@ -418,52 +438,183 @@ const REPORT_CATEGORIES = [
 
 const REPORT_MAP = REPORT_CATEGORIES.reduce((map, category) => {
   category.reports.forEach((report) => {
-    map[report.id] = { ...report, category: category.id }
+    map[report.id] = { ...report, categoryId: category.id, categoryLabel: category.label }
   })
   return map
 }, {})
-// Phase 5: stock movement + document trail are wired to live API.
-// Sales/purchase register detail tables still use seed data (no paged endpoints yet).
 
-const TABS = [
-  { id: 'sales',     label: '📈 Sales Register' },
-  { id: 'purchase',  label: '📦 Purchase Register' },
-  { id: 'tax',       label: '🧾 Tax Summary (GST)' },
-  { id: 'stock',     label: '📊 Stock Movement' },
-  { id: 'trail',     label: '🔗 Document Trail' },
-  { id: 'branch',    label: '🏪 Branch Comparison' },
-  { id: 'margin',    label: '💹 Margin Analysis' },
-]
+export default function ReportsPage() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const reportId = searchParams.get('report') || ''
+  const reportGroup = searchParams.get('report_group') || ''
+  const selectedReport = REPORT_MAP[reportId] || null
+  const listPath = reportGroup
+    ? `/reports?report_group=${encodeURIComponent(reportGroup)}`
+    : '/reports'
 
-const TRAIL_LABELS = {
-  quotation: 'Quotation',
-  sales_order: 'Sales Order',
-  invoice: 'Invoice',
-  credit_note: 'Credit Note',
-  customer_payment: 'Customer Payment',
-  purchase_order: 'Purchase Order',
-  grn: 'GRN',
-  purchase_bill: 'Purchase Bill',
-  vendor_return: 'Vendor Return',
-  vendor_payment: 'Vendor Payment',
+  if (reportId && !selectedReport) {
+    return <NavigateToReportsList />
+  }
+
+  if (!selectedReport) {
+    return (
+      <ReportsListPage
+        reportGroup={reportGroup}
+        onSelectGroup={(id) => navigate(`/reports?report_group=${encodeURIComponent(id)}`)}
+        onOpen={(id) => {
+          const params = new URLSearchParams()
+          params.set('report', id)
+          if (reportGroup) params.set('report_group', reportGroup)
+          else params.set('report_group', REPORT_MAP[id]?.categoryId || '')
+          navigate(`/reports?${params.toString()}`)
+        }}
+      />
+    )
+  }
+
+  return <ReportDetailPage report={selectedReport} onBack={() => navigate(listPath)} />
 }
 
-const TT = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null
+function NavigateToReportsList() {
+  const navigate = useNavigate()
+  useEffect(() => {
+    toast.error('Unknown report.')
+    navigate('/reports', { replace: true })
+  }, [navigate])
+  return null
+}
+
+function FolderIcon() {
   return (
-    <div style={{ background:'var(--bg-raised)', border:'1px solid var(--border-default)', borderRadius:8, padding:'10px 14px', fontSize:12 }}>
-      <div style={{ fontWeight:600, marginBottom:5 }}>{label}</div>
-      {payload.map(p => <div key={p.name} style={{ color:p.color }}>
-        {p.name}: <span style={{ fontFamily:'DM Mono' }}>{fmt(p.value)}</span>
-      </div>)}
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  )
+}
+
+function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+
+  const activeGroupId = REPORT_CATEGORIES.some((c) => c.id === reportGroup)
+    ? reportGroup
+    : REPORT_CATEGORIES[0].id
+  const activeCategory = REPORT_CATEGORIES.find((c) => c.id === activeGroupId) || REPORT_CATEGORIES[0]
+
+  const visibleReports = (activeCategory.reports || []).filter((report) => (
+    !needle || report.label.toLowerCase().includes(needle) || activeCategory.label.toLowerCase().includes(needle)
+  ))
+
+  return (
+    <div className="page-container">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', flex: '0 0 auto' }}>Reports Center</h1>
+        <div style={{ flex: 1, minWidth: 240, maxWidth: 420, margin: '0 auto' }}>
+          <SearchBar value={query} onChange={setQuery} placeholder="Search reports" style={{ width: '100%' }} />
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '240px minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
+        <aside style={{
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-default)',
+          borderRadius: 10,
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            padding: '12px 14px 8px',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            color: 'var(--text-muted)',
+          }}>
+            REPORT CATEGORY
+          </div>
+          {REPORT_CATEGORIES.map((category) => {
+            const active = category.id === activeGroupId
+            return (
+              <button
+                key={category.id}
+                type="button"
+                onClick={() => onSelectGroup(category.id)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 14px',
+                  border: 'none',
+                  background: active ? 'var(--blue-bg)' : 'transparent',
+                  color: active ? 'var(--blue)' : 'var(--text-secondary)',
+                  fontWeight: active ? 600 : 500,
+                  fontSize: 13.5,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ display: 'inline-flex', opacity: 0.85 }}><FolderIcon /></span>
+                {category.label}
+              </button>
+            )
+          })}
+        </aside>
+
+        <section style={{
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-default)',
+          borderRadius: 10,
+          overflow: 'hidden',
+          minHeight: 360,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 18px 12px' }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{activeCategory.label}</h2>
+            <span style={{
+              minWidth: 22,
+              height: 22,
+              padding: '0 7px',
+              borderRadius: 11,
+              background: 'var(--blue-bg)',
+              color: 'var(--blue)',
+              fontSize: 12,
+              fontWeight: 700,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              {visibleReports.length}
+            </span>
+          </div>
+          <table className="data-table" style={{ minWidth: 0 }}>
+            <thead>
+              <tr>
+                <th>REPORT NAME</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleReports.length === 0 ? (
+                <tr>
+                  <td style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                    No reports match that search.
+                  </td>
+                </tr>
+              ) : visibleReports.map((report) => (
+                  <tr key={report.id} style={{ cursor: 'pointer' }} onClick={() => onOpen(report.id)}>
+                    <td>
+                      <span style={{ color: 'var(--blue)', fontWeight: 500 }}>{report.label}</span>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </section>
+      </div>
     </div>
   )
 }
 
-const DEFAULT_CATEGORY = REPORT_CATEGORIES[0].id
-const DEFAULT_REPORT = REPORT_CATEGORIES[0].reports[0].id
-
-export default function ReportsPage() {
+function ReportDetailPage({ report, onBack }) {
+  const navigate = useNavigate()
   const today = new Date().toISOString().slice(0, 10)
   const defaultFrom = useMemo(() => {
     const from = new Date()
@@ -471,13 +622,10 @@ export default function ReportsPage() {
     return from.toISOString().slice(0, 10)
   }, [])
 
-  const [category, setCategory] = useState(DEFAULT_CATEGORY)
-  const [reportType, setReportType] = useState(DEFAULT_REPORT)
   const [dateFrom, setDateFrom] = useState(defaultFrom)
   const [dateTo, setDateTo] = useState(today)
   const [branchId, setBranchId] = useState('')
-  const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState(REPORT_MAP[DEFAULT_REPORT].defaultSort)
+  const [sortBy, setSortBy] = useState(report.defaultSort || report.columns[0]?.key)
   const [sortOrder, setSortOrder] = useState('desc')
   const [skip, setSkip] = useState(0)
   const [limit, setLimit] = useState(50)
@@ -485,140 +633,49 @@ export default function ReportsPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [runKey, setRunKey] = useState(Date.now())
-  const [tab, setTab] = useState('sales')
-
-  const selectedReport = REPORT_MAP[reportType]
-  const reportOptions = REPORT_CATEGORIES.find((item) => item.id === category)?.reports || []
-
-  const handleCategoryChange = (nextCategory) => {
-    const nextReportOptions = REPORT_CATEGORIES.find((item) => item.id === nextCategory)?.reports || []
-    const firstReport = nextReportOptions[0]
-    setCategory(nextCategory)
-    if (firstReport) {
-      setReportType(firstReport.id)
-      setSortBy(firstReport.defaultSort || firstReport.columns[0]?.key)
-      setSortOrder('desc')
-      setSkip(0)
-      setRunKey(Date.now())
-    }
-  }
-
-  const handleReportTypeChange = (nextReportType) => {
-    const nextReport = REPORT_MAP[nextReportType]
-    setReportType(nextReportType)
-    if (nextReport) {
-      setSortBy(nextReport.defaultSort || nextReport.columns[0]?.key)
-      setSortOrder('desc')
-      setSkip(0)
-      setRunKey(Date.now())
-    }
-  }
-  // Live API data per tab. KPIs render from these; detail tables still use
-  // seed (Phase 4 backlog).
-  const [salesSummary, setSalesSummary] = useState(null)
-  const [purchaseSummary, setPurchaseSummary] = useState(null)
-  const [taxSummaryData, setTaxSummary] = useState(null)
-  const [branchCompare, setBranchCompare] = useState([])
-  const [marginData, setMarginData] = useState(null)
-  const [stockData, setStockData] = useState(null)
-  const [trailNumber, setTrailNumber] = useState('')
-  const [trailResult, setTrailResult] = useState(null)
-  const [trailLoading, setTrailLoading] = useState(false)
 
   useEffect(() => {
-    if (!selectedReport) return
+    setSortBy(report.defaultSort || report.columns[0]?.key)
+    setSortOrder('desc')
+    setSkip(0)
+    setRows([])
+    setTotal(0)
+    setRunKey(Date.now())
+  }, [report.id, report.defaultSort, report.columns])
 
+  useEffect(() => {
+    let cancelled = false
     const fetchData = async () => {
       setLoading(true)
       try {
         const params = {
-          branch_id: branchId || undefined,
+          branch_id: branchId ? branchId : null,
           date_from: dateFrom,
           date_to: dateTo,
-          search: search || undefined,
           sort_by: sortBy,
           sort_order: sortOrder,
           skip,
-          limit,
+          limit: report.id === 'profit-loss' ? Math.max(limit, 100) : limit,
         }
-        const response = await reportsAPI[selectedReport.api](params)
+        const response = await reportsAPI[report.api](params)
         const payload = response?.data ?? response
         const data = payload.items ?? payload
+        if (cancelled) return
         setRows(Array.isArray(data) ? data : [])
         setTotal(typeof payload.total === 'number' ? payload.total : Array.isArray(data) ? data.length : 0)
       } catch (error) {
         console.error(error)
-        setRows([])
-        setTotal(0)
-      } finally {
-        setLoading(false)
-        try {
-          const [s, p, t, b, m, stk] = await Promise.all([
-            reportsAPI.salesSummary(params).catch(() => null),
-            reportsAPI.purchaseSummary(params).catch(() => null),
-            reportsAPI.taxSummary({ date_from: dateFrom, date_to: dateTo }).catch(() => null),
-            reportsAPI.branchCompare().catch(() => []),
-            reportsAPI.marginAnalysis().catch(() => null),
-            reportsAPI.stockMovement({
-              branch_id: branchId || undefined,
-              date_from: dateFrom,
-              date_to: dateTo,
-              limit: 500,
-            }).catch(() => null),
-          ])
-          if (cancelled) return
-          setSalesSummary(s)
-          setPurchaseSummary(p)
-          setTaxSummary(t)
-          setBranchCompare(Array.isArray(b) ? b : [])
-          setMarginData(m)
-          setStockData(stk)
-        } catch (e) {
-          // Toast already fired by axios interceptor.
-          console.error(e)
+        if (!cancelled) {
+          setRows([])
+          setTotal(0)
         }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
     }
-
     fetchData()
-  }, [selectedReport, branchId, dateFrom, dateTo, search, sortBy, sortOrder, skip, limit, runKey])
-  // Helpers — fall back to seed-derived numbers when the API hasn't replied
-  // yet, so the page stays usable on first paint.
-  const seedSalesTotal = useMemo(() => SALES_INVOICES.reduce((s, i) => s + i.total, 0), [])
-  const seedPurchaseTotal = useMemo(() => PURCHASE_BILLS.reduce((s, b) => s + b.total, 0), [])
-  const seedSalesCount = SALES_INVOICES.length
-  const seedPurchaseCount = PURCHASE_BILLS.length
-  const stockRows = stockData?.items ?? []
-
-  const handleTrailSearch = async () => {
-    const num = trailNumber.trim()
-    if (!num) {
-      toast.error('Enter a document number (e.g. INV-2026-2001)')
-      return
-    }
-    setTrailLoading(true)
-    try {
-      const res = await reportsAPI.documentTrail({ number: num })
-      setTrailResult(res)
-    } catch {
-      setTrailResult(null)
-    } finally {
-      setTrailLoading(false)
-    }
-  }
-
-  const handleGenerate = () => {
-    if (!dateFrom || !dateTo) {
-      toast.error('Please select both dates.')
-      return
-    }
-    if (new Date(dateTo) < new Date(dateFrom)) {
-      toast.error('End date must be after start date.')
-      return
-    }
-    setSkip(0)
-    setRunKey(Date.now())
-  }
+    return () => { cancelled = true }
+  }, [report, branchId, dateFrom, dateTo, sortBy, sortOrder, skip, limit, runKey])
 
   const handleSort = (key) => {
     const nextOrder = sortBy === key && sortOrder === 'asc' ? 'desc' : 'asc'
@@ -632,46 +689,39 @@ export default function ReportsPage() {
       toast.error('No data available to export.')
       return
     }
-
     const exportData = rows.map((row) => {
       const entry = {}
-      selectedReport.columns.forEach((col) => {
+      report.columns.forEach((col) => {
         const value = row[col.key]
         entry[col.label] = value === null || value === undefined ? '' : value
       })
       return entry
     })
-
-    exportToExcel(exportData, `${selectedReport.label.replace(/\s+/g, '_')}_${dateFrom}_to_${dateTo}.xlsx`)
+    exportToExcel(exportData, `${report.label.replace(/\s+/g, '_')}_${dateFrom}_to_${dateTo}.xlsx`)
     toast.success('Excel export ready')
-  }
-
-  const exportPdf = () => {
-    window.print()
-  }
-
-  const printReport = () => {
-    window.print()
   }
 
   return (
     <div className="page-container">
       <SectionHeader
-        title="Reports & Analytics"
-        subtitle="Sales, purchases, inventory, tax, and operational reports"
+        title={report.label}
+        subtitle={`${report.categoryLabel} report`}
       >
-        <PageActionsMenu actions={buildListPageMenuActions({
-          onExport: exportExcel,
-          onRefresh: () => {
-            setSkip(0)
-            setRunKey(Date.now())
-            toast.success('Report refreshed')
-          },
-        })} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button type="button" className="btn btn-secondary" onClick={onBack}>Back to reports</button>
+          <PageActionsMenu actions={buildListPageMenuActions({
+            onExport: exportExcel,
+            onRefresh: () => {
+              setSkip(0)
+              setRunKey(Date.now())
+              toast.success('Report refreshed')
+            },
+          })} />
+        </div>
       </SectionHeader>
 
       <div style={{ marginBottom: 18, display: 'grid', gap: 12 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(160px, 1fr))', gap: 12, alignItems: 'end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 220px))', gap: 12, alignItems: 'end' }}>
           <div>
             <label className="form-label">From</label>
             <DatePicker value={dateFrom} onChange={setDateFrom} />
@@ -692,212 +742,90 @@ export default function ReportsPage() {
               placeholder="All Branches"
             />
           </div>
-          <div>
-            <label className="form-label">Report</label>
-            <AutocompleteDropdown
-              value={reportType}
-              onChange={handleReportTypeChange}
-              options={reportOptions.map((report) => ({ id: report.id, label: report.label }))}
-              isSearchFieldRequired={false}
-            />
-          </div>
-          {/* <button className="btn btn-primary" style={{ height: 40, marginTop: 6 }} onClick={handleGenerate}>Generate</button> */}
-        </div>
-        <div>
-          <SearchBar value={search} onChange={setSearch} placeholder="Search invoices, products, customers…" style={{ width: '100%' }} />
         </div>
       </div>
 
-<Tabs tabs={REPORT_CATEGORIES.map((item) => ({ id: item.id, label: item.label }))} active={category} onChange={handleCategoryChange} />
-
-      <Card title={selectedReport ? selectedReport.label : 'Report'} titleRight={<div style={{ display: 'flex', gap: 8 }}>
-        {/* <button className="btn btn-secondary btn-sm" onClick={printReport}>Print</button> */}
-      </div>} bodyPadding={false}>
+      <Card title={report.label} bodyPadding={false}>
         <div style={{ padding: 16, overflowX: 'auto' }}>
           <table className="data-table" style={{ minWidth: 920 }}>
             <thead>
               <tr>
-                {selectedReport.columns.map((column) => (
-                  <SortableHeader
-                    key={column.key}
-                    label={column.label}
-                    sortKey={column.key}
-                    sortBy={sortBy}
-                    sortOrder={sortOrder}
-                    onSort={handleSort}
-                    align={column.align || 'left'}
-                  />
+                {report.columns.map((column) => (
+                  column.sortable === false ? (
+                    <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{column.label}</th>
+                  ) : (
+                    <SortableHeader
+                      key={column.key}
+                      label={column.label}
+                      sortKey={column.key}
+                      sortBy={sortBy}
+                      sortOrder={sortOrder}
+                      onSort={handleSort}
+                      align={column.align || 'left'}
+                    />
+                  )
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={selectedReport.columns.length} style={{ padding: 0 }}>
+                  <td colSpan={report.columns.length} style={{ padding: 0 }}>
                     <TableLoadingPanel label="Loading report data…" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={selectedReport.columns.length} style={{ textAlign: 'center', padding: 28 }}>No records match the selected filters.</td>
+                  <td colSpan={report.columns.length} style={{ textAlign: 'center', padding: 28 }}>No records match the selected filters.</td>
                 </tr>
               ) : (
-                rows.map((row, index) => (
-                  <tr key={index}>
-                    {selectedReport.columns.map((column) => {
-                      const value = row[column.key]
-                      const rendered = column.formatter ? column.formatter(value, row) : value
-                      return (
-                        <td key={column.key} className={column.align === 'right' ? 'text-right' : ''}>
-                          {rendered !== null && rendered !== undefined ? rendered : '—'}
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))
+                rows.map((row, index) => {
+                  const isPnL = report.id === 'profit-loss'
+                  const emphasis = isPnL && (row.row_type === 'header' || row.row_type === 'section_total' || row.row_type === 'result')
+                  const detailPath = typeof report.getDetailPath === 'function' ? report.getDetailPath(row) : null
+                  const rowStyle = isPnL
+                    ? {
+                        fontWeight: emphasis ? 700 : 400,
+                        background: row.row_type === 'result' ? 'var(--bg-subtle, rgba(0,0,0,0.03))' : undefined,
+                      }
+                    : detailPath
+                      ? { cursor: 'pointer' }
+                      : undefined
+                  return (
+                    <tr
+                      key={index}
+                      style={rowStyle}
+                      onClick={detailPath ? () => navigate(detailPath) : undefined}
+                    >
+                      {report.columns.map((column) => {
+                        const value = row[column.key]
+                        const rendered = column.formatter ? column.formatter(value, row) : value
+                        const alignClass =
+                          column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
+                        const isNameCol = ['invoice_number', 'bill_number', 'transfer_number'].includes(column.key)
+                        return (
+                          <td
+                            key={column.key}
+                            className={alignClass}
+                            style={{
+                              ...(isPnL && column.key === 'account' && row.row_type === 'detail' ? { paddingLeft: 28 } : {}),
+                              ...(detailPath && isNameCol ? { color: 'var(--blue)', fontWeight: 500 } : {}),
+                            }}
+                          >
+                            {rendered !== null && rendered !== undefined && rendered !== ''
+                              ? rendered
+                              : (isPnL ? '' : '—')}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
         </div>
       </Card>
-      {/* ── STOCK MOVEMENT ──────────────────────────────────────── */}
-      {tab === 'stock' && (
-        <Card title={`Stock Movement Report — ${dateFrom} to ${dateTo}`} bodyPadding={false}>
-          {stockRows.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              {stockData ? 'No stock movement in this period.' : 'Click Generate to load stock data.'}
-            </div>
-          ) : (
-            <table className="data-table">
-              <thead><tr><th>Item</th><th className="text-right">Opening</th><th className="text-right">Purchased</th><th className="text-right">Sold</th><th className="text-right">Transferred</th><th className="text-right">Adjusted</th><th className="text-right">Closing</th><th>Variance</th></tr></thead>
-              <tbody>
-                {stockRows.map(r => {
-                  const trans = r.transfers_net ?? ((r.transfers_in || 0) - (r.transfers_out || 0))
-                  const expected = r.opening + r.purchases_in - r.sales_out + trans
-                  const variance = r.variance ?? (r.closing - expected)
-                  return (
-                    <tr key={r.item_id || r.sku}>
-                      <td><div><div style={{fontWeight:500,color:'var(--text-primary)',fontSize:12.5}}>{r.item_name}</div><div style={{fontSize:11,color:'var(--text-muted)'}}>{r.sku}</div></div></td>
-                      <td className="text-right mono">{r.opening}</td>
-                      <td className="text-right mono" style={{color: r.purchases_in >= 0 ? 'var(--green)' : 'var(--red)'}}>{r.purchases_in >= 0 ? '+' : ''}{r.purchases_in}</td>
-                      <td className="text-right mono" style={{color:'var(--red)'}}>-{r.sales_out}</td>
-                      <td className="text-right mono" style={{color:'var(--blue)'}}>{trans >= 0 ? '+' : ''}{trans}</td>
-                      <td className="text-right mono">{r.adjustments >= 0 ? '+' : ''}{r.adjustments}</td>
-                      <td className="text-right mono" style={{fontWeight:600,color:'var(--text-primary)'}}>{r.closing}</td>
-                      <td><span style={{fontSize:11.5,padding:'2px 8px',borderRadius:10,background:variance===0?'var(--green-bg)':variance>0?'var(--blue-bg)':'var(--red-bg)',color:variance===0?'var(--green)':variance>0?'var(--blue)':'var(--red)',fontWeight:600}}>{variance===0?'Match':variance>0?'+'+variance:variance}</span></td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-        </Card>
-      )}
-
-      {/* ── DOCUMENT TRAIL ──────────────────────────────────────── */}
-      {tab === 'trail' && (
-        <>
-          <Card title="Document Lineage Search">
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="Document number (QT-, SO-, INV-, CN-, PO-, GRN-, PUR-, RET-)"
-                value={trailNumber}
-                onChange={e => setTrailNumber(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleTrailSearch()}
-                style={{ flex: 1, minWidth: 280 }}
-              />
-              <button className="btn btn-primary btn-sm" onClick={handleTrailSearch} disabled={trailLoading}>
-                {trailLoading ? 'Searching…' : 'Trace'}
-              </button>
-            </div>
-            <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-              Traces upstream and downstream links: Quote → SO → Invoice → Credit Note, or PO → GRN → Bill → Vendor Return.
-            </p>
-          </Card>
-
-          {trailResult?.chain?.length > 0 && (
-            <Card title={`Trail for ${trailResult.number}`} bodyPadding={false}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Step</th>
-                    <th>Type</th>
-                    <th>Number</th>
-                    <th>Date</th>
-                    <th>Status</th>
-                    <th className="text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trailResult.chain.map((node, i) => (
-                    <tr key={`${node.type}-${node.id}`}>
-                      <td className="mono" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
-                      <td>{TRAIL_LABELS[node.type] || node.type}</td>
-                      <td style={{ fontWeight: 500 }}>{node.number}</td>
-                      <td>{node.date || '—'}</td>
-                      <td><Chip label={node.status} custom={{ bg: 'var(--bg-raised)', color: 'var(--text-secondary)' }} /></td>
-                      <td className="text-right mono">{fmt(node.total)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          )}
-        </>
-      )}
-
-      {/* ── BRANCH COMPARISON ───────────────────────────────────── */}
-      {tab === 'branch' && (
-        <>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:20}}>
-            {(branchCompare.length > 0
-              ? branchCompare.map((b, i) => ({
-                  name: b.branch,
-                  sales: b.sales,
-                  purchases: b.purchases,
-                  color: ['#1f7a4d','#e87722','#2dd4bf','#f5a623','#22a86b','#f5485c'][i % 6],
-                }))
-              : [
-                  {name:'Male',      sales:1480000, purchases:840000, color:'#1f7a4d'},
-                  {name:'Addu',      sales:1120000, purchases:620000, color:'#e87722'},
-                  {name:'Hulhumalé', sales:860000,  purchases:480000, color:'#2dd4bf'},
-                  {name:'Felidhoo',  sales:540000,  purchases:310000, color:'#f5a623'},
-                ]
-            ).map(b=>(
-              <div key={b.name} style={{background:'var(--bg-surface)',border:'1px solid var(--border-default)',borderRadius:14,padding:18}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
-                  <span style={{width:10,height:10,borderRadius:'50%',background:b.color,display:'inline-block'}}/>
-                  <span style={{fontWeight:600,fontSize:14}}>{b.name}</span>
-                </div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-                  <div><div style={{fontSize:11,color:'var(--text-muted)'}}>Sales (Apr)</div><div style={{fontSize:16,fontWeight:700,color:'var(--text-primary)'}}>{fmt(b.sales)}</div></div>
-                  <div><div style={{fontSize:11,color:'var(--text-muted)'}}>Purchases</div><div style={{fontSize:15,fontWeight:600,color:'var(--text-secondary)'}}>{fmt(b.purchases)}</div></div>
-                </div>
-                <div style={{fontSize:11,color:'var(--text-muted)',marginBottom:4}}>Performance vs Male</div>
-                <div style={{height:6,background:'var(--bg-hover)',borderRadius:3,overflow:'hidden'}}>
-                  <div style={{height:'100%',borderRadius:3,background:b.color,width:`${Math.round(b.sales/14800)}%`,transition:'width 1s ease'}}/>
-                </div>
-              </div>
-            ))}
-          </div>
-          <Card title="Branch Sales Comparison Chart">
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={SALES_TREND.slice(-7).map(d=>({...d,tnagar:Math.round(d.sales*0.76),vadapalani:Math.round(d.sales*0.55),velachery:Math.round(d.sales*0.35)}))} margin={{top:5,right:10,left:-10,bottom:0}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)"/>
-                <XAxis dataKey="date" tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false}/>
-                <YAxis tick={{fontSize:10,fill:'var(--text-muted)'}} tickLine={false} axisLine={false} tickFormatter={v=>`₹${(v/1000).toFixed(0)}K`}/>
-                <Tooltip content={<TT/>}/>
-                <Legend wrapperStyle={{fontSize:11,color:'var(--text-muted)'}}/>
-                <Bar dataKey="sales"     name="Male"      fill="#1f7a4d" radius={[3,3,0,0]}/>
-                <Bar dataKey="tnagar"    name="Addu"      fill="#e87722" radius={[3,3,0,0]}/>
-                <Bar dataKey="vadapalani" name="Hulhumalé" fill="#2dd4bf" radius={[3,3,0,0]}/>
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        </>
-      )}
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
@@ -915,3 +843,4 @@ export default function ReportsPage() {
     </div>
   )
 }
+

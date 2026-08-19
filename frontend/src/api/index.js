@@ -540,6 +540,7 @@ export const reportsAPI = {
   gstSummary:            (params) => api.get('/reports/gst-summary',       { params }),
   outstandingReceivables:(params) => api.get('/reports/outstanding-receivables',{ params }),
   outstandingPayables:   (params) => api.get('/reports/outstanding-payables',{ params }),
+  profitLoss:            (params) => api.get('/reports/profit-loss',         { params }),
   pettyCash:             (params) => api.get('/reports/petty-cash',        { params }),
   topCustomers:          (params) => api.get('/reports/top-customers',      { params }),
   vendorOutstanding:     (params) => api.get('/reports/vendor-outstanding', { params }),
