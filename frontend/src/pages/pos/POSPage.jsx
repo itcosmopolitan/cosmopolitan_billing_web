@@ -138,7 +138,8 @@ export default function POSPage() {
   const [hasMoreProducts, setHasMoreProducts] = useState(false)
   const [loadingMoreProducts, setLoadingMoreProducts] = useState(false)
   const [categories, setCategories] = useState([{ id: 'all', name: 'All', icon: '⊞' }])
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [loadingProducts, setLoadingProducts] = useState(false)
   const [completing, setCompleting] = useState(false)
   const [leftPaneRatio, setLeftPaneRatio] = useState(readStoredSplit)
   const [leadingPanel, setLeadingPanel] = useState(readStoredLeading)
@@ -267,8 +268,10 @@ export default function POSPage() {
 
 
   const resetProducts = async (branchId, resetCategories = false) => {
+    const showFullPageLoader = resetCategories
     try {
-      setLoading(true)
+      if (showFullPageLoader) setInitialLoading(true)
+      else setLoadingProducts(true)
       await loadProductsPage({ branchId, pageNo: 1, reset: true, resetCategories })
     } catch (err) {
       console.error('Failed to fetch items:', err)
@@ -286,12 +289,13 @@ export default function POSPage() {
       setCategories([{ id: 'all', name: 'All', icon: '⊞' }, ...catData])
       toast.error('API failed. Loaded seeded POS data.')
     } finally {
-      setLoading(false)
+      if (showFullPageLoader) setInitialLoading(false)
+      else setLoadingProducts(false)
     }
   }
 
   const loadMoreProducts = async () => {
-    if (loading || loadingMoreProducts || !hasMoreProducts) return
+    if (initialLoading || loadingProducts || loadingMoreProducts || !hasMoreProducts) return
     const branchId = activeBranch?.id || 'br-001'
     try {
       setLoadingMoreProducts(true)
@@ -813,7 +817,7 @@ export default function POSPage() {
     },
   })
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 56px)' }}>
         <div style={{ textAlign: 'center' }}>
@@ -915,8 +919,40 @@ export default function POSPage() {
         </div>
 
         {/* Products grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10 }}>
-          {filtered.map((p) => {
+        <div style={{ position: 'relative', minHeight: 120 }}>
+          {loadingProducts && (
+            <>
+              <div style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 1,
+                background: 'var(--bg-base)',
+                opacity: 0.88,
+                borderRadius: 12,
+              }} />
+              <div style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 2,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}>
+                <Spinner size={28} />
+                <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading products…</div>
+              </div>
+            </>
+          )}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+            gap: 10,
+            opacity: loadingProducts ? 0.45 : 1,
+            transition: 'opacity 0.15s ease',
+          }}>
+            {filtered.map((p) => {
             const stock = p.available_stock ?? 0
             const inCart = cart.find((i) => i.id === p.id)?.qty ?? 0
             const isOut = !allowOverselling && stock <= 0
@@ -967,16 +1003,17 @@ export default function POSPage() {
               </div>
             )
           })}
+          </div>
         </div>
 
-        {filtered.length === 0 && (
+        {!loadingProducts && filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
             <div style={{ fontSize: 32, marginBottom: 10 }}>🔍</div>
             <div style={{ fontSize: 14 }}>No products found</div>
           </div>
         )}
 
-        {filtered.length > 0 && (
+        {!loadingProducts && filtered.length > 0 && (
           <div style={{ textAlign: 'center', padding: '12px 0 6px', color: 'var(--text-muted)', fontSize: 12 }}>
             {loadingMoreProducts
               ? 'Loading more products…'

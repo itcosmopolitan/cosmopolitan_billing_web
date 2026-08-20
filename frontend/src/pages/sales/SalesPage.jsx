@@ -10,6 +10,7 @@ import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, Aler
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   QUOTE_STATUS_FILTER_OPTIONS,
+  PAYMENT_STATUS_FILTER_OPTIONS,
   PAYMENT_MODE_LABEL_OPTIONS,
   PAYMENT_METHOD_WITH_CREDIT_OPTIONS,
   statusOptions,
@@ -75,6 +76,7 @@ export default function SalesPage() {
   const [quoteStatusF, setQuoteStatusF] = useState('')
   const [orderStatusF, setOrderStatusF] = useState('')
   const [retStatusF, setRetStatusF]     = useState('')
+  const [payStatusF, setPayStatusF]     = useState('')
   // Branch filter removed 2026-05-23: the Topbar's active-branch picker
   // already scopes everything the operator sees; a second filter in the
   // invoice tab was duplicative and confusing.
@@ -341,7 +343,7 @@ export default function SalesPage() {
     setOrderSkip(0)
     setRetSkip(0)
     setPaySkip(0)
-  }, [search, invStatusF, paymentModeF, customerF, categoryF, discountF, quoteStatusF, orderStatusF, retStatusF, dateFrom, dateTo])
+  }, [search, invStatusF, paymentModeF, customerF, categoryF, discountF, quoteStatusF, orderStatusF, retStatusF, payStatusF, dateFrom, dateTo])
 
   // Re-fetch lists when active branch changes.
   useEffect(() => {
@@ -533,6 +535,7 @@ export default function SalesPage() {
           sort_by: paySortBy,
           sort_order: paySortOrder,
           search: search || undefined,
+          status: payStatusF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -551,7 +554,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, payStatusF, dateFrom, dateTo])
 
   // Tab-aware sort handler for the four list tabs in this page. Each tab
   // owns its own sortBy/sortOrder pair; the closure picks them up.
@@ -1380,6 +1383,15 @@ export default function SalesPage() {
         <>
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, customer…" />
+            <AutocompleteDropdown
+              value={payStatusF}
+              onChange={setPayStatusF}
+              options={PAYMENT_STATUS_FILTER_OPTIONS}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
             <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
             <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
           </div>
@@ -1404,6 +1416,7 @@ export default function SalesPage() {
                     <th>Invoices</th>
                     <SortableHeader label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
                     <th className="text-right">Credit Applied</th>
+                    <th>Status</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -1437,6 +1450,11 @@ export default function SalesPage() {
                         <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
                         <td className="text-right mono" style={{ color: (p.creditApplied || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>
                           {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : '—'}
+                        </td>
+                        <td>
+                          {p.voided
+                            ? <Chip status="cancelled" label="Voided" />
+                            : <Chip status="paid" label="Recorded" />}
                         </td>
                         <td className="text-right">
                           <RowActionsMenu

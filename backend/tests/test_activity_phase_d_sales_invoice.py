@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from fastapi import HTTPException
+
 from src.database import Base  # noqa: E402
 from src.models import AuditLog, Branch, Customer, SaleLineItem, User  # noqa: E402
 from src.routes.sales import (  # noqa: E402
@@ -18,6 +20,7 @@ from src.routes.sales import (  # noqa: E402
     SaleCreate,
     SalesReturnCreate,
     SalesReturnLineIn,
+    bulk_delete_invoices,
     bulk_delete_payments,
     cancel_invoice,
     create_invoice,
@@ -263,6 +266,19 @@ async def _run_sales_invoice_activity_proof() -> None:
             if meta.get("payment_id") == pay_1["id"]:
                 void_targets[row.record_id] = float(meta.get("amount") or 0)
         assert void_targets == expected_amounts, "payment_voided must be logged per invoice with allocation amount"
+
+        try:
+            await bulk_delete_invoices(BulkDeleteIn(ids=[invoice_id_3]), db=db, user=actor)
+            raise AssertionError("Expected bulk delete to block invoice with voided payment allocation")
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            detail = exc.detail
+            assert isinstance(detail, dict)
+            assert detail.get("blocked")
+            assert any(
+                "linked payment" in str(b.get("reason", "")).lower()
+                for b in detail["blocked"]
+            )
 
         pay_2 = await create_payment(
             CustomerPaymentCreate(
