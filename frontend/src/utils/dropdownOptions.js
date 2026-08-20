@@ -71,6 +71,7 @@ export const INVOICE_STATUS_FILTER_OPTIONS = statusOptions(['paid', 'pending', '
 export const QUOTE_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'sent', 'accepted', 'rejected', 'converted'])
 export const ORDER_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'confirmed', 'partial', 'fulfilled', 'cancelled', 'converted'])
 export const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'posted', 'void'])
+export const PAYMENT_STATUS_FILTER_OPTIONS = statusOptions(['recorded', 'voided'])
 
 export function branchesToOptions(branches = []) {
   return branches.map((b) => ({ id: b.id, label: b.name }))

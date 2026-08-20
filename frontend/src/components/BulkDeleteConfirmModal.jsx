@@ -16,8 +16,8 @@
  *   • items         — array of { id, number, customerName?, total?, status? }
  *                     to display in the "Items to delete" list.
  *   • blocked       — array of { id, number, reason } returned from a prior
- *                     failed submit. When non-empty, the danger button is
- *                     disabled + a red alert shows the per-row reasons.
+ *                     failed submit. When non-empty, the modal switches to an
+ *                     error-only view (hides confirm copy) and shows reasons.
  *   • submitting    — boolean (caller-controlled spinner state)
  *   • reversalLines — optional array of strings to render under "Reversal
  *                     effects". E.g. ["Stock restored: 18 units", ...]
@@ -39,127 +39,115 @@ export default function BulkDeleteConfirmModal({
   const pluralLabel = count === 1 ? entityLabel : `${entityLabel}s`
   const title = `Delete ${count} ${pluralLabel.charAt(0).toUpperCase() + pluralLabel.slice(1)}?`
   const hasBlocked = blocked.length > 0
+  const errorMessage = hasBlocked
+    ? [...new Set(blocked.map((b) => b.reason).filter(Boolean))].join(' ')
+    : ''
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={title}
+      title={hasBlocked ? 'Cannot delete' : title}
       icon="⚠️"
       size="md"
       busy={submitting}
       footer={
-        <>
+        hasBlocked ? (
           <button
             className="btn btn-secondary"
             onClick={onClose}
             disabled={submitting}
           >
-            Keep {pluralLabel}
+            Close
           </button>
-          <button
-            className="btn btn-danger"
-            onClick={onConfirm}
-            disabled={submitting || hasBlocked || count === 0}
-            title={hasBlocked ? 'Some rows are blocked — deselect them first' : undefined}
-          >
-            {submitting ? 'Deleting…' : `Delete ${count} ${pluralLabel}`}
-          </button>
-        </>
+        ) : (
+          <>
+            <button
+              className="btn btn-secondary"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Keep {pluralLabel}
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={onConfirm}
+              disabled={submitting || count === 0}
+            >
+              {submitting ? 'Deleting…' : `Delete ${count} ${pluralLabel}`}
+            </button>
+          </>
+        )
       }
     >
-      {/* Permanent-action banner — always at the top of the modal. */}
-      <AlertBar type="amber" icon="⚠">
-        This action is permanent. Stock will be restored and credit
-        balances refunded where applicable. Cannot be undone.
-      </AlertBar>
-      <div style={{ height: 14 }} />
-
-      {/* Items list */}
-      <div style={sectionHeaderStyle}>
-        Items to delete ({count})
-      </div>
-      <div style={{
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 8,
-        background: 'var(--bg-raised)',
-        maxHeight: 220,
-        overflowY: 'auto',
-        marginBottom: 14,
-      }}>
-        {items.length === 0 ? (
-          <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
-            Nothing selected.
-          </div>
-        ) : items.map((it, idx) => (
-          <div key={it.id} style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '10px 12px',
-            borderTop: idx === 0 ? 'none' : '1px solid var(--border-subtle)',
-          }}>
-            <span style={{
-              fontFamily: 'monospace', fontSize: 12,
-              color: 'var(--accent)', minWidth: 130,
-            }}>
-              {it.number || it.id}
-            </span>
-            <span style={{ flex: 1, fontSize: 13, color: 'var(--text-primary)' }}>
-              {it.customerName || it.vendorName || ''}
-            </span>
-            {typeof it.total === 'number' && (
-              <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {fmt(it.total)}
-              </span>
-            )}
-            {it.status && (
-              <span style={statusPillStyle(it.status)}>
-                {String(it.status).charAt(0).toUpperCase() + String(it.status).slice(1)}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Reversal preview (optional). Caller passes the relevant copy. */}
-      {reversalLines.length > 0 && (
+      {hasBlocked ? (
+        <AlertBar type="red" icon="⚠">
+          {errorMessage}
+        </AlertBar>
+      ) : (
         <>
-          <div style={sectionHeaderStyle}>Reversal effects</div>
-          <ul style={{
-            margin: '0 0 14px 0', padding: '0 0 0 20px',
-            color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.7,
-          }}>
-            {reversalLines.map((line, i) => <li key={i}>{line}</li>)}
-          </ul>
-        </>
-      )}
+          <AlertBar type="amber" icon="⚠">
+            This action is permanent. Stock will be restored and credit
+            balances refunded where applicable. Cannot be undone.
+          </AlertBar>
+          <div style={{ height: 14 }} />
 
-      {/* Blocked rows alert — only when caller passes blocked entries. */}
-      {hasBlocked && (
-        <div style={{
-          border: '1px solid var(--red)',
-          borderLeftWidth: 4,
-          borderRadius: 6,
-          background: 'rgba(229, 72, 77, 0.08)',
-          padding: '10px 12px',
-          marginTop: 4,
-        }}>
+          <div style={sectionHeaderStyle}>
+            Items to delete ({count})
+          </div>
           <div style={{
-            fontSize: 12, fontWeight: 600, color: 'var(--red)',
-            marginBottom: 6,
-            display: 'flex', alignItems: 'center', gap: 6,
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 8,
+            background: 'var(--bg-raised)',
+            maxHeight: 220,
+            overflowY: 'auto',
+            marginBottom: 14,
           }}>
-            <span>⚠</span> Cannot delete — {blocked.length} {blocked.length === 1 ? 'row' : 'rows'} blocked
+            {items.length === 0 ? (
+              <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
+                Nothing selected.
+              </div>
+            ) : items.map((it, idx) => (
+              <div key={it.id} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px',
+                borderTop: idx === 0 ? 'none' : '1px solid var(--border-subtle)',
+              }}>
+                <span style={{
+                  fontFamily: 'monospace', fontSize: 12,
+                  color: 'var(--accent)', minWidth: 130,
+                }}>
+                  {it.number || it.id}
+                </span>
+                <span style={{ flex: 1, fontSize: 13, color: 'var(--text-primary)' }}>
+                  {it.customerName || it.vendorName || ''}
+                </span>
+                {typeof it.total === 'number' && (
+                  <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    {fmt(it.total)}
+                  </span>
+                )}
+                {it.status && (
+                  <span style={statusPillStyle(it.status)}>
+                    {String(it.status).charAt(0).toUpperCase() + String(it.status).slice(1)}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
-          {blocked.map((b) => (
-            <div key={b.id} style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
-              <span className="mono" style={{ color: 'var(--accent)' }}>{b.number}</span>{' — '}
-              <span>{b.reason}</span>
-            </div>
-          ))}
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
-            Deselect the blocked rows above and submit again.
-          </div>
-        </div>
+
+          {reversalLines.length > 0 && (
+            <>
+              <div style={sectionHeaderStyle}>Reversal effects</div>
+              <ul style={{
+                margin: '0 0 14px 0', padding: '0 0 0 20px',
+                color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.7,
+              }}>
+                {reversalLines.map((line, i) => <li key={i}>{line}</li>)}
+              </ul>
+            </>
+          )}
+        </>
       )}
     </Modal>
   )

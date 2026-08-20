@@ -992,6 +992,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
         so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
         sales_order_number = so_res.scalar_one_or_none()
     d = _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
+    d["payments"] = await _payments_for_invoice(db, inv.id)
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if org_row:
         d.setdefault('organisation', {})
@@ -2095,6 +2096,38 @@ def _payment_dict(p, allocations=None):
     return d
 
 
+async def _payments_for_invoice(db: AsyncSession, invoice_id: str):
+    """Payments allocated to an invoice (for invoice detail drawer).
+
+    Includes voided payments so operators can see the full settlement history.
+    `amount` is the allocation applied to this invoice (not the payment total).
+    """
+    rows = (await db.execute(
+        select(CustomerPaymentAllocation, CustomerPayment)
+        .join(CustomerPayment, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
+        .where(CustomerPaymentAllocation.invoice_id == invoice_id)
+        .order_by(CustomerPayment.date.asc(), CustomerPayment.created_at.asc())
+    )).all()
+    out = []
+    for alloc, pay in rows:
+        out.append({
+            "id": pay.id,
+            "allocationId": alloc.id,
+            "number": pay.number,
+            "date": pay.date,
+            "paymentMode": pay.payment_mode,
+            "paymentRef": pay.payment_ref,
+            "amount": float(alloc.amount or 0),
+            "totalAmount": float(pay.total_amount or 0),
+            "creditApplied": float(pay.credit_applied or 0),
+            "voided": bool(getattr(pay, "voided", False)),
+            "voidedAt": getattr(pay, "voided_at", None),
+            "createdBy": pay.created_by,
+            "notes": pay.notes,
+        })
+    return out
+
+
 # ─── PAYMENTS: LIST ──────────────────────────────────────────────────────────
 @router.get("/payments/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_payments(
@@ -2104,13 +2137,18 @@ async def list_payments(
     limit: int = Query(50, ge=1, le=200),
     customer_id: Optional[str] = None,
     payment_mode: Optional[str] = None,
+    status: Optional[str] = None,
     search: Optional[str] = None,           # match payment number or customer name
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     conds = []
-    conds.append(or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)))  # noqa: E712
+    status_key = (status or "").strip().lower()
+    if status_key == "voided":
+        conds.append(CustomerPayment.voided == True)  # noqa: E712
+    elif status_key == "recorded":
+        conds.append(or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)))  # noqa: E712
     if customer_id:
         conds.append(CustomerPayment.customer_id == customer_id)
     if payment_mode:
@@ -5217,6 +5255,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
     await _resolve_branch_scope(user, db, inv.branch_id)
     li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
     d = _inv_dict(inv, li_res.scalars().all())
+    d["payments"] = await _payments_for_invoice(db, inv.id)
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if org_row:
         d.setdefault('organisation', {})
@@ -5870,11 +5909,7 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
     )).all()) if found_ids else {}
     payment_counts = dict((await db.execute(
         select(CustomerPaymentAllocation.invoice_id, func.count(CustomerPaymentAllocation.id))
-        .join(CustomerPayment, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
-        .where(
-            CustomerPaymentAllocation.invoice_id.in_(found_ids),
-            or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)),  # noqa: E712
-        )
+        .where(CustomerPaymentAllocation.invoice_id.in_(found_ids))
         .group_by(CustomerPaymentAllocation.invoice_id)
     )).all()) if found_ids else {}
 
@@ -5887,7 +5922,7 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
         if payment_counts.get(inv.id):
             blocked.append({
                 "id": inv.id, "number": inv.number,
-                "reason": f"Invoice {inv.number} has {payment_counts[inv.id]} payment(s) — delete those first",
+                "reason": "Cannot delete invoice with linked payment record(s). Delete the payment(s) first.",
             })
     if blocked:
         raise HTTPException(400, {"blocked": blocked, "message": "Some invoices can't be deleted"})

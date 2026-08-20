@@ -28,7 +28,7 @@ import { fmt, exportToCSV } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
-import { PAYMENT_MODE_LABEL_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
+import { PAYMENT_MODE_LABEL_OPTIONS, PAYMENT_STATUS_FILTER_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 // In-flight cache to deduplicate identical purchases requests across remounts
@@ -70,6 +70,7 @@ export default function PurchasesPage() {
   const [orderStatusF, setOrderStatusF] = useState('')
   const [grnStatusF, setGrnStatusF]     = useState('')
   const [retStatusF, setRetStatusF]     = useState('')
+  const [payStatusF, setPayStatusF]     = useState('')
   const [vendorF, setVendorF]     = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
@@ -287,7 +288,7 @@ export default function PurchasesPage() {
     setGrnSkip(0)
     setRetSkip(0)
     setPaySkip(0)
-  }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, vendorF, dateFrom, dateTo])
+  }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, payStatusF, vendorF, dateFrom, dateTo])
 
   // Re-fetch when active branch changes
   useEffect(() => {
@@ -477,6 +478,7 @@ export default function PurchasesPage() {
           sort_order: paySortOrder,
           search: search || undefined,
           vendor_id: vendorF || undefined,
+          status: payStatusF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -495,7 +497,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, payStatusF, dateFrom, dateTo])
 
   // Prefill payment amount when the modal opens — same UX as
   // SalesPage's record-payment flow.
@@ -1398,6 +1400,15 @@ export default function PurchasesPage() {
           <div className="filter-bar">
             <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, vendor…" />
             <AutocompleteDropdown
+              value={payStatusF}
+              onChange={setPayStatusF}
+              options={PAYMENT_STATUS_FILTER_OPTIONS}
+              prependOptions={[{ id: '', label: 'All Status' }]}
+              isSearchFieldRequired={false}
+              placeholder="All Status"
+              style={{ width: 140 }}
+            />
+            <AutocompleteDropdown
               value={vendorF}
               onChange={setVendorF}
               fetchUrl={AUTOCOMPLETE_VENDOR_URL}
@@ -1431,6 +1442,7 @@ export default function PurchasesPage() {
                     <th>Bills</th>
                     <SortableHeader label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
                     <th>Reference</th>
+                    <th>Status</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -1461,6 +1473,11 @@ export default function PurchasesPage() {
                         <td><span style={{ fontSize: 12 }}>{allocCount} {allocCount === 1 ? 'bill' : 'bills'}</span></td>
                         <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || '—'}</td>
+                        <td>
+                          {p.voided
+                            ? <Chip status="cancelled" label="Voided" />
+                            : <Chip status="paid" label="Recorded" />}
+                        </td>
                         <td className="text-right">
                           <RowActionsMenu
                             busy={!!actionBusy}

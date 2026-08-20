@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
-import { Chip, ReturnStatusChip, Tag } from '@/components/ui'
+import { Chip, CopyableId, ReturnStatusChip, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
 function displayPaymentMode(raw) {
@@ -85,6 +85,8 @@ export default function SalesTxnDetailPanel({
   }, [open, doc?.id, kind])
 
   const lineCount = detail?.items?.length || 0
+  const payments = kind === 'invoice' ? (detail?.payments || []) : []
+  const paymentCount = payments.length
   const balDue = kind === 'invoice'
     ? Math.round(((detail?.total || 0) - (detail?.paidAmount || 0) - (detail?.creditedAmount || 0)) * 100) / 100
     : 0
@@ -213,6 +215,7 @@ export default function SalesTxnDetailPanel({
         { id: 'overview', label: `${meta.label} details` },
         { id: 'lines', label: `Line items (${lineCount})` },
         { id: 'totals', label: 'Totals' },
+        ...(kind === 'invoice' ? [{ id: 'payments', label: `Payments (${paymentCount})` }] : []),
       ]}
       activeTab={tab}
       onTabChange={setTab}
@@ -357,6 +360,57 @@ export default function SalesTxnDetailPanel({
               ] : []),
             ]}
           />
+        </DetailSection>
+      )}
+
+      {tab === 'payments' && kind === 'invoice' && (
+        <DetailSection title="Payment history">
+          {paymentCount === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              No payments recorded against this invoice yet.
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Payment #</th>
+                  <th>Date</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                  <th className="text-right">Applied</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((p) => (
+                  <tr key={p.allocationId || p.id} style={p.voided ? { opacity: 0.65 } : undefined}>
+                    <td>
+                      <CopyableId
+                        value={p.number}
+                        label={p.number}
+                        style={{ color: 'var(--accent)', fontSize: 12 }}
+                      />
+                    </td>
+                    <td>{p.date || '—'}</td>
+                    <td>
+                      {p.paymentMode
+                        ? <Chip status={p.paymentMode} label={displayPaymentMode(p.paymentMode)} />
+                        : '—'}
+                    </td>
+                    <td className="mono" style={{ fontSize: 12 }}>{p.paymentRef || '—'}</td>
+                    <td className="text-right mono" style={{ color: p.voided ? undefined : 'var(--green)', fontWeight: 600 }}>
+                      {fmt(p.amount)}
+                    </td>
+                    <td>
+                      {p.voided
+                        ? <Chip status="cancelled" label="Voided" />
+                        : <Chip status="paid" label="Recorded" />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </DetailSection>
       )}
     </RecordDetailDrawer>
