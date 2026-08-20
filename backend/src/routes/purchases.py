@@ -1621,12 +1621,18 @@ async def list_payments(
     vendor_id: Optional[str] = None,
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     payment_mode: Optional[str] = None,
+    status: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
-    conds = [or_(VendorPayment.voided == False, VendorPayment.voided.is_(None))]  # noqa: E712
+    conds = []
+    status_key = (status or "").strip().lower()
+    if status_key == "voided":
+        conds.append(VendorPayment.voided == True)  # noqa: E712
+    elif status_key == "recorded":
+        conds.append(or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)))  # noqa: E712
     if vendor_id:
         conds.append(VendorPayment.vendor_id == vendor_id)
     if payment_mode:
@@ -4440,11 +4446,7 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
     )).all()) if found_ids else {}
     payment_counts = dict((await db.execute(
         select(VendorPaymentAllocation.bill_id, func.count(VendorPaymentAllocation.id))
-        .join(VendorPayment, VendorPaymentAllocation.payment_id == VendorPayment.id)
-        .where(
-            VendorPaymentAllocation.bill_id.in_(found_ids),
-            or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)),  # noqa: E712
-        )
+        .where(VendorPaymentAllocation.bill_id.in_(found_ids))
         .group_by(VendorPaymentAllocation.bill_id)
     )).all()) if found_ids else {}
 
@@ -4471,7 +4473,7 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
         if payment_counts.get(bill.id):
             blocked.append({
                 "id": bill.id, "number": bill.number,
-                "reason": f"Bill {bill.number} has {payment_counts[bill.id]} payment(s) — delete those first",
+                "reason": "Cannot delete bill with linked payment record(s). Delete the payment(s) first.",
             })
         if bill.id in consumed_bill_ids:
             blocked.append({
