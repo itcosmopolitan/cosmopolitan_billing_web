@@ -441,6 +441,7 @@ async def sales_register(
     start, end = _normalize_date_range(date_from, date_to)
     conds = _sale_filters(branch_id, search, start, end, allowed_branch_ids=branch_scope)
     query = select(
+        SaleInvoice.id.label("invoice_id"),
         SaleInvoice.number.label("invoice_number"),
         SaleInvoice.date.label("invoice_date"),
         SaleInvoice.customer_name.label("customer"),
@@ -1318,6 +1319,7 @@ async def purchase_register(
     start, end = _normalize_date_range(date_from, date_to)
     conds = _purchase_filters(branch_id, None, search, start, end)
     query = select(
+        PurchaseBill.id.label("bill_id"),
         PurchaseBill.number.label("bill_number"),
         PurchaseBill.date.label("bill_date"),
         PurchaseBill.vendor_name.label("vendor"),
@@ -1624,6 +1626,7 @@ async def stock_transfers(
 
     base = (
         select(
+            StockTransfer.id.label("transfer_id"),
             StockTransfer.ref_number.label("transfer_number"),
             StockTransfer.from_branch_name.label("from_branch"),
             StockTransfer.to_branch_name.label("to_branch"),
@@ -1696,6 +1699,7 @@ async def spoilage_damage(
 
     base = (
         select(
+            AdjustmentRequest.id.label("adjustment_id"),
             StockAdjustment.created_at.label("date"),
             AdjustmentRequest.ref_number.label("reference_number"),
             Item.sku.label("product_code"),
@@ -2018,6 +2022,7 @@ async def outstanding_receivables(
     lim = normalize_limit(limit)
     query = (
         select(
+            SaleInvoice.id.label("invoice_id"),
             SaleInvoice.customer_name.label("customer"),
             SaleInvoice.number.label("invoice_number"),
             SaleInvoice.date.label("invoice_date"),
@@ -2071,6 +2076,7 @@ async def outstanding_payables(
     lim = normalize_limit(limit)
     query = (
         select(
+            PurchaseBill.id.label("bill_id"),
             PurchaseBill.vendor_name.label("vendor"),
             PurchaseBill.number.label("bill_number"),
             PurchaseBill.date.label("bill_date"),

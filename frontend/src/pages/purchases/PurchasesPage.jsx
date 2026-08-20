@@ -63,6 +63,7 @@ export default function PurchasesPage() {
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
+  const viewId = searchParams.get('view')
   const can = useCan()
   const activeBranch = useAppStore((s) => s.activeBranch)
   const [search, setSearch]       = useState('')
@@ -256,6 +257,14 @@ export default function PurchasesPage() {
 
   // Modals + sub-state
   const [purchaseDoc, setPurchaseDoc] = useState(null) // { kind: 'bill'|'order'|'grn'|'return', data }
+
+  useEffect(() => {
+    if (!viewId) return
+    const kindByTab = { bills: 'bill', orders: 'order', grns: 'grn', returns: 'return' }
+    const kind = kindByTab[tab]
+    if (!kind) return
+    setPurchaseDoc({ kind, data: { id: viewId } })
+  }, [tab, viewId])
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
@@ -1524,7 +1533,12 @@ export default function PurchasesPage() {
         open={!!purchaseDoc}
         kind={purchaseDoc?.kind || 'bill'}
         document={purchaseDoc?.data}
-        onClose={() => setPurchaseDoc(null)}
+        onClose={() => {
+          setPurchaseDoc(null)
+          if (searchParams.get('view')) {
+            navigate(`/purchases?tab=${tab}`, { replace: true })
+          }
+        }}
         onRecordPayment={(b) => setShowPay(b)}
         onVoidReturn={voidVendorReturn}
         onBillFromGrn={billFromGrn}
