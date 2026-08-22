@@ -502,46 +502,37 @@ export default function POSPage() {
 
       const soldItemIds = cart.map((i) => i.id)
 
-      const selectedCustomerName = customer?.name || 'Walk-in'
-      const selectedCustomerId = customer?.id || null
       const cashTender = paymentReceived && paymentMethod === 'cash'
         ? cashTenderSummary(cashCollected, result.total)
         : null
+
+      let fullSale
+      try {
+        fullSale = await salesAPI.get(result.id)
+      } catch (fetchError) {
+        console.error('Failed to refresh completed invoice:', fetchError)
+        toast('Receipt loaded with limited data. Full invoice details could not be refreshed.', {
+          icon: '⚠️',
+          duration: 5000,
+        })
+        fullSale = {
+          ...result,
+          id: result.id,
+          number: result.number,
+          total: result.total,
+          subtotal: sub,
+          taxTotal: tax,
+          discount: disc,
+        }
+      }
+
       setLastSale({
-        number: result.number,
-        total: result.total,
-        subtotal: sub,
-        taxTotal: tax,
-        discount: disc,
+        ...fullSale,
         discountReason: hasDiscountForSubmit ? discountReason : '',
         method: paymentReceived ? paymentMethod : null,
         cashCollected: cashTender?.collected ?? null,
         cashChange: cashTender?.change ?? null,
-        customerName: selectedCustomerName,
-        customerId: selectedCustomerId,
-        customerAddress: customer?.address,
-        customerStreet1: customer?.street1,
-        customerStreet2: customer?.street2,
-        customerStreet3: customer?.street3,
-        customerCity: customer?.city,
-        customerStateProvince: customer?.state_province,
-        customerCountry: customer?.country,
-        customerPostalCode: customer?.postal_code,
-        items: cart.map(i => ({
-          name: i.name,
-          qty: i.qty,
-          price: i.price,
-          lineTotal: i.lineTotal,
-          hsnCode: i.hsnCode || i.hsn_code || '',
-          size: i.size || i.package || '',
-          attribute: i.attribute || i.attr || '',
-          batch: Array.isArray(i.batchAllocation)
-            ? i.batchAllocation.map((b) => b.batchNumber).filter(Boolean).join(', ')
-            : '',
-          discount: i.lineDiscountValue ?? i.lineDiscountPct ?? 0,
-        })),
-        id: result.id,
-      })
+      });
 
       // 2026-05-25: refresh local customer credit_balance after a
       // credit-mode sale so the next cart sees the updated balance.
@@ -561,14 +552,8 @@ export default function POSPage() {
       await refreshProductStock()
       queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
       toast.success(`Sale ${result.number} completed!`)
-      if (result?.id) {
-        const url = `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(result.id))}`
-        const win = window.open(url, '_blank')
-        if (win) {
-          win.focus()
-        }
-        return
-      }
+      // Show the receipt modal for user to choose format and print
+      setShowComplete(true)
     } catch (err) {
       console.error('Failed to complete sale:', err)
       toast.error('Failed to save sale. Please try again.')
@@ -600,6 +585,8 @@ export default function POSPage() {
           expiryTracking: Boolean(inMemory.expiry_tracking),
           wholesale_discount_pct: inMemory.wholesale_discount_pct || 0,
           staff_discount_pct: inMemory.staff_discount_pct || 0,
+          brand: inMemory.brand || '',
+          unit: inMemory.unit || inMemory.unitOfMeasure || inMemory.unit_of_measure || '',
         })
         toast.success(inMemory.name, { duration: 800 })
         setSearch('')
@@ -633,6 +620,8 @@ export default function POSPage() {
             expiryTracking: Boolean(hit.expiry_tracking),
             wholesale_discount_pct: hit.wholesale_discount_pct || 0,
             staff_discount_pct: hit.staff_discount_pct || 0,
+            brand: hit.brand || '',
+            unit: hit.unit || hit.unitOfMeasure || hit.unit_of_measure || '',
           })
           toast.success(hit.name, { duration: 800 })
           setSearch('')
@@ -977,6 +966,8 @@ export default function POSPage() {
                       availableStock: stock,
                       wholesale_discount_pct: p.wholesale_discount_pct || 0,
                       staff_discount_pct: p.staff_discount_pct || 0,
+                      brand: p.brand || '',
+                      unit: p.unit || p.unitOfMeasure || p.unit_of_measure || '',
                       // Carry batch-tracking flags forward so CartRow knows
                       // whether to render the source batch picker.
                       batchTracking: Boolean(p.batch_tracking),
@@ -1625,27 +1616,18 @@ export default function POSPage() {
       />
 
       {/* Sale Complete Modal */}
-      <Modal open={showComplete} onClose={() => setShowComplete(false)} title="Sale Completed!" icon="✅" size="md">
+      <Modal open={showComplete} onClose={() => setShowComplete(false)} title="Sale Completed!" icon="✅" size="xl">
         {lastSale && (
-          <Receipt
-            sale={{
-              number: lastSale.number,
-              total: lastSale.total,
-              subtotal: lastSale.subtotal,
-              taxTotal: lastSale.taxTotal,
-              discount: lastSale.discount,
-              paymentMode: lastSale.method,
-              cashCollected: lastSale.cashCollected,
-              cashChange: lastSale.cashChange,
-              cashier: 'Staff',
-              customerName: lastSale.customerName || 'Walk-in',
-              customerId: lastSale.customerId || null,
-              date: new Date(),
-              items: lastSale.items || [],
-            }}
-            branch={activeBranch}
-            onClose={() => setShowComplete(false)}
-          />
+          <div style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+            <Receipt
+              sale={{
+                ...lastSale,
+                paymentMode: lastSale.method ?? lastSale.paymentMode,
+                payment_mode: lastSale.method ?? lastSale.payment_mode,
+              }}
+              branch={activeBranch}
+            />
+          </div>
         )}
       </Modal>
 

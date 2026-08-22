@@ -456,8 +456,8 @@
         </div>
 
         <div class="title-row">
-          <div class="copy-label">${escapeHtml(copyLabel || '')}</div>
-          <h1>Sales Tax-Invoice</h1>
+          ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
+          <h1 class='center'>Sales Tax-Invoice</h1>
           <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
         </div>
 
@@ -496,11 +496,11 @@
             })()}</div>
             <table style="margin-top:10px; width:100%;">
               ${(() => {
-                const customerId = invoice.customerId || invoice.customer_id || invoice.customerCode || ''
+                const customerCode = invoice.customerCode || invoice.customer_code || ''
                 const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || ''
                 const customerName = (invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '').toString().trim().toLowerCase()
                 const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
-                return customerId && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerId)}</td></tr>` : ''
+                return customerCode && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''
               })()}
               ${(() => {
                 const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || ''
@@ -514,8 +514,8 @@
             </table>
           </div>
           <div class="seller-addr details-box">
-            <div class="details-title">Organization Details</div>
-            <div style="font-weight:700; margin-bottom:6px;">${escapeHtml(branch.company || 'Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
+            <div class="details-title">Branch Details</div>
+            <div style="font-weight:700; margin-bottom:6px;">${escapeHtml('Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
             <div style="margin-bottom:8px;">${escapeHtml(branch.address || branch.address_lines || branch.addressLines || 'LOT NO-10627, Haivakaru Magu, Hulhumale\', Maldives.').replace(/\n/g,'<br/>')}</div>
             <table style="width:100%;">
               <tr><td class="label">Phone No.</td><td>${escapeHtml(branch.phone || branch.tel || branch.phoneNo || branch.phone_no || '')}</td></tr>
@@ -617,6 +617,54 @@
 
   let hasRenderedInvoice = false
 
+  function normalizeInvoicePayload(payload) {
+    const sale = { ...(payload?.sale || {}) }
+    const sourceBranch = payload?.branch || {}
+    const organisation = sale.organisation || sale.organization || {}
+    const branch = { ...organisation, ...sourceBranch }
+
+    const phone = sale.phoneNo || sale.phone_no ||
+      branch.phone || branch.tel || branch.phoneNo || branch.phone_no ||
+      organisation.phone || ''
+    const email = sale.email ||
+      branch.email || branch.emailAddress || branch.email_address ||
+      organisation.email || ''
+    const website = sale.website || sale.homePage || sale.homepage ||
+      branch.website || branch.homePage || branch.homepage || branch.url ||
+      organisation.website || organisation.homePage || ''
+    const gst = sale.gstin || sale.gstNo || sale.gst_no || sale.gst ||
+      branch.gstin || branch.gstNo || branch.gst_no || branch.gst ||
+      organisation.gstin || ''
+    const salesperson = sale.salesperson || sale.salesPerson ||
+      sale.salesperson_name || sale.cashier || sale.cashierName || ''
+
+    Object.assign(branch, {
+      company: sourceBranch.company || sourceBranch.companyName || '',
+      address: sourceBranch.address || sourceBranch.address_lines || sourceBranch.addressLines || '',
+      phone,
+      phoneNo: branch.phoneNo || phone,
+      website,
+      homePage: branch.homePage || website,
+      gstin: gst,
+      gst,
+      gstNo: gst,
+      gst_no: gst,
+      email,
+    })
+
+    Object.assign(sale, {
+      salesperson,
+      phoneNo: phone,
+      email,
+      website,
+      gstin: sale.gstin || gst,
+      gstNo: sale.gstNo || gst,
+      gst_no: sale.gst_no || gst,
+    })
+
+    return { ...payload, sale, branch }
+  }
+
   function renderInvoicePayload(payload) {
     if (hasRenderedInvoice) return
     hasRenderedInvoice = true
@@ -630,7 +678,7 @@
     const pages = paginateItems(items, 16)
     const discountAmount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
     const discountPercent = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
-    const copyLabels = ['COSMOPOLITAN COPY', 'CUSTOMER COPY']
+    const copyLabels = ['']
     const allPages = []
     copyLabels.forEach((copyLabel) => {
       pages.forEach((pageItems, pageIndex) => {
@@ -657,13 +705,21 @@
   window.addEventListener('message', (ev) => {
     const msg = ev.data || {}
     if (msg.type !== 'renderInvoice') return
-    renderInvoicePayload(msg.payload)
+    renderInvoicePayload(normalizeInvoicePayload(msg.payload))
   })
 
   function setStatusMessage(message) {
     const container = document.getElementById('invoicePages')
     if (!container) return
     container.innerHTML = `<div style="padding:40px; text-align:center; color:#555; font-size:14px;">${message}</div>`
+  }
+
+  const queryParams = new URLSearchParams(window.location.search)
+  const hasStandaloneInvoiceQuery = Boolean(queryParams.get('invoice_id') || queryParams.get('invoiceId'))
+  if (!hasStandaloneInvoiceQuery) {
+    setTimeout(() => {
+      if (!hasRenderedInvoice) setStatusMessage('Failed to load invoice data.')
+    }, 4000)
   }
 
   function getAuthHeaders() {
@@ -697,7 +753,7 @@
         setStatusMessage('Invoice data is invalid or missing.')
         return
       }
-      renderInvoicePayload({ sale, branch: {} })
+      renderInvoicePayload(normalizeInvoicePayload({ sale, branch: {} }))
     } catch (err) {
       console.error('Failed to load invoice from query:', err)
       setStatusMessage('Unable to load invoice. Check your network connection.')

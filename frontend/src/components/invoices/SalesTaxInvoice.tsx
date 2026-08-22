@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
+import amountToWords from '@/utils/amountToWords'
 
 export interface InvoiceLineItem {
   itemNo?: string
@@ -64,40 +65,6 @@ const LEGAL_TERMS = [
   'Kindly retain a copy for your records and future reference.',
 ]
 
-export function amountToWords(value: number | string | undefined | null) {
-  const n = Number(value ?? 0)
-  if (Number.isNaN(n)) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
-
-  const rupees = Math.floor(n)
-  const laari = Math.round((n - rupees) * 100)
-  const ones = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN']
-  const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY']
-
-  const chunk = (num: number): string => {
-    if (num < 20) return ones[num]
-    if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '')
-    const rem = num % 100
-    return ones[Math.floor(num / 100)] + ' HUNDRED' + (rem ? ' ' + chunk(rem) : '')
-  }
-
-  if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
-
-  const parts: string[] = []
-  let remaining = rupees
-  let scaleIndex = 0
-  const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
-  while (remaining > 0) {
-    const part = remaining % 1000
-    if (part > 0) parts.unshift(chunk(part) + (scale[scaleIndex] ? ' ' + scale[scaleIndex] : ''))
-    remaining = Math.floor(remaining / 1000)
-    scaleIndex += 1
-  }
-
-  const rupeesText = parts.join(' ') || 'ZERO'
-  const laariText = laari === 0 ? 'ZERO' : chunk(laari)
-  return `${rupeesText} RUFIYAA AND ${laariText} LAARI ONLY`
-}
-
 function parseNumber(value: number | string | undefined | null, fallback = 0) {
   const number = Number(value ?? fallback)
   return Number.isNaN(number) ? fallback : number
@@ -148,7 +115,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   ].filter((line) => typeof line === 'string' && line.trim()).map((line) => line.trim())
 
   return {
-    copyType: isWalkin ? 'CUSTOMER COPY' : 'COSMOPOLITAN COPY',
+    copyType: null,
     billTo: {
       name: customerName || 'Walk-in',
       contactPerson: sale?.contactPerson || sale?.contact_person || '',
@@ -156,7 +123,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
         ? customerAddressLines
         : sale?.addressLines || sale?.address_lines || (sale?.customerAddress ? [sale.customerAddress] : []) || (sale?.customer_address ? [sale.customer_address] : []),
     },
-    billToCustomerNo: sale?.customerCode || sale?.customer_code || sale?.customerId || sale?.customer_id || '',
+    billToCustomerNo: sale?.customerCode || sale?.customer_code || '',
     gstNo: sale?.gstNo || sale?.gst_no || '',
     invoiceNo: `${sale?.number || sale?.invoiceNo || sale?.invoice_no || ''}`,
     orderNo: sale?.orderNo || sale?.order_no || '',
@@ -166,7 +133,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     email: sale?.email || branch?.email || '',
     homePage: sale?.homePage || sale?.homepage || branch?.homepage || branch?.website || '',
     gstRegNo: sale?.gstRegNo || sale?.gst_reg_no || branch?.gst || branch?.gstin || '',
-    salesperson: sale?.salesperson || sale?.cashier || sale?.cashierName || '',
+    salesperson: sale?.salesperson || sale?.cashier || sale?.cashierName || sale?.salesperson_name || sale?.salesPerson || '',
     paymentDueDate: sale?.dueDate || sale?.due_date || '',
     lineItems,
     gstRatePercent: gstRatePercent || (subtotal ? Math.round((totalGst / subtotal) * 100) : 0),
@@ -239,7 +206,13 @@ function SealWithFallback() {
 export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice, branch?: any }) {
   const logoSrc = branch?.logo || branch?.logo_url || LOGO_SRC
   const companyName = branch?.company || COMPANY_NAME
-  const contactLine = branch?.contactLine || branch?.contact || HEADER_CONTACT_LINE
+  const customerName = invoice.billTo?.name || 'Walk-in'
+  const displayEmail = invoice.email || branch?.email || branch?.emailAddress || branch?.email_address || ''
+  const displayHomepage = invoice.homePage || branch?.homePage || branch?.homepage || branch?.website || ''
+  const displayGstRegNo = invoice.gstRegNo || branch?.gstRegNo || branch?.gst || branch?.gstin || ''
+  const companyAddressLines: string[] = Array.isArray(branch?.address)
+    ? branch.address.filter(Boolean)
+    : (branch?.address ? String(branch.address).split(/\n|<br\s*\/?\s*>/i).filter(Boolean) : ['LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv', "Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv"])
   const rowsPerPage = 15
   const totalPages = Math.max(1, Math.ceil((invoice.lineItems || []).length / rowsPerPage))
   const pageItems = Array.from({ length: totalPages }, (_, pageIndex) => {
@@ -256,31 +229,15 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
         return (
           <div className="invoice-page" key={`${invoice.invoiceNo}-${pageNumber}`}>
             <div className="invoice-header" style={{ alignItems: 'center' }}>
-              <div className="logo-column" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className="logo-column" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
                 <img src={logoSrc} alt="Cosmopolitan logo" className="logo-image" style={{ width: 150 }} />
-                <div style={{ marginTop: 6 }}>
-                  <div className="badge badge--green" style={{ padding: '6px 10px', minWidth: 110, fontSize: 11 }}>FSSC 22000</div>
-                </div>
+                <div className="badge badge--green" style={{ padding: '6px 10px', minWidth: 110, fontSize: 11 }}>FSSC 22000</div>
               </div>
 
               <div className="company-center" style={{ flex: 1, textAlign: 'center', paddingLeft: 12, paddingRight: 12 }}>
                 <div className="company-name-row" style={{ fontSize: 18, color: '#28c23d', fontWeight: 800 }}>{companyName}</div>
-                {branch?.address ? (
-                  (Array.isArray(branch.address) ? branch.address : String(branch.address || '').split('\n')).map((ln: string, i: number) => (
-                    <div key={`addr-${i}`} style={{ fontSize: 12 }}>{ln}</div>
-                  ))
-                ) : (
-                  <div style={{ fontSize: 12 }}>
-                    <div>LOT NO-10627, Haivakaru Magu, T : 960 331 0477 E : info@cosmopolitan.com.mv</div>
-                    <div>Hulhumale', Republic of Maldives, F : 960 331 0458 W : www.cosmopolitan.com.mv</div>
-                  </div>
-                )}
-                <div style={{ height: 6 }} />
-                <div style={{ fontSize: 12, display: 'flex', justifyContent: 'center', gap: 10 }}>
-                  <div>{branch?.phone ? `T : ${branch.phone}` : ''}</div>
-                  <div>{branch?.email ? `E : ${branch.email}` : ''}</div>
-                  <div>{branch?.homepage ? `W : ${branch.homepage}` : ''}</div>
-                </div>
+                <div style={{ fontSize: 12 }}>LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv</div>
+                <div style={{ fontSize: 12 }}>Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv</div>
               </div>
 
               <div className="company-right" style={{ width: 120, display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
@@ -296,61 +253,38 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
               <div className="page-number">Page {pageNumber} of {totalPages}</div>
             </div>
 
-            <div className="info-grid">
-              <div className="info-column">
-                <div className="info-row">
-                  <div className="info-label">Bill-to Customer No</div>
-                  <div className="info-value">{formatOptionalText(invoice.billToCustomerNo)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">GST No</div>
-                  <div className="info-value">{formatOptionalText(invoice.gstNo)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">Invoice No</div>
-                  <div className="info-value">{formatOptionalText(invoice.invoiceNo)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">Order No</div>
-                  <div className="info-value">{formatOptionalText(invoice.orderNo)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">Purchase Order No</div>
-                  <div className="info-value">{formatOptionalText(invoice.purchaseOrderNo)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">Posting Date</div>
-                  <div className="info-value">{formatOptionalText(invoice.postingDate)}</div>
+            <div className="party-grid">
+              <div className="details-box">
+                <div className="details-title">Customer Details</div>
+                <div className="customer-name">{customerName}</div>
+                {(invoice.billTo.addressLines || []).filter(Boolean).length ? (
+                  <div className="customer-address">{(invoice.billTo.addressLines || []).filter(Boolean).map((line, i) => <div key={`${line}-${i}`}>{line}</div>)}</div>
+                ) : null}
+
+                <div className="detail-list" style={{ marginTop: 10 }}>
+                  <div className="detail-row"><span className="detail-label">Bill-to Customer No.</span><span className="detail-value">{formatOptionalText(invoice.billToCustomerNo)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Customer GST IN</span><span className="detail-value">{formatOptionalText(invoice.g)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Invoice No.</span><span className="detail-value">{formatOptionalText(invoice.invoiceNo)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Purchase Order No</span><span className="detail-value">{formatOptionalText(invoice.purchaseOrderNo)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Posting Date</span><span className="detail-value">{formatOptionalText(invoice.postingDate)}</span></div>
                 </div>
               </div>
 
-              <div className="info-column">
-                <div className="info-row">
-                  <div className="info-label">Phone No</div>
-                  <div className="info-value">{formatOptionalText(invoice.phoneNo)}</div>
+              <div className="details-box">
+                <div className="details-title">Branch Details</div>
+                <div className="customer-name" style={{ marginBottom: 8 }}>{companyName}</div>
+                <div className="customer-address" style={{ marginBottom: 10 }}>
+                  {companyAddressLines.map((line: string, i: number) => <div key={`org-${i}`}>{line}</div>)}
                 </div>
-                <div className="info-row">
-                  <div className="info-label">Branch E-Mail</div>
-                  <div className="info-value">{formatOptionalText(invoice.email)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">Home Page</div>
-                  <div className="info-value">{formatOptionalText(invoice.homePage)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">GST Reg no</div>
-                  <div className="info-value">{formatOptionalText(invoice.gstRegNo)}</div>
-                </div>
-                <div className="info-row">
-                  <div className="info-label">Salesperson</div>
-                  <div className="info-value">{formatOptionalText(invoice.salesperson)}</div>
+
+                <div className="detail-list">
+                  <div className="detail-row"><span className="detail-label">Phone No.</span><span className="detail-value">{formatOptionalText(invoice.phoneNo || branch?.phone)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Branch E-Mail</span><span className="detail-value">{formatOptionalText(displayEmail)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Home Page</span><span className="detail-value">{formatOptionalText(displayHomepage)}</span></div>
+                  <div className="detail-row"><span className="detail-label">GST Reg no</span><span className="detail-value">{formatOptionalText(displayGstRegNo)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Salesperson</span><span className="detail-value">{formatOptionalText(invoice.salesperson)}</span></div>
                 </div>
               </div>
-            </div>
-
-            <div className="bill-to-section">
-              <div className="section-label">Bill To</div>
-              {renderBillToBlock(invoice)}
             </div>
 
             <table className="invoice-table">
@@ -373,7 +307,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   <tr key={`${item.description}-${rowIndex}`}>
                     <td>{item.itemNo ?? ''}</td>
                     <td>{item.description}</td>
-                    <td>{item.packing ?? ''}</td>
+                    <td>{item.packing ?? ''} </td>
                     <td>{item.origin ?? ''}</td>
                     <td>{item.units ?? ''}</td>
                     <td>{formatQtyNumber(item.qty)}</td>
@@ -389,12 +323,6 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
             {pageNumber === totalPages ? (
               <>
                 <div className="totals-block">
-                  {invoice.discountAmount ? (
-                    <div className="totals-row">
-                      <span>Discount ({invoice.discountPct ?? 0}%)</span>
-                      <span>-{formatNumber(invoice.discountAmount)}</span>
-                    </div>
-                  ) : null}
                   <div className="totals-row">
                     <span>Total MRF Excl. GST</span>
                     <span>{formatNumber(invoice.totalExclGst)}</span>
@@ -579,6 +507,56 @@ const styles = `
   .page-number {
     font-size: 10px;
     color: #4a4a4a;
+  }
+  .party-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 14px 0 12px;
+  }
+  .details-box {
+    border: 1px solid rgba(0,0,0,0.10);
+    border-radius: 6px;
+    background: rgba(248,249,250,0.85);
+    padding: 12px 12px 8px;
+    min-height: 160px;
+  }
+  .details-title {
+    font-size: 12px;
+    font-weight: 800;
+    color: #1b3e6f;
+    margin-bottom: 8px;
+  }
+  .customer-name {
+    font-size: 16px;
+    font-weight: 800;
+    color: #1b3e6f;
+    margin-bottom: 4px;
+  }
+  .customer-address {
+    font-size: 11px;
+    color: #2b2b2b;
+    line-height: 1.45;
+  }
+  .detail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .detail-row {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 10px;
+    align-items: start;
+    font-size: 11px;
+  }
+  .detail-label {
+    font-weight: 700;
+    color: #1b3e6f;
+  }
+  .detail-value {
+    color: #1f1f1f;
+    word-break: break-word;
   }
   .info-grid {
     display: grid;
