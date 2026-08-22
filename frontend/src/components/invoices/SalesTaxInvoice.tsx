@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
+import amountToWords from '@/utils/amountToWords'
 
 export interface InvoiceLineItem {
   itemNo?: string
@@ -64,40 +65,6 @@ const LEGAL_TERMS = [
   'Kindly retain a copy for your records and future reference.',
 ]
 
-export function amountToWords(value: number | string | undefined | null) {
-  const n = Number(value ?? 0)
-  if (Number.isNaN(n)) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
-
-  const rupees = Math.floor(n)
-  const laari = Math.round((n - rupees) * 100)
-  const ones = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN']
-  const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY']
-
-  const chunk = (num: number): string => {
-    if (num < 20) return ones[num]
-    if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '')
-    const rem = num % 100
-    return ones[Math.floor(num / 100)] + ' HUNDRED' + (rem ? ' ' + chunk(rem) : '')
-  }
-
-  if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
-
-  const parts: string[] = []
-  let remaining = rupees
-  let scaleIndex = 0
-  const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
-  while (remaining > 0) {
-    const part = remaining % 1000
-    if (part > 0) parts.unshift(chunk(part) + (scale[scaleIndex] ? ' ' + scale[scaleIndex] : ''))
-    remaining = Math.floor(remaining / 1000)
-    scaleIndex += 1
-  }
-
-  const rupeesText = parts.join(' ') || 'ZERO'
-  const laariText = laari === 0 ? 'ZERO' : chunk(laari)
-  return `${rupeesText} RUFIYAA AND ${laariText} LAARI ONLY`
-}
-
 function parseNumber(value: number | string | undefined | null, fallback = 0) {
   const number = Number(value ?? fallback)
   return Number.isNaN(number) ? fallback : number
@@ -148,7 +115,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   ].filter((line) => typeof line === 'string' && line.trim()).map((line) => line.trim())
 
   return {
-    copyType: isWalkin ? 'CUSTOMER COPY' : 'COSMOPOLITAN COPY',
+    copyType: null,
     billTo: {
       name: customerName || 'Walk-in',
       contactPerson: sale?.contactPerson || sale?.contact_person || '',
@@ -156,7 +123,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
         ? customerAddressLines
         : sale?.addressLines || sale?.address_lines || (sale?.customerAddress ? [sale.customerAddress] : []) || (sale?.customer_address ? [sale.customer_address] : []),
     },
-    billToCustomerNo: sale?.customerCode || sale?.customer_code || sale?.customerId || sale?.customer_id || '',
+    billToCustomerNo: sale?.customerCode || sale?.customer_code || '',
     gstNo: sale?.gstNo || sale?.gst_no || '',
     invoiceNo: `${sale?.number || sale?.invoiceNo || sale?.invoice_no || ''}`,
     orderNo: sale?.orderNo || sale?.order_no || '',
@@ -166,7 +133,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     email: sale?.email || branch?.email || '',
     homePage: sale?.homePage || sale?.homepage || branch?.homepage || branch?.website || '',
     gstRegNo: sale?.gstRegNo || sale?.gst_reg_no || branch?.gst || branch?.gstin || '',
-    salesperson: sale?.salesperson || sale?.cashier || sale?.cashierName || '',
+    salesperson: sale?.salesperson || sale?.cashier || sale?.cashierName || sale?.salesperson_name || sale?.salesPerson || '',
     paymentDueDate: sale?.dueDate || sale?.due_date || '',
     lineItems,
     gstRatePercent: gstRatePercent || (subtotal ? Math.round((totalGst / subtotal) * 100) : 0),
@@ -269,9 +236,8 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
 
               <div className="company-center" style={{ flex: 1, textAlign: 'center', paddingLeft: 12, paddingRight: 12 }}>
                 <div className="company-name-row" style={{ fontSize: 18, color: '#28c23d', fontWeight: 800 }}>{companyName}</div>
-                {companyAddressLines.map((ln: string, i: number) => (
-                  <div key={`addr-${i}`} style={{ fontSize: 12 }}>{ln}</div>
-                ))}
+                <div style={{ fontSize: 12 }}>LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv</div>
+                <div style={{ fontSize: 12 }}>Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv</div>
               </div>
 
               <div className="company-right" style={{ width: 120, display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
@@ -296,6 +262,8 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 ) : null}
 
                 <div className="detail-list" style={{ marginTop: 10 }}>
+                  <div className="detail-row"><span className="detail-label">Bill-to Customer No.</span><span className="detail-value">{formatOptionalText(invoice.billToCustomerNo)}</span></div>
+                  <div className="detail-row"><span className="detail-label">Customer GST IN</span><span className="detail-value">{formatOptionalText(invoice.g)}</span></div>
                   <div className="detail-row"><span className="detail-label">Invoice No.</span><span className="detail-value">{formatOptionalText(invoice.invoiceNo)}</span></div>
                   <div className="detail-row"><span className="detail-label">Purchase Order No</span><span className="detail-value">{formatOptionalText(invoice.purchaseOrderNo)}</span></div>
                   <div className="detail-row"><span className="detail-label">Posting Date</span><span className="detail-value">{formatOptionalText(invoice.postingDate)}</span></div>
@@ -339,7 +307,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   <tr key={`${item.description}-${rowIndex}`}>
                     <td>{item.itemNo ?? ''}</td>
                     <td>{item.description}</td>
-                    <td>{item.packing ?? ''}</td>
+                    <td>{item.packing ?? ''} </td>
                     <td>{item.origin ?? ''}</td>
                     <td>{item.units ?? ''}</td>
                     <td>{formatQtyNumber(item.qty)}</td>

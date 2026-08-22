@@ -1,7 +1,10 @@
+import amountToWords from '@/utils/amountToWords'
+
 export async function openInvoicePrintWindow(sale, branch) {
   if (typeof window === 'undefined') return
   const authToken = window.localStorage.getItem('retailos_token')
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
+  const win = window.open('/invoice-cosmo.html', '_blank')
 
   let fullSale = sale
   try {
@@ -28,7 +31,7 @@ export async function openInvoicePrintWindow(sale, branch) {
     branchMerged.phone = branchMerged.phone || org.phone || ''
   }
 
-  const totalInWords = ''
+  const totalInWords = fullSale?.totalInWords || amountToWords(fullSale?.total)
   const saleToSend = {
     ...fullSale,
     salesperson: fullSale?.salesperson || fullSale?.cashier || fullSale?.cashierName || fullSale?.salesperson_name || fullSale?.salesPerson || '',
@@ -47,10 +50,6 @@ export async function openInvoicePrintWindow(sale, branch) {
   branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
 
   const payload = { sale: saleToSend, branch: branchMerged, printedAt: new Date().toISOString() }
-  const invoiceId = fullSale?.id ?? sale?.id ?? sale?.invoice_id ?? sale?.invoiceId
-  const printUrl = invoiceId ? `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(invoiceId))}` : '/invoice-cosmo.html'
-
-  const win = window.open(printUrl, '_blank')
   const sendPayload = () => {
     try {
       if (!win || win.closed) return false

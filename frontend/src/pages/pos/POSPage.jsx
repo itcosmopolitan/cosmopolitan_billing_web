@@ -502,47 +502,36 @@ export default function POSPage() {
 
       const soldItemIds = cart.map((i) => i.id)
 
-      const selectedCustomerName = customer?.name || 'Walk-in'
-      const selectedCustomerId = customer?.id || null
       const cashTender = paymentReceived && paymentMethod === 'cash'
         ? cashTenderSummary(cashCollected, result.total)
         : null
+
+      let fullSale
+      try {
+        fullSale = await salesAPI.get(result.id)
+      } catch (fetchError) {
+        console.error('Failed to refresh completed invoice:', fetchError)
+        toast('Receipt loaded with limited data. Full invoice details could not be refreshed.', {
+          icon: '⚠️',
+          duration: 5000,
+        })
+        fullSale = {
+          ...result,
+          id: result.id,
+          number: result.number,
+          total: result.total,
+          subtotal: sub,
+          taxTotal: tax,
+          discount: disc,
+        }
+      }
+
       setLastSale({
-        number: result.number,
-        total: result.total,
-        subtotal: sub,
-        taxTotal: tax,
-        discount: disc,
+        ...fullSale,
         discountReason: hasDiscountForSubmit ? discountReason : '',
         method: paymentReceived ? paymentMethod : null,
         cashCollected: cashTender?.collected ?? null,
         cashChange: cashTender?.change ?? null,
-        customerName: selectedCustomerName,
-        customerId: selectedCustomerId,
-        customerAddress: customer?.address,
-        customerStreet1: customer?.street1,
-        customerStreet2: customer?.street2,
-        customerStreet3: customer?.street3,
-        customerCity: customer?.city,
-        customerStateProvince: customer?.state_province,
-        customerCountry: customer?.country,
-        customerPostalCode: customer?.postal_code,
-        items: cart.map(i => ({
-          name: i.name,
-          qty: i.qty,
-          price: i.price,
-          lineTotal: i.lineTotal,
-          hsnCode: i.hsnCode || i.hsn_code || '',
-          size: i.size || i.package || '',
-          attribute: i.attribute || i.attr || '',
-          batch: Array.isArray(i.batchAllocation)
-            ? i.batchAllocation.map((b) => b.batchNumber).filter(Boolean).join(', ')
-            : '',
-          discount: i.lineDiscountValue ?? i.lineDiscountPct ?? 0,
-          brand: i.brand || '',
-          unit: i.unit || i.unitOfMeasure || i.unit_of_measure || '',
-        })),
-        id: result.id,
       });
 
       // 2026-05-25: refresh local customer credit_balance after a
@@ -1632,29 +1621,9 @@ export default function POSPage() {
           <div style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <Receipt
               sale={{
-                number: lastSale.number,
-                total: lastSale.total,
-                subtotal: lastSale.subtotal,
-                taxTotal: lastSale.taxTotal,
-                tax_total: lastSale.taxTotal,
-                discount: lastSale.discount,
-                paymentMode: lastSale.method,
-                payment_mode: lastSale.method,
-                cashCollected: lastSale.cashCollected,
-                cashChange: lastSale.cashChange,
-                cashier: 'Staff',
-                customerName: lastSale.customerName || 'Walk-in',
-                customerId: lastSale.customerId || null,
-                customerAddress: lastSale.customerAddress,
-                customerStreet1: lastSale.customerStreet1,
-                customerStreet2: lastSale.customerStreet2,
-                customerStreet3: lastSale.customerStreet3,
-                customerCity: lastSale.customerCity,
-                customerStateProvince: lastSale.customerStateProvince,
-                customerCountry: lastSale.customerCountry,
-                customerPostalCode: lastSale.customerPostalCode,
-                date: new Date(),
-                items: lastSale.items || [],
+                ...lastSale,
+                paymentMode: lastSale.method ?? lastSale.paymentMode,
+                payment_mode: lastSale.method ?? lastSale.payment_mode,
               }}
               branch={activeBranch}
             />

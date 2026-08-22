@@ -6,6 +6,7 @@ import SalesTaxInvoice, { mapSaleToInvoice } from '@/components/invoices/SalesTa
 import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
 import openInvoicePrintWindow from '@/utils/printInvoice'
+import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
 
 const formatNumber = (value, options = {}) => {
@@ -16,43 +17,6 @@ const formatNumber = (value, options = {}) => {
     minimumFractionDigits: options.minimumFractionDigits ?? amountDecimals,
     maximumFractionDigits: options.maximumFractionDigits ?? amountDecimals,
   })
-}
-
-const amountToWords = (value) => {
-  const n = Number(value)
-  if (Number.isNaN(n)) return '—'
-  const rupees = Math.floor(n)
-  const laari = Math.round((n - rupees) * 100)
-  const ones = ['ZERO','ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE','TEN','ELEVEN','TWELVE','THIRTEEN','FOURTEEN','FIFTEEN','SIXTEEN','SEVENTEEN','EIGHTEEN','NINETEEN']
-  const tens = ['','','TWENTY','THIRTY','FORTY','FIFTY','SIXTY','SEVENTY','EIGHTY','NINETY']
-
-  const chunk = (num) => {
-    if (num < 20) return ones[num]
-    if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : '')
-    const rem = num % 100
-    return ones[Math.floor(num / 100)] + ' HUNDRED' + (rem ? ' ' + chunk(rem) : '')
-  }
-
-  if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
-
-  const parts = []
-  let remaining = rupees
-  let scaleIndex = 0
-  const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
-
-  while (remaining > 0) {
-    const part = remaining % 1000
-    if (part > 0) {
-      const prefix = chunk(part)
-      parts.unshift(prefix + (scale[scaleIndex] ? ' ' + scale[scaleIndex] : ''))
-    }
-    remaining = Math.floor(remaining / 1000)
-    scaleIndex += 1
-  }
-
-  const rupeesText = parts.join(' ') || 'ZERO'
-  const laariText = laari === 0 ? 'ZERO' : chunk(laari)
-  return `${rupeesText} RUFIYAA AND ${laariText} LAARI ONLY`
 }
 
 const formatCurrency = (value) => formatAmountNumber(value)
@@ -158,7 +122,7 @@ export function Receipt({ sale, branch }) {
     const dueDate = sale.dueDate || sale.due_date || null
     const paymentTerms = sale.paymentTerms || sale.payment_terms || '30 DAYS'
     const customerId = sale.customerCode || sale.customer_code || sale.customerId || sale.customer_id || '—'
-    const totalInWords = amountToWords(sale.total || 0)
+    const totalInWords = amountToWords(sale.total, '—')
 
     const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0) || (sale.subtotal ? Math.round(((sale.taxTotal || sale.tax_total || 0) / sale.subtotal) * 100) : 0)
 
@@ -381,131 +345,6 @@ export function Receipt({ sale, branch }) {
     setTimeout(() => { win.print(); win.close() }, 500)
   }
 
-  const printInvoiceCosmo = async () => {
-    const printedAt = fmtDateTime(new Date())
-    const totalInWords = amountToWords(sale.total || 0)
-    const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0) || (sale.subtotal ? Math.round(((sale.taxTotal || sale.tax_total || 0) / sale.subtotal) * 100) : 0)
-
-    const authToken = typeof window !== 'undefined' ? window.localStorage.getItem('retailos_token') : null
-    const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
-
-    // Ensure we have a fully-hydrated sale before printing
-    let fullSale = sale
-    try {
-      const needsFetch = !sale || (
-        sale?.id &&
-        (
-          !sale.salesperson ||
-          !sale.email ||
-          !sale.phoneNo ||
-          !sale.orderNo ||
-          !sale.purchaseOrderNo ||
-          (!sale.gstNo && !sale.gst_no && !sale.gst)
-        )
-      )
-      if (needsFetch && sale?.id) {
-        const res = await fetch(`/api/v1/sales/${sale.id}`, {
-          headers: {
-            Accept: 'application/json',
-            ...authHeaders,
-          },
-        })
-        if (res.ok) fullSale = await res.json()
-      }
-    } catch (e) {
-      // ignore and proceed with whatever we have
-    }
-
-    // Organisation fallback for branch-level metadata
-    let org = null
-    try {
-      const r = await fetch('/api/v1/settings/organisation', {
-        headers: {
-          Accept: 'application/json',
-          ...authHeaders,
-        },
-      })
-      if (r.ok) org = await r.json()
-    } catch (e) {
-      /* ignore */
-    }
-
-    const branchMerged = { ...(branch || {}) }
-    // merge organisation only for missing branch-level fields; don't overwrite branch values
-    if (org) {
-      branchMerged.gstin = branchMerged.gstin || org.gstin || org.gstin
-      branchMerged.website = branchMerged.website || org.website
-      branchMerged.homePage = branchMerged.homePage || org.website || org.homePage
-      branchMerged.email = branchMerged.email || org.email
-      branchMerged.phone = branchMerged.phone || org.phone || ''
-    }
-
-    const saleToSend = {
-      ...fullSale,
-      salesperson: fullSale?.salesperson || fullSale?.cashier || fullSale?.cashierName || fullSale?.salesperson_name || fullSale?.salesPerson || '',
-      // ensure phone/email on the sale payload: sale -> branch -> org
-      phoneNo: fullSale?.phoneNo || fullSale?.phone_no || branchMerged?.phone || branchMerged?.tel || org?.phone || '',
-      email: fullSale?.email || branchMerged?.email || org?.email || '',
-      totalInWords,
-      taxPercent,
-    }
-    // Normalize aliases expected by the print template
-    branchMerged.gstin = branchMerged.gstin || branchMerged.gst || branchMerged.gstNo || branchMerged.gst_no || ''
-    branchMerged.gst = branchMerged.gst || branchMerged.gstin || ''
-    branchMerged.gstNo = branchMerged.gstNo || branchMerged.gst || branchMerged.gstin || ''
-    branchMerged.gst_no = branchMerged.gst_no || branchMerged.gstin || ''
-    branchMerged.website = branchMerged.website || branchMerged.homepage || ''
-    branchMerged.homePage = branchMerged.homePage || branchMerged.homepage || branchMerged.website || ''
-    branchMerged.email = branchMerged.email || branchMerged.emailAddress || branchMerged.email_address || ''
-    branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
-
-    const payload = { sale: saleToSend, branch: branchMerged, printedAt }
-    const invoiceId = fullSale?.id ?? sale?.id ?? sale?.invoice_id ?? sale?.invoiceId
-    const printUrl = invoiceId ? `/invoice-cosmo.html?invoice_id=${encodeURIComponent(String(invoiceId))}` : '/invoice-cosmo.html'
-    console.debug('[PrintInvoiceCosmo] payload', {
-      sale: {
-        id: saleToSend.id,
-        number: saleToSend.number,
-        salesperson: saleToSend.salesperson,
-        email: saleToSend.email,
-        phoneNo: saleToSend.phoneNo,
-        gstNo: saleToSend.gstNo || saleToSend.gst_no || saleToSend.gst,
-      },
-      branch: {
-        gst: branchMerged.gst,
-        gstNo: branchMerged.gstNo,
-        gst_no: branchMerged.gst_no,
-        gstin: branchMerged.gstin,
-        email: branchMerged.email,
-        website: branchMerged.website,
-        homePage: branchMerged.homePage,
-      },
-    })
-    const win = window.open(printUrl, '_blank')
-    const sendPayload = () => {
-      try {
-        if (!win || win.closed) return false
-        win.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
-        return true
-      } catch (e) {
-        return false
-      }
-    }
-
-    const interval = setInterval(() => {
-      if (!win || win.closed) { clearInterval(interval); return }
-      if (sendPayload()) { clearInterval(interval) }
-    }, 200)
-
-    if (win) {
-      win.addEventListener('load', () => {
-        sendPayload()
-        clearInterval(interval)
-      })
-    }
-    setTimeout(() => { try { win.focus() } catch (e) {} }, 500)
-  }
-
   const shareWhatsApp = () => {
     const items = (sale.items || []).map(i => `• ${i.name} x${i.qty} = MVR${i.lineTotal || i.qty * i.price}`).join('\n')
     const msg = `*Cosmopolitan — ${branch?.name}*\n` +
@@ -531,7 +370,7 @@ export function Receipt({ sale, branch }) {
 
   const handlePrint = () => {
     if (invoiceFormat === 'standard') {
-      printInvoiceCosmo()
+      openInvoicePrintWindow(sale, branch)
     } else if (invoiceFormat === 'thermal' && thermalRef.current) {
       thermalRef.current.print()
     }
