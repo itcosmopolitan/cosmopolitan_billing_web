@@ -678,13 +678,11 @@
     const pages = paginateItems(items, 16)
     const discountAmount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
     const discountPercent = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
-    const copyLabels = ['']
-    const allPages = []
-    copyLabels.forEach((copyLabel) => {
-      pages.forEach((pageItems, pageIndex) => {
-        allPages.push({ pageItems, copyLabel, pageIndex, totalPages: pages.length })
-      })
-    })
+    const allPages = pages.map((pageItems, pageIndex) => ({
+      pageItems,
+      pageIndex,
+      totalPages: pages.length,
+    }))
 
     const totals = {
       subtotal,
