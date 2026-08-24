@@ -320,7 +320,6 @@ export function Receipt({ sale, branch }) {
         <div class="divider"></div>
         <div style="font-size:10px; margin-top:8px; text-align:center;">Thank you for choosing Cosmopolitan as your preferred partner</div>
         <div style="display:grid;grid-template-columns:1fr 1fr; gap:16px; font-size:10px; margin-top:16px;">
-          <div style="text-align:left;">For COSMOPOLITAN</div>
           <div style="text-align:right;">Received By</div>
         </div>
         <div style="display:flex; justify-content:space-between; font-size:10px; margin-top:2px;">
