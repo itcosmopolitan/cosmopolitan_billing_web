@@ -664,6 +664,7 @@
     if (hasRenderedInvoice) return
     hasRenderedInvoice = true
     const sale = payload?.sale || {}
+    document.title = sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || 'Sales Tax-Invoice'
     const branch = payload?.branch || {}
     const items = sale.items || []
     const subtotal = Number(sale.subtotal ?? items.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0))

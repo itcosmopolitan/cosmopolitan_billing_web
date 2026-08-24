@@ -63,6 +63,7 @@ export default function QuoteFormModal({
       price: inv.selling_price,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
+      unit: inv.unit || '',
       ...pattern,
       lineDiscount: suggested,
       lineDiscountType: '%',

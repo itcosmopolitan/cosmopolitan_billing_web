@@ -276,15 +276,15 @@
   .info-left td + td, .info-right td + td { padding-left: 8px; color: #111; font-size: 10px; }
   .info-left tr, .info-right tr { border-bottom: 1px solid rgba(0,0,0,0.08); }
   .info-left tr:last-child td, .info-right tr:last-child td { border-bottom: none; }
-  table.items { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 10.5px; }
+  table.items { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 20px; font-size: 10.5px; }
   table.items thead tr { border-top: 1px solid #000; border-bottom: 1px solid #000; }
-  table.items th, table.items td { padding: 5px 4px; vertical-align: top; }
-  table.items th.num, table.items td.num { text-align: right; }
+  table.items th, table.items td { padding: 5px 4px; vertical-align: top; text-align: center; }
+  table.items th.num, table.items td.num { text-align: center; }
   table.items th { font-weight: bold; }
-  .totals { width: 100%; margin-top: 4px; font-size: 10.5px; border-collapse: collapse; }
+  .totals { width: 100%; table-layout: fixed; margin-top: 4px; font-size: 10.5px; border-collapse: collapse; }
   .totals td { padding: 3px 4px; }
-  .totals .tlabel { text-align: right; padding-right: 10px; }
-  .totals .tval { text-align: right; width: 110px; }
+  .totals .tlabel { text-align: center; padding-right: 10px; width: 100px}
+  .totals .tval { text-align: center; width: 110px; padding-left: 30px}
   .totals .grand td { border-top: 1px solid #000; font-weight: bold; padding-top: 5px; }
   .vat-spec { margin-top: 26px; }
   .vat-spec h3 { font-size: 11px; font-weight: bold; margin: 0 0 8px 0; }
@@ -301,6 +301,43 @@
   .terms { margin-top: 14px; font-size: 10px; line-height: 1.4; }
   .thankyou { margin-top: 14px; font-size: 11px; font-weight: 700; text-align: center; }
   .signoff { display: flex; justify-content: space-between; margin-top: 20px; font-size: 11px; }
+  .amount-words {
+    margin-top: 10px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+  .quote-terms-box {
+    margin-top: 22px;
+    border-top: 1px solid #333;
+    padding-top: 10px;
+    font-size: 10.5px;
+  }
+  .quote-terms-box .payment-row { display: flex; margin-bottom: 4px; }
+  .quote-terms-box .plabel { width: 160px; flex-shrink: 0; }
+  .quote-terms-box .pcolon { width: 12px; }
+  .quote-terms-box .bank-details { margin-left: 172px; line-height: 1.5; }
+  .quote-terms {
+    margin-top: 16px;
+    font-size: 9.5px;
+    color: #333;
+    line-height: 1.6;
+  }
+  .quote-terms div { margin-bottom: 1px; }
+  .quote-thankyou {
+    margin-top: 24px;
+    text-align: center;
+    font-style: italic;
+    font-weight: bold;
+    font-size: 11px;
+  }
+  .quote-signoff {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 40px;
+    font-size: 10.5px;
+    font-weight: bold;
+  }
   #quotePages { min-height: 100vh; }
 </style>
 </head>
@@ -329,6 +366,60 @@
     const n = Number(value)
     if (Number.isNaN(n)) return '0.00'
     return n.toLocaleString('en-MV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+
+  function amountToWords(value, invalidFallback = 'ZERO RUFIYAA AND ZERO LAARI ONLY') {
+    const number = Number(value ?? 0)
+    if (Number.isNaN(number)) return invalidFallback
+
+    const rupees = Math.floor(number)
+    const laari = Math.round((number - rupees) * 100)
+    const ones = [
+      'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
+      'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN',
+      'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN',
+      'NINETEEN',
+    ]
+    const tens = [
+      '', '', 'TWENTY', 'THIRTY', 'FORTY',
+      'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY',
+    ]
+
+    const chunk = (number) => {
+      if (number < 20) return ones[number]
+      if (number < 100) {
+        return tens[Math.floor(number / 10)] +
+          (number % 10 ? ` ${ones[number % 10]}` : '')
+      }
+      const remainder = number % 100
+      return `${ones[Math.floor(number / 100)]} HUNDRED${
+        remainder ? ` ${chunk(remainder)}` : ''
+      }`
+    }
+
+    if (rupees === 0 && laari === 0) {
+      return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
+    }
+
+    const parts = []
+    let remaining = rupees
+    let scaleIndex = 0
+    const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
+
+    while (remaining > 0) {
+      const part = remaining % 1000
+      if (part > 0) {
+        parts.unshift(
+          `${chunk(part)}${scale[scaleIndex] ? ` ${scale[scaleIndex]}` : ''}`
+        )
+      }
+      remaining = Math.floor(remaining / 1000)
+      scaleIndex += 1
+    }
+
+    return `${parts.join(' ') || 'ZERO'} RUFIYAA AND ${
+      laari === 0 ? 'ZERO' : chunk(laari)
+    } LAARI ONLY`
   }
 
   function formatYesNo(value) {
@@ -379,14 +470,10 @@
 
   function renderPage(pageIndex, totalPages, pageItems, quote, branch, totals, copyLabel) {
     const customerAddress = (quote.customerAddress || quote.customer_address || quote.address || '').toString().trim()
-    const customerId = quote.customerId || quote.customer_id || ''
+    const customerCode = quote.customerCode || quote.customer_code || ''
     const customerGstin = quote.customerGstin || quote.customer_gstin || quote.gstin || quote.gstNo || quote.gst_no || ''
     const customerName = (quote.customerName || quote.customer_name || quote.customer || quote.name || '').toString().trim().toLowerCase()
     const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
-    const branchGstin = branch.gstin || branch.gst || branch.gstNo || branch.gst_no || quote.gstin || quote.gst || ''
-    const branchEmail = quote.email || branch.email || branch.emailAddress || branch.email_address || ''
-    const branchWebsite = quote.website || branch.website || branch.homePage || branch.homepage || branch.url || ''
-    const branchPhone = quote.phoneNo || quote.phone || branch.phone || branch.phoneNo || branch.phone_no || branch.tel || ''
     const salesperson = quote.salesperson || quote.createdBy || quote.created_by || ''
     const paymentTerms = quote.paymentTerms || quote.payment_terms || ''
     const shipmentMethod = quote.shipmentMethod || quote.shipment_method || ''
@@ -420,7 +507,7 @@
         </div>
 
         <div class="title-row">
-          <div class="copy-label">${escapeHtml(copyLabel || '')}</div>
+          ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
           <h1>Sales - Quote</h1>
           <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
         </div>
@@ -458,25 +545,25 @@
               return escapeHtml(addressLines.join('\n')).replace(/\n/g,'<br/>')
             })()}</div>`}
             <table style="margin-top:10px; width:100%;">
-              ${customerId && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerId)}</td></tr>` : ''}
-              <tr><td class="label">VAT Registration No.</td><td>${escapeHtml(quote.customerGstin)}</td></tr>
+              ${customerCode && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''}
+              <tr><td class="label">GST Registration No.</td><td>${escapeHtml(quote.customerGstin)}</td></tr>
               <tr><td class="label">Document Date</td><td>${escapeHtml(formatDate(quote.date || quote.quote_date || ''))}</td></tr>
               <tr><td class="label">Shipment Date</td><td>${escapeHtml(formatDate(quote.shipmentDate || quote.shipment_date || ''))}</td></tr>
               <tr><td class="label">Quote No.</td><td>${escapeHtml(quote.number || quote.quote_no || '')}</td></tr>
-              <tr><td class="label">Prices Including VAT</td><td>${escapeHtml(formatYesNo(pricesIncludingVat))}</td></tr>
+              <tr><td class="label">Prices Including GST</td><td>${escapeHtml(formatYesNo(pricesIncludingVat))}</td></tr>
               <tr><td class="label">Payment Terms</td><td>${escapeHtml(paymentTerms)}</td></tr>
               <tr><td class="label">Shipment Method</td><td>${escapeHtml(shipmentMethod)}</td></tr>
             </table>
           </div>
           <div class="seller-addr details-box">
             <div class="details-title">Branch Details</div>
-            <div style="font-weight:700; margin-bottom:6px;">Cosmopolitan Champa Brothers Maldives</div>
-            <div style="margin-bottom:8px;">LOT NO-10627, Haivakaru Magu, Hulhumale', Maldives.</div>
+            <div style="font-weight:700; margin-bottom:6px;">${escapeHtml('Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
+            <div style="margin-bottom:8px;">${escapeHtml(branch.address || branch.address_lines || branch.addressLines || 'LOT NO-10627, Haivakaru Magu, Hulhumale\', Maldives.').replace(/\n/g,'<br/>')}</div>
             <table style="width:100%;">
-              <tr><td class="label">Phone No.</td><td>${escapeHtml(branchPhone)}</td></tr>
-              <tr><td class="label">Branch E-Mail</td><td>${escapeHtml(branchEmail)}</td></tr>
-              <tr><td class="label">Website</td><td>${escapeHtml(branchWebsite)}</td></tr>
-              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branchGstin)}</td></tr>
+              <tr><td class="label">Phone No.</td><td>${escapeHtml(branch.phone || branch.tel || branch.phoneNo || branch.phone_no || '')}</td></tr>
+              <tr><td class="label">Branch E-Mail</td><td>${escapeHtml(quote.email || branch.email || branch.emailAddress || branch.email_address || '')}</td></tr>
+              <tr><td class="label">Website</td><td>${escapeHtml(quote.website || branch.homePage || branch.url || branch.website || '')}</td></tr>
+              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branch.gst || branch.gstNo || branch.gstin || branch.gst_no || '')}</td></tr>
               <tr><td class="label">Salesperson</td><td>${escapeHtml(salesperson)}</td></tr>
             </table>
           </div>
@@ -485,14 +572,15 @@
         <table class="items">
           <thead>
             <tr>
-              <th>No.</th>
+              <th>Product ID</th>
               <th>Description</th>
-              <th class="num">Quantity</th>
+              <th>Packaging</th>
               <th>Unit of<br>Measure</th>
+              <th class="num">Quantity</th>
               <th class="num">Unit Price</th>
               <th class="num">Discount<br>%</th>
               <th>Allow<br>Invoice<br>Discount</th>
-              <th>VAT<br>Identifier</th>
+              <th>GST<br>Identifier</th>
               <th class="num">Amount</th>
             </tr>
           </thead>
@@ -501,8 +589,9 @@
               <tr>
                 <td>${escapeHtml(line.sku || line.itemId || line.id || '')}</td>
                 <td>${escapeHtml(line.name || '')}</td>
-                <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
+                <td>${escapeHtml(line.packing ?? '')}</td>
                 <td>${escapeHtml(line.unit || line.units || '')}</td>
+                <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
                 <td class="num">${formatNumber(line.price)}</td>
                 <td class="num">${escapeHtml(Number(line.discount || line.line_discount || 0).toFixed(2))}</td>
                 <td>${escapeHtml(line.allowInvoiceDiscount || line.allow_invoice_discount ? 'Yes' : 'No')}</td>
@@ -515,49 +604,39 @@
 
         ${pageIndex === totalPages - 1 ? `
         <table class="totals">
-          <tr><td colspan="7"></td><td class="tlabel">Total MRF Excl. VAT</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
-          <tr><td colspan="7"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
-          <tr><td colspan="7"></td><td class="tlabel">Payment Discount on VAT</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>
-          <tr class="grand"><td colspan="7"></td><td class="tlabel">Total MRF Incl. VAT</td><td class="tval">${formatNumber(totals.total)}</td></tr>
+          <tr><td colspan="8"></td><td class="tlabel">Total MRF Excl. GST</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
+          <tr><td colspan="8"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
+          <tr><td colspan="8"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>
+          <tr class="grand"><td colspan="8"></td><td class="tlabel">Total MRF Incl. GST</td><td class="tval">${formatNumber(totals.total)}</td></tr>
         </table>
-
-        <div class="vat-spec">
-          <h3>VAT Amount Specification</h3>
-          <table class="vat-table">
-            <thead>
-              <tr>
-                <th>VAT Identifier</th>
-                <th class="num">VAT %</th>
-                <th class="num">Line Amount</th>
-                <th class="num">Invoice Discount<br>Base Amount</th>
-                <th class="num">Invoice Discount<br>Amount</th>
-                <th class="num">VAT Base</th>
-                <th class="num">VAT Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${groupVatRows(quote.items || []).map((row) => `
-                <tr>
-                  <td>${escapeHtml(row.vatIdentifier)}</td>
-                  <td class="num">${escapeHtml(String(row.taxRate))}</td>
-                  <td class="num">${formatNumber(row.lineAmount)}</td>
-                  <td class="num">${formatNumber(row.invoiceDiscountBase)}</td>
-                  <td class="num">${formatNumber(0)}</td>
-                  <td class="num">${formatNumber(row.vatBase)}</td>
-                  <td class="num">${formatNumber(row.vatAmount)}</td>
-                </tr>
-              `).join('')}
-              <tr class="total-row">
-                <td>Total</td>
-                <td class="num"></td>
-                <td class="num">${formatNumber(totals.subtotal)}</td>
-                <td class="num">${formatNumber(totals.subtotal)}</td>
-                <td class="num">${formatNumber(0)}</td>
-                <td class="num">${formatNumber(totals.subtotal)}</td>
-                <td class="num">${formatNumber(totals.taxTotal)}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
+        <div class="quote-terms-box">
+          <div class="payment-row">
+            <div class="plabel">Payment Due Date</div><div class="pcolon">:</div><div>Not applicable for quotation</div>
+          </div>
+          <div class="payment-row">
+            <div class="plabel">Payment Terms</div><div class="pcolon">:</div><div>${escapeHtml(quote.paymentTerms || 'As agreed')}</div>
+          </div>
+          <div class="bank-details">
+            Payment details for settlement when invoiced:<br>
+            A/C NAME : Cosmopolitan Champa Brothers Maldives Pvt Ltd<br>
+            Bank Account No : 7730000519444<br>
+            Bank Name : Bank of Maldives<br>
+            Bank Address : Boduthakurufaanu Magu, Malé 20094<br>
+            Swift Code : MALBMVMVXXX
+          </div>
+        </div>
+        <div class="quote-terms">
+          <div>- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoiled in transit.</div>
+          <div>- Overdue interest, where applicable, applies to overdue invoices.</div>
+          <div>- Any discrepancies in the eventual invoice should be raised within 24 hours of receipt.</div>
+          <div>- Currency fluctuations may affect the final invoiced amount as advised by the MMA.</div>
+          <div>- By accepting this quotation, the customer accepts these terms and conditions.</div>
+          <div>- This document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
+        </div>
+        <div class="quote-thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
+        <div class="quote-signoff">
+          <div>Recieved By</div>
         </div>
         ` : ''}
       </div>
@@ -578,6 +657,7 @@
     if (hasRenderedQuote) return
     hasRenderedQuote = true
     const quote = payload?.quote || {}
+    document.title = quote.number || quote.quote_no || quote.id || 'Sales Quote'
     const branch = {
       ...payload?.branch,
       gstin: payload?.branch?.gstin || payload?.branch?.gst || payload?.branch?.gstNo || payload?.branch?.gst_no || '',
@@ -598,13 +678,12 @@
       total,
       taxLabel: `${taxPercent}% GST`,
     }
-    const copyLabels = ['COSMOPOLITAN COPY', 'CUSTOMER COPY']
-    const allPages = []
-    copyLabels.forEach((copyLabel) => {
-      pages.forEach((pageItems, pageIndex) => {
-        allPages.push({ pageItems, copyLabel, pageIndex, totalPages: pages.length })
-      })
-    })
+    const allPages = pages.map((pageItems, pageIndex) => ({
+      pageItems,
+      pageIndex,
+      totalPages: pages.length,
+      copyLabel: '',
+    }))
 
     document.getElementById('quotePages').innerHTML = allPages.map((page) => renderPage(page.pageIndex, page.totalPages, page.pageItems, quote, branch, totals, page.copyLabel)).join('')
     setTimeout(() => { window.print() }, 500)

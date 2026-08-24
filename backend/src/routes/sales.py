@@ -2978,6 +2978,7 @@ def _quote_dict(quote, items=None):
             "id": i.id,
             "itemId": i.item_id,
             "sku": getattr(_loaded_rel(i, "item"), "sku", None),
+            "packing": getattr(_loaded_rel(i, "item"), "packaging_quantity", None),
             "name": i.name,
             "qty": i.qty,
             "price": i.price,
