@@ -22,6 +22,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
   const readOnly = searchParams.get('view') === '1'
   const navigate = useNavigate()
   const can = useCan()
+  const user = useAppStore((s) => s.user)
   const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
   const branches = useAppStore((s) => s.branches)
 
@@ -85,7 +86,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
-        created_by: 'Staff',
+        created_by: user?.name || 'Staff',
         valid_until: form.validUntil,
         shipment_date: form.shipmentDate,
         payment_terms: form.paymentTerms,
