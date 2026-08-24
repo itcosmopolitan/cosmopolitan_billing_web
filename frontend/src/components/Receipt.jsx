@@ -311,7 +311,7 @@ export function Receipt({ sale, branch }) {
           <div>Bank Address : Boduthakurufaanu Magu, Malé 20094</div>
           <div style="margin-top:6px;">- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoil in transit</div>
           <div>- Overdue outstanding will be subject to 1% interest per overdue day.</div>
-          <div>- Any invoice discrepancies should be made clear via e-mail/fax no later than 48 hours after receiving.</div>
+          <div>- Any invoice discrepancies should be made clear via e-mail/fax no later than 24 hours after receiving.</div>
           <div>- In case of currency fluctuations, invoices must be settled by the latest maximum legal rate as advised by the MMA.</div>
           <div>- By accepting COSMOPOLITAN and/or other products described in the Invoice, the customer accepts these terms and conditions</div>
           <div>- The above document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
