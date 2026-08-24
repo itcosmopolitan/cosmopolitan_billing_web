@@ -5,6 +5,7 @@ import amountToWords from '@/utils/amountToWords'
 
 export interface InvoiceLineItem {
   itemNo?: string
+  sku?: string
   description: string
   packing?: string
   origin?: string
@@ -83,6 +84,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     const metadata = getInvoiceItemMetadata(item)
     return {
       itemNo: item?.itemNo || item?.item_no || '',
+      sku: item?.sku ?? '',
       description: `${item?.name || item?.description || ''}`,
       packing: metadata.packaging,
       origin: metadata.origin,
@@ -207,9 +209,11 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
   const logoSrc = branch?.logo || branch?.logo_url || LOGO_SRC
   const companyName = branch?.company || COMPANY_NAME
   const customerName = invoice.billTo?.name || 'Walk-in'
+  const normalizedCustomerName = customerName.trim().toLowerCase()
+  const isWalkin = normalizedCustomerName === 'walk-in' || normalizedCustomerName === 'walkin' || normalizedCustomerName === 'walk in' || normalizedCustomerName === 'walkin customer' || normalizedCustomerName === 'cash customer'
   const displayEmail = invoice.email || branch?.email || branch?.emailAddress || branch?.email_address || ''
   const displayHomepage = invoice.homePage || branch?.homePage || branch?.homepage || branch?.website || ''
-  const displayGstRegNo = invoice.gstRegNo || branch?.gstRegNo || branch?.gst || branch?.gstin || ''
+  const displayGstRegNo =  branch?.gstRegNo || branch?.gst || branch?.gstin || ''
   const companyAddressLines: string[] = Array.isArray(branch?.address)
     ? branch.address.filter(Boolean)
     : (branch?.address ? String(branch.address).split(/\n|<br\s*\/?\s*>/i).filter(Boolean) : ['LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv', "Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv"])
@@ -262,10 +266,9 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 ) : null}
 
                 <div className="detail-list" style={{ marginTop: 10 }}>
-                  <div className="detail-row"><span className="detail-label">Bill-to Customer No.</span><span className="detail-value">{formatOptionalText(invoice.billToCustomerNo)}</span></div>
-                  <div className="detail-row"><span className="detail-label">Customer GST IN</span><span className="detail-value">{formatOptionalText(invoice.g)}</span></div>
+                  {!isWalkin && <div className="detail-row"><span className="detail-label">Bill-to Customer No.</span><span className="detail-value">{formatOptionalText(invoice.billToCustomerNo)}</span></div>}
+                  {!isWalkin && <div className="detail-row"><span className="detail-label">Customer GST IN</span><span className="detail-value">{formatOptionalText(invoice.gstNo)}</span></div>}
                   <div className="detail-row"><span className="detail-label">Invoice No.</span><span className="detail-value">{formatOptionalText(invoice.invoiceNo)}</span></div>
-                  <div className="detail-row"><span className="detail-label">Purchase Order No</span><span className="detail-value">{formatOptionalText(invoice.purchaseOrderNo)}</span></div>
                   <div className="detail-row"><span className="detail-label">Posting Date</span><span className="detail-value">{formatOptionalText(invoice.postingDate)}</span></div>
                 </div>
               </div>
@@ -290,7 +293,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
             <table className="invoice-table">
               <thead>
                 <tr>
-                  <th>No.</th>
+                  <th>SKU ID</th>
                   <th>Description</th>
                   <th>Packing</th>
                   <th>Origin</th>
@@ -305,7 +308,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
               <tbody>
                 {rows.map((item, rowIndex) => (
                   <tr key={`${item.description}-${rowIndex}`}>
-                    <td>{item.itemNo ?? ''}</td>
+                    <td>{item.sku ?? ''}</td>
                     <td>{item.description}</td>
                     <td>{item.packing ?? ''} </td>
                     <td>{item.origin ?? ''}</td>
@@ -368,7 +371,6 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
 
                 <div className="signature-row">
                   <div>Recieved By</div>
-                  <div className="signature-right">For COSMOPOLITAN</div>
                 </div>
               </>
             ) : null}

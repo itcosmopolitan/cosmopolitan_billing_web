@@ -421,8 +421,8 @@
       const gstRate = Number(it.taxRate ?? it.tax_rate ?? 0)
       const amount = Number(it.lineTotal || it.total || qty * rate)
       const gstAmt = Math.round((amount * gstRate) / 100 * 100) / 100
-      const rowLabel = it.code || it.itemCode || it.productCode || String(index + 1)
-      return `<tr>\n<td>${escapeHtml(rowLabel)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+      const sku = it.sku || ''
+      return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
   }
 
@@ -509,7 +509,6 @@
                 return customerGstin && !isWalkIn ? `<tr><td class="label">Customer GST IN</td><td>${escapeHtml(customerGstin)}</td></tr>` : ''
               })()}
               <tr><td class="label">Invoice No.</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
-              <tr><td class="label">Purchase Order No</td><td>${escapeHtml(invoice.purchaseOrderNo || invoice.purchase_order_no || invoice.poNumber || invoice.po_no || '')}</td></tr>
               <tr><td class="label">Posting Date</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
             </table>
           </div>
@@ -521,7 +520,7 @@
               <tr><td class="label">Phone No.</td><td>${escapeHtml(branch.phone || branch.tel || branch.phoneNo || branch.phone_no || '')}</td></tr>
               <tr><td class="label">Branch E-Mail</td><td>${escapeHtml(invoice.email || branch.email || branch.emailAddress || branch.email_address || '')}</td></tr>
               <tr><td class="label">Website</td><td>${escapeHtml(invoice.website || branch.homePage || branch.url || branch.website || '')}</td></tr>
-              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branch.gst || branch.gstNo || branch.gstin || branch.gst_no || invoice.gstin || '')}</td></tr>
+              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branch.gst || branch.gstNo || branch.gstin || branch.gst_no || '')}</td></tr>
               <tr><td class="label">Salesperson</td><td>${escapeHtml(invoice.salesperson || invoice.salesPerson || invoice.salesperson_name || '')}</td></tr>
             </table>
           </div>
@@ -530,7 +529,7 @@
         <table class="items">
           <thead>
             <tr>
-              <th>No.</th>
+              <th>Product ID</th>
               <th>Description</th>
               <th>Packing</th>
               <th>Origin</th>
@@ -600,7 +599,6 @@
           <div class="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
           <div class="signoff">
             <div>Recieved By</div>
-            <div>For COSMOPOLITAN</div>
           </div>
         ` : ''}
       </div>
@@ -632,9 +630,9 @@
     const website = sale.website || sale.homePage || sale.homepage ||
       branch.website || branch.homePage || branch.homepage || branch.url ||
       organisation.website || organisation.homePage || ''
-    const gst = sale.gstin || sale.gstNo || sale.gst_no || sale.gst ||
-      branch.gstin || branch.gstNo || branch.gst_no || branch.gst ||
-      organisation.gstin || ''
+    const branchGst = sourceBranch.gstRegNo || sourceBranch.gst || sourceBranch.gstin ||
+      sourceBranch.gstNo || sourceBranch.gst_no || organisation.gstin ||
+      organisation.gstNo || organisation.gst_no || ''
     const salesperson = sale.salesperson || sale.salesPerson ||
       sale.salesperson_name || sale.cashier || sale.cashierName || ''
 
@@ -645,10 +643,10 @@
       phoneNo: branch.phoneNo || phone,
       website,
       homePage: branch.homePage || website,
-      gstin: gst,
-      gst,
-      gstNo: gst,
-      gst_no: gst,
+      gstin: branchGst,
+      gst: branchGst,
+      gstNo: branchGst,
+      gst_no: branchGst,
       email,
     })
 
@@ -657,9 +655,6 @@
       phoneNo: phone,
       email,
       website,
-      gstin: sale.gstin || gst,
-      gstNo: sale.gstNo || gst,
-      gst_no: sale.gst_no || gst,
     })
 
     return { ...payload, sale, branch }
