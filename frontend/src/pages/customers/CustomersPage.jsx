@@ -5,7 +5,7 @@ import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { decomposeAddress } from '@/utils/address'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
@@ -309,7 +309,7 @@ export default function CustomersPage() {
       setLedgerTotal(total || 0)
     } catch (err) {
       console.error('Failed to load credit ledger:', err)
-      toast.error('Failed to load credit ledger')
+      toast.error('Failed to load store credit ledger')
       setLedgerCustomer(null)
     } finally {
       setLedgerLoading(false)
@@ -337,7 +337,7 @@ export default function CustomersPage() {
               Address: c.address || '—',
               'GST Reg No': c.gstIn || '—',
               Type: (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
-              'Credit Limit (MVR)': c.creditLimit || 0,
+              'Account Limit (MVR)': c.creditLimit || 0,
               'Outstanding (MVR)': c.outstanding || 0,
               'Total Purchases (MVR)': c.totalPurchases || 0,
             })), `Customers_${new Date().toISOString().split('T')[0]}.csv`)
@@ -372,6 +372,7 @@ export default function CustomersPage() {
 
       <Card bodyPadding={false}>
         {customers.length === 0 ? <EmptyState icon="👥" title="No customers found" /> : (
+          <div className="table-scroll">
           <table className="data-table">
             <thead>
               <tr>
@@ -381,17 +382,17 @@ export default function CustomersPage() {
                 <th>KAM</th>
                 <th>Branch</th>
                 <th>Credit Terms</th>
-                <SortableHeader label="Credit Limit" sortKey="credit_limit" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
+                <SortableHeader label="Account Limit" sortKey="credit_limit" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 {/* Sales Phase 1 (2026-05-23): money we owe the customer.
                     Read-only display; applying credit is manual in v1. Not
                     server-side sortable yet (would need backend allow-list
                     update) — defer to PR 2 if anyone asks. */}
-                <th className="text-right" style={{textAlign:'right'}}>Credit</th>
-                <th style={{width:100}}>Credit Used</th>
+                <th className="text-right" style={{textAlign:'right'}}>Store Credit</th>
+                <th style={{width:100}}>Limit Used</th>
                 <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
                 <th>Status</th>
-                <th></th>
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -423,19 +424,32 @@ export default function CustomersPage() {
                     </td>
                     <td className="text-right mono">{fmt(c.totalPurchases)}</td>
                     <td><Chip status={c.active ? 'active' : 'inactive'} /></td>
-                    <td data-no-row-click>
-                      <div style={{ display:'flex', gap:4 }}>
-                        <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(c)}>View</button>
-                        {can('customers.edit') && (
-                          <button className="btn btn-ghost btn-xs" onClick={() => openEditCustomerModal(c)}>Edit</button>
-                        )}
-                      </div>
+                    <td className="text-right">
+                      <RowActionsMenu
+                        ariaLabel={`Actions for ${c.name}`}
+                        actions={[
+                          {
+                            label: 'View',
+                            onClick: () => setShowDetail(c),
+                          },
+                          {
+                            label: 'Edit',
+                            hidden: !can('customers.edit'),
+                            onClick: () => openEditCustomerModal(c),
+                          },
+                          {
+                            label: 'Store credit ledger',
+                            onClick: () => openCreditLedger(c),
+                          },
+                        ]}
+                      />
                     </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
+          </div>
         )}
         <PaginationBar
           total={custTotal}
@@ -550,7 +564,7 @@ export default function CustomersPage() {
               emptyLabel="No users found"
             />
           </FormGroup>
-          <FormGroup label="Credit Limit (MVR)">
+          <FormGroup label="Account limit (MVR)">
             <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
           </FormGroup>
         </FormRow>
@@ -559,7 +573,7 @@ export default function CustomersPage() {
             className="form-input"
             value={form.credit_terms}
             onChange={e => pf('credit_terms', e.target.value)}
-            placeholder="e.g. Cash, Credit - 7 Days, Credit - 30 Days"
+            placeholder="e.g. Cash, Net 7 days, Net 30 days"
           />
         </FormGroup>
       </Modal>
@@ -575,7 +589,7 @@ export default function CustomersPage() {
       <Modal
         open={!!ledgerCustomer}
         onClose={() => setLedgerCustomer(null)}
-        title={`Credit Ledger — ${ledgerCustomer?.name || ''}`}
+        title={`Store credit ledger — ${ledgerCustomer?.name || ''}`}
         icon="💳"
         size="lg"
         footer={<button className="btn btn-secondary" onClick={() => setLedgerCustomer(null)}>Close</button>}
@@ -584,7 +598,7 @@ export default function CustomersPage() {
           <>
             <div style={{ display:'flex', gap:16, marginBottom:16, flexWrap:'wrap' }}>
               <div style={{ padding:'10px 14px', background:'var(--bg-raised)', borderRadius:8 }}>
-                <div style={{ fontSize:11, color:'var(--text-muted)' }}>Current balance</div>
+                <div style={{ fontSize:11, color:'var(--text-muted)' }}>Store credit balance</div>
                 <div style={{ fontSize:18, fontWeight:600, color:'var(--accent)' }}>{fmt(ledgerCustomer.creditBalance)}</div>
               </div>
               <div style={{ padding:'10px 14px', background:'var(--bg-raised)', borderRadius:8 }}>
@@ -595,7 +609,7 @@ export default function CustomersPage() {
             {ledgerLoading ? (
               <div style={{ padding:24, textAlign:'center', color:'var(--text-muted)' }}>Loading ledger…</div>
             ) : ledgerEntries.length === 0 ? (
-              <EmptyState icon="💳" title="No credit movements yet" subtitle="Overpayments and return credits will appear here." />
+              <EmptyState icon="💳" title="No store credit movements yet" subtitle="Overpayments and return credits will appear here." />
             ) : (
               <table className="data-table">
                 <thead>

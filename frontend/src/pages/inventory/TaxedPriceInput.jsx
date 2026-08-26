@@ -23,6 +23,7 @@ export default function TaxedPriceInput({
   placeholder = '0.00',
   disabled = false,
   compact = false,
+  dense = false,
 }) {
   const entryMode = normalizeTaxMode(mode)
   const n = Number(value)
@@ -32,11 +33,21 @@ export default function TaxedPriceInput({
   const rate = Number(taxRate) || 0
 
   const breakdownEl = breakdown && (
-    <div className={`taxed-price-breakdown${compact ? ' taxed-price-breakdown--compact' : ''}`}>
-      <span><em>Excl.</em> <strong>{fmt(breakdown.exclusive)}</strong></span>
-      <span><em>GST {rate}%</em> <strong>{fmt(breakdown.tax)}</strong></span>
-      <span><em>Incl.</em> <strong>{fmt(breakdown.inclusive)}</strong></span>
-    </div>
+    dense ? (
+      <div className="taxed-price-breakdown taxed-price-breakdown--dense">
+        Excl. {fmt(breakdown.exclusive)}
+        <span aria-hidden="true"> · </span>
+        GST {rate}% {fmt(breakdown.tax)}
+        <span aria-hidden="true"> · </span>
+        Incl. {fmt(breakdown.inclusive)}
+      </div>
+    ) : (
+      <div className={`taxed-price-breakdown${compact ? ' taxed-price-breakdown--compact' : ''}`}>
+        <span><em>Excl.</em> <strong>{fmt(breakdown.exclusive)}</strong></span>
+        <span><em>GST {rate}%</em> <strong>{fmt(breakdown.tax)}</strong></span>
+        <span><em>Incl.</em> <strong>{fmt(breakdown.inclusive)}</strong></span>
+      </div>
+    )
   )
 
   const control = (

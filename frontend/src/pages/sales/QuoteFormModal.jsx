@@ -21,7 +21,7 @@ import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
+import { emptySaleLine, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType, resolveCategoryLinePricing } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -54,18 +54,23 @@ export default function QuoteFormModal({
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
-    const suggested = suggestedDiscountForCustomer({ ...inv, ...pattern }, quoteForm.customerType)
+    const retailPrice = Number(inv.selling_price || 0) || 0
+    const resolved = resolveCategoryLinePricing(
+      { ...inv, ...pattern, retailPrice, price: retailPrice },
+      quoteForm.customerType,
+    )
     const next = [...quoteForm.items]
     next[i] = {
       ...next[i],
       item_id: inv.id,
       name: inv.name,
-      price: inv.selling_price,
+      price: resolved.price,
+      retailPrice,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
       unit: inv.unit || '',
       ...pattern,
-      lineDiscount: suggested,
+      lineDiscount: resolved.discountPct,
       lineDiscountType: '%',
     }
     pqf('items', next)

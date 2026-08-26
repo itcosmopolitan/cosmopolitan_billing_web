@@ -9,7 +9,7 @@ export const PAYMENT_METHOD_OPTIONS = [
 
 export const PAYMENT_METHOD_WITH_CREDIT_OPTIONS = [
   ...PAYMENT_METHOD_OPTIONS,
-  { id: 'credit', label: '🏦 Credit' },
+  { id: 'credit', label: '🏦 Store credit' },
 ]
 
 export const PAYMENT_MODE_LABEL_OPTIONS = [

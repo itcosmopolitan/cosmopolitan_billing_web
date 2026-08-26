@@ -200,8 +200,18 @@ export default function ItemDetailPanel({
             <DetailFields fields={[
               { label: 'Default cost (MVR)', value: catalogPriceLabel(detail?.default_cost_price ?? detail?.cost_price, detail?.tax_rate) },
               { label: 'Default selling — retail (MVR)', value: catalogPriceLabel(detail?.default_selling_price ?? detail?.selling_price, detail?.tax_rate) },
-              { label: 'Wholesale discount %', value: `${Number(detail?.wholesale_discount_pct || 0)}%` },
-              { label: 'Staff discount %', value: `${Number(detail?.staff_discount_pct || 0)}%` },
+              {
+                label: 'Wholesale',
+                value: detail?.wholesale_pricing_mode === 'price'
+                  ? catalogPriceLabel(detail?.wholesale_price, detail?.tax_rate)
+                  : `${Number(detail?.wholesale_discount_pct || 0)}% off`,
+              },
+              {
+                label: 'Staff',
+                value: detail?.staff_pricing_mode === 'price'
+                  ? catalogPriceLabel(detail?.staff_price, detail?.tax_rate)
+                  : `${Number(detail?.staff_discount_pct || 0)}% off`,
+              },
               { label: 'Default reorder level', value: detail?.default_reorder_level != null || detail?.reorder_level != null ? fmtQty(detail?.default_reorder_level ?? detail?.reorder_level) : '—' },
             ]}
             />

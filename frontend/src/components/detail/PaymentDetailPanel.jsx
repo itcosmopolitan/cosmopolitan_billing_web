@@ -24,7 +24,7 @@ export default function PaymentDetailPanel({
   const summary = [
     { label: 'Amount', value: fmt(detail?.totalAmount), tone: 'var(--green)' },
     {
-      label: 'Credit applied',
+      label: 'Store credit applied',
       value: (detail?.creditApplied || 0) > 0 ? fmt(detail.creditApplied) : '—',
       tone: (detail?.creditApplied || 0) > 0 ? 'var(--amber)' : undefined,
     },
@@ -78,7 +78,7 @@ export default function PaymentDetailPanel({
                 value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(detail?.totalAmount)}</span>,
               },
               ...(partyLabel === 'Customer' ? [{
-                label: 'Credit applied',
+                label: 'Store credit applied',
                 value: (detail?.creditApplied || 0) > 0
                   ? <span className="mono" style={{ color: 'var(--amber)' }}>{fmt(detail.creditApplied)}</span>
                   : '—',

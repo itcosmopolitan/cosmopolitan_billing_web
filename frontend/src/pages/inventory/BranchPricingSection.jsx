@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
-import { AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
+import { EmptyState, AutocompleteDropdown, Modal } from '@/components/ui'
 import { createBranchRow, retailBranches } from './itemFormShared'
 import TaxedPriceInput from './TaxedPriceInput'
 import { qtyInputStep } from '@/utils/decimalPrecision'
@@ -29,6 +28,7 @@ export default function BranchPricingSection({
   const isEdit = mode === 'edit'
   const showCreateOpeningStock = !isEdit && !batchTracking
   const showEditOpeningStock = isEdit && !batchTracking
+  const showOpeningStock = showCreateOpeningStock || showEditOpeningStock
   const initiallyListed = new Set(initialListedIds)
   const options = retailBranches(branches)
 
@@ -67,38 +67,34 @@ export default function BranchPricingSection({
   const handleRemoveBranchClick = async (rowId) => {
     const row = branchConfigs.find((r) => r._rowId === rowId)
     if (!row || !row.branch_id) {
-      // Empty row, just remove it
       removeRow(rowId)
       return
     }
-    
-    // Only check for batches in edit mode with an item ID
+
     if (!isEdit || !itemId) {
       removeRow(rowId)
       return
     }
-    
+
     setCheckingBatches(true)
     setPendingRemoveRowId(rowId)
     try {
       const info = await itemsAPI.getBranchBatchInfo(itemId, row.branch_id)
       if (info.batch_count > 0 || info.stock_qty > 0) {
-        // Show warning
         setBatchWarningData({
           rowId,
           branchName: row.branch_name,
           ...info,
         })
       } else {
-        // No batches/stock, safe to remove
         removeRow(rowId)
       }
     } catch (err) {
-      // If API fails, allow removal anyway (safer to fail open)
       console.error('Failed to check batch info:', err)
       removeRow(rowId)
     } finally {
       setCheckingBatches(false)
+      setPendingRemoveRowId(null)
     }
   }
 
@@ -113,12 +109,9 @@ export default function BranchPricingSection({
     setBatchWarningData(null)
   }
 
-
-
   const canAddMore = branchConfigs.length < options.length
-  const costPlaceholder = (v) => (v === '' || v == null ? `Default ${defaultCost || 0}` : undefined)
-  const pricePlaceholder = (v) => (v === '' || v == null ? `Default ${defaultPrice || 0}` : undefined)
-  const openingStockPlaceholder = '0'
+  const costPlaceholder = `Default ${defaultCost || 0}`
+  const pricePlaceholder = `Default ${defaultPrice || 0}`
   const reorderPlaceholder = String(defaultReorder || 10)
 
   const getProfitPercentage = (row) => {
@@ -134,26 +127,34 @@ export default function BranchPricingSection({
     )
 
     if (!Number.isFinite(cost) || !Number.isFinite(price) || cost === 0) {
-      return ''
+      return null
     }
 
-    return `${((price - cost) / cost * 100).toFixed(1)}%`
+    return ((price - cost) / cost) * 100
   }
+
+  const removalSummary = (() => {
+    if (!batchWarningData) return ''
+    const parts = []
+    if (batchWarningData.batch_count > 0) parts.push(`${batchWarningData.batch_count} batch(es)`)
+    if (batchWarningData.stock_qty > 0) parts.push(`${batchWarningData.stock_qty} unit(s) on hand`)
+    return parts.join(' and ')
+  })()
 
   if (!options.length) return null
 
   return (
-    <div style={{
-      marginTop: 12, padding: '12px 14px', background: 'var(--bg-raised)',
-      borderRadius: 8, border: '1px solid var(--border)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <div className="form-label" style={{ marginBottom: 0 }}>
-          Branch listing &amp; pricing
+    <section className="item-form-section item-form-section--branches">
+      <div className="item-form-section__head">
+        <div>
+          <h3>Branches</h3>
+          <p className="item-form-section__hint item-form-section__hint--inline">
+            List where this item is sold. Blank cost/sell uses catalog defaults.
+          </p>
         </div>
         <button
           type="button"
-          className="btn btn-secondary btn-xs"
+          className="btn btn-secondary btn-sm"
           onClick={addRow}
           disabled={!canAddMore}
           title={canAddMore ? undefined : 'All branches have been added'}
@@ -161,149 +162,144 @@ export default function BranchPricingSection({
           + Add branch
         </button>
       </div>
-      <AlertBar type="blue" icon="ℹ️">
-        Add each branch where this item is sold. Leave cost or sell price blank to use item defaults.
-        Branch amounts use the same Incl. GST / Excl. GST setting as the prices above.
-        {isEdit && ' Removing a branch row unlists the item there.'}
-        {' '}Stock and batches are added per branch from <strong>Items &amp; Stock</strong>.
-      </AlertBar>
 
       {branchConfigs.length === 0 ? (
-        <div style={{ marginTop: 12 }}>
+        <div className="branch-price-empty">
           <EmptyState
             icon="🏪"
-            title="No branches added"
-            desc='Click "Add branch" to list this item at one or more retail branches.'
+            title="No branches listed"
+            desc="Add each retail location where this item should appear."
+            action={(
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={addRow}
+                disabled={!canAddMore}
+              >
+                + Add branch
+              </button>
+            )}
           />
         </div>
       ) : (
-        <div style={{ overflowX: 'auto', marginTop: 10 }}>
-          <table className="data-table branch-pricing-table" style={{ marginBottom: 0 }}>
+        <div className="branch-price-table-wrap">
+          <table className="data-table branch-price-table">
             <thead>
               <tr>
                 <th>Branch</th>
-                <th className="text-right" style={{ width: 176 }}>Cost Price (MVR)</th>
-                <th className="text-right" style={{ width: 176 }}>Selling Price (MVR)</th>
-                <th className="text-right" style={{ width: 96 }}>Profit %</th>
-                {(showCreateOpeningStock || showEditOpeningStock) && <th className="text-right">Opening Qty</th>}
+                <th className="text-right">Cost</th>
+                <th className="text-right">Selling</th>
+                <th className="text-right">GP %</th>
+                {showOpeningStock && <th className="text-right">Opening</th>}
                 <th className="text-right">Reorder</th>
                 {isEdit && <th className="text-right">Stock</th>}
-                <th style={{ width: 44 }} />
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
               {branchConfigs.map((r) => {
                 const canEditOpeningInEdit = isEdit && r.branch_id && !initiallyListed.has(r.branch_id)
+                const profit = getProfitPercentage(r)
+                const removing = checkingBatches && pendingRemoveRowId === r._rowId
                 return (
-                <tr key={r._rowId}>
-                  <td>
-                    <AutocompleteDropdown
-                      value={r.branch_id || ''}
-                      onSelectOption={(opt) => patchRow(r._rowId, 'branch_id', opt?.id || '')}
-                      options={options.map((b) => ({
-                        id: b.id,
-                        label: b.name,
-                        disabled: usedBranchIds.has(b.id) && b.id !== r.branch_id,
-                      }))}
-                      isSearchFieldRequired={false}
-                      selectedLabel={r.branch_name || undefined}
-                      placeholder="Select branch…"
-                      searchPlaceholder="Search branches…"
-                      emptyLabel="No branches found"
-                      style={{ minWidth: 140, width: '100%' }}
-                    />
-                  </td>
-                  <td className="text-right">
-                    <TaxedPriceInput
-                      compact
-                      disabled={!r.branch_id}
-                      value={r.cost_price ?? ''}
-                      mode={priceTaxMode}
-                      taxRate={taxRate}
-                      placeholder={costPlaceholder(r.cost_price)}
-                      onValueChange={(v) => patchRow(r._rowId, 'cost_price', v)}
-                    />
-                  </td>
-                  <td className="text-right">
-                    <TaxedPriceInput
-                      compact
-                      disabled={!r.branch_id}
-                      value={r.selling_price ?? ''}
-                      mode={priceTaxMode}
-                      taxRate={taxRate}
-                      placeholder={pricePlaceholder(r.selling_price)}
-                      onValueChange={(v) => patchRow(r._rowId, 'selling_price', v)}
-                    />
-                  </td>
-                  <td className="text-right">
-                    <input
-                      className="form-input"
-                      type="text"
-                      style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
-                      value={getProfitPercentage(r)}
-                      readOnly
-                      disabled
-                    />
-                  </td>
-                  {(showCreateOpeningStock || showEditOpeningStock) && (
-                    <td className="text-right">
-                      {isEdit && !canEditOpeningInEdit ? (
-                        <input
-                          className="form-input"
-                          type="number"
-                          style={{ width: 80, marginLeft: 'auto', textAlign: 'right', opacity: 0.6, cursor: 'not-allowed' }}
-                          disabled
-                          value={r.available_stock ?? 0}
-                          title="Opening Qty can be set only for newly added branches"
-                        />
-                      ) : (
-                        <input
-                          className="form-input"
-                          type="number"
-                          min="0"
-                          step={qtyInputStep()}
-                          style={{ width: 80, marginLeft: 'auto', textAlign: 'right' }}
-                          disabled={!r.branch_id}
-                          placeholder={openingStockPlaceholder}
-                          value={r.opening_stock ?? ''}
-                          onChange={(e) => patchRow(r._rowId, 'opening_stock', e.target.value)}
-                        />
-                      )}
+                  <tr key={r._rowId}>
+                    <td className="branch-price-table__branch">
+                      <AutocompleteDropdown
+                        value={r.branch_id || ''}
+                        onSelectOption={(opt) => patchRow(r._rowId, 'branch_id', opt?.id || '')}
+                        options={options.map((b) => ({
+                          id: b.id,
+                          label: b.name,
+                          disabled: usedBranchIds.has(b.id) && b.id !== r.branch_id,
+                        }))}
+                        isSearchFieldRequired={false}
+                        selectedLabel={r.branch_name || undefined}
+                        placeholder="Select branch…"
+                        searchPlaceholder="Search branches…"
+                        emptyLabel="No branches found"
+                      />
                     </td>
-                  )}
-                  <td className="text-right">
-                    <input
-                      className="form-input"
-                      type="number"
-                      min="0"
-                      step={qtyInputStep()}
-                      style={{ width: 72, marginLeft: 'auto', textAlign: 'right' }}
-                      disabled={!r.branch_id}
-                      placeholder={reorderPlaceholder}
-                      value={r.reorder_level ?? ''}
-                      onChange={(e) => patchRow(r._rowId, 'reorder_level', e.target.value)}
-                    />
-                  </td>
-                  {isEdit && (
+                    <td className="text-right branch-price-table__price">
+                      <TaxedPriceInput
+                        dense
+                        disabled={!r.branch_id}
+                        value={r.cost_price ?? ''}
+                        mode={priceTaxMode}
+                        taxRate={taxRate}
+                        placeholder={costPlaceholder}
+                        onValueChange={(v) => patchRow(r._rowId, 'cost_price', v)}
+                      />
+                    </td>
+                    <td className="text-right branch-price-table__price">
+                      <TaxedPriceInput
+                        dense
+                        disabled={!r.branch_id}
+                        value={r.selling_price ?? ''}
+                        mode={priceTaxMode}
+                        taxRate={taxRate}
+                        placeholder={pricePlaceholder}
+                        onValueChange={(v) => patchRow(r._rowId, 'selling_price', v)}
+                      />
+                    </td>
                     <td className="text-right">
-                      <span className="mono" style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                        {fmtQty(r.available_stock ?? 0)}
+                      <span className={`branch-price-table__gp${profit != null && profit < 0 ? ' is-neg' : ''}`}>
+                        {profit == null ? '—' : `${profit.toFixed(1)}%`}
                       </span>
                     </td>
-                  )}
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => handleRemoveBranchClick(r._rowId)}
-                      disabled={checkingBatches && pendingRemoveRowId === r._rowId}
-                      title={checkingBatches && pendingRemoveRowId === r._rowId ? 'Checking…' : 'Remove branch'}
-                      aria-label="Remove branch"
-                    >
-                      {checkingBatches && pendingRemoveRowId === r._rowId ? '⏳' : '✕'}
-                    </button>
-                  </td>
-                </tr>
+                    {showOpeningStock && (
+                      <td className="text-right">
+                        {isEdit && !canEditOpeningInEdit ? (
+                          <input
+                            className="form-input branch-price-table__num"
+                            type="number"
+                            disabled
+                            value={r.available_stock ?? 0}
+                            title="Opening qty can be set only for newly added branches"
+                          />
+                        ) : (
+                          <input
+                            className="form-input branch-price-table__num"
+                            type="number"
+                            min="0"
+                            step={qtyInputStep()}
+                            disabled={!r.branch_id}
+                            placeholder="0"
+                            value={r.opening_stock ?? ''}
+                            onChange={(e) => patchRow(r._rowId, 'opening_stock', e.target.value)}
+                          />
+                        )}
+                      </td>
+                    )}
+                    <td className="text-right">
+                      <input
+                        className="form-input branch-price-table__num"
+                        type="number"
+                        min="0"
+                        step={qtyInputStep()}
+                        disabled={!r.branch_id}
+                        placeholder={reorderPlaceholder}
+                        value={r.reorder_level ?? ''}
+                        onChange={(e) => patchRow(r._rowId, 'reorder_level', e.target.value)}
+                      />
+                    </td>
+                    {isEdit && (
+                      <td className="text-right">
+                        <span className="branch-price-table__stock">{fmtQty(r.available_stock ?? 0)}</span>
+                      </td>
+                    )}
+                    <td className="branch-price-table__actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs branch-price-table__remove"
+                        onClick={() => handleRemoveBranchClick(r._rowId)}
+                        disabled={removing}
+                        title={removing ? 'Checking…' : 'Remove branch'}
+                        aria-label="Remove branch"
+                      >
+                        {removing ? '…' : '✕'}
+                      </button>
+                    </td>
+                  </tr>
                 )
               })}
             </tbody>
@@ -312,88 +308,34 @@ export default function BranchPricingSection({
       )}
 
       {!isEdit && (
-        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
-          Default reorder level: {defaultReorder || 10}. Leave branch reorder blank to use the default.
-        </div>
+        <p className="item-form-section__hint" style={{ marginTop: 10, marginBottom: 0 }}>
+          Default reorder: {defaultReorder || 10}. Blank branch reorder uses this default.
+        </p>
       )}
 
-      {/* Batch removal warning modal */}
-      {batchWarningData && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.7)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-        }}>
-          <div style={{
-            background: '#fff',
-            borderRadius: 8,
-            boxShadow: '0 10px 30px rgba(0, 0, 0, 0.3)',
-            maxWidth: 380,
-            width: '90%',
-            textAlign: 'center',
-            padding: '32px 24px 24px',
-          }}>
-            {/* Icon */}
-            <div style={{
-              fontSize: 32,
-              marginBottom: 16,
-            }}>
-              ⚠️
-            </div>
-
-            {/* Title */}
-            <div style={{
-              fontSize: 16,
-              fontWeight: 600,
-              color: '#000',
-              marginBottom: 12,
-            }}>
-              Remove "{batchWarningData.branchName}" branch?
-            </div>
-
-            {/* Description */}
-            <div style={{
-              fontSize: 13,
-              color: '#666',
-              lineHeight: 1.6,
-              marginBottom: 24,
-            }}>
-              This branch has <strong>{batchWarningData.batch_count > 0 ? `${batchWarningData.batch_count} batch(es)` : ''}{batchWarningData.batch_count > 0 && batchWarningData.stock_qty > 0 ? ' and ' : ''}{batchWarningData.stock_qty > 0 ? `${batchWarningData.stock_qty} units` : ''}</strong>. Removing this branch will permanently delete all batches and stock data for this item at this branch.
-            </div>
-
-            {/* Buttons */}
-            <div style={{
-              display: 'flex',
-              gap: 12,
-              justifyContent: 'center',
-            }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={handleCancelRemoval}
-                style={{ minWidth: 100 }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={handleConfirmRemoval}
-                style={{ minWidth: 100 }}
-              >
-                Yes, Remove
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        open={Boolean(batchWarningData)}
+        onClose={handleCancelRemoval}
+        title="Remove branch?"
+        icon="⚠️"
+        size="sm"
+        footer={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={handleCancelRemoval}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-danger" onClick={handleConfirmRemoval}>
+              Remove branch
+            </button>
+          </>
+        )}
+      >
+        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+          <strong>{batchWarningData?.branchName}</strong>
+          {removalSummary ? <> has {removalSummary}</> : null}.
+          Removing it permanently deletes batches and stock for this item at that branch.
+        </p>
+      </Modal>
+    </section>
   )
 }

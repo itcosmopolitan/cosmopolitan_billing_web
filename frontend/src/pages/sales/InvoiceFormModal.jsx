@@ -10,7 +10,7 @@ import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import { emptySaleLine, suggestedDiscountForCustomer, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType } from './salesFormShared'
+import { emptySaleLine, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType, resolveCategoryLinePricing } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
@@ -47,15 +47,20 @@ export default function InvoiceFormModal({
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
-    const suggested = suggestedDiscountForCustomer({ ...inv, ...pattern }, invoiceForm.customerType)
+    const retailPrice = Number(inv.selling_price || 0) || 0
+    const resolved = resolveCategoryLinePricing(
+      { ...inv, ...pattern, retailPrice, price: retailPrice },
+      invoiceForm.customerType,
+    )
     patchLine(i, {
       item_id: inv.id,
       name: inv.name,
-      price: inv.selling_price,
+      price: resolved.price,
+      retailPrice,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
       taxRate: inv.tax_rate || 0,
       ...pattern,
-      lineDiscount: suggested,
+      lineDiscount: resolved.discountPct,
       lineDiscountType: '%',
       batchTracking: Boolean(inv.batch_tracking),
       expiryTracking: Boolean(inv.expiry_tracking),

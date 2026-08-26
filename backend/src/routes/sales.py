@@ -5582,13 +5582,8 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
                 risk="low",
                 ip_address=None,
                 branch_id=inv.branch_id,
-                date=ret.date,
-                description=f"Refund for return {ret.number} on {inv.number}",
-                category="Sale Return — Refund",
-                source_type="sale_return",
-                source_id=ret.id,
-                source_ref=ret.number,
-                recorded_by=data.created_by or "Staff",
+                record_type="sale_return",
+                record_id=ret.id,
             ))
 
     _recompute_invoice_status(inv)
