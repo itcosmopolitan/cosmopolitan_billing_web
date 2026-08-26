@@ -5,10 +5,11 @@ import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
-import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 import RowActionsMenu from './RowActionsMenu'
 import TransferDetailPanel from './TransferDetailPanel'
 
@@ -44,6 +45,7 @@ function transferStatusChip(status) {
 
 export default function TransfersPage() {
   const can = useCan()
+  const columnPrefs = useColumnPrefs('transfers.list')
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeBranch = useAppStore((s) => s.activeBranch)
@@ -419,6 +421,7 @@ export default function TransfersPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
                     {canDelete && (
                       <th style={{ width: 36 }}>
                         <input
@@ -431,12 +434,23 @@ export default function TransfersPage() {
                         />
                       </th>
                     )}
-                    <SortableHeader label="Transfer #" sortKey="ref_number" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
-                    <SortableHeader label="From → To" sortKey="from_branch_id" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
-                    <th>Items</th>
-                    <SortableHeader label="Status" sortKey="status" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
-                    <SortableHeader label="Date" sortKey="created_at" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
-                    <th></th>
+                    {columnPrefs.visibleIds.map((id) => {
+                      if (id === 'ref_number') {
+                        return <SortableHeader key={id} label="Transfer #" sortKey="ref_number" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                      }
+                      if (id === 'route') {
+                        return <SortableHeader key={id} label="From → To" sortKey="from_branch_id" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                      }
+                      if (id === 'items') return <th key={id}>Items</th>
+                      if (id === 'status') {
+                        return <SortableHeader key={id} label="Status" sortKey="status" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                      }
+                      if (id === 'date') {
+                        return <SortableHeader key={id} label="Date" sortKey="created_at" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                      }
+                      return null
+                    })}
+                    <th aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -444,6 +458,7 @@ export default function TransfersPage() {
                     const chip = transferStatusChip(t.status)
                     return (
                     <tr key={t.id} {...tableRowClickProps(() => setShowDetail(t))}>
+                      <ColumnPrefsSpacer />
                       {canDelete && (
                         <td data-no-row-click>
                           {t.status === 'pending' ? (
@@ -457,19 +472,38 @@ export default function TransfersPage() {
                           ) : null}
                         </td>
                       )}
-                      <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}>{t.ref_number}</span></td>
-                      <td>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{t.from_branch_name || t.from_branch_id}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>→ {t.to_branch_name || t.to_branch_id}</div>
-                      </td>
-                      <td>
-                        <div style={{ fontSize: 13 }}>{t.items?.length || 0} item{t.items?.length !== 1 ? 's' : ''}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.items?.map((i) => i.name?.split(' ')[0]).join(', ')}</div>
-                      </td>
-                      <td>
-                        <Chip status={chip.status} label={chip.label} />
-                      </td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || 'N/A'}</td>
+                      {columnPrefs.visibleIds.map((id) => {
+                        if (id === 'ref_number') {
+                          return <td key={id}><span className="mono" style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}>{t.ref_number}</span></td>
+                        }
+                        if (id === 'route') {
+                          return (
+                            <td key={id}>
+                              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{t.from_branch_name || t.from_branch_id}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>→ {t.to_branch_name || t.to_branch_id}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'items') {
+                          return (
+                            <td key={id}>
+                              <div style={{ fontSize: 13 }}>{t.items?.length || 0} item{t.items?.length !== 1 ? 's' : ''}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.items?.map((i) => i.name?.split(' ')[0]).join(', ')}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'status') {
+                          return (
+                            <td key={id}>
+                              <Chip status={chip.status} label={chip.label} />
+                            </td>
+                          )
+                        }
+                        if (id === 'date') {
+                          return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || 'N/A'}</td>
+                        }
+                        return null
+                      })}
                       <td className="text-right">
                         <RowActionsMenu
                           busy={!!actionBusy || deleteBusy}
@@ -544,6 +578,14 @@ export default function TransfersPage() {
           </Card>
         </div>
       </div>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       <TransferDetailPanel
         open={!!showDetail}

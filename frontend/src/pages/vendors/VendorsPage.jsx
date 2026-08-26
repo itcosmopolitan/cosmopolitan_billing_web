@@ -3,14 +3,16 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 import VendorDetailPanel from './VendorDetailPanel'
 
 export default function VendorsPage() {
   const can = useCan()
+  const columnPrefs = useColumnPrefs('vendors.list')
   const [search, setSearch]   = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
@@ -241,36 +243,78 @@ export default function VendorsPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <SortableHeader label="Vendor" sortKey="name" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
-                <SortableHeader label="Contact" sortKey="contact_person" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
-                <th>GST Reg No</th>
-                <SortableHeader label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
-                <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
-                <th className="text-right" style={{ textAlign: 'right' }}>Credit</th>
-                <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
-                <th>Status</th>
-                <th></th>
+                <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+                {columnPrefs.visibleIds.map((id) => {
+                  if (id === 'vendor') {
+                    return <SortableHeader key={id} label="Vendor" sortKey="name" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                  }
+                  if (id === 'contact') {
+                    return <SortableHeader key={id} label="Contact" sortKey="contact_person" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                  }
+                  if (id === 'gstin') return <th key={id}>GST Reg No</th>
+                  if (id === 'payment_terms') {
+                    return <SortableHeader key={id} label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
+                  }
+                  if (id === 'outstanding') {
+                    return <SortableHeader key={id} label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                  }
+                  if (id === 'credit') {
+                    return <th key={id} className="text-right" style={{ textAlign: 'right' }}>Credit</th>
+                  }
+                  if (id === 'total_purchases') {
+                    return <SortableHeader key={id} label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                  }
+                  if (id === 'status') return <th key={id}>Status</th>
+                  return null
+                })}
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
               {vendors.map(v => (
                 <tr key={v.id} {...tableRowClickProps(() => setShowDetail(v))}>
-                  <td>
-                    <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
-                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || '—'}</div>
-                  </td>
-                  <td>
-                    <div style={{fontSize:12.5}}>{v.contact_person || '—'}</div>
-                    <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.phone || '—'}</div>
-                  </td>
-                  <td style={{fontSize:12,fontFamily:'DM Mono,monospace'}}>{v.gstin||'—'}</td>
-                  <td><Tag>{v.payment_terms}</Tag></td>
-                  <td className="text-right mono" style={{color:v.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(v.outstanding)}</td>
-                  <td className="text-right mono" style={{ color: v.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                    {v.creditBalance > 0 ? fmt(v.creditBalance) : '—'}
-                  </td>
-                  <td className="text-right mono">{fmt(v.totalPurchases)}</td>
-                  <td><Chip status={v.active ? 'active' : 'inactive'} /></td>
+                  <ColumnPrefsSpacer />
+                  {columnPrefs.visibleIds.map((id) => {
+                    if (id === 'vendor') {
+                      return (
+                        <td key={id}>
+                          <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
+                          <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || '—'}</div>
+                        </td>
+                      )
+                    }
+                    if (id === 'contact') {
+                      return (
+                        <td key={id}>
+                          <div style={{fontSize:12.5}}>{v.contact_person || '—'}</div>
+                          <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.phone || '—'}</div>
+                        </td>
+                      )
+                    }
+                    if (id === 'gstin') {
+                      return <td key={id} style={{fontSize:12,fontFamily:'DM Mono,monospace'}}>{v.gstin||'—'}</td>
+                    }
+                    if (id === 'payment_terms') {
+                      return <td key={id}><Tag>{v.payment_terms}</Tag></td>
+                    }
+                    if (id === 'outstanding') {
+                      return <td key={id} className="text-right mono" style={{color:v.outstanding>0?'var(--red)':'var(--green)'}}>{fmt(v.outstanding)}</td>
+                    }
+                    if (id === 'credit') {
+                      return (
+                        <td key={id} className="text-right mono" style={{ color: v.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                          {v.creditBalance > 0 ? fmt(v.creditBalance) : '—'}
+                        </td>
+                      )
+                    }
+                    if (id === 'total_purchases') {
+                      return <td key={id} className="text-right mono">{fmt(v.totalPurchases)}</td>
+                    }
+                    if (id === 'status') {
+                      return <td key={id}><Chip status={v.active ? 'active' : 'inactive'} /></td>
+                    }
+                    return null
+                  })}
                   <td data-no-row-click>
                     <div style={{display:'flex',gap:4}}>
                       <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(v)}>View</button>
@@ -293,6 +337,14 @@ export default function VendorsPage() {
           disabled={loading}
         />
       </Card>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Add Vendor" icon="🏭" size="md" busy={saving}
         footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Vendor'}</button></>}>

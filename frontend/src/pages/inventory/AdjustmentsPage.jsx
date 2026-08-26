@@ -8,12 +8,14 @@ import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
   EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, AutocompleteDropdown,
   PageActionsMenu, buildListPageMenuActions,
+  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { fmtDate, fmtDateTime, fmtQty } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 import RowActionsMenu from './RowActionsMenu'
 import AdjustmentDetailPanel from './AdjustmentDetailPanel'
 
@@ -63,6 +65,7 @@ function PersonWhen({ name, at }) {
 
 export default function AdjustmentsPage() {
   const can = useCan()
+  const columnPrefs = useColumnPrefs('adjustments.list')
   const user = useAppStore((s) => s.user)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const [activityTarget, setActivityTarget] = useState(null)
@@ -473,6 +476,7 @@ export default function AdjustmentsPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
                     {canDelete && (
                       <th style={{ width: 36 }}>
                         <input
@@ -485,19 +489,31 @@ export default function AdjustmentsPage() {
                         />
                       </th>
                     )}
-                    <SortableHeader label="Adjustment #" sortKey="ref_number" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
-                    <SortableHeader label="Branch" sortKey="branch_name" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
-                    <th>Item</th>
-                    <th>Qty change</th>
-                    <SortableHeader label="Status" sortKey="status" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
-                    <SortableHeader label="Requested" sortKey="created_at" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
-                    <th>{resolvedColumnLabel(tab)}</th>
-                    <th></th>
+                    {columnPrefs.visibleIds.map((id) => {
+                      if (id === 'ref_number') {
+                        return <SortableHeader key={id} label="Adjustment #" sortKey="ref_number" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
+                      }
+                      if (id === 'branch') {
+                        return <SortableHeader key={id} label="Branch" sortKey="branch_name" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
+                      }
+                      if (id === 'item') return <th key={id}>Item</th>
+                      if (id === 'qty_change') return <th key={id}>Qty change</th>
+                      if (id === 'status') {
+                        return <SortableHeader key={id} label="Status" sortKey="status" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
+                      }
+                      if (id === 'requested') {
+                        return <SortableHeader key={id} label="Requested" sortKey="created_at" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
+                      }
+                      if (id === 'resolved') return <th key={id}>{resolvedColumnLabel(tab)}</th>
+                      return null
+                    })}
+                    <th aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
                   {requests.map((r) => (
                     <tr key={r.id} {...tableRowClickProps(() => setShowDetail(r))}>
+                      <ColumnPrefsSpacer />
                       {canDelete && (
                         <td data-no-row-click>
                           {r.status === 'pending' ? (
@@ -511,37 +527,64 @@ export default function AdjustmentsPage() {
                           ) : null}
                         </td>
                       )}
-                      <td><span className="mono" style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}>{r.ref_number}</span></td>
-                      <td style={{ fontSize: 13 }}>{r.branch_name || r.branch_id}</td>
-                      <td>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>{r.item_name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.reason}</div>
-                      </td>
-                      <td className="mono" style={{ fontSize: 12 }}>
-                        {fmtQty(r.before_qty)} → <strong>{fmtQty(r.new_qty)}</strong>
-                        <span style={{ color: (r.delta || 0) >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
-                          ({(r.delta || 0) >= 0 ? '+' : ''}{fmtQty(r.delta ?? (r.new_qty - r.before_qty))})
-                        </span>
-                      </td>
-                      <td>
-                        <Chip
-                          status={r.status === 'approved' ? 'active' : r.status === 'pending' ? 'pending' : 'draft'}
-                          label={r.status?.charAt(0).toUpperCase() + r.status?.slice(1)}
-                        />
-                      </td>
-                      <td>
-                        <PersonWhen name={r.requested_by} at={r.requested_at || r.created_at} />
-                      </td>
-                      <td>
-                        {r.status === 'pending' ? (
-                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
-                        ) : (
-                          <PersonWhen
-                            name={r.resolved_by || r.approved_by || r.rejected_by}
-                            at={r.resolved_at}
-                          />
-                        )}
-                      </td>
+                      {columnPrefs.visibleIds.map((id) => {
+                        if (id === 'ref_number') {
+                          return <td key={id}><span className="mono" style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600 }}>{r.ref_number}</span></td>
+                        }
+                        if (id === 'branch') {
+                          return <td key={id} style={{ fontSize: 13 }}>{r.branch_name || r.branch_id}</td>
+                        }
+                        if (id === 'item') {
+                          return (
+                            <td key={id}>
+                              <div style={{ fontSize: 13, fontWeight: 500 }}>{r.item_name}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.reason}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'qty_change') {
+                          return (
+                            <td key={id} className="mono" style={{ fontSize: 12 }}>
+                              {fmtQty(r.before_qty)} → <strong>{fmtQty(r.new_qty)}</strong>
+                              <span style={{ color: (r.delta || 0) >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }}>
+                                ({(r.delta || 0) >= 0 ? '+' : ''}{fmtQty(r.delta ?? (r.new_qty - r.before_qty))})
+                              </span>
+                            </td>
+                          )
+                        }
+                        if (id === 'status') {
+                          return (
+                            <td key={id}>
+                              <Chip
+                                status={r.status === 'approved' ? 'active' : r.status === 'pending' ? 'pending' : 'draft'}
+                                label={r.status?.charAt(0).toUpperCase() + r.status?.slice(1)}
+                              />
+                            </td>
+                          )
+                        }
+                        if (id === 'requested') {
+                          return (
+                            <td key={id}>
+                              <PersonWhen name={r.requested_by} at={r.requested_at || r.created_at} />
+                            </td>
+                          )
+                        }
+                        if (id === 'resolved') {
+                          return (
+                            <td key={id}>
+                              {r.status === 'pending' ? (
+                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
+                              ) : (
+                                <PersonWhen
+                                  name={r.resolved_by || r.approved_by || r.rejected_by}
+                                  at={r.resolved_at}
+                                />
+                              )}
+                            </td>
+                          )
+                        }
+                        return null
+                      })}
                       <td className="text-right">
                         <RowActionsMenu
                           busy={!!actionBusy || deleteBusy}
@@ -603,6 +646,14 @@ export default function AdjustmentsPage() {
           </Card>
         </div>
       </div>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       <Modal open={showNew} onClose={() => { if (!submitting) { setShowNew(false); setPickedItem(null) } }} title="New Stock Adjustment Request" icon="⚖" size="md" busy={submitting}
         footer={<>

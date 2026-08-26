@@ -129,6 +129,7 @@ export default function App() {
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
+  const setColumnTables = useAppStore((s) => s.setColumnTables)
   const location = useLocation()
   const [booting, setBooting] = useState(true)
   const [setupStatusResolved, setSetupStatusResolved] = useState(false)
@@ -140,7 +141,7 @@ export default function App() {
     document.documentElement.style.colorScheme = nextTheme
   }, [theme])
 
-  // Boot-time hydration. Public catalog always; branches + /auth/me only with token.
+  // Boot-time hydration once per app load (not on every route change).
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -157,9 +158,15 @@ export default function App() {
 
         const data = token
           ? await bootstrapAuthenticatedData()
-          : { ...(await bootstrapPublicData()), branches: [], user: null, permissions: [] }
+          : { ...(await bootstrapPublicData()), branches: [], user: null, permissions: [], columnTables: {} }
         if (cancelled) return
-        applyBootstrapToStore(data, { setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs })
+        applyBootstrapToStore(data, {
+          setSession,
+          setPermCatalog,
+          setBranches,
+          setDecimalPrecisionPrefs,
+          setColumnTables,
+        })
       } finally {
         if (!cancelled) {
           setBooting(false)
@@ -168,7 +175,9 @@ export default function App() {
       }
     })()
     return () => { cancelled = true }
-  }, [setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs, location.pathname])
+  // Intentionally omit location.pathname — sidebar navigation must not re-bootstrap.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs, setColumnTables])
 
   if (!setupStatusResolved || booting) return <BootSplash />
   if (setupRequired && location.pathname !== '/setup') return <Navigate to="/setup" replace />

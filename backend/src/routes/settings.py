@@ -3,6 +3,7 @@ Settings — organisation profile and document numbering configuration.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any, Literal, Optional
 
@@ -12,6 +13,7 @@ from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.database import get_db
 from src.document_numbering import get_counter_seq, peek_next_number, serialize_numbering
@@ -33,7 +35,9 @@ from src.models import (
     PurchaseOrder,
     SalesOrder,
     User,
+    UserColumnPrefs,
 )
+from src.column_catalog import COLUMN_CATALOG, build_column_tables, resolve_table_prefs
 from src.routes._numbering import parse_numbering_config, serialize_numbering_config
 from src.services.audit_service import add_audit_log
 from src.decimal_precision import clamp_precision, org_precision
@@ -645,3 +649,100 @@ async def create_discount_reason(
         reason=new_reason.reason,
         created_at=new_reason.created_at,
     )
+
+
+# ─── Per-user list column preferences (Customize Columns) ─────────────────────
+# Boot returns the full catalog + resolved prefs for every list table.
+# Frontend must not define columns — it only renders ids from this payload.
+
+_TABLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+
+
+class ColumnPrefUpdate(BaseModel):
+    """Update one table inside the shared column-prefs document."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    table_key: str = Field(..., alias="tableKey", min_length=1, max_length=64)
+    order: list[str] = Field(default_factory=list)
+    hidden: list[str] = Field(default_factory=list)
+
+
+def _normalize_pref_entry(raw: Any) -> dict[str, list[str]]:
+    if not isinstance(raw, dict):
+        return {"order": [], "hidden": []}
+    order = raw.get("order") or []
+    hidden = raw.get("hidden") or []
+    if not isinstance(order, list):
+        order = []
+    if not isinstance(hidden, list):
+        hidden = []
+    return {
+        "order": [str(x) for x in order if x is not None and str(x).strip()],
+        "hidden": [str(x) for x in hidden if x is not None and str(x).strip()],
+    }
+
+
+def _prefs_map(row: Optional[UserColumnPrefs]) -> dict[str, dict[str, list[str]]]:
+    if not row or not isinstance(row.prefs, dict):
+        return {}
+    out: dict[str, dict[str, list[str]]] = {}
+    for key, val in row.prefs.items():
+        if not isinstance(key, str) or key not in COLUMN_CATALOG:
+            continue
+        out[key] = _normalize_pref_entry(val)
+    return out
+
+
+@router.get("/column-prefs")
+async def get_column_prefs(
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """All list-table columns + resolved order/hidden for the current user.
+
+    Returned once at app boot. Pages render only columns present here.
+    """
+    row = (
+        await db.execute(select(UserColumnPrefs).where(UserColumnPrefs.user_id == user.id))
+    ).scalar_one_or_none()
+    tables = build_column_tables(_prefs_map(row))
+    return {"tables": tables}
+
+
+@router.put("/column-prefs")
+async def put_column_prefs(
+    body: ColumnPrefUpdate,
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upsert one list page's order/hidden inside the shared prefs document."""
+    table_key = (body.table_key or "").strip()
+    if table_key not in COLUMN_CATALOG or not _TABLE_KEY_RE.match(table_key):
+        raise HTTPException(status_code=400, detail="Unknown tableKey")
+
+    columns = COLUMN_CATALOG[table_key]
+    entry = resolve_table_prefs(
+        columns,
+        _normalize_pref_entry({"order": body.order, "hidden": body.hidden}),
+    )
+    row = (
+        await db.execute(select(UserColumnPrefs).where(UserColumnPrefs.user_id == user.id))
+    ).scalar_one_or_none()
+    if row is None:
+        row = UserColumnPrefs(user_id=user.id, prefs={})
+        db.add(row)
+
+    prefs = dict(row.prefs or {}) if isinstance(row.prefs, dict) else {}
+    prefs[table_key] = entry
+    row.prefs = prefs
+    flag_modified(row, "prefs")
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+
+    tables = build_column_tables(_prefs_map(row))
+    return {
+        "tableKey": table_key,
+        "table": tables[table_key],
+        "tables": tables,
+    }

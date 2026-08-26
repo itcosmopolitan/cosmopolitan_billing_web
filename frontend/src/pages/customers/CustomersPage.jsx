@@ -5,14 +5,16 @@ import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { decomposeAddress } from '@/utils/address'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 import CustomerDetailPanel from './CustomerDetailPanel'
 
 export default function CustomersPage() {
   const can = useCan()
+  const columnPrefs = useColumnPrefs('customers.list')
   const [search, setSearch]     = useState('')
   const [typeF, setTypeF]       = useState('')
   const [customerModalOpen, setCustomerModalOpen] = useState(false)
@@ -376,22 +378,102 @@ export default function CustomersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <SortableHeader label="Customer" sortKey="name" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
-                <SortableHeader label="Contact" sortKey="phone" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
-                <SortableHeader label="Pricing" sortKey="customer_type" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} />
-                <th>KAM</th>
-                <th>Branch</th>
-                <th>Credit Terms</th>
-                <SortableHeader label="Account Limit" sortKey="credit_limit" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
-                <SortableHeader label="Outstanding" sortKey="outstanding" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
-                {/* Sales Phase 1 (2026-05-23): money we owe the customer.
-                    Read-only display; applying credit is manual in v1. Not
-                    server-side sortable yet (would need backend allow-list
-                    update) — defer to PR 2 if anyone asks. */}
-                <th className="text-right" style={{textAlign:'right'}}>Store Credit</th>
-                <th style={{width:100}}>Limit Used</th>
-                <SortableHeader label="Total Purchases" sortKey="total_purchases" sortBy={custSortBy} sortOrder={custSortOrder} onSort={onSort} className="text-right" align="right" />
-                <th>Status</th>
+                <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+                {columnPrefs.visibleIds.map((id) => {
+                  if (id === 'customer') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Customer"
+                        sortKey="name"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                      />
+                    )
+                  }
+                  if (id === 'contact') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Contact"
+                        sortKey="phone"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                      />
+                    )
+                  }
+                  if (id === 'pricing') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Pricing"
+                        sortKey="customer_type"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                      />
+                    )
+                  }
+                  if (id === 'kam') return <th key={id}>KAM</th>
+                  if (id === 'branch') return <th key={id}>Branch</th>
+                  if (id === 'credit_terms') return <th key={id}>Credit Terms</th>
+                  if (id === 'account_limit') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Account Limit"
+                        sortKey="credit_limit"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                        className="text-right"
+                        align="right"
+                      />
+                    )
+                  }
+                  if (id === 'outstanding') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Outstanding"
+                        sortKey="outstanding"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                        className="text-right"
+                        align="right"
+                      />
+                    )
+                  }
+                  if (id === 'store_credit') {
+                    return (
+                      <th key={id} className="text-right" style={{ textAlign: 'right' }}>
+                        Store Credit
+                      </th>
+                    )
+                  }
+                  if (id === 'limit_used') {
+                    return <th key={id} style={{ width: 100 }}>Limit Used</th>
+                  }
+                  if (id === 'total_purchases') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Total Purchases"
+                        sortKey="total_purchases"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                        className="text-right"
+                        align="right"
+                      />
+                    )
+                  }
+                  if (id === 'status') return <th key={id}>Status</th>
+                  return null
+                })}
                 <th aria-label="Actions" />
               </tr>
             </thead>
@@ -400,30 +482,92 @@ export default function CustomersPage() {
                 const pct = creditUsedPct(c)
                 return (
                   <tr key={c.id} {...tableRowClickProps(() => setShowDetail(c))}>
-                    <td>
-                      <div style={{ fontWeight:500, color:'var(--text-primary)', fontSize:13 }}>{c.name}</div>
-                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>Customer ID: {c.customer_code || c.customerCode || '—'}</div>
-                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.gstIn || 'No GST Reg No'}</div>
-                    </td>
-                    <td>
-                      <div style={{ fontSize:12.5 }}>{c.phone}</div>
-                      <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.email || '—'}</div>
-                    </td>
-                    <td><Tag color={c.type==='wholesale' ? 'var(--purple)' : c.type === 'staff' ? 'var(--accent)' : undefined}>{CUSTOMER_TYPE_LABELS[c.type] || 'Retail'}</Tag></td>
-                    <td style={{ fontSize:12 }}>{c.keyAccountManager || '—'}</td>
-                    <td style={{ fontSize:12 }}>{branches.find(b=>b.id===c.branchId)?.name || c.branchId}</td>
-                    <td style={{ fontSize:12 }}>{c.creditTerms || '—'}</td>
-                    <td className="text-right mono">{fmt(c.creditLimit)}</td>
-                    <td className="text-right mono" style={{ color: c.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(c.outstanding)}</td>
-                    <td className="text-right mono" style={{ color: c.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                      {c.creditBalance > 0 ? fmt(c.creditBalance) : '—'}
-                    </td>
-                    <td>
-                      <ProgressBar value={pct} color={pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : 'var(--green)'} />
-                      <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:2 }}>{Math.round(pct)}%</div>
-                    </td>
-                    <td className="text-right mono">{fmt(c.totalPurchases)}</td>
-                    <td><Chip status={c.active ? 'active' : 'inactive'} /></td>
+                    <ColumnPrefsSpacer />
+                    {columnPrefs.visibleIds.map((id) => {
+                      if (id === 'customer') {
+                        return (
+                          <td key={id}>
+                            <div style={{ fontWeight:500, color:'var(--text-primary)', fontSize:13 }}>{c.name}</div>
+                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>Customer ID: {c.customer_code || c.customerCode || '—'}</div>
+                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.gstIn || 'No GST Reg No'}</div>
+                          </td>
+                        )
+                      }
+                      if (id === 'contact') {
+                        return (
+                          <td key={id}>
+                            <div style={{ fontSize:12.5 }}>{c.phone}</div>
+                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.email || '—'}</div>
+                          </td>
+                        )
+                      }
+                      if (id === 'pricing') {
+                        return (
+                          <td key={id}>
+                            <Tag color={c.type==='wholesale' ? 'var(--purple)' : c.type === 'staff' ? 'var(--accent)' : undefined}>
+                              {CUSTOMER_TYPE_LABELS[c.type] || 'Retail'}
+                            </Tag>
+                          </td>
+                        )
+                      }
+                      if (id === 'kam') {
+                        return <td key={id} style={{ fontSize:12 }}>{c.keyAccountManager || '—'}</td>
+                      }
+                      if (id === 'branch') {
+                        return (
+                          <td key={id} style={{ fontSize:12 }}>
+                            {branches.find(b=>b.id===c.branchId)?.name || c.branchId}
+                          </td>
+                        )
+                      }
+                      if (id === 'credit_terms') {
+                        return <td key={id} style={{ fontSize:12 }}>{c.creditTerms || '—'}</td>
+                      }
+                      if (id === 'account_limit') {
+                        return <td key={id} className="text-right mono">{fmt(c.creditLimit)}</td>
+                      }
+                      if (id === 'outstanding') {
+                        return (
+                          <td
+                            key={id}
+                            className="text-right mono"
+                            style={{ color: c.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}
+                          >
+                            {fmt(c.outstanding)}
+                          </td>
+                        )
+                      }
+                      if (id === 'store_credit') {
+                        return (
+                          <td
+                            key={id}
+                            className="text-right mono"
+                            style={{ color: c.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}
+                          >
+                            {c.creditBalance > 0 ? fmt(c.creditBalance) : '—'}
+                          </td>
+                        )
+                      }
+                      if (id === 'limit_used') {
+                        return (
+                          <td key={id}>
+                            <ProgressBar value={pct} color={pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : 'var(--green)'} />
+                            <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:2 }}>{Math.round(pct)}%</div>
+                          </td>
+                        )
+                      }
+                      if (id === 'total_purchases') {
+                        return <td key={id} className="text-right mono">{fmt(c.totalPurchases)}</td>
+                      }
+                      if (id === 'status') {
+                        return (
+                          <td key={id}>
+                            <Chip status={c.active ? 'active' : 'inactive'} />
+                          </td>
+                        )
+                      }
+                      return null
+                    })}
                     <td className="text-right">
                       <RowActionsMenu
                         ariaLabel={`Actions for ${c.name}`}
@@ -460,6 +604,14 @@ export default function CustomersPage() {
           disabled={loading}
         />
       </Card>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       {/* Add / Edit Customer */}
       <Modal

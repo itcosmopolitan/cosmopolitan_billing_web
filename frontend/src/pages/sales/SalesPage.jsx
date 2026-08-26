@@ -6,8 +6,9 @@ import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 import {
   QUOTE_STATUS_FILTER_OPTIONS,
   PAYMENT_STATUS_FILTER_OPTIONS,
@@ -62,6 +63,11 @@ export default function SalesPage() {
   const [searchParams] = useSearchParams()
   const can = useCan()
   const canActivity = can('history.view', 'comments.view')
+  const invoiceColumnPrefs = useColumnPrefs('sales.invoices')
+  const quoteColumnPrefs = useColumnPrefs('sales.quotes')
+  const orderColumnPrefs = useColumnPrefs('sales.orders')
+  const returnColumnPrefs = useColumnPrefs('sales.returns')
+  const paymentColumnPrefs = useColumnPrefs('sales.payments')
   const tabParam = searchParams.get('tab')
   const tab = VALID_TABS.has(tabParam) ? tabParam : 'quotes'
   const viewId = searchParams.get('view')
@@ -920,6 +926,7 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={invoiceColumnPrefs.openCustomize} />
                     <th style={{ width: 36 }}>
                       <input
                         type="checkbox"
@@ -929,16 +936,19 @@ export default function SalesPage() {
                         style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                       />
                     </th>
-                    <SortableHeader label="Invoice #" sortKey="number" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
-                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
-                    <SortableHeader label="Branch" sortKey="branch_id" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
-                    <SortableHeader label="Date" sortKey="date" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
-                    <SortableHeader label="Cashier" sortKey="cashier" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
-                    <SortableHeader label="Amount" sortKey="total" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
-                    <SortableHeader label="Paid" sortKey="paid_amount" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
-                    <SortableHeader label="Mode" sortKey="payment_mode" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
-                    <SortableHeader label="Status" sortKey="status" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
-                    <th>Returns</th>
+                    {invoiceColumnPrefs.visibleIds.map((id) => {
+                      if (id === 'number') return <SortableHeader key={id} label="Invoice #" sortKey="number" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
+                      if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'branch') return <SortableHeader key={id} label="Branch" sortKey="branch_id" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
+                      if (id === 'cashier') return <SortableHeader key={id} label="Cashier" sortKey="cashier" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'paid') return <SortableHeader key={id} label="Paid" sortKey="paid_amount" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'mode') return <SortableHeader key={id} label="Mode" sortKey="payment_mode" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'returns') return <th key={id}>Returns</th>
+                      return null
+                    })}
                     <th></th>
                   </tr>
                 </thead>
@@ -950,6 +960,7 @@ export default function SalesPage() {
                         style: selectedIds.has(inv.id) ? { background: 'var(--accent-bg)' } : undefined,
                       })}
                     >
+                      <ColumnPrefsSpacer />
                       <td data-no-row-click>
                         <input
                           type="checkbox"
@@ -958,20 +969,31 @@ export default function SalesPage() {
                           style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                         />
                       </td>
-                      <td><CopyableId value={inv.number} label={inv.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                      <td>
-                        <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{inv.customerName || 'Walk-in'}</div>
-                      </td>
-                      <td style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || 'N/A'}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.date}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.cashier || 'N/A'}</td>
-                      <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(inv.total)}</td>
-                      <td className="text-right mono" style={{ color: (inv.paidAmount || 0) >= inv.total ? 'var(--green)' : 'var(--amber)' }}>{fmt(inv.paidAmount || 0)}</td>
-                      <td>{displayPaymentMode(inv.paymentMode) === '—'
-                        ? <span style={{ color: 'var(--text-muted)' }}>—</span>
-                        : <Tag>{displayPaymentMode(inv.paymentMode)}</Tag>}</td>
-                      <td><Chip status={inv.status} /></td>
-                      <td><ReturnStatusChip status={inv.returnStatus} /></td>
+                      {invoiceColumnPrefs.visibleIds.map((id) => {
+                        if (id === 'number') return <td key={id}><CopyableId value={inv.number} label={inv.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                        if (id === 'customer') {
+                          return (
+                            <td key={id}>
+                              <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{inv.customerName || 'Walk-in'}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || 'N/A'}</td>
+                        if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.date}</td>
+                        if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.cashier || 'N/A'}</td>
+                        if (id === 'amount') return <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(inv.total)}</td>
+                        if (id === 'paid') return <td key={id} className="text-right mono" style={{ color: (inv.paidAmount || 0) >= inv.total ? 'var(--green)' : 'var(--amber)' }}>{fmt(inv.paidAmount || 0)}</td>
+                        if (id === 'mode') {
+                          return (
+                            <td key={id}>{displayPaymentMode(inv.paymentMode) === '—'
+                              ? <span style={{ color: 'var(--text-muted)' }}>—</span>
+                              : <Tag>{displayPaymentMode(inv.paymentMode)}</Tag>}</td>
+                          )
+                        }
+                        if (id === 'status') return <td key={id}><Chip status={inv.status} /></td>
+                        if (id === 'returns') return <td key={id}><ReturnStatusChip status={inv.returnStatus} /></td>
+                        return null
+                      })}
                       <td className="text-right">
                         <RowActionsMenu
                           busy={!!actionBusy}
@@ -1090,6 +1112,7 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={quoteColumnPrefs.openCustomize} />
                     <th style={{ width: 36 }}>
                       <input
                         type="checkbox"
@@ -1099,12 +1122,15 @@ export default function SalesPage() {
                         style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                       />
                     </th>
-                    <SortableHeader label="Quote #" sortKey="number" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
-                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
-                    <SortableHeader label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
-                    <SortableHeader label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
-                    <SortableHeader label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
-                    <SortableHeader label="Status" sortKey="status" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                    {quoteColumnPrefs.visibleIds.map((id) => {
+                      if (id === 'number') return <SortableHeader key={id} label="Quote #" sortKey="number" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
+                      if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                      if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
+                      if (id === 'valid_until') return <SortableHeader key={id} label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
+                      if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                      return null
+                    })}
                     <th></th>
                   </tr>
                 </thead>
@@ -1116,6 +1142,7 @@ export default function SalesPage() {
                         style: selectedIds.has(q.id) ? { background: 'var(--accent-bg)' } : undefined,
                       })}
                     >
+                      <ColumnPrefsSpacer />
                       <td data-no-row-click>
                         <input
                           type="checkbox"
@@ -1124,12 +1151,15 @@ export default function SalesPage() {
                           style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                         />
                       </td>
-                      <td><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                      <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
-                      <td className="text-right mono">{fmt(q.total)}</td>
-                      <td><Chip status={q.status === 'sent' ? 'active' : q.status === 'accepted' ? 'success' : 'draft'} label={q.status.charAt(0).toUpperCase() + q.status.slice(1)} /></td>
+                      {quoteColumnPrefs.visibleIds.map((id) => {
+                        if (id === 'number') return <td key={id}><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                        if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
+                        if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
+                        if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
+                        if (id === 'amount') return <td key={id} className="text-right mono">{fmt(q.total)}</td>
+                        if (id === 'status') return <td key={id}><Chip status={q.status === 'sent' ? 'active' : q.status === 'accepted' ? 'success' : 'draft'} label={q.status.charAt(0).toUpperCase() + q.status.slice(1)} /></td>
+                        return null
+                      })}
                       <td>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                           <RowActionsMenu
@@ -1238,6 +1268,42 @@ export default function SalesPage() {
         reversalLines={reversalLinesForTabKey(deleteOneTarget?.tabKey || tab)}
       />
 
+      <CustomizeColumnsModal
+        open={invoiceColumnPrefs.customizeOpen}
+        onClose={invoiceColumnPrefs.closeCustomize}
+        defs={invoiceColumnPrefs.defs}
+        value={invoiceColumnPrefs.prefs}
+        onSave={invoiceColumnPrefs.savePrefs}
+      />
+      <CustomizeColumnsModal
+        open={quoteColumnPrefs.customizeOpen}
+        onClose={quoteColumnPrefs.closeCustomize}
+        defs={quoteColumnPrefs.defs}
+        value={quoteColumnPrefs.prefs}
+        onSave={quoteColumnPrefs.savePrefs}
+      />
+      <CustomizeColumnsModal
+        open={orderColumnPrefs.customizeOpen}
+        onClose={orderColumnPrefs.closeCustomize}
+        defs={orderColumnPrefs.defs}
+        value={orderColumnPrefs.prefs}
+        onSave={orderColumnPrefs.savePrefs}
+      />
+      <CustomizeColumnsModal
+        open={returnColumnPrefs.customizeOpen}
+        onClose={returnColumnPrefs.closeCustomize}
+        defs={returnColumnPrefs.defs}
+        value={returnColumnPrefs.prefs}
+        onSave={returnColumnPrefs.savePrefs}
+      />
+      <CustomizeColumnsModal
+        open={paymentColumnPrefs.customizeOpen}
+        onClose={paymentColumnPrefs.closeCustomize}
+        defs={paymentColumnPrefs.defs}
+        value={paymentColumnPrefs.prefs}
+        onSave={paymentColumnPrefs.savePrefs}
+      />
+
       <ActivityDrawer
         open={!!activityTarget}
         onClose={() => setActivityTarget(null)}
@@ -1280,6 +1346,7 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={returnColumnPrefs.openCustomize} />
                     <th style={{ width: 36 }}>
                       <input
                         type="checkbox"
@@ -1289,15 +1356,18 @@ export default function SalesPage() {
                         style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                       />
                     </th>
-                    <SortableHeader label="Credit Note #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
-                    <SortableHeader label="Invoice" sortKey="invoice_number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
-                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
-                    <SortableHeader label="Date" sortKey="date" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
-                    <SortableHeader label="Total" sortKey="total" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
-                    <th className="text-right">Credited</th>
-                    <th>Refund</th>
-                    <th>Reason</th>
-                    <SortableHeader label="Status" sortKey="status" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                    {returnColumnPrefs.visibleIds.map((id) => {
+                      if (id === 'number') return <SortableHeader key={id} label="Credit Note #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                      if (id === 'invoice') return <SortableHeader key={id} label="Invoice" sortKey="invoice_number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                      if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                      if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
+                      if (id === 'total') return <SortableHeader key={id} label="Total" sortKey="total" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'credited') return <th key={id} className="text-right">Credited</th>
+                      if (id === 'refund') return <th key={id}>Refund</th>
+                      if (id === 'reason') return <th key={id}>Reason</th>
+                      if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                      return null
+                    })}
                     <th></th>
                   </tr>
                 </thead>
@@ -1309,6 +1379,7 @@ export default function SalesPage() {
                         style: selectedIds.has(r.id) ? { background: 'var(--accent-bg)' } : undefined,
                       })}
                     >
+                      <ColumnPrefsSpacer />
                       <td data-no-row-click>
                         <input
                           type="checkbox"
@@ -1317,21 +1388,32 @@ export default function SalesPage() {
                           style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                         />
                       </td>
-                      <td><CopyableId value={r.number} label={r.number} style={{ color: 'var(--red)', fontSize: 12 }} /></td>
-                      <td><CopyableId value={r.invoiceNumber} label={r.invoiceNumber} style={{ fontSize: 12 }} /></td>
-                      <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{r.customerName || 'Walk-in'}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.date}</td>
-                      <td className="text-right mono" style={{ color: 'var(--red)' }}>-{fmt(r.total)}</td>
-                      <td className="text-right mono" style={{ color: r.creditedAmount > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                        {r.creditedAmount > 0 ? fmt(r.creditedAmount) : '—'}
-                      </td>
-                      <td>
-                        <Tag color={r.refundMethod === 'credit' ? 'var(--accent)' : r.refundMethod === 'adjustment' ? 'var(--amber)' : undefined}>
-                          {r.refundMethod === 'credit' ? 'Store credit' : r.refundMethod === 'adjustment' ? 'Adjustment' : 'Cash'}
-                        </Tag>
-                      </td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
-                      <td><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
+                      {returnColumnPrefs.visibleIds.map((id) => {
+                        if (id === 'number') return <td key={id}><CopyableId value={r.number} label={r.number} style={{ color: 'var(--red)', fontSize: 12 }} /></td>
+                        if (id === 'invoice') return <td key={id}><CopyableId value={r.invoiceNumber} label={r.invoiceNumber} style={{ fontSize: 12 }} /></td>
+                        if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{r.customerName || 'Walk-in'}</td>
+                        if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.date}</td>
+                        if (id === 'total') return <td key={id} className="text-right mono" style={{ color: 'var(--red)' }}>-{fmt(r.total)}</td>
+                        if (id === 'credited') {
+                          return (
+                            <td key={id} className="text-right mono" style={{ color: r.creditedAmount > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                              {r.creditedAmount > 0 ? fmt(r.creditedAmount) : '—'}
+                            </td>
+                          )
+                        }
+                        if (id === 'refund') {
+                          return (
+                            <td key={id}>
+                              <Tag color={r.refundMethod === 'credit' ? 'var(--accent)' : r.refundMethod === 'adjustment' ? 'var(--amber)' : undefined}>
+                                {r.refundMethod === 'credit' ? 'Store credit' : r.refundMethod === 'adjustment' ? 'Adjustment' : 'Cash'}
+                              </Tag>
+                            </td>
+                          )
+                        }
+                        if (id === 'reason') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
+                        if (id === 'status') return <td key={id}><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
+                        return null
+                      })}
                       <td>
                         <RowActionsMenu
                           busy={!!actionBusy}
@@ -1409,6 +1491,7 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={paymentColumnPrefs.openCustomize} />
                     <th style={{ width: 36 }}>
                       <input
                         type="checkbox"
@@ -1418,14 +1501,17 @@ export default function SalesPage() {
                         style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                       />
                     </th>
-                    <SortableHeader label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
-                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
-                    <SortableHeader label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
-                    <SortableHeader label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
-                    <th>Invoices</th>
-                    <SortableHeader label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
-                    <th className="text-right">Store Credit</th>
-                    <th>Status</th>
+                    {paymentColumnPrefs.visibleIds.map((id) => {
+                      if (id === 'number') return <SortableHeader key={id} label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
+                      if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                      if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
+                      if (id === 'method') return <SortableHeader key={id} label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                      if (id === 'invoices') return <th key={id}>Invoices</th>
+                      if (id === 'total') return <SortableHeader key={id} label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'store_credit') return <th key={id} className="text-right">Store Credit</th>
+                      if (id === 'status') return <th key={id}>Status</th>
+                      return null
+                    })}
                     <th></th>
                   </tr>
                 </thead>
@@ -1439,6 +1525,7 @@ export default function SalesPage() {
                           style: selectedIds.has(p.id) ? { background: 'var(--accent-bg)' } : undefined,
                         })}
                       >
+                        <ColumnPrefsSpacer />
                         <td data-no-row-click>
                           <input
                             type="checkbox"
@@ -1447,24 +1534,43 @@ export default function SalesPage() {
                             style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                           />
                         </td>
-                        <td><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                        <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.customerName || 'Walk-in'}</td>
-                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
-                        <td>{p.paymentMode
-                          ? <Chip status={p.paymentMode} label={String(p.paymentMode).replace('_', ' ').toUpperCase()} />
-                          : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
-                        <td>
-                          <Tag>{allocCount} {allocCount === 1 ? 'invoice' : 'invoices'}</Tag>
-                        </td>
-                        <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
-                        <td className="text-right mono" style={{ color: (p.creditApplied || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>
-                          {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : '—'}
-                        </td>
-                        <td>
-                          {p.voided
-                            ? <Chip status="cancelled" label="Voided" />
-                            : <Chip status="paid" label="Recorded" />}
-                        </td>
+                        {paymentColumnPrefs.visibleIds.map((id) => {
+                          if (id === 'number') return <td key={id}><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                          if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.customerName || 'Walk-in'}</td>
+                          if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
+                          if (id === 'method') {
+                            return (
+                              <td key={id}>{p.paymentMode
+                                ? <Chip status={p.paymentMode} label={String(p.paymentMode).replace('_', ' ').toUpperCase()} />
+                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                            )
+                          }
+                          if (id === 'invoices') {
+                            return (
+                              <td key={id}>
+                                <Tag>{allocCount} {allocCount === 1 ? 'invoice' : 'invoices'}</Tag>
+                              </td>
+                            )
+                          }
+                          if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
+                          if (id === 'store_credit') {
+                            return (
+                              <td key={id} className="text-right mono" style={{ color: (p.creditApplied || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>
+                                {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : '—'}
+                              </td>
+                            )
+                          }
+                          if (id === 'status') {
+                            return (
+                              <td key={id}>
+                                {p.voided
+                                  ? <Chip status="cancelled" label="Voided" />
+                                  : <Chip status="paid" label="Recorded" />}
+                              </td>
+                            )
+                          }
+                          return null
+                        })}
                         <td className="text-right">
                           <RowActionsMenu
                             busy={!!actionBusy}
@@ -1530,6 +1636,7 @@ export default function SalesPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <ColumnPrefsTrigger onClick={orderColumnPrefs.openCustomize} />
                     <th style={{ width: 36 }}>
                       <input
                         type="checkbox"
@@ -1539,12 +1646,15 @@ export default function SalesPage() {
                         style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                       />
                     </th>
-                    <SortableHeader label="Order #" sortKey="number" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
-                    <SortableHeader label="Customer" sortKey="customer_name" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
-                    <SortableHeader label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
-                    <SortableHeader label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
-                    <SortableHeader label="Amount" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
-                    <SortableHeader label="Status" sortKey="status" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                    {orderColumnPrefs.visibleIds.map((id) => {
+                      if (id === 'number') return <SortableHeader key={id} label="Order #" sortKey="number" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
+                      if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                      if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
+                      if (id === 'expected') return <SortableHeader key={id} label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                      if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                      return null
+                    })}
                     <th></th>
                   </tr>
                 </thead>
@@ -1562,6 +1672,7 @@ export default function SalesPage() {
                           style: selectedIds.has(o.id) ? { background: 'var(--accent-bg)' } : undefined,
                         })}
                       >
+                        <ColumnPrefsSpacer />
                         <td data-no-row-click>
                           <input
                             type="checkbox"
@@ -1570,12 +1681,15 @@ export default function SalesPage() {
                             style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                           />
                         </td>
-                        <td><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                        <td style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{o.customerName || 'Walk-in'}</td>
-                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
-                        <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
-                        <td className="text-right mono">{fmt(o.total)}</td>
-                        <td><Chip status={o.status} label={(o.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /></td>
+                        {orderColumnPrefs.visibleIds.map((id) => {
+                          if (id === 'number') return <td key={id}><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
+                          if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{o.customerName || 'Walk-in'}</td>
+                          if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
+                          if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
+                          if (id === 'amount') return <td key={id} className="text-right mono">{fmt(o.total)}</td>
+                          if (id === 'status') return <td key={id}><Chip status={o.status} label={(o.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /></td>
+                          return null
+                        })}
                         <td>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                             <RowActionsMenu

@@ -121,6 +121,10 @@ export const useAppStore = create(
       amountDecimalPrecision: DEFAULT_AMOUNT_DECIMALS,
       quantityDecimalPrecision: DEFAULT_QTY_DECIMALS,
 
+      // Per-user Customize Columns: tableKey → { columns, order, hidden }.
+      // Hydrated at boot via GET /settings/column-prefs (server owns column defs).
+      columnTables: {},
+
       // Actions
       setActiveBranch: (branch) => set((s) => {
         const list = Array.isArray(s.branches) ? s.branches : []
@@ -175,6 +179,15 @@ export const useAppStore = create(
           quantityDecimalPrecision: next.quantityDecimalPrecision,
         })
       },
+      setColumnTables: (columnTables) => set({
+        columnTables: columnTables && typeof columnTables === 'object' ? columnTables : {},
+      }),
+      setColumnTable: (tableKey, table) => set((s) => ({
+        columnTables: {
+          ...(s.columnTables || {}),
+          [tableKey]: table,
+        },
+      })),
       setSession: ({ user, permissions, permCatalog }) => set((s) => {
         // When the session changes (login / boot rehydrate), re-evaluate the
         // persisted activeBranch against the new user's allowed branches.
@@ -196,7 +209,7 @@ export const useAppStore = create(
           ...(permCatalog ? { permCatalog } : {}),
         }
       }),
-      clearSession: () => set({ user: null, permissions: [], roles: [], activeBranch: null }),
+      clearSession: () => set({ user: null, permissions: [], roles: [], activeBranch: null, columnTables: {} }),
     }),
     { name: 'retailos-app', partialize: (s) => ({ activeBranch: s.activeBranch, theme: s.theme, sidebarCollapsed: s.sidebarCollapsed }) }
   )

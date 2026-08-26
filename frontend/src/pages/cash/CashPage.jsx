@@ -5,15 +5,17 @@ import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
-import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 
 const TABS = ['Entries', 'Breakdown', 'Day History']
 
 export default function CashPage() {
   const can = useCan()
+  const columnPrefs = useColumnPrefs('cash.entries')
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const currentUser = useAppStore((s) => s.user)
@@ -232,9 +234,19 @@ export default function CashPage() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>#</th><th>Time</th><th>Type</th><th>Category</th>
-                  <th>Description</th><th>Ref</th><th>By</th>
-                  <th className="text-right">Amount</th><th></th>
+                  <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+                  {columnPrefs.visibleIds.map((id) => {
+                    if (id === 'entry_number') return <th key={id}>#</th>
+                    if (id === 'time') return <th key={id}>Time</th>
+                    if (id === 'type') return <th key={id}>Type</th>
+                    if (id === 'category') return <th key={id}>Category</th>
+                    if (id === 'description') return <th key={id}>Description</th>
+                    if (id === 'ref') return <th key={id}>Ref</th>
+                    if (id === 'by') return <th key={id}>By</th>
+                    if (id === 'amount') return <th key={id} className="text-right">Amount</th>
+                    return null
+                  })}
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -243,22 +255,48 @@ export default function CashPage() {
                     key={e.id}
                     style={{ opacity: e.is_voided ? 0.45 : 1, textDecoration: e.is_voided ? 'line-through' : 'none' }}
                   >
-                    <td style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono,monospace' }}>
-                      {e.entry_number || '—'}
-                    </td>
-                    <td style={{ fontSize: 12, fontFamily: 'DM Mono,monospace', color: 'var(--text-muted)' }}>{e.time}</td>
-                    <td>
-                      <Chip status={e.type === 'in' ? 'paid' : 'overdue'} label={e.type === 'in' ? 'IN' : 'OUT'} />
-                      {e.is_system && <span title="Auto-generated" style={{ marginLeft: 4, fontSize: 10 }}>🔒</span>}
-                      {e.is_voided && <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--text-muted)' }}>VOIDED</span>}
-                    </td>
-                    <td style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.category}</td>
-                    <td style={{ fontSize: 12.5 }}>{e.description}</td>
-                    <td style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.ref}</td>
-                    <td style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.by}</td>
-                    <td className="text-right mono" style={{ fontWeight: 600, color: e.type === 'in' ? 'var(--green)' : 'var(--red)' }}>
-                      {e.type === 'in' ? '+' : '-'}{fmt(e.amount)}
-                    </td>
+                    <ColumnPrefsSpacer />
+                    {columnPrefs.visibleIds.map((id) => {
+                      if (id === 'entry_number') {
+                        return (
+                          <td key={id} style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono,monospace' }}>
+                            {e.entry_number || '—'}
+                          </td>
+                        )
+                      }
+                      if (id === 'time') {
+                        return <td key={id} style={{ fontSize: 12, fontFamily: 'DM Mono,monospace', color: 'var(--text-muted)' }}>{e.time}</td>
+                      }
+                      if (id === 'type') {
+                        return (
+                          <td key={id}>
+                            <Chip status={e.type === 'in' ? 'paid' : 'overdue'} label={e.type === 'in' ? 'IN' : 'OUT'} />
+                            {e.is_system && <span title="Auto-generated" style={{ marginLeft: 4, fontSize: 10 }}>🔒</span>}
+                            {e.is_voided && <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--text-muted)' }}>VOIDED</span>}
+                          </td>
+                        )
+                      }
+                      if (id === 'category') {
+                        return <td key={id} style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.category}</td>
+                      }
+                      if (id === 'description') {
+                        return <td key={id} style={{ fontSize: 12.5 }}>{e.description}</td>
+                      }
+                      if (id === 'ref') {
+                        return <td key={id} style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.ref}</td>
+                      }
+                      if (id === 'by') {
+                        return <td key={id} style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.by}</td>
+                      }
+                      if (id === 'amount') {
+                        return (
+                          <td key={id} className="text-right mono" style={{ fontWeight: 600, color: e.type === 'in' ? 'var(--green)' : 'var(--red)' }}>
+                            {e.type === 'in' ? '+' : '-'}{fmt(e.amount)}
+                          </td>
+                        )
+                      }
+                      return null
+                    })}
                     <td>
                       <RowActionsMenu
                         busy={entryBusy || voidSaving}
@@ -298,6 +336,14 @@ export default function CashPage() {
           </div>
         </Card>
       )}
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       {/* ─── Tab: Breakdown ─── */}
       {tab === 'Breakdown' && (
