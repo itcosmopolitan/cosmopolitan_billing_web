@@ -36,6 +36,7 @@ export function useAuditTrail() {
         prev.risk === next.risk &&
         prev.operation_type === next.operation_type &&
         prev.operation_type_not === next.operation_type_not &&
+        JSON.stringify(prev.criteria ?? null) === JSON.stringify(next.criteria ?? null) &&
         prev.search === next.search &&
         prev.date_from === next.date_from &&
         prev.date_to === next.date_to &&
@@ -49,5 +50,5 @@ export function useAuditTrail() {
     setFilters((prev) => (prev.page === page ? prev : { ...prev, page }));
   }, []);
 
-  return { data, filters, loading, error, selected, setSelected, updateFilter, goToPage };
+  return { data, filters, loading, error, selected, setSelected, updateFilter, goToPage, refresh: fetchLogs };
 }

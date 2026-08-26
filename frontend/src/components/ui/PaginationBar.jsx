@@ -22,6 +22,7 @@ export function PaginationBar({ total, skip, limit, onSkipChange, onLimitChange,
 
   return (
     <div
+      className="pagination-bar"
       style={{
         display: 'flex',
         alignItems: 'center',

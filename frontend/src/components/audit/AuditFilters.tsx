@@ -1,546 +1,470 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import Portal from "../ui/Portal";
-import type { AuditFilters } from "../../types/audit";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  AutocompleteDropdown,
+  DatePicker,
+  Drawer,
+  FormGroup,
+  SearchBar,
+} from '@/components/ui'
+import * as Icon from '@/components/ui/Icons'
+import type { AuditCriteria, AuditCriteriaJoiner, AuditFilters } from '../../types/audit'
+import {
+  AUDIT_FILTER_FIELD_OPTIONS,
+  AUDIT_DATE_RANGE_OPTIONS,
+  AUDIT_JOINER_OPTIONS,
+  AUDIT_SELECT_CONDITION_OPTIONS,
+  AUDIT_TEXT_CONDITION_OPTIONS,
+  auditFieldType,
+  auditValueOptionsForField,
+  defaultAuditJoiners,
+  getAuditDateRangeChipLabel,
+  getAuditDateRangeForPreset,
+  inferAuditDateRangePreset,
+} from '@/utils/dropdownOptions'
 
 interface Props {
-  filters: AuditFilters;
-  onFilter: (patch: Partial<AuditFilters>) => void;
+  filters: AuditFilters
+  onFilter: (patch: Partial<AuditFilters>) => void
+  toolbarActions?: ReactNode
 }
 
-type FilterFieldType = "select" | "text";
-
 type FilterRow = {
-  id: string;
-  field: string;
-  condition: string;
-  value: string;
-};
-
-const FILTER_FIELDS: { label: string; key: string; type: FilterFieldType; options?: string[] }[] = [
-  { label: "Module", key: "module", type: "select", options: ["Sales", "Inventory", "Finance", "Cash", "Purchases", "Auth"] },
-  { label: "Risk Level", key: "risk", type: "select", options: ["LOW", "MEDIUM", "HIGH"] },
-  { label: "User", key: "user_name", type: "text" },
-  { label: "Operation Type", key: "action", type: "select", options: ["Created", "Deleted", "Updated"] },
-  { label: "Customer Name", key: "customer_name", type: "text" },
-  { label: "Vendor Name", key: "vendor_name", type: "text" },
-];
-
-const SELECT_CONDITIONS = ["is", "is not"];
-const TEXT_CONDITIONS = ["contains", "is", "starts with", "is empty"];
+  id: string
+  field: string
+  condition: string
+  value: string
+}
 
 const buildFilterRow = (overrides?: Partial<FilterRow>): FilterRow => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  field: "module",
-  condition: "is",
-  value: "",
+  field: 'module',
+  condition: 'is',
+  value: '',
   ...overrides,
-});
+})
 
-const formatDate = (date: Date) => date.toISOString().slice(0, 10);
+const fieldLabel = (key: string) => AUDIT_FILTER_FIELD_OPTIONS.find((f) => f.id === key)?.label ?? key
 
-const getPresetRange = (preset: string): { from: string; to: string } => {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+const rowChipLabel = (row: { field: string; condition: string; value: string }) => {
+  const label = fieldLabel(row.field)
+  if (row.condition === 'is empty') return `${label} is empty`
+  if (!row.value) return ''
+  return `${label} ${row.condition} ${row.value}`
+}
 
-  if (preset === "Today") {
-    const value = formatDate(today);
-    return { from: value, to: value };
+const hasActiveCriteriaRows = (rows: FilterRow[]) => (
+  rows.some((row) => row.value || row.condition === 'is empty')
+)
+
+function stateFromFilters(filters: AuditFilters): { rows: FilterRow[]; joiners: AuditCriteriaJoiner[] } {
+  if (filters.criteria?.rows?.length) {
+    const rows = filters.criteria.rows.map((row) => buildFilterRow(row))
+    const joiners = filters.criteria.joiners?.length
+      ? [...filters.criteria.joiners]
+      : defaultAuditJoiners(rows.length)
+    return { rows, joiners }
   }
 
-  if (preset === "This Week") {
-    const day = today.getDay();
-    const monday = new Date(today);
-    monday.setDate(today.getDate() - ((day + 6) % 7));
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    return { from: formatDate(monday), to: formatDate(sunday) };
+  const legacyRows: FilterRow[] = []
+  if (filters.module) legacyRows.push(buildFilterRow({ field: 'module', condition: 'is', value: filters.module }))
+  if (filters.risk) legacyRows.push(buildFilterRow({ field: 'risk', condition: 'is', value: filters.risk }))
+  if (filters.operation_type) {
+    legacyRows.push(buildFilterRow({ field: 'action', condition: 'is', value: filters.operation_type }))
+  } else if (filters.operation_type_not) {
+    legacyRows.push(buildFilterRow({ field: 'action', condition: 'is not', value: filters.operation_type_not }))
   }
 
-  if (preset === "This Month") {
-    const first = new Date(today.getFullYear(), today.getMonth(), 1);
-    const last = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    return { from: formatDate(first), to: formatDate(last) };
-  }
+  const rows = legacyRows.length > 0 ? legacyRows : [buildFilterRow()]
+  return { rows, joiners: defaultAuditJoiners(rows.length) }
+}
 
-  if (preset === "Last Month") {
-    const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const last = new Date(today.getFullYear(), today.getMonth(), 0);
-    return { from: formatDate(first), to: formatDate(last) };
-  }
-
-  return { from: "", to: "" };
-};
-
-const getPresetLabel = (from?: string, to?: string) => {
-  if (!from || !to) return "This Month";
-  const today = formatDate(new Date());
-  if (from === today && to === today) return "Today";
-  const weekRange = getPresetRange("This Week");
-  if (from === weekRange.from && to === weekRange.to) return "This Week";
-  const monthRange = getPresetRange("This Month");
-  if (from === monthRange.from && to === monthRange.to) return "This Month";
-  const lastMonthRange = getPresetRange("Last Month");
-  if (from === lastMonthRange.from && to === lastMonthRange.to) return "Last Month";
-  return "Custom Range";
-};
-
-export function AuditFiltersBar({ filters, onFilter }: Props) {
-  const [searchValue, setSearchValue] = useState(filters.search ?? "");
-  const [filterRows, setFilterRows] = useState<FilterRow[]>(() => {
-    const rows: FilterRow[] = [];
-    if (filters.module) rows.push(buildFilterRow({ field: "module", condition: "is", value: filters.module }));
-    if (filters.risk) rows.push(buildFilterRow({ field: "risk", condition: "is", value: filters.risk }));
-    return rows;
-  });
-  const [openDateDropdown, setOpenDateDropdown] = useState(false);
-  const [openFieldDropdownId, setOpenFieldDropdownId] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("audit_filters_collapsed") === "true";
-  });
+export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Props) {
+  const initialState = stateFromFilters(filters)
+  const [open, setOpen] = useState(false)
+  const [searchValue, setSearchValue] = useState(filters.search ?? '')
+  const [filterRows, setFilterRows] = useState<FilterRow[]>(initialState.rows)
+  const [joiners, setJoiners] = useState<AuditCriteriaJoiner[]>(initialState.joiners)
+  const [draftDatePreset, setDraftDatePreset] = useState(() => inferAuditDateRangePreset(filters.date_from, filters.date_to))
+  const [draftDateFrom, setDraftDateFrom] = useState(filters.date_from ?? '')
+  const [draftDateTo, setDraftDateTo] = useState(filters.date_to ?? '')
 
   useEffect(() => {
-    setSearchValue(filters.search ?? "");
-  }, [filters.search]);
+    setSearchValue(filters.search ?? '')
+  }, [filters.search])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      if ((filters.search ?? "") !== searchValue) {
-        onFilter({ search: searchValue });
+      if ((filters.search ?? '') !== searchValue) {
+        onFilter({ search: searchValue })
       }
-    }, 300);
-    return () => window.clearTimeout(timeout);
-  }, [searchValue, filters.search, onFilter]);
+    }, 300)
+    return () => window.clearTimeout(timeout)
+  }, [searchValue, filters.search, onFilter])
 
   useEffect(() => {
-    window.localStorage.setItem("audit_filters_collapsed", String(collapsed));
-  }, [collapsed]);
+    if (!open) return
+    const next = stateFromFilters(filters)
+    setFilterRows(next.rows)
+    setJoiners(next.joiners)
+    setDraftDatePreset(inferAuditDateRangePreset(filters.date_from, filters.date_to))
+    setDraftDateFrom(filters.date_from ?? '')
+    setDraftDateTo(filters.date_to ?? '')
+  }, [open, filters])
 
-  const normalizeActionValue = (value: string) => {
-    const lower = value.trim().toLowerCase();
-    if (lower === "created") return "created";
-    if (lower === "deleted") return "deleted";
-    if (lower === "edited" || lower === "updated") return "updated";
-    return value;
-  };
+  const handleDatePresetChange = (presetId: string) => {
+    setDraftDatePreset(presetId)
+    if (!presetId) {
+      setDraftDateFrom('')
+      setDraftDateTo('')
+      return
+    }
+    if (presetId === 'custom') return
+    const range = getAuditDateRangeForPreset(presetId)
+    setDraftDateFrom(range.from)
+    setDraftDateTo(range.to)
+  }
 
   const applyFilters = () => {
-    const patch: Partial<AuditFilters> = {
-      module: "",
-      risk: "",
-      operation_type: "",
-      operation_type_not: "",
-      search: filters.search ?? "",
-      date_from: filters.date_from,
-      date_to: filters.date_to,
-    };
-    const searchTerms: string[] = [];
+    const criteriaRows = filterRows.map(({ field, condition, value }) => ({ field, condition, value }))
+    const criteria: AuditCriteria | null = hasActiveCriteriaRows(filterRows)
+      ? { rows: criteriaRows, joiners: [...joiners] }
+      : null
 
-    filterRows.forEach((row) => {
-      if (!row.value && row.condition !== "is empty") return;
-      if (row.field === "module") {
-        patch.module = row.value;
-        return;
+    onFilter({
+      module: '',
+      risk: '',
+      operation_type: '',
+      operation_type_not: '',
+      criteria,
+      search: searchValue,
+      date_from: draftDateFrom || undefined,
+      date_to: draftDateTo || undefined,
+    })
+    setOpen(false)
+  }
+
+  const clearDrawerFilters = () => {
+    setFilterRows([buildFilterRow()])
+    setJoiners([])
+    setDraftDatePreset('')
+    setDraftDateFrom('')
+    setDraftDateTo('')
+    onFilter({
+      module: '',
+      risk: '',
+      operation_type: '',
+      operation_type_not: '',
+      criteria: null,
+      date_from: undefined,
+      date_to: undefined,
+    })
+    setOpen(false)
+  }
+
+  const clearAllFilters = () => {
+    setSearchValue('')
+    setFilterRows([buildFilterRow()])
+    setJoiners([])
+    setDraftDatePreset('')
+    setDraftDateFrom('')
+    setDraftDateTo('')
+    onFilter({
+      search: '',
+      module: '',
+      risk: '',
+      operation_type: '',
+      operation_type_not: '',
+      criteria: null,
+      date_from: undefined,
+      date_to: undefined,
+    })
+  }
+
+  const chips = useMemo(() => {
+    const items: { key: string; label: string }[] = []
+    if (filters.criteria?.rows?.length) {
+      filters.criteria.rows.forEach((row, index) => {
+        const label = rowChipLabel(row)
+        if (label) items.push({ key: `criteria-${index}`, label })
+      })
+    } else {
+      if (filters.module) items.push({ key: 'module', label: `Module is ${filters.module}` })
+      if (filters.risk) items.push({ key: 'risk', label: `Risk is ${filters.risk}` })
+      if (filters.operation_type) {
+        items.push({ key: 'operation_type', label: `Operation is ${filters.operation_type}` })
       }
-      if (row.field === "risk") {
-        patch.risk = row.value;
-        return;
+      if (filters.operation_type_not) {
+        items.push({ key: 'operation_type_not', label: `Operation is not ${filters.operation_type_not}` })
       }
-      if (row.field === "action") {
-        if (row.condition === "is empty" || !row.value) return;
-        const term = normalizeActionValue(row.value);
-        if (row.condition === "is") {
-          patch.operation_type = term as "Created" | "Deleted" | "Updated";
-        } else if (row.condition === "is not") {
-          patch.operation_type_not = term as "Created" | "Deleted" | "Updated";
-        }
-        return;
-      }
-      if (["user_name", "customer_name", "vendor_name"].includes(row.field)) {
-        if (row.condition === "is empty") {
-          return;
-        }
-        if (row.value) searchTerms.push(row.value);
-      }
-    });
+    }
+    const dateLabel = getAuditDateRangeChipLabel(filters.date_from, filters.date_to)
+    if (dateLabel) items.push({ key: 'date', label: dateLabel })
+    return items
+  }, [filters])
 
-    patch.search = searchTerms.length > 0 ? searchTerms.join(" ") : filters.search ?? "";
-    onFilter(patch);
-    setCollapsed(true);
-    setOpenDateDropdown(false);
-  };
+  const filtersActive = chips.length > 0
+  const activeCount = chips.length
 
-  const handlePresetSelect = (preset: string) => {
-    const range = getPresetRange(preset);
-    setOpenDateDropdown(false);
-    onFilter({ date_from: range.from, date_to: range.to });
-  };
-
-  const summaryFilters = useMemo(() => {
-    const pills: { label: string; onRemove: () => void }[] = [];
-    if (filters.module) {
-      pills.push({ label: `Module: ${filters.module}`, onRemove: () => onFilter({ module: "" }) });
+  const removeChip = (key: string) => {
+    if (key.startsWith('criteria-')) {
+      const index = Number(key.replace('criteria-', ''))
+      if (!filters.criteria || Number.isNaN(index)) return
+      const rows = filters.criteria.rows.filter((_, i) => i !== index)
+      const joiners = [...(filters.criteria.joiners || [])]
+      if (index <= 0) joiners.shift()
+      else joiners.splice(index - 1, 1)
+      onFilter({
+        criteria: rows.length && hasActiveCriteriaRows(rows) ? { rows, joiners } : null,
+        module: '',
+        risk: '',
+        operation_type: '',
+        operation_type_not: '',
+      })
+      return
     }
-    if (filters.risk) {
-      pills.push({ label: `Risk: ${filters.risk}`, onRemove: () => onFilter({ risk: "" }) });
-    }
-    if (filters.operation_type) {
-      pills.push({ label: `Operation: ${filters.operation_type}`, onRemove: () => onFilter({ operation_type: "" }) });
-    }
-    if (filters.operation_type_not) {
-      pills.push({ label: `Not: ${filters.operation_type_not}`, onRemove: () => onFilter({ operation_type_not: "" }) });
-    }
-    if (filters.search) {
-      pills.push({ label: `Search: ${filters.search}`, onRemove: () => onFilter({ search: "" }) });
-    }
-    if (filters.date_from || filters.date_to) {
-      pills.push({ label: getPresetLabel(filters.date_from, filters.date_to), onRemove: () => onFilter({ date_from: undefined, date_to: undefined }) });
-    }
-    return pills;
-  }, [filters, onFilter]);
-
-  const fieldOptions = FILTER_FIELDS;
+    if (key === 'module') onFilter({ module: '' })
+    else if (key === 'risk') onFilter({ risk: '' })
+    else if (key === 'operation_type') onFilter({ operation_type: '' })
+    else if (key === 'operation_type_not') onFilter({ operation_type_not: '' })
+    else if (key === 'date') onFilter({ date_from: undefined, date_to: undefined })
+  }
 
   const updateRow = (id: string, patch: Partial<FilterRow>) => {
-    setFilterRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  };
+    setFilterRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+  }
 
-  const addRow = (from?: FilterRow) => {
-    setFilterRows((prev) => [...prev, buildFilterRow(from ? { ...from } : undefined)]);
-  };
+  const updateJoiner = (index: number, value: string) => {
+    setJoiners((prev) => {
+      const next = [...prev]
+      next[index] = (value || 'and') as AuditCriteriaJoiner
+      return next
+    })
+  }
+
+  const addRow = () => {
+    setFilterRows((prev) => [...prev, buildFilterRow()])
+    setJoiners((prev) => [...prev, 'and'])
+  }
 
   const removeRow = (id: string) => {
-    setFilterRows((prev) => prev.filter((row) => row.id !== id));
-  };
+    const idx = filterRows.findIndex((row) => row.id === id)
+    if (idx === -1) return
 
-  const toggleFieldDropdown = (id: string) => {
-    setOpenFieldDropdownId((current) => (current === id ? null : id));
-  };
+    const nextRows = filterRows.filter((row) => row.id !== id)
+    if (nextRows.length === 0) {
+      setFilterRows([buildFilterRow()])
+      setJoiners([])
+      return
+    }
 
-  const dropdownAnchorRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const dropdownRef = useRef<HTMLDivElement | null>(null);
-  const [openValueDropdownId, setOpenValueDropdownId] = useState<string | null>(null);
-  const valueAnchorRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const valueDropdownRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!openFieldDropdownId && !openValueDropdownId && !openDateDropdown) return;
-
-    const handleDown = (e: MouseEvent) => {
-      const target = e.target as Node | null;
-      const fAnchor = openFieldDropdownId ? dropdownAnchorRefs.current[openFieldDropdownId] : null;
-      const vAnchor = openValueDropdownId ? valueAnchorRefs.current[openValueDropdownId] : null;
-      const dateButton = document.getElementById("audit-date-range-button");
-      const dateDropdown = document.getElementById("audit-date-range-dropdown");
-
-      if (fAnchor && fAnchor.contains(target)) return;
-      if (vAnchor && vAnchor.contains(target)) return;
-      if (dropdownRef.current && dropdownRef.current.contains(target)) return;
-      if (valueDropdownRef.current && valueDropdownRef.current.contains(target)) return;
-      if (dateButton && dateButton.contains(target)) return;
-      if (dateDropdown && dateDropdown.contains(target)) return;
-
-      setOpenFieldDropdownId(null);
-      setOpenValueDropdownId(null);
-      setOpenDateDropdown(false);
-    };
-
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setOpenFieldDropdownId(null);
-        setOpenValueDropdownId(null);
-        setOpenDateDropdown(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleDown);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleDown);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [openFieldDropdownId, openValueDropdownId, openDateDropdown]);
-
-  const dateLabel = getPresetLabel(filters.date_from, filters.date_to);
+    setJoiners((prev) => {
+      if (idx <= 0) return prev.slice(1)
+      return [...prev.slice(0, idx - 1), ...prev.slice(idx)]
+    })
+    setFilterRows(nextRows)
+  }
 
   return (
-    <div className="mb-5 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-sm">
-      <div className="filter-bar mb-0">
-        <button
-          type="button"
-          onClick={() => setCollapsed((current) => !current)}
-          className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm"
-        >
-          <span className={`ti ${collapsed ? "ti-chevron-right" : "ti-chevron-down"} text-base`} />
-          <span className="text-[var(--text-muted)]">Filters:</span>
-        </button>
+    <>
+      <div className="filter-toolbar-stack">
+        <div className="filter-toolbar">
+          <SearchBar
+            value={searchValue}
+            onChange={setSearchValue}
+            placeholder="Search action, detail, reference, user…"
+            style={{ flex: 1, minWidth: 200, maxWidth: 420 }}
+          />
+          <div className="filter-toolbar__actions">
+            {toolbarActions}
+            <button
+              type="button"
+              className={`filter-trigger${filtersActive ? ' is-active' : ''}`}
+              aria-label="Open filters"
+              title="Filters"
+              onClick={() => setOpen(true)}
+            >
+              <Icon.Filter size={18} />
+              {filtersActive && (
+                <span className="filter-trigger__badge">{activeCount}</span>
+              )}
+            </button>
+          </div>
+        </div>
 
-        <div className="flex flex-wrap items-center gap-2 flex-1">
-          {summaryFilters.length > 0 ? (
-            summaryFilters.map((filter) => (
-              <span
-                key={filter.label}
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-raised)] px-3 py-1 text-xs font-medium text-[var(--text-secondary)]"
-              >
-                {filter.label}
+        {filtersActive && (
+          <div className="filter-applied-band" role="status" aria-label="Applied filters">
+            <span className="filter-applied-band__label">Filter:</span>
+            {chips.map((chip) => (
+              <span key={chip.key} className="filter-applied-chip">
+                <span className="filter-applied-chip__text" title={chip.label}>{chip.label}</span>
                 <button
                   type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    filter.onRemove();
-                  }}
-                  className="text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                  className="filter-applied-chip__remove"
+                  aria-label={`Remove ${chip.label}`}
+                  onClick={() => removeChip(chip.key)}
                 >
                   ×
                 </button>
               </span>
-            ))
-          ) : (
-            <span className="text-sm text-[var(--text-muted)]">No filters applied</span>
-          )}
-        </div>
+            ))}
+            <button type="button" className="filter-applied-band__clear" onClick={clearAllFilters}>
+              × Clear Filter
+            </button>
+          </div>
+        )}
       </div>
 
-      <div
-        className={`overflow-visible transition-all duration-200 ease-in-out ${collapsed ? "max-h-0 opacity-0" : "max-h-[900px] opacity-100"}`}
-        style={{ transitionProperty: "max-height, opacity" }}
+      <Drawer
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Filter By"
+        size="md"
+        footerClassName="drawer-footer--filters"
+        footer={(
+          <>
+            <button type="button" className="btn btn-primary" onClick={applyFilters}>
+              Apply
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={clearDrawerFilters} style={{ color: 'var(--red)' }}>
+              Clear Filters
+            </button>
+          </>
+        )}
       >
-        <div className={collapsed ? "pointer-events-none opacity-0" : "opacity-100"}>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <div className="relative">
-              <button
-                id="audit-date-range-button"
-                type="button"
-                onClick={() => setOpenDateDropdown((current) => !current)}
-                className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] shadow-sm"
-              >
-                Date Range: {dateLabel}
-              </button>
-              {openDateDropdown && (
-                <div id="audit-date-range-dropdown" className="absolute left-0 z-50 mt-2 w-72 rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-lg">
-                  <div className="space-y-2">
-                    {(["Today", "This Week", "This Month", "Last Month", "Custom Range"] as const).map((preset) => (
+        <div className="filter-sidebar-fields">
+          <FormGroup label="Date Range">
+            <AutocompleteDropdown
+              value={draftDatePreset}
+              onChange={handleDatePresetChange}
+              options={AUDIT_DATE_RANGE_OPTIONS}
+              isSearchFieldRequired={false}
+              placeholder="All dates"
+              style={{ width: '100%' }}
+            />
+            {draftDatePreset === 'custom' && (
+              <div className="filter-sidebar-dates audit-filter-custom-dates">
+                <DatePicker
+                  style={{ width: '100%' }}
+                  value={draftDateFrom}
+                  onChange={setDraftDateFrom}
+                  placeholder="From"
+                />
+                <DatePicker
+                  style={{ width: '100%' }}
+                  value={draftDateTo}
+                  onChange={setDraftDateTo}
+                  placeholder="To"
+                />
+              </div>
+            )}
+          </FormGroup>
+
+          <div className="audit-filter-conditions">
+            <div className="audit-filter-conditions__header">
+              <span className="audit-filter-conditions__title">Conditions</span>
+            </div>
+
+            <div className="audit-filter-conditions__rows">
+              {filterRows.map((row, index) => {
+                const fieldType = auditFieldType(row.field)
+                const conditionOptions = fieldType === 'select'
+                  ? AUDIT_SELECT_CONDITION_OPTIONS
+                  : AUDIT_TEXT_CONDITION_OPTIONS
+                const valueDisabled = row.condition === 'is empty'
+                return (
+                  <Fragment key={row.id}>
+                    {index > 0 && (
+                      <div className="audit-filter-condition-joiner">
+                        <AutocompleteDropdown
+                          value={joiners[index - 1] || 'and'}
+                          onChange={(id) => updateJoiner(index - 1, id)}
+                          options={AUDIT_JOINER_OPTIONS}
+                          isSearchFieldRequired={false}
+                          style={{ width: 88 }}
+                        />
+                      </div>
+                    )}
+                    <div className="audit-filter-condition-row">
+                      <div className="audit-filter-condition-row__index">{index + 1}</div>
+                      <div className="audit-filter-condition-row__field">
+                        <AutocompleteDropdown
+                          value={row.field}
+                          onChange={(id) => {
+                            const nextType = auditFieldType(id)
+                            updateRow(row.id, {
+                              field: id,
+                              condition: nextType === 'select' ? 'is' : 'contains',
+                              value: '',
+                            })
+                          }}
+                          options={AUDIT_FILTER_FIELD_OPTIONS}
+                          isSearchFieldRequired={false}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                      <div className="audit-filter-condition-row__condition">
+                        <AutocompleteDropdown
+                          value={row.condition}
+                          onChange={(id) => updateRow(row.id, {
+                            condition: id,
+                            value: id === 'is empty' ? '' : row.value,
+                          })}
+                          options={conditionOptions}
+                          isSearchFieldRequired={false}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                      <div className="audit-filter-condition-row__value">
+                        {fieldType === 'select' ? (
+                          <AutocompleteDropdown
+                            value={row.value}
+                            onChange={(id) => updateRow(row.id, { value: id })}
+                            options={auditValueOptionsForField(row.field)}
+                            isSearchFieldRequired={false}
+                            placeholder={`Select ${fieldLabel(row.field)}`}
+                            clearable
+                            onClear={() => updateRow(row.id, { value: '' })}
+                            disabled={valueDisabled}
+                            style={{ width: '100%' }}
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={row.value}
+                            onChange={(e) => updateRow(row.id, { value: e.target.value })}
+                            placeholder={valueDisabled ? 'No value needed' : `Enter ${fieldLabel(row.field)}`}
+                            className="form-input w-full"
+                            disabled={valueDisabled}
+                          />
+                        )}
+                      </div>
                       <button
-                        key={preset}
                         type="button"
-                        onClick={() => handlePresetSelect(preset)}
-                        className="w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+                        onClick={() => removeRow(row.id)}
+                        className="btn btn-secondary btn-xs audit-filter-condition-row__action audit-filter-condition-row__action--remove"
+                        aria-label="Delete condition"
+                        title="Delete condition"
                       >
-                        {preset}
+                        <Icon.Trash2 size={14} />
                       </button>
-                    ))}
-                  </div>
-                  {(dateLabel === "Custom Range" || filters.date_from || filters.date_to) && (
-                    <div className="mt-3 space-y-3 border-t border-gray-100 pt-3">
-                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)]">From</label>
-                      <input
-                        type="date"
-                        value={filters.date_from ?? ""}
-                        onChange={(e) => onFilter({ date_from: e.target.value || undefined })}
-                        className="form-input w-full"
-                      />
-                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)]">To</label>
-                      <input
-                        type="date"
-                        value={filters.date_to ?? ""}
-                        onChange={(e) => onFilter({ date_to: e.target.value || undefined })}
-                        className="form-input w-full"
-                      />
                     </div>
-                  )}
-                </div>
-              )}
+                  </Fragment>
+                )
+              })}
             </div>
 
             <button
               type="button"
+              className="btn btn-secondary btn-sm audit-filter-conditions__add"
               onClick={() => addRow()}
-              className="btn btn-primary btn-sm"
             >
-              <span className="text-base">+</span>
-              More Filters
+              + Add condition
             </button>
           </div>
-
-          {filterRows.length > 0 && (
-            <div className="mt-4 space-y-3">
-              {filterRows.map((row, index) => {
-                const field = FILTER_FIELDS.find((item) => item.key === row.field) ?? FILTER_FIELDS[0];
-                const conditionOptions = field.type === "select" ? SELECT_CONDITIONS : TEXT_CONDITIONS;
-                return (
-                  <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-3">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--bg-hover)] text-[11px] font-semibold text-[var(--text-muted)]">
-                      {index + 1}
-                    </div>
-                    <div className="relative min-w-[180px] flex-1">
-                      <button
-                        ref={(el) => (dropdownAnchorRefs.current[row.id] = el)}
-                        type="button"
-                        onClick={() => toggleFieldDropdown(row.id)}
-                        className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-left text-sm text-[var(--text-secondary)]"
-                      >
-                        {field.label}
-                      </button>
-                      {openFieldDropdownId === row.id && (
-                        <Portal>
-                          <div
-                            ref={dropdownRef}
-                            className="z-50 rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-lg"
-                            style={{ width: dropdownAnchorRefs.current[row.id]?.getBoundingClientRect().width ?? 260, position: "absolute", left: dropdownAnchorRefs.current[row.id]?.getBoundingClientRect().left ?? 0, top: (dropdownAnchorRefs.current[row.id]?.getBoundingClientRect().bottom ?? 0) + 8 }}
-                          >
-                            <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Fields</div>
-                            <div className="max-h-56 overflow-y-auto px-2 pb-2">
-                              {fieldOptions.map((option) => (
-                                <button
-                                  key={option.key}
-                                  type="button"
-                                  onClick={() => {
-                                    updateRow(row.id, { field: option.key, condition: option.type === "select" ? "is" : "contains", value: "" });
-                                    setOpenFieldDropdownId(null);
-                                  }}
-                                  className="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-                                >
-                                  <div className="flex justify-between">
-                                    <span>{option.label}</span>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        </Portal>
-                      )}
-                    </div>
-                    <div className="min-w-[130px]">
-                      <select
-                        value={row.condition}
-                        onChange={(e) => updateRow(row.id, { condition: e.target.value })}
-                        className="form-input w-full"
-                      >
-                        {conditionOptions.map((condition) => (
-                          <option key={condition} value={condition}>
-                            {condition}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[180px]">
-                      {field.type === "select" ? (
-                        <div className="relative">
-                          <button
-                            ref={(el) => (valueAnchorRefs.current[row.id] = el)}
-                            type="button"
-                            onClick={() => {
-                              setOpenValueDropdownId((current) => (current === row.id ? null : row.id));
-                              setValueSearch("");
-                            }}
-                            className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-left text-sm text-[var(--text-secondary)]"
-                          >
-                            {row.value || `Select ${field.label}`}
-                          </button>
-                          {openValueDropdownId === row.id && (
-                            <Portal>
-                              <div
-                                ref={valueDropdownRef}
-                                className="z-50 rounded-2xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-lg"
-                                style={{ width: valueAnchorRefs.current[row.id]?.getBoundingClientRect().width ?? 260, position: "absolute", left: valueAnchorRefs.current[row.id]?.getBoundingClientRect().left ?? 0, top: (valueAnchorRefs.current[row.id]?.getBoundingClientRect().bottom ?? 0) + 8 }}
-                              >
-                                <div className="max-h-56 overflow-y-auto px-2 pb-2">
-                                  {field.options && field.options.length ? (
-                                    field.options.map((option) => (
-                                      <button
-                                        key={option}
-                                        type="button"
-                                        onClick={() => {
-                                          updateRow(row.id, { value: option });
-                                          setOpenValueDropdownId(null);
-                                        }}
-                                        className="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-                                      >
-                                        {option}
-                                      </button>
-                                    ))
-                                  ) : (
-                                    <div className="px-3 py-2 text-sm text-[var(--text-muted)]">No options</div>
-                                  )}
-                                </div>
-                              </div>
-                            </Portal>
-                          )}
-                        </div>
-                      ) : (
-                        <input
-                          type="text"
-                          value={row.value}
-                          onChange={(e) => updateRow(row.id, { value: e.target.value })}
-                          placeholder={`Enter ${field.label}`}
-                          className="form-input w-full"
-                        />
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => addRow(row)}
-                      className="rounded-lg px-2 py-1 text-[var(--text-muted)] transition hover:text-[var(--text-secondary)]"
-                      aria-label="Duplicate filter row"
-                    >
-                      +
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeRow(row.id)}
-                      className="rounded-lg px-2 py-1 text-[var(--text-muted)] transition hover:text-[var(--red)]"
-                      aria-label="Remove filter row"
-                    >
-                      🗑
-                    </button>
-                  </div>
-                );
-              })}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <button type="button" onClick={() => addRow()} className="text-indigo-600 text-sm font-medium">
-                  + Add condition
-                </button>
-                <button
-                  type="button"
-                  onClick={applyFilters}
-                  className="btn btn-primary btn-sm"
-                >
-                  Apply Filters
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="relative mt-4">
-            <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-muted)]" aria-hidden="true">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-3.5-3.5" />
-              </svg>
-            </span>
-            <input
-              type="text"
-              value={searchValue}
-              onChange={(e) => setSearchValue(e.target.value)}
-              placeholder="Search action, detail, reference, user..."
-              className="form-input w-full pl-10 pr-10"
-            />
-            {searchValue && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchValue("");
-                  onFilter({ search: "" });
-                }}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                aria-label="Clear search"
-              >
-                ×
-              </button>
-            )}
-          </div>
         </div>
-      </div>
-    </div>
-  );
+      </Drawer>
+    </>
+  )
 }
+
+export default AuditFiltersBar

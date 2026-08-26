@@ -50,7 +50,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md', ico
 }
 
 // ─── Drawer ───────────────────────────────────────────────────────────────────
-export function Drawer({ open, onClose, title, children, footer, icon }) {
+export function Drawer({ open, onClose, title, children, footer, icon, size, footerClassName }) {
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose() }
     if (open) document.addEventListener('keydown', handler)
@@ -59,17 +59,19 @@ export function Drawer({ open, onClose, title, children, footer, icon }) {
 
   if (!open) return null
 
+  const sizeClass = size ? `drawer--${size}` : ''
+
   return (
     <>
       <div className="drawer-overlay" onClick={onClose} />
-      <div className="drawer">
+      <div className={`drawer ${sizeClass}`.trim()}>
         <div className="drawer-header">
           {icon && <span style={{ fontSize: 20 }}>{icon}</span>}
           <h3 style={{ flex: 1 }}>{title}</h3>
           <button className="btn btn-ghost btn-sm" onClick={onClose} style={{ padding: '4px 8px' }}>✕</button>
         </div>
         <div className="drawer-body">{children}</div>
-        {footer && <div className="drawer-footer">{footer}</div>}
+        {footer && <div className={`drawer-footer${footerClassName ? ` ${footerClassName}` : ''}`}>{footer}</div>}
       </div>
     </>
   )
