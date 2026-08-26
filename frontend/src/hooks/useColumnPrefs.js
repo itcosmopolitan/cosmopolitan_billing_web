@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { settingsAPI } from '@/api'
 import { useAppStore } from '@/store'
@@ -56,7 +56,7 @@ function normalizeColumns(columns) {
 
 /**
  * List-table column layout from the server catalog (boot: GET /settings/column-prefs).
- * Column definitions come only from the API — pages pass a tableKey, never local defs.
+ * Prefs are derived from the store — no sync effects (keeps hook order stable).
  *
  * @param {string} tableKey e.g. "customers.list", "sales.invoices"
  */
@@ -65,29 +65,15 @@ export default function useColumnPrefs(tableKey) {
   const setColumnTables = useAppStore((s) => s.setColumnTables)
   const setColumnTable = useAppStore((s) => s.setColumnTable)
 
-  const defs = useMemo(() => normalizeColumns(table?.columns), [table?.columns])
-
-  const [prefs, setPrefs] = useState(() => {
-    if (table) {
-      return resolvePrefs(normalizeColumns(table.columns), {
-        order: table.order,
-        hidden: table.hidden,
-      })
-    }
-    return resolvePrefs([], null)
-  })
   const [customizeOpen, setCustomizeOpen] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const defsKey = defs.map((d) => d.id).join('|')
-  useEffect(() => {
-    if (!table) {
-      setPrefs(resolvePrefs([], null))
-      return
-    }
-    const columns = normalizeColumns(table.columns)
-    setPrefs(resolvePrefs(columns, { order: table.order, hidden: table.hidden }))
-  }, [tableKey, defsKey, table])
+  const defs = useMemo(() => normalizeColumns(table?.columns), [table])
+
+  const prefs = useMemo(
+    () => resolvePrefs(defs, table ? { order: table.order, hidden: table.hidden } : null),
+    [defs, table],
+  )
 
   const defMap = useMemo(() => {
     const m = new Map()
@@ -119,24 +105,14 @@ export default function useColumnPrefs(tableKey) {
       return
     }
     const resolved = resolvePrefs(defs, next)
-    setPrefs(resolved)
     setSaving(true)
     try {
       const res = await settingsAPI.putColumnPref(tableKey, resolved)
       if (res?.tables) {
         setColumnTables(res.tables)
-        const t = res.tables[tableKey]
-        if (t) {
-          setPrefs(resolvePrefs(normalizeColumns(t.columns), { order: t.order, hidden: t.hidden }))
-        }
       } else if (res?.table) {
         setColumnTable(tableKey, res.table)
-        setPrefs(resolvePrefs(normalizeColumns(res.table.columns), {
-          order: res.table.order,
-          hidden: res.table.hidden,
-        }))
       } else {
-        setPrefs(resolved)
         setColumnTable(tableKey, { columns: defs, ...resolved })
       }
       clearLegacyStored(tableKey)
