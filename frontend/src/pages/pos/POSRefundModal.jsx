@@ -193,7 +193,7 @@ export default function POSRefundModal({ open, onClose, branchId, onSuccess }) {
                   { id: 'cash', label: '💵 Cash (refund from drawer)' },
                   {
                     id: 'credit',
-                    label: `🏦 Store Credit${isWalkin ? ' (walk-in — pick Cash)' : ''}`,
+                    label: `🏦 Store credit${isWalkin ? ' (walk-in — pick Cash)' : ''}`,
                     disabled: isWalkin,
                   },
                 ]}

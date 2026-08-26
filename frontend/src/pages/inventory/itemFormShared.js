@@ -2,7 +2,10 @@ import { catalogInclusiveAmount } from '@/utils/taxCalc'
 
 export const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', country_of_origin: '', categoryId: '', categoryName: '', brand: '',
-  unit: '', cost_price: '', selling_price: '', wholesale_discount_pct: '', staff_discount_pct: '',
+  unit: '', cost_price: '', selling_price: '',
+  categoryPricingMode: 'pct',
+  wholesale_discount_pct: '', wholesale_price: '',
+  staff_discount_pct: '', staff_price: '',
   tax_rate: '8',
   priceTaxMode: 'inclusive',
   hsn_code: '', reorder_level: '10', active: true,
@@ -57,8 +60,14 @@ export function formFromItem(item) {
     unit: item.unit || '',
     cost_price: item.default_cost_price ?? item.cost_price ?? '',
     selling_price: item.default_selling_price ?? item.selling_price ?? '',
+    categoryPricingMode:
+      item.wholesale_pricing_mode === 'price' || item.staff_pricing_mode === 'price'
+        ? 'price'
+        : 'pct',
     wholesale_discount_pct: item.wholesale_discount_pct ?? '',
+    wholesale_price: item.wholesale_price ?? '',
     staff_discount_pct: item.staff_discount_pct ?? '',
+    staff_price: item.staff_price ?? '',
     tax_rate: item.tax_rate ?? '8',
     priceTaxMode: 'inclusive',
     hsn_code: item.hsn_code || '',
@@ -81,13 +90,22 @@ export function validateItemForm(form, branchConfigs) {
     return { ok: false, error: 'Quantity per pack/set is required when packaging is enabled' }
   }
   if (!form.selling_price) return { ok: false, error: 'Selling price is required' }
+  const categoryMode = form.categoryPricingMode === 'price' ? 'price' : 'pct'
   const wholesaleDisc = Number(form.wholesale_discount_pct || 0)
   const staffDisc = Number(form.staff_discount_pct || 0)
-  if (wholesaleDisc < 0 || wholesaleDisc > 100) {
+  const wholesalePrice = Number(form.wholesale_price || 0)
+  const staffPrice = Number(form.staff_price || 0)
+  if (categoryMode === 'pct' && (wholesaleDisc < 0 || wholesaleDisc > 100)) {
     return { ok: false, error: 'Wholesale discount must be between 0 and 100%' }
   }
-  if (staffDisc < 0 || staffDisc > 100) {
+  if (categoryMode === 'pct' && (staffDisc < 0 || staffDisc > 100)) {
     return { ok: false, error: 'Staff discount must be between 0 and 100%' }
+  }
+  if (categoryMode === 'price' && wholesalePrice < 0) {
+    return { ok: false, error: 'Wholesale price cannot be negative' }
+  }
+  if (categoryMode === 'price' && staffPrice < 0) {
+    return { ok: false, error: 'Staff price cannot be negative' }
   }
 
   const listed = branchConfigs.filter((bc) => bc.branch_id)
@@ -134,8 +152,16 @@ export function buildCatalogPayload(form, branchFilter) {
     unit: form.unit,
     cost_price: catalogInclusiveAmount(form.cost_price, form.priceTaxMode, form.tax_rate),
     selling_price: catalogInclusiveAmount(form.selling_price, form.priceTaxMode, form.tax_rate),
-    wholesale_discount_pct: Number(form.wholesale_discount_pct || 0),
-    staff_discount_pct: Number(form.staff_discount_pct || 0),
+    wholesale_pricing_mode: form.categoryPricingMode === 'price' ? 'price' : 'pct',
+    wholesale_discount_pct: form.categoryPricingMode === 'price' ? 0 : Number(form.wholesale_discount_pct || 0),
+    wholesale_price: form.categoryPricingMode === 'price'
+      ? catalogInclusiveAmount(form.wholesale_price || 0, form.priceTaxMode, form.tax_rate)
+      : 0,
+    staff_pricing_mode: form.categoryPricingMode === 'price' ? 'price' : 'pct',
+    staff_discount_pct: form.categoryPricingMode === 'price' ? 0 : Number(form.staff_discount_pct || 0),
+    staff_price: form.categoryPricingMode === 'price'
+      ? catalogInclusiveAmount(form.staff_price || 0, form.priceTaxMode, form.tax_rate)
+      : 0,
     tax_rate: Number(form.tax_rate),
     hsn_code: form.hsn_code,
     reorder_level: Number(form.reorder_level),

@@ -5,6 +5,7 @@ export {
   customerPricingType,
   discountPatternFromItem,
   applySuggestedDiscountsToSaleLines,
+  resolveCategoryLinePricing,
 } from '@/utils/pricingDiscounts'
 
 export function lineDiscountToPercent(line) {
@@ -29,7 +30,12 @@ export const emptySaleLine = () => ({
   lineDiscount: 0,
   lineDiscountType: '%',
   wholesale_discount_pct: 0,
+  wholesale_pricing_mode: 'pct',
+  wholesale_price: 0,
   staff_discount_pct: 0,
+  staff_pricing_mode: 'pct',
+  staff_price: 0,
+  retailPrice: 0,
   batchTracking: false,
   expiryTracking: false,
   batchAllocation: [],
@@ -48,7 +54,12 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
     lineDiscountType: '%',
     wholesale_discount_pct: Number(it.wholesale_discount_pct ?? it.wholesaleDiscountPct ?? 0) || 0,
+    wholesale_pricing_mode: it.wholesale_pricing_mode === 'price' ? 'price' : 'pct',
+    wholesale_price: Number(it.wholesale_price ?? it.wholesalePrice ?? 0) || 0,
     staff_discount_pct: Number(it.staff_discount_pct ?? it.staffDiscountPct ?? 0) || 0,
+    staff_pricing_mode: it.staff_pricing_mode === 'price' ? 'price' : 'pct',
+    staff_price: Number(it.staff_price ?? it.staffPrice ?? 0) || 0,
+    retailPrice: Number(it.retailPrice ?? it.price ?? 0) || 0,
     batchAllocation: it.batchAllocation || [],
     batchAllocationCustom: Boolean(it.batchAllocation?.length),
     ...(withOrderLineId && it.id ? { orderLineId: it.id } : {}),

@@ -307,6 +307,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("customers", "credit_terms", "VARCHAR"),
     ("items", "wholesale_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "staff_discount_pct", "FLOAT DEFAULT 0"),
+    ("items", "wholesale_pricing_mode", "VARCHAR DEFAULT 'pct'"),
+    ("items", "wholesale_price", "FLOAT DEFAULT 0"),
+    ("items", "staff_pricing_mode", "VARCHAR DEFAULT 'pct'"),
+    ("items", "staff_price", "FLOAT DEFAULT 0"),
     # 2026-05-24: parity with sale_invoices.payment_mode on vendor bills.
     ("purchase_bills", "payment_mode", "VARCHAR"),
     # 2026-05-24: per-line discount on purchase bills (percent).

@@ -120,7 +120,7 @@ export default function PaymentFormPage() {
     ...PAYMENT_MODE_LABEL_OPTIONS,
     {
       id: 'credit',
-      label: `CREDIT (${fmt(avail)} available)`,
+      label: `STORE CREDIT (${fmt(avail)} available)`,
       disabled: avail <= 0,
     },
   ], [avail])
@@ -144,7 +144,7 @@ export default function PaymentFormPage() {
       if (err) { toast.error(err); return }
     }
     if (creditMode && creditInsufficient) {
-      toast.error(`Insufficient credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
+      toast.error(`Insufficient store credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
       return
     }
     const allocations = []
@@ -169,7 +169,7 @@ export default function PaymentFormPage() {
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
-          `Payment ${res.number} recorded. ${fmt(credit)} credited to ${customer.name}`,
+          `Payment ${res.number} recorded. ${fmt(credit)} added to store credit for ${customer.name}`,
           { duration: 5000 },
         )
       } else {
@@ -258,7 +258,7 @@ export default function PaymentFormPage() {
                   {invoices.length} pending {invoices.length === 1 ? 'invoice' : 'invoices'} ·{' '}
                   <strong>{fmt(totalBalance)}</strong> outstanding
                   {avail > 0 && (
-                    <> · <strong>{fmt(avail)}</strong> customer credit available</>
+                    <> · <strong>{fmt(avail)}</strong> store credit available</>
                   )}
                 </AlertBar>
               )
@@ -342,7 +342,7 @@ export default function PaymentFormPage() {
                           />
                           {excess > 0 && (
                             <div style={{ fontSize: 10.5, color: 'var(--amber)', marginTop: 2 }}>
-                              Excess {fmt(excess)} → credit
+                              Excess {fmt(excess)} → store credit
                             </div>
                           )}
                         </td>
@@ -360,7 +360,7 @@ export default function PaymentFormPage() {
                   </div>
                   {totals.credit > 0 && (
                     <div style={totalsRowStyle}>
-                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>Credit Applied</span>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>To store credit</span>
                       <span className="mono" style={{ ...totalsValueStyle, color: 'var(--amber)' }}>{fmt(totals.credit)}</span>
                     </div>
                   )}
@@ -392,8 +392,8 @@ export default function PaymentFormPage() {
                     color: creditInsufficient ? 'var(--amber)' : 'var(--text-muted)',
                   }}>
                     {creditInsufficient
-                      ? `Allocated ${fmt(totals.allocated)} exceeds available credit ${fmt(avail)}. Reduce selection.`
-                      : `Drawing ${fmt(totals.allocated)} from ${fmt(avail)} available credit.`}
+                      ? `Allocated ${fmt(totals.allocated)} exceeds store credit ${fmt(avail)}. Reduce selection.`
+                      : `Drawing ${fmt(totals.allocated)} from ${fmt(avail)} store credit.`}
                   </div>
                 )}
               </FormGroup>
@@ -416,7 +416,7 @@ export default function PaymentFormPage() {
             )}
             {creditMode && creditInsufficient && (
               <AlertBar type="red" icon="⚠">
-                Insufficient credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
+                Insufficient store credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
               </AlertBar>
             )}
             <FormGroup label="Notes (optional)">

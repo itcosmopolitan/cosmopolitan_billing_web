@@ -287,9 +287,13 @@ class Item(Base):
     unit            = Column(String, default="Pcs")
     cost_price      = Column(Float, default=0)
     selling_price   = Column(Float, default=0)
-    # Suggested off-list discounts vs retail selling_price (cashier applies at bill).
+    # Wholesale / staff pricing: either % off retail (`pct`) or a fixed selling price (`price`).
+    wholesale_pricing_mode = Column(String, default="pct")  # pct | price
     wholesale_discount_pct = Column(Float, default=0)
+    wholesale_price        = Column(Float, default=0)
+    staff_pricing_mode     = Column(String, default="pct")  # pct | price
     staff_discount_pct     = Column(Float, default=0)
+    staff_price            = Column(Float, default=0)
     tax_rate        = Column(Float, default=18)
     hsn_code        = Column(String)
     reorder_level   = Column(Integer, default=10)

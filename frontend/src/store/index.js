@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { suggestedDiscountForCustomer, customerPricingType, discountPatternFromItem } from '@/utils/pricingDiscounts'
+import { customerPricingType, discountPatternFromItem, resolveCategoryLinePricing } from '@/utils/pricingDiscounts'
 import {
   DEFAULT_AMOUNT_DECIMALS,
   DEFAULT_QTY_DECIMALS,
@@ -242,8 +242,9 @@ export const usePOSStore = create((set, get) => ({
   addItem: (product) => {
     const { cart, customer } = get()
     const pattern = discountPatternFromItem(product)
-    const suggested = suggestedDiscountForCustomer(
-      { ...product, ...pattern },
+    const retailPrice = Number(pattern.retailPrice || product.price || 0) || 0
+    const resolved = resolveCategoryLinePricing(
+      { ...product, ...pattern, retailPrice, price: retailPrice },
       customerPricingType(customer),
     )
     const existing = cart.find((i) => i.id === product.id)
@@ -259,6 +260,7 @@ export const usePOSStore = create((set, get) => ({
             ? applyLineCalc({
                 ...i,
                 ...pattern,
+                retailPrice: i.retailPrice ?? retailPrice,
                 qty: i.qty + 1,
                 batchAllocationCustom: false,
               })
@@ -272,9 +274,11 @@ export const usePOSStore = create((set, get) => ({
           normalizeCartItem({
             ...product,
             ...pattern,
+            retailPrice,
+            price: resolved.price,
             qty: 1,
             lineDiscountType: 'pct',
-            lineDiscountValue: suggested,
+            lineDiscountValue: resolved.discountPct,
           }),
         ],
       })
@@ -346,11 +350,15 @@ export const usePOSStore = create((set, get) => ({
     const type = customerPricingType(customer)
     set((s) => ({
       customer,
-      cart: s.cart.map((i) => applyLineCalc({
-        ...i,
-        lineDiscountType: 'pct',
-        lineDiscountValue: suggestedDiscountForCustomer(i, type),
-      })),
+      cart: s.cart.map((i) => {
+        const resolved = resolveCategoryLinePricing(i, type)
+        return applyLineCalc({
+          ...i,
+          price: resolved.price,
+          lineDiscountType: 'pct',
+          lineDiscountValue: resolved.discountPct,
+        })
+      }),
     }))
   },
   setDiscount: (pct, amt) => set({ discountPct: pct, discountAmt: amt }),

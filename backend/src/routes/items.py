@@ -158,6 +158,62 @@ def _resolve_item_status_value(item: Item) -> str:
     return "approved"
 
 
+def _normalize_category_pricing_mode(mode) -> str:
+    raw = str(mode or "").strip().lower()
+    return "price" if raw in {"price", "amount", "fixed", "fixed_price", "fixed price"} else "pct"
+
+
+def _category_pricing_fields(data) -> dict:
+    """Normalize wholesale/staff pct-vs-price fields from create/update payloads."""
+    get = data.get if isinstance(data, dict) else lambda k, d=None: getattr(data, k, d)
+    wholesale_mode = _normalize_category_pricing_mode(get("wholesale_pricing_mode", "pct"))
+    staff_mode = _normalize_category_pricing_mode(get("staff_pricing_mode", "pct"))
+    wholesale_pct = float(get("wholesale_discount_pct", 0) or 0)
+    staff_pct = float(get("staff_discount_pct", 0) or 0)
+    wholesale_price = float(get("wholesale_price", 0) or 0)
+    staff_price = float(get("staff_price", 0) or 0)
+    if wholesale_pct < 0 or wholesale_pct > 100:
+        raise HTTPException(400, "Wholesale discount must be between 0 and 100%")
+    if staff_pct < 0 or staff_pct > 100:
+        raise HTTPException(400, "Staff discount must be between 0 and 100%")
+    if wholesale_price < 0:
+        raise HTTPException(400, "Wholesale price cannot be negative")
+    if staff_price < 0:
+        raise HTTPException(400, "Staff price cannot be negative")
+    # Persist only the active side so the unused value doesn't linger as stale config.
+    if wholesale_mode == "price":
+        wholesale_pct = 0.0
+    else:
+        wholesale_price = 0.0
+    if staff_mode == "price":
+        staff_pct = 0.0
+    else:
+        staff_price = 0.0
+    return {
+        "wholesale_pricing_mode": wholesale_mode,
+        "wholesale_discount_pct": wholesale_pct,
+        "wholesale_price": wholesale_price,
+        "staff_pricing_mode": staff_mode,
+        "staff_discount_pct": staff_pct,
+        "staff_price": staff_price,
+    }
+
+
+def _item_category_pricing_dict(item: Item) -> dict:
+    return {
+        "wholesale_pricing_mode": _normalize_category_pricing_mode(
+            getattr(item, "wholesale_pricing_mode", None) or "pct"
+        ),
+        "wholesale_discount_pct": float(getattr(item, "wholesale_discount_pct", 0) or 0),
+        "wholesale_price": float(getattr(item, "wholesale_price", 0) or 0),
+        "staff_pricing_mode": _normalize_category_pricing_mode(
+            getattr(item, "staff_pricing_mode", None) or "pct"
+        ),
+        "staff_discount_pct": float(getattr(item, "staff_discount_pct", 0) or 0),
+        "staff_price": float(getattr(item, "staff_price", 0) or 0),
+    }
+
+
 async def _get_config_map(
     db: AsyncSession,
     item_ids: list[str],
@@ -573,8 +629,12 @@ class ItemCreate(BaseModel):
     unit: str = "Pcs"
     cost_price: float
     selling_price: float
+    wholesale_pricing_mode: str = "pct"
     wholesale_discount_pct: float = 0
+    wholesale_price: float = 0
+    staff_pricing_mode: str = "pct"
     staff_discount_pct: float = 0
+    staff_price: float = 0
     tax_rate: float = 18
     hsn_code: Optional[str] = None
     reorder_level: int = 10
@@ -658,8 +718,12 @@ class ItemPatch(BaseModel):
     unit: Optional[str] = None
     cost_price: Optional[float] = None
     selling_price: Optional[float] = None
+    wholesale_pricing_mode: Optional[str] = None
     wholesale_discount_pct: Optional[float] = None
+    wholesale_price: Optional[float] = None
+    staff_pricing_mode: Optional[str] = None
     staff_discount_pct: Optional[float] = None
+    staff_price: Optional[float] = None
     tax_rate: Optional[float] = None
     hsn_code: Optional[str] = None
     reorder_level: Optional[int] = None
@@ -898,8 +962,7 @@ async def list_items(
             "cost_price": item.cost_price if master_mode else eff_cost,
             "default_selling_price": item.selling_price,
             "selling_price": eff_price,
-            "wholesale_discount_pct": float(getattr(item, "wholesale_discount_pct", 0) or 0),
-            "staff_discount_pct": float(getattr(item, "staff_discount_pct", 0) or 0),
+            **_item_category_pricing_dict(item),
             "tax_rate": item.tax_rate,
             "hsn_code": item.hsn_code,
             "reorder_level": eff_reorder,
@@ -956,6 +1019,7 @@ async def create_item(
         raise HTTPException(400, "Packaging quantity must be greater than zero when packaging is enabled")
     direct = await can_direct_commit(user, db, "item_master.approve")
     initial_status = ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
+    category_pricing = _category_pricing_fields(data)
     item = Item(
         id=str(uuid.uuid4()),
         name=data.name,
@@ -967,8 +1031,7 @@ async def create_item(
         unit=data.unit,
         cost_price=data.cost_price,
         selling_price=data.selling_price,
-        wholesale_discount_pct=float(data.wholesale_discount_pct or 0),
-        staff_discount_pct=float(data.staff_discount_pct or 0),
+        **category_pricing,
         tax_rate=data.tax_rate,
         hsn_code=data.hsn_code,
         reorder_level=data.reorder_level,
@@ -1233,8 +1296,12 @@ async def import_items(
                 unit=data.get('unit') or 'Pcs',
                 cost_price=float(data.get('cost_price') or 0),
                 selling_price=float(data.get('selling_price') or 0),
+                wholesale_pricing_mode="pct",
                 wholesale_discount_pct=0,
+                wholesale_price=0,
+                staff_pricing_mode="pct",
                 staff_discount_pct=0,
+                staff_price=0,
                 tax_rate=float(data.get('tax_rate') or 0),
                 hsn_code=None,
                 reorder_level=int(data.get('reorder_level') or 0),
@@ -1432,8 +1499,7 @@ async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
         "cost_price": item.cost_price,
         "default_selling_price": item.selling_price,
         "selling_price": item.selling_price,
-        "wholesale_discount_pct": float(getattr(item, "wholesale_discount_pct", 0) or 0),
-        "staff_discount_pct": float(getattr(item, "staff_discount_pct", 0) or 0),
+        **_item_category_pricing_dict(item),
         "tax_rate": item.tax_rate,
         "hsn_code": item.hsn_code,
         "default_reorder_level": item.reorder_level,
@@ -1598,8 +1664,7 @@ async def update_item(
         "country_of_origin": item.country_of_origin,
         "cost_price": item.cost_price,
         "selling_price": item.selling_price,
-        "wholesale_discount_pct": getattr(item, "wholesale_discount_pct", 0) or 0,
-        "staff_discount_pct": getattr(item, "staff_discount_pct", 0) or 0,
+        **_item_category_pricing_dict(item),
         "tax_rate": item.tax_rate,
         "reorder_level": item.reorder_level,
         "batch_tracking": item.batch_tracking,
@@ -1614,8 +1679,8 @@ async def update_item(
     item.unit = data.unit
     item.cost_price = data.cost_price
     item.selling_price = data.selling_price
-    item.wholesale_discount_pct = float(data.wholesale_discount_pct or 0)
-    item.staff_discount_pct = float(data.staff_discount_pct or 0)
+    for key, value in _category_pricing_fields(data).items():
+        setattr(item, key, value)
     item.tax_rate = data.tax_rate
     item.hsn_code = data.hsn_code
     item.reorder_level = data.reorder_level
@@ -1923,8 +1988,12 @@ async def patch_item(
             "country_of_origin",
             "cost_price",
             "selling_price",
+            "wholesale_pricing_mode",
             "wholesale_discount_pct",
+            "wholesale_price",
+            "staff_pricing_mode",
             "staff_discount_pct",
+            "staff_price",
             "is_packaging",
             "packaging_quantity",
             "tax_rate",
@@ -1957,6 +2026,17 @@ async def patch_item(
         )
         if not will_track:
             updates["expiry_tracking"] = False
+    pricing_keys = (
+        "wholesale_pricing_mode",
+        "wholesale_discount_pct",
+        "wholesale_price",
+        "staff_pricing_mode",
+        "staff_discount_pct",
+        "staff_price",
+    )
+    if any(k in updates for k in pricing_keys):
+        merged = {**_item_category_pricing_dict(item), **{k: updates[k] for k in pricing_keys if k in updates}}
+        updates.update(_category_pricing_fields(merged))
     for k, v in updates.items():
         setattr(item, k, v)
 

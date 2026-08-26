@@ -299,14 +299,14 @@ export default function SalesPage() {
       return [
         `${plural('invoice')} removed`,
         'Stock restored on each invoice line (aggregate add-back)',
-        'Credit-mode payments refund customer credit balance',
+        'Store-credit payments refund customer store credit balance',
         'Audit log entries written per deletion',
       ]
     }
     if (tabKey === 'orders') return [`${plural('sales order')} removed`, 'No stock or credit changes (SOs are intent-only)', 'Audit log entries written']
     if (tabKey === 'quotes') return [`${plural('quotation')} removed`, 'No downstream effects', 'Audit log entries written']
-    if (tabKey === 'returns') return [`${plural('return')} removed`, 'Credit refunds revoked from customer balance (if any)', 'Audit log entries written']
-    if (tabKey === 'payments') return [`${plural('payment')} removed`, 'Invoice paid_amount + status reverted per allocation', 'Credit-mode payments restore credit balance', 'Audit log entries written']
+    if (tabKey === 'returns') return [`${plural('return')} removed`, 'Store credit refunds revoked from customer balance (if any)', 'Audit log entries written']
+    if (tabKey === 'payments') return [`${plural('payment')} removed`, 'Invoice paid_amount + status reverted per allocation', 'Store-credit payments restore store credit balance', 'Audit log entries written']
     return [`${plural('item')} removed`]
   }
 
@@ -605,10 +605,10 @@ export default function SalesPage() {
     // 2026-05-30: credit-mode guards (mirror POS). Walk-in can't draw
     // credit; available balance must cover the amount. Backend re-checks.
     if (payMode === 'credit') {
-      if (isWalkin) { toast.error('Credit mode needs a customer — walk-in invoices can\'t draw credit'); return }
+      if (isWalkin) { toast.error('Store credit needs a customer — walk-in invoices can\'t use store credit'); return }
       const avail = Number(payCustCredit || 0)
       if (avail < amount) {
-        toast.error(`Insufficient credit — ${fmt(avail)} available, ${fmt(amount)} needed`)
+        toast.error(`Insufficient store credit — ${fmt(avail)} available, ${fmt(amount)} needed`)
         return
       }
     }
@@ -620,7 +620,7 @@ export default function SalesPage() {
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
-          `Invoice settled. ${fmt(credit)} credited to ${showPayment.customerName}`,
+          `Invoice settled. ${fmt(credit)} added to store credit for ${showPayment.customerName}`,
           { duration: 5000 },
         )
       } else {
@@ -1327,7 +1327,7 @@ export default function SalesPage() {
                       </td>
                       <td>
                         <Tag color={r.refundMethod === 'credit' ? 'var(--accent)' : r.refundMethod === 'adjustment' ? 'var(--amber)' : undefined}>
-                          {r.refundMethod === 'credit' ? 'Credit' : r.refundMethod === 'adjustment' ? 'Adjustment' : 'Cash'}
+                          {r.refundMethod === 'credit' ? 'Store credit' : r.refundMethod === 'adjustment' ? 'Adjustment' : 'Cash'}
                         </Tag>
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
@@ -1424,7 +1424,7 @@ export default function SalesPage() {
                     <SortableHeader label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
                     <th>Invoices</th>
                     <SortableHeader label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
-                    <th className="text-right">Credit Applied</th>
+                    <th className="text-right">Store Credit</th>
                     <th>Status</th>
                     <th></th>
                   </tr>
@@ -1739,7 +1739,7 @@ export default function SalesPage() {
                 )}
                 {creditMode && !isWalkin && (
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                    Locked to the full balance for credit settlement.
+                    Locked to the full balance for store credit settlement.
                   </div>
                 )}
               </FormGroup>
@@ -1748,7 +1748,7 @@ export default function SalesPage() {
                   mode (amount is locked to balance, never overpays). */}
               {overpay > 0 && !isWalkin && !creditMode && (
                 <AlertBar type="amber" icon="ℹ">
-                  Overpayment: <strong>{fmt(overpay)}</strong> will be credited to {showPayment.customerName}
+                  Overpayment: <strong>{fmt(overpay)}</strong> will be added to store credit for {showPayment.customerName}
                 </AlertBar>
               )}
               <FormGroup label="Payment Mode" required>
@@ -1764,7 +1764,7 @@ export default function SalesPage() {
                     ...PAYMENT_MODE_LABEL_OPTIONS,
                     ...(!isWalkin ? [{
                       id: 'credit',
-                      label: `CREDIT${avail != null ? ` (${fmt(avail)} available)` : ''}${creditInsufficient ? ' — insufficient' : ''}`,
+                      label: `STORE CREDIT${avail != null ? ` (${fmt(avail)} available)` : ''}${creditInsufficient ? ' — insufficient' : ''}`,
                       disabled: creditInsufficient,
                     }] : []),
                   ]}
@@ -1772,7 +1772,7 @@ export default function SalesPage() {
                 />
                 {creditMode && creditInsufficient && (
                   <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
-                    Available credit ({fmt(avail)}) is less than the balance ({fmt(balance)}). Pick another method.
+                    Store credit ({fmt(avail)}) is less than the balance ({fmt(balance)}). Pick another method.
                   </div>
                 )}
               </FormGroup>

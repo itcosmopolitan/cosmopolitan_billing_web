@@ -356,7 +356,7 @@ export default function SalesTxnDetailPanel({
                 { label: 'Balance due', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : '—' },
               ] : []),
               ...(kind === 'return' ? [
-                { label: 'Credited to customer', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                { label: 'Added to store credit', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
               ] : []),
             ]}
           />

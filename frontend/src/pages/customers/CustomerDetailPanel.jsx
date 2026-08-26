@@ -70,7 +70,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
   const summary = [
     { label: 'Outstanding', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
     { label: 'Store credit', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
-    { label: 'Credit limit', value: fmt(detail?.creditLimit) },
+    { label: 'Account limit', value: fmt(detail?.creditLimit) },
     { label: 'Total purchases', value: fmt(detail?.totalPurchases) },
   ]
 
@@ -85,7 +85,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
       summary={summary}
       tabs={[
         { id: 'overview', label: 'Customer details' },
-        { id: 'credit', label: 'Credit & pricing' },
+        { id: 'credit', label: 'Account & store credit' },
       ]}
       activeTab={tab}
       onTabChange={setTab}
@@ -98,7 +98,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
             onClose?.()
           }}
         >
-          Credit ledger
+          Store credit ledger
         </button>
       )}
     >
@@ -144,7 +144,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
               },
               { label: 'Key account manager', value: detail?.keyAccountManager || '—' },
               { label: 'Credit terms', value: detail?.creditTerms || '—' },
-              { label: 'Credit limit', value: fmt(detail?.creditLimit) },
+              { label: 'Account limit', value: fmt(detail?.creditLimit) },
               {
                 label: 'Outstanding',
                 value: <span style={{ color: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(detail?.outstanding)}</span>,
@@ -161,7 +161,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
           </DetailSection>
           {detail?.outstanding > 0 && (
             <AlertBar type="amber" icon="⚠️">
-              Outstanding balance of <strong>{fmt(detail.outstanding)}</strong> — {Math.round(creditUsedPct(detail))}% of credit limit used.
+              Outstanding balance of <strong>{fmt(detail.outstanding)}</strong> — {Math.round(creditUsedPct(detail))}% of account limit used.
             </AlertBar>
           )}
         </>

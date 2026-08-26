@@ -419,13 +419,13 @@ export default function POSPage() {
 
     if (paymentReceived && paymentMethod === 'credit') {
       if (!customer?.id) {
-        toast.error('Credit mode requires a customer — pick one or change the method')
+        toast.error('Store credit requires a customer — pick one or change the method')
         return
       }
       const avail = Number(customer.credit_balance || 0)
       if (avail < total) {
         toast.error(
-          `Insufficient credit — ${fmt(avail)} available, ${fmt(total)} needed`,
+          `Insufficient store credit — ${fmt(avail)} available, ${fmt(total)} needed`,
         )
         return
       }
@@ -583,8 +583,12 @@ export default function POSPage() {
           costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
           availableStock: stock, batchTracking: Boolean(inMemory.batch_tracking),
           expiryTracking: Boolean(inMemory.expiry_tracking),
+          wholesale_pricing_mode: inMemory.wholesale_pricing_mode || 'pct',
           wholesale_discount_pct: inMemory.wholesale_discount_pct || 0,
+          wholesale_price: inMemory.wholesale_price || 0,
+          staff_pricing_mode: inMemory.staff_pricing_mode || 'pct',
           staff_discount_pct: inMemory.staff_discount_pct || 0,
+          staff_price: inMemory.staff_price || 0,
           brand: inMemory.brand || '',
           unit: inMemory.unit || inMemory.unitOfMeasure || inMemory.unit_of_measure || '',
         })
@@ -618,8 +622,12 @@ export default function POSPage() {
             costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
             availableStock: stock, batchTracking: Boolean(hit.batch_tracking),
             expiryTracking: Boolean(hit.expiry_tracking),
+            wholesale_pricing_mode: hit.wholesale_pricing_mode || 'pct',
             wholesale_discount_pct: hit.wholesale_discount_pct || 0,
+            wholesale_price: hit.wholesale_price || 0,
+            staff_pricing_mode: hit.staff_pricing_mode || 'pct',
             staff_discount_pct: hit.staff_discount_pct || 0,
+            staff_price: hit.staff_price || 0,
             brand: hit.brand || '',
             unit: hit.unit || hit.unitOfMeasure || hit.unit_of_measure || '',
           })
@@ -657,7 +665,7 @@ export default function POSPage() {
     { id: 'bank_transfer', label: '🏦 Bank Transfer' },
     ...(customer?.id ? [{
       id: 'credit',
-      label: `🏦 Credit (${fmt(Number(customer.credit_balance || 0))})`,
+      label: `🏦 Store credit (${fmt(Number(customer.credit_balance || 0))})`,
       disabled: Number(customer.credit_balance || 0) < total,
     }] : []),
   ]
@@ -964,8 +972,12 @@ export default function POSPage() {
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
                       availableStock: stock,
+                      wholesale_pricing_mode: p.wholesale_pricing_mode || 'pct',
                       wholesale_discount_pct: p.wholesale_discount_pct || 0,
+                      wholesale_price: p.wholesale_price || 0,
+                      staff_pricing_mode: p.staff_pricing_mode || 'pct',
                       staff_discount_pct: p.staff_discount_pct || 0,
+                      staff_price: p.staff_price || 0,
                       brand: p.brand || '',
                       unit: p.unit || p.unitOfMeasure || p.unit_of_measure || '',
                       // Carry batch-tracking flags forward so CartRow knows
@@ -1113,7 +1125,7 @@ export default function POSPage() {
                   fontWeight: 600,
                   whiteSpace: 'nowrap',
                 }}
-                title="Available customer credit"
+                title="Store credit available (from returns / overpayments)"
               >
                 {fmt(Number(customer.credit_balance || 0))}
               </span>
@@ -1426,7 +1438,7 @@ export default function POSPage() {
                         lineHeight: 1.45,
                       }}
                     >
-                      Credit short by {fmt(total - Number(customer.credit_balance || 0))} — pick another method.
+                      Store credit short by {fmt(total - Number(customer.credit_balance || 0))} — pick another method.
                     </div>
                   )}
                 </>

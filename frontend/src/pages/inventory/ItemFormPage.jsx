@@ -301,12 +301,12 @@ export default function ItemFormPage({ mode = 'create' }) {
       <div className="page-container page-container--with-footer transfer-page-shell">
         <div className="transfer-hero">
           <div className="transfer-hero__copy">
-            <div className="transfer-hero__eyebrow">Inventory master</div>
-            <h1>{isEdit ? 'Edit Item' : 'New Item'}</h1>
+            <div className="transfer-hero__eyebrow">Item master</div>
+            <h1>{isEdit ? 'Edit item' : 'New item'}</h1>
             <p>
               {isEdit
-                ? 'Update catalog defaults, branch pricing, and reorder logic in one place.'
-                : 'Add a product to the central catalog with branch listing and inventory settings.'}
+                ? 'Catalog defaults, category pricing, and branch listing.'
+                : 'Catalog details, pricing, and where this item is sold.'}
             </p>
           </div>
           <div className="transfer-hero__stats">
@@ -319,7 +319,7 @@ export default function ItemFormPage({ mode = 'create' }) {
           </div>
         </div>
 
-        <Card title="Product details">
+        <Card>
           <ItemFormFields
             form={form}
             patchForm={patchForm}

@@ -241,7 +241,7 @@ export default function ReturnFormPage() {
       const credited = Number(res?.credited_amount || 0)
       if (res?.refund_method === 'credit' && credited > 0) {
         toast.success(
-          `Return ${res.number} processed. ${fmt(credited)} credited to ${invoice.customerName}`,
+          `Return ${res.number} processed. ${fmt(credited)} added to store credit for ${invoice.customerName}`,
           { duration: 5000 },
         )
       } else if (res?.refund_method === 'cash' && credited > 0) {
@@ -489,7 +489,7 @@ export default function ReturnFormPage() {
                         { id: 'cash', label: '💵 Cash (refund from drawer)' },
                         {
                           id: 'credit',
-                          label: `🏦 Customer Credit${isWalkin ? ' (walk-in — pick Cash)' : ''}`,
+                          label: `🏦 Store credit${isWalkin ? ' (walk-in — pick Cash)' : ''}`,
                           disabled: isWalkin,
                         },
                       ]}
@@ -517,7 +517,7 @@ export default function ReturnFormPage() {
 
                 {refundMethod === 'credit' && !isWalkin && totals.total > Number(invoice.paidAmount || 0) && (
                   <AlertBar type="amber" icon="ℹ">
-                    Return total exceeds paid amount. Only <strong>{fmt(invoice.paidAmount)}</strong> can be credited
+                    Return total exceeds paid amount. Only <strong>{fmt(invoice.paidAmount)}</strong> can go to store credit
                     to the customer; the remaining <strong>{fmt(totals.total - Number(invoice.paidAmount))}</strong> will
                     reduce the invoice&apos;s outstanding balance.
                   </AlertBar>
