@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
 import { authAPI } from '@/api'
@@ -14,6 +14,8 @@ import { roleLabels } from '@/utils/helpers'
 // future "Help" link). The `useCan` filter applied below hides anything the
 // current user can't access — same source-of-truth strings as the backend
 // route guards in src/security.py require_perm().
+//
+// Sales / Purchases children mirror their list-page tabs (expandable groups).
 const navItems = [
   { section: 'Main',      path: '/dashboard',  Icon: Icon.Dashboard,   label: 'Dashboard',       perm: 'dashboard.view' },
   { section: null,        path: '/pos',        Icon: Icon.Receipt,     label: 'POS Billing',     perm: 'pos.use' },
@@ -21,8 +23,52 @@ const navItems = [
   { section: null,        path: '/items',      Icon: Icon.Package,  label: 'Items & Stock',   perm: 'items.view' },
   { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view' },
   { section: null,        path: '/adjustments', Icon: Icon.Scale,     label: 'Stock Adjustments', perm: 'adjustments.view' },
-  { section: 'Commerce',  path: '/sales',      Icon: Icon.ShoppingBag, label: 'Sales',           perm: 'invoices.view' },
-  { section: null,        path: '/purchases',  Icon: Icon.Clipboard,   label: 'Purchases',       perm: 'purchases.view' },
+  {
+    section: 'Commerce',
+    path: '/sales',
+    Icon: Icon.ShoppingBag,
+    label: 'Sales',
+    perm: 'invoices.view',
+    defaultTab: 'quotes',
+    defaultChild: '/sales?tab=invoices',
+    formRoutes: [
+      { prefix: '/sales/invoices', tab: 'invoices' },
+      { prefix: '/sales/orders', tab: 'orders' },
+      { prefix: '/sales/quotations', tab: 'quotes' },
+      { prefix: '/sales/returns', tab: 'returns' },
+      { prefix: '/sales/payments', tab: 'payments' },
+    ],
+    children: [
+      { path: '/sales?tab=quotes', label: 'Quotations', tab: 'quotes' },
+      { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders' },
+      { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices' },
+      { path: '/sales?tab=returns', label: 'Credit Notes / CN', tab: 'returns' },
+      { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments' },
+    ],
+  },
+  {
+    section: null,
+    path: '/purchases',
+    Icon: Icon.Clipboard,
+    label: 'Purchases',
+    perm: 'purchases.view',
+    defaultTab: 'bills',
+    defaultChild: '/purchases?tab=bills',
+    formRoutes: [
+      { prefix: '/purchases/bills', tab: 'bills' },
+      { prefix: '/purchases/orders', tab: 'orders' },
+      { prefix: '/purchases/grns', tab: 'grns' },
+      { prefix: '/purchases/returns', tab: 'returns' },
+      { prefix: '/purchases/payments', tab: 'payments' },
+    ],
+    children: [
+      { path: '/purchases?tab=bills', label: 'Purchase Bills', tab: 'bills' },
+      { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders' },
+      { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns' },
+      { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns' },
+      { path: '/purchases?tab=payments', label: 'Payments Made', tab: 'payments' },
+    ],
+  },
   { section: null,        path: '/customers',  Icon: Icon.Users,       label: 'Customers',       perm: 'customers.view' },
   { section: null,        path: '/vendors',    Icon: Icon.Factory,     label: 'Vendors',         perm: 'vendors.view' },
   { section: 'Finance',   path: '/cash',       Icon: Icon.Wallet,      label: 'Cash Control',    perm: 'cash.view' },
@@ -34,10 +80,86 @@ const navItems = [
 const SIDEBAR_W          = 220
 const SIDEBAR_W_COLLAPSED = 68
 
+function resolveGroupTab(item, pathname, search) {
+  if (!pathname.startsWith(item.path)) return null
+  for (const row of item.formRoutes || []) {
+    if (pathname === row.prefix || pathname.startsWith(`${row.prefix}/`)) return row.tab
+  }
+  if (pathname === item.path) {
+    const tab = new URLSearchParams(search).get('tab')
+    return tab || item.defaultTab || item.children?.[0]?.tab || null
+  }
+  return null
+}
+
+function isGroupChildActive(item, location, tabId) {
+  return resolveGroupTab(item, location.pathname, location.search) === tabId
+}
+
+function isGroupActive(item, location) {
+  return location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+}
+
+const linkBaseStyle = (sidebarCollapsed, isActive, { soft = false } = {}) => ({
+  position: 'relative',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 11,
+  padding: sidebarCollapsed ? '9px' : '8px 10px',
+  justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+  borderRadius: 8,
+  marginBottom: 2,
+  cursor: 'pointer',
+  color: isActive && !soft ? 'var(--accent)' : 'var(--text-secondary)',
+  // Parent group (Sales/Purchases) uses a lighter accent wash than the active child.
+  background: isActive
+    ? (soft
+      ? 'color-mix(in srgb, var(--accent) 6%, transparent)'
+      : 'var(--accent-bg)')
+    : 'transparent',
+  fontSize: 13,
+  fontWeight: isActive && !soft ? 600 : 500,
+  textDecoration: 'none',
+  border: 'none',
+  width: '100%',
+  textAlign: 'left',
+  transition: 'background 120ms ease, color 120ms ease',
+})
+
+function applyHoverHandlers(isActive, softActiveBg) {
+  return {
+    onMouseEnter: (e) => {
+      if (!isActive) {
+        e.currentTarget.style.background = 'var(--bg-hover)'
+        e.currentTarget.style.color = 'var(--text-primary)'
+      }
+    },
+    onMouseLeave: (e) => {
+      if (!isActive) {
+        e.currentTarget.style.background = 'transparent'
+        e.currentTarget.style.color = 'var(--text-secondary)'
+      } else if (softActiveBg) {
+        e.currentTarget.style.background = softActiveBg
+        e.currentTarget.style.color = 'var(--text-secondary)'
+      }
+    },
+  }
+}
+
 export default function Sidebar() {
   const navigate = useNavigate()
+  const location = useLocation()
   const userMenuRef = useRef(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const [openGroups, setOpenGroups] = useState(() => {
+    const initial = {}
+    for (const item of navItems) {
+      if (item.children?.length) {
+        initial[item.path] = isGroupActive(item, location)
+      }
+    }
+    return initial
+  })
   const { user, sidebarCollapsed, toggleSidebar, roles, clearSession } = useAppStore()
   const can = useCan()
 
@@ -49,7 +171,30 @@ export default function Sidebar() {
 
   // Phase 2: hide nav items the current user can't access. Items without a
   // `perm` are always visible.
-  const visibleNav = navItems.filter((item) => !item.perm || can(item.perm))
+  const visibleNav = useMemo(
+    () => navItems.filter((item) => !item.perm || can(item.perm)),
+    [can],
+  )
+
+  // Keep expandable groups open while on their routes.
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const item of navItems) {
+        if (!item.children?.length) continue
+        if (isGroupActive(item, location) && !next[item.path]) {
+          next[item.path] = true
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [location.pathname, location.search])
+
+  const toggleGroup = (path) => {
+    setOpenGroups((prev) => ({ ...prev, [path]: !prev[path] }))
+  }
 
   // Click-outside dismissal for the profile dropdown — feels broken without it.
   useEffect(() => {
@@ -119,6 +264,11 @@ export default function Sidebar() {
         {visibleNav.map((item) => {
           const showSection = item.section && item.section !== lastSection
           if (item.section) lastSection = item.section
+          const children = item.children || []
+          const hasChildren = children.length > 0
+          const groupActive = hasChildren && isGroupActive(item, location)
+          const groupOpen = Boolean(openGroups[item.path])
+
           return (
             <div key={item.path}>
               {showSection && !sidebarCollapsed && (
@@ -139,50 +289,27 @@ export default function Sidebar() {
                   margin: '10px 6px 8px',
                 }} />
               )}
-              <NavLink
-                to={item.path}
-                title={sidebarCollapsed ? item.label : undefined}
-                style={({ isActive }) => ({
-                  position: 'relative',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 11,
-                  padding: sidebarCollapsed ? '9px' : '8px 10px',
-                  justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
-                  borderRadius: 8,
-                  marginBottom: 2,
-                  cursor: 'pointer',
-                  color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-                  background: isActive ? 'var(--accent-bg)' : 'transparent',
-                  fontSize: 13,
-                  fontWeight: isActive ? 600 : 500,
-                  textDecoration: 'none',
-                  transition: 'background 120ms ease, color 120ms ease',
-                })}
-                onMouseEnter={(e) => {
-                  // Hover without breaking the active style: only apply when not active.
-                  if (!e.currentTarget.classList.contains('active')) {
-                    e.currentTarget.style.background = 'var(--bg-hover)'
-                    e.currentTarget.style.color = 'var(--text-primary)'
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!e.currentTarget.classList.contains('active')) {
-                    e.currentTarget.style.background = 'transparent'
-                    e.currentTarget.style.color = 'var(--text-secondary)'
-                  }
-                }}
-              >
-                {({ isActive }) => (
-                  <>
-                    {/* Subtle left accent bar in expanded mode. */}
-                    {isActive && !sidebarCollapsed && (
-                      <span style={{
-                        position: 'absolute', left: -10, top: 6, bottom: 6, width: 3,
-                        background: 'var(--accent)', borderRadius: '0 3px 3px 0',
-                      }} />
+
+              {hasChildren ? (
+                <>
+                  <button
+                    type="button"
+                    title={sidebarCollapsed ? item.label : undefined}
+                    aria-expanded={groupOpen}
+                    onClick={() => {
+                      if (sidebarCollapsed) {
+                        navigate(item.defaultChild || item.children[0].path)
+                        return
+                      }
+                      toggleGroup(item.path)
+                    }}
+                    style={linkBaseStyle(sidebarCollapsed, groupActive, { soft: true })}
+                    {...applyHoverHandlers(
+                      groupActive,
+                      groupActive ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : undefined,
                     )}
-                    <item.Icon size={18} strokeWidth={isActive ? 2 : 1.75} />
+                  >
+                    <item.Icon size={18} strokeWidth={groupActive ? 2 : 1.75} />
                     {!sidebarCollapsed && (
                       <span style={{
                         flex: 1, whiteSpace: 'nowrap',
@@ -191,9 +318,86 @@ export default function Sidebar() {
                         {item.label}
                       </span>
                     )}
-                  </>
-                )}
-              </NavLink>
+                    {!sidebarCollapsed && (
+                      <span
+                        className={`sidebar-nav-chevron${groupOpen ? ' is-open' : ''}`}
+                        aria-hidden
+                      >
+                        <Icon.ChevronRight size={14} />
+                      </span>
+                    )}
+                  </button>
+
+                  {!sidebarCollapsed && (
+                    <div
+                      className={`sidebar-nav-children${groupOpen ? ' is-open' : ''}`}
+                      aria-hidden={!groupOpen}
+                    >
+                      <div className="sidebar-nav-children__inner">
+                        {children.map((child) => {
+                          const childActive = isGroupChildActive(item, location, child.tab)
+                          return (
+                            <NavLink
+                              key={child.path}
+                              to={child.path}
+                              tabIndex={groupOpen ? undefined : -1}
+                              className={() => (childActive ? 'active' : undefined)}
+                              style={{
+                                ...linkBaseStyle(false, childActive),
+                                // Align with parent label (padding 10 + icon 18 + gap 11).
+                                paddingLeft: 39,
+                              }}
+                              {...applyHoverHandlers(childActive)}
+                            >
+                              {childActive && (
+                                <span style={{
+                                  position: 'absolute', left: -10, top: 6, bottom: 6, width: 3,
+                                  background: 'var(--accent)', borderRadius: '0 3px 3px 0',
+                                }} />
+                              )}
+                              <span style={{
+                                flex: 1,
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                fontSize: 13,
+                              }}>
+                                {child.label}
+                              </span>
+                            </NavLink>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <NavLink
+                  to={item.path}
+                  title={sidebarCollapsed ? item.label : undefined}
+                  style={({ isActive }) => linkBaseStyle(sidebarCollapsed, isActive)}
+                >
+                  {({ isActive }) => (
+                    <>
+                      {isActive && !sidebarCollapsed && (
+                        <span style={{
+                          position: 'absolute', left: -10, top: 6, bottom: 6, width: 3,
+                          background: 'var(--accent)', borderRadius: '0 3px 3px 0',
+                        }} />
+                      )}
+                      <item.Icon size={18} strokeWidth={isActive ? 2 : 1.75} />
+                      {!sidebarCollapsed && (
+                        <span style={{
+                          flex: 1, whiteSpace: 'nowrap',
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>
+                          {item.label}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </NavLink>
+              )}
             </div>
           )
         })}

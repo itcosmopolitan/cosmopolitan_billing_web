@@ -5,11 +5,11 @@ import csv
 import io
 import uuid
 from datetime import date, datetime, time, timedelta
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
@@ -82,6 +82,105 @@ def _build_operation_type_filter(operation_type: str):
     return action == key
 
 
+def _build_text_field_filter(column, condition: str, value: str):
+    condition = (condition or "contains").strip().lower()
+    value = (value or "").strip()
+    if condition == "is empty":
+        return or_(column.is_(None), column == "")
+    if not value:
+        return None
+    if condition == "contains":
+        return column.ilike(f"%{value}%")
+    if condition == "is":
+        return func.lower(column) == value.lower()
+    if condition == "starts with":
+        return column.ilike(f"{value}%")
+    return None
+
+
+def _build_criteria_row_filter(row: dict[str, Any]):
+    field = (row.get("field") or "").strip()
+    condition = (row.get("condition") or "is").strip().lower()
+    value = (row.get("value") or "").strip()
+
+    if field == "module":
+        if not value and condition != "is empty":
+            return None
+        col = func.lower(AuditLog.module)
+        if condition == "is":
+            return col == value.lower()
+        if condition == "is not":
+            return col != value.lower()
+        return None
+
+    if field == "risk":
+        if not value and condition != "is empty":
+            return None
+        col = func.upper(AuditLog.risk)
+        if condition == "is":
+            return col == value.upper()
+        if condition == "is not":
+            return col != value.upper()
+        return None
+
+    if field == "action":
+        if not value and condition != "is empty":
+            return None
+        if condition == "is":
+            return _build_operation_type_filter(value)
+        if condition == "is not":
+            return ~_build_operation_type_filter(value)
+        return None
+
+    if field == "user_name":
+        return _build_text_field_filter(AuditLog.user_name, condition, value)
+
+    if field in {"customer_name", "vendor_name"}:
+        return _build_text_field_filter(AuditLog.detail, condition, value)
+
+    return None
+
+
+def _parse_criteria_payload(raw: Optional[str]) -> Optional[dict[str, Any]]:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    rows = parsed.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return None
+    joiners = parsed.get("joiners") or []
+    if not isinstance(joiners, list):
+        joiners = []
+    return {"rows": rows, "joiners": joiners}
+
+
+def _combine_criteria_filters(rows: list[dict[str, Any]], joiners: list[Any]):
+    result = None
+
+    for index, row in enumerate(rows):
+        clause = _build_criteria_row_filter(row)
+        if clause is None:
+            continue
+        if result is None:
+            result = clause
+            continue
+
+        joiner = "and"
+        if index > 0 and (index - 1) < len(joiners):
+            joiner = str(joiners[index - 1]).strip().lower()
+        if joiner == "or":
+            result = or_(result, clause)
+        else:
+            result = and_(result, clause)
+
+    return result
+
+
 @router.get("/", response_model=AuditLogListResponse, dependencies=[Depends(require_perm("audit.view"))])
 async def list_audit_logs(
     module: Optional[str] = Query(None),
@@ -92,6 +191,7 @@ async def list_audit_logs(
     date_to: Optional[date] = Query(None),
     operation_type: Optional[str] = Query(None),
     operation_type_not: Optional[str] = Query(None),
+    criteria: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
@@ -106,7 +206,10 @@ async def list_audit_logs(
     date_to = _coerce_query_value(date_to)
     operation_type = _coerce_query_value(operation_type)
     operation_type_not = _coerce_query_value(operation_type_not)
+    criteria = _coerce_query_value(criteria)
     search = _coerce_query_value(search)
+
+    criteria_payload = _parse_criteria_payload(criteria)
 
     if branch_id:
         branch_id = await enforce_branch_access_optional(branch_id, user=user, db=db)
@@ -116,10 +219,20 @@ async def list_audit_logs(
 
     filters = []
 
-    if module:
-        filters.append(func.lower(AuditLog.module) == module.lower())
-    if risk:
-        filters.append(func.upper(AuditLog.risk) == risk.upper())
+    if criteria_payload:
+        criteria_filter = _combine_criteria_filters(criteria_payload["rows"], criteria_payload["joiners"])
+        if criteria_filter is not None:
+            filters.append(criteria_filter)
+    else:
+        if module:
+            filters.append(func.lower(AuditLog.module) == module.lower())
+        if risk:
+            filters.append(func.upper(AuditLog.risk) == risk.upper())
+
+        if operation_type:
+            filters.append(_build_operation_type_filter(operation_type))
+        if operation_type_not:
+            filters.append(~_build_operation_type_filter(operation_type_not))
     if user_id:
         filters.append(AuditLog.user_id == user_id)
     if branch_id:
@@ -130,11 +243,6 @@ async def list_audit_logs(
         filters.append(AuditLog.created_at >= start_dt)
     if end_dt is not None:
         filters.append(AuditLog.created_at < end_dt)
-
-    if operation_type:
-        filters.append(_build_operation_type_filter(operation_type))
-    if operation_type_not:
-        filters.append(~_build_operation_type_filter(operation_type_not))
 
     if search:
         pattern = f"%{search.strip()}%"
@@ -181,6 +289,9 @@ async def export_csv(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
+    operation_type: Optional[str] = Query(None),
+    operation_type_not: Optional[str] = Query(None),
+    criteria: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
@@ -193,6 +304,9 @@ async def export_csv(
         branch_id=branch_id,
         date_from=date_from,
         date_to=date_to,
+        operation_type=operation_type,
+        operation_type_not=operation_type_not,
+        criteria=criteria,
         search=search,
         page=1,
         limit=200,

@@ -21,12 +21,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL } from '@/api'
+import { purchasesAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { SectionHeader, Card, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { PAYMENT_MODE_LABEL_OPTIONS, PAYMENT_STATUS_FILTER_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
@@ -37,6 +37,7 @@ const inFlightPurchasesRequests = new Map()
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
+import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
 
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
 
@@ -47,6 +48,17 @@ const TABS = [
   { id: 'returns',  label: 'Vendor Returns' },
   { id: 'payments', label: 'Payments' },
 ]
+
+const PURCHASE_FILTER_FIELDS = ['vendor', 'status', 'date']
+const BILL_FILTER_FIELDS = ['vendor', 'status', 'paymentMode', 'date']
+const PAYMENT_FILTER_FIELDS = ['vendor', 'status', 'paymentMode', 'date']
+const BILL_STATUS_FILTER_OPTIONS = statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled', 'draft', 'pending_approval'])
+const ORDER_STATUS_FILTER_OPTIONS = ['draft', 'pending_approval', 'confirmed', 'partially_received', 'converted', 'cancelled'].map((s) => ({
+  id: s,
+  label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+}))
+const GRN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'pending_approval', 'received', 'cancelled'])
+const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'approved', 'void'])
 
 // Mirror of routes/purchases.py PaymentMode + sales VALID_PAYMENT_MODES.
 // Used to render the Mode column gracefully when a legacy bill has a
@@ -64,6 +76,7 @@ export default function PurchasesPage() {
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
+  const pageTitle = TABS.find((t) => t.id === tab)?.label || 'Purchase Bills'
   const viewId = searchParams.get('view')
   const can = useCan()
   const billColumnPrefs = useColumnPrefs('purchases.bills')
@@ -79,6 +92,8 @@ export default function PurchasesPage() {
   const [retStatusF, setRetStatusF]     = useState('')
   const [payStatusF, setPayStatusF]     = useState('')
   const [vendorF, setVendorF]     = useState('')
+  const [vendorLabel, setVendorLabel] = useState('')
+  const [paymentModeF, setPaymentModeF] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
   const canActivity = can('history.view', 'comments.view')
@@ -303,7 +318,7 @@ export default function PurchasesPage() {
     setGrnSkip(0)
     setRetSkip(0)
     setPaySkip(0)
-  }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, payStatusF, vendorF, dateFrom, dateTo])
+  }, [search, billStatusF, orderStatusF, grnStatusF, retStatusF, payStatusF, vendorF, paymentModeF, dateFrom, dateTo])
 
   // Re-fetch when active branch changes
   useEffect(() => {
@@ -322,7 +337,7 @@ export default function PurchasesPage() {
   // Bills list
   useEffect(() => {
     if (tab !== 'bills') return
-    const key = `bills|${activeBranch?.id || ''}|${billSkip}|${billLimit}|${billSortBy}|${billSortOrder}|${search}|${billStatusF}|${vendorF}|${dateFrom}|${dateTo}|${listVersion}`
+    const key = `bills|${activeBranch?.id || ''}|${billSkip}|${billLimit}|${billSortBy}|${billSortOrder}|${search}|${billStatusF}|${vendorF}|${paymentModeF}|${dateFrom}|${dateTo}|${listVersion}`
     let cancelled = false
     const run = async () => {
       try {
@@ -337,6 +352,7 @@ export default function PurchasesPage() {
             search: search || undefined,
             status: billStatusF || undefined,
             vendor_id: vendorF || undefined,
+            payment_mode: paymentModeF || undefined,
             date_from: dateFrom || undefined,
             date_to: dateTo || undefined,
           })
@@ -362,7 +378,7 @@ export default function PurchasesPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, billSkip, billLimit, search, billStatusF, vendorF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
+  }, [tab, activeBranch?.id, billSkip, billLimit, search, billStatusF, vendorF, paymentModeF, dateFrom, dateTo, listVersion, billSortBy, billSortOrder])
 
   // Orders list — same no-branch-filter policy as bills (see above).
   useEffect(() => {
@@ -494,6 +510,7 @@ export default function PurchasesPage() {
           search: search || undefined,
           vendor_id: vendorF || undefined,
           status: payStatusF || undefined,
+          payment_mode: paymentModeF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -512,7 +529,7 @@ export default function PurchasesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, payStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, listVersion, search, vendorF, payStatusF, paymentModeF, dateFrom, dateTo])
 
   // Prefill payment amount when the modal opens — same UX as
   // SalesPage's record-payment flow.
@@ -761,9 +778,40 @@ export default function PurchasesPage() {
     onRefresh: refreshCurrentTab,
   })
 
+  const listToolbarActions = (
+    <>
+      {createAction && (
+        <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>
+          {createAction.label}
+        </button>
+      )}
+      <PageActionsMenu actions={listMenuActions} />
+    </>
+  )
+
+  const clearDateFilters = () => {
+    setDateFrom(EMPTY_LIST_FILTERS.dateFrom)
+    setDateTo(EMPTY_LIST_FILTERS.dateTo)
+  }
+
+  const applyDateFilters = (next) => {
+    setDateFrom(next.dateFrom || '')
+    setDateTo(next.dateTo || '')
+  }
+
+  const applyVendorFilters = (next) => {
+    setVendorF(next.vendorId || '')
+    setVendorLabel(next.vendorLabel || '')
+  }
+
+  const clearVendorFilters = () => {
+    setVendorF(EMPTY_LIST_FILTERS.vendorId)
+    setVendorLabel(EMPTY_LIST_FILTERS.vendorLabel)
+  }
+
   return (
     <div className="page-container">
-      <SectionHeader title="Purchase Management" subtitle="Vendor bills, purchase orders, and payments">
+      <SectionHeader title={pageTitle}>
         {selectedIds.size > 0 && can('purchases.delete') && tab !== 'grns' && (
           <>
             <button className="btn btn-danger btn-sm" onClick={() => setDeleteOpen(true)}>
@@ -774,41 +822,45 @@ export default function PurchasesPage() {
             </button>
           </>
         )}
-        {createAction && (
-          <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
-        )}
-        <PageActionsMenu actions={listMenuActions} />
       </SectionHeader>
-
-      <Tabs tabs={TABS} active={tab} onChange={(id) => navigate(`/purchases?tab=${id}`)} />
 
       {/* ── BILLS ─────────────────────────────────────────────────── */}
       {tab === 'bills' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search bill #, vendor…" />
-            <AutocompleteDropdown
-              value={billStatusF}
-              onChange={setBillStatusF}
-              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled', 'draft', 'pending_approval'])}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={vendorF}
-              onChange={setVendorF}
-              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
-              prependOptions={[{ id: '', label: 'All Vendors' }]}
-              isSearchFieldRequired
-              placeholder="All Vendors"
-              searchPlaceholder="Search vendors…"
-              style={{ width: 180 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search bill #, vendor…"
+            toolbarActions={listToolbarActions}
+            fields={BILL_FILTER_FIELDS}
+            statusOptions={BILL_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: billStatusF,
+              vendorId: vendorF,
+              vendorLabel,
+              paymentMode: paymentModeF,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setBillStatusF(next.status || '')
+              applyVendorFilters(next)
+              setPaymentModeF(next.paymentMode || '')
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setBillStatusF('')
+              clearVendorFilters()
+              setPaymentModeF(EMPTY_LIST_FILTERS.paymentMode)
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setBillStatusF('')
+              else if (key === 'vendor') clearVendorFilters()
+              else if (key === 'paymentMode') setPaymentModeF('')
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
           <Card bodyPadding={false}>
             <TablePanel loading={billLoading} isEmpty={!billLoading && bills.length === 0} emptyIcon="📋" emptyTitle="No bills found">
               <table className="data-table">
@@ -971,33 +1023,36 @@ export default function PurchasesPage() {
       {/* ── ORDERS ────────────────────────────────────────────────── */}
       {tab === 'orders' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search PO #, vendor…" />
-            <AutocompleteDropdown
-              value={orderStatusF}
-              onChange={setOrderStatusF}
-              options={['draft', 'pending_approval', 'confirmed', 'partially_received', 'converted', 'cancelled'].map((s) => ({
-                id: s,
-                label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-              }))}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={vendorF}
-              onChange={setVendorF}
-              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
-              prependOptions={[{ id: '', label: 'All Vendors' }]}
-              isSearchFieldRequired
-              placeholder="All Vendors"
-              searchPlaceholder="Search vendors…"
-              style={{ width: 180 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search PO #, vendor…"
+            toolbarActions={listToolbarActions}
+            fields={PURCHASE_FILTER_FIELDS}
+            statusOptions={ORDER_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: orderStatusF,
+              vendorId: vendorF,
+              vendorLabel,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setOrderStatusF(next.status || '')
+              applyVendorFilters(next)
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setOrderStatusF('')
+              clearVendorFilters()
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setOrderStatusF('')
+              else if (key === 'vendor') clearVendorFilters()
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
           <Card bodyPadding={false}>
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📄" emptyTitle="No purchase orders" emptyDesc="POs you create will appear here. Convert one to a Bill to receive goods.">
               <table className="data-table">
@@ -1177,30 +1232,36 @@ export default function PurchasesPage() {
       {/* ── GRNs ──────────────────────────────────────────────────── */}
       {tab === 'grns' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search GRN #, vendor, PO…" />
-            <AutocompleteDropdown
-              value={grnStatusF}
-              onChange={setGrnStatusF}
-              options={statusOptions(['draft', 'pending_approval', 'received', 'cancelled'])}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={vendorF}
-              onChange={setVendorF}
-              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
-              prependOptions={[{ id: '', label: 'All Vendors' }]}
-              isSearchFieldRequired
-              placeholder="All Vendors"
-              searchPlaceholder="Search vendors…"
-              style={{ width: 180 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search GRN #, vendor, PO…"
+            toolbarActions={listToolbarActions}
+            fields={PURCHASE_FILTER_FIELDS}
+            statusOptions={GRN_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: grnStatusF,
+              vendorId: vendorF,
+              vendorLabel,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setGrnStatusF(next.status || '')
+              applyVendorFilters(next)
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setGrnStatusF('')
+              clearVendorFilters()
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setGrnStatusF('')
+              else if (key === 'vendor') clearVendorFilters()
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
           <Card bodyPadding={false}>
             <TablePanel loading={grnLoading} isEmpty={!grnLoading && grns.length === 0} emptyIcon="📦" emptyTitle="No goods receipts" emptyDesc="Receive stock with + New GRN, or create a bill / convert a PO (those also create a GRN).">
               <table className="data-table">
@@ -1314,30 +1375,36 @@ export default function PurchasesPage() {
       {/* ── RETURNS ───────────────────────────────────────────────── */}
       {tab === 'returns' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search return #, vendor…" />
-            <AutocompleteDropdown
-              value={retStatusF}
-              onChange={setRetStatusF}
-              options={statusOptions(['draft', 'approved', 'void'])}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={vendorF}
-              onChange={setVendorF}
-              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
-              prependOptions={[{ id: '', label: 'All Vendors' }]}
-              isSearchFieldRequired
-              placeholder="All Vendors"
-              searchPlaceholder="Search vendors…"
-              style={{ width: 180 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search return #, vendor…"
+            toolbarActions={listToolbarActions}
+            fields={PURCHASE_FILTER_FIELDS}
+            statusOptions={RETURN_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: retStatusF,
+              vendorId: vendorF,
+              vendorLabel,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setRetStatusF(next.status || '')
+              applyVendorFilters(next)
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setRetStatusF('')
+              clearVendorFilters()
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setRetStatusF('')
+              else if (key === 'vendor') clearVendorFilters()
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
           <Card bodyPadding={false}>
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩️" emptyTitle="No vendor returns" emptyDesc="Returns to vendors will appear here.">
               <table className="data-table">
@@ -1448,30 +1515,40 @@ export default function PurchasesPage() {
       {/* ── PAYMENTS ──────────────────────────────────────────────── */}
       {tab === 'payments' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, vendor…" />
-            <AutocompleteDropdown
-              value={payStatusF}
-              onChange={setPayStatusF}
-              options={PAYMENT_STATUS_FILTER_OPTIONS}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={vendorF}
-              onChange={setVendorF}
-              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
-              prependOptions={[{ id: '', label: 'All Vendors' }]}
-              isSearchFieldRequired
-              placeholder="All Vendors"
-              searchPlaceholder="Search vendors…"
-              style={{ width: 180 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search payment #, vendor…"
+            toolbarActions={listToolbarActions}
+            fields={PAYMENT_FILTER_FIELDS}
+            statusOptions={PAYMENT_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: payStatusF,
+              vendorId: vendorF,
+              vendorLabel,
+              paymentMode: paymentModeF,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setPayStatusF(next.status || '')
+              applyVendorFilters(next)
+              setPaymentModeF(next.paymentMode || '')
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setPayStatusF('')
+              clearVendorFilters()
+              setPaymentModeF(EMPTY_LIST_FILTERS.paymentMode)
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setPayStatusF('')
+              else if (key === 'vendor') clearVendorFilters()
+              else if (key === 'paymentMode') setPaymentModeF('')
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
           <Card bodyPadding={false}>
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💸" emptyTitle="No payments yet" emptyDesc="Record a vendor payment to see it here.">
               <table className="data-table">

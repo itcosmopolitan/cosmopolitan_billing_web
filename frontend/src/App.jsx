@@ -56,11 +56,11 @@ function AppShell() {
   // here for the main-content margin.
   const sidebarW = sidebarCollapsed ? 68 : 220
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', overflowX: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <Sidebar />
-      <div style={{ marginLeft: sidebarW, flex: 1, display: 'flex', flexDirection: 'column', minHeight: '100vh', transition: 'margin-left 0.2s ease', overflowX: 'hidden' }}>
+      <div style={{ marginLeft: sidebarW, flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', transition: 'margin-left 0.2s ease', overflow: 'hidden' }}>
         <Topbar />
-        <main style={{ flex: 1, overflowX: 'hidden' }}>
+        <main style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <Routes>
             <Route path="/"           element={<Navigate to="/dashboard" replace />} />
             {/* Phase 2 + 3 — every module route is gated on its `*.view`

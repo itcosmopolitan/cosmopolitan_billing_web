@@ -3814,6 +3814,7 @@ async def list_orders(
     limit: int = Query(50, ge=1, le=500),
     search: Optional[str] = None,
     status: Optional[str] = None,
+    customer_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
@@ -3826,6 +3827,8 @@ async def list_orders(
         conds.append(or_(SalesOrder.number.ilike(f"%{search}%"), SalesOrder.customer_name.ilike(f"%{search}%")))
     if status:
         conds.append(SalesOrder.status == status)
+    if customer_id:
+        conds.append(SalesOrder.customer_id == customer_id)
     if date_from:
         conds.append(SalesOrder.date >= date_from)
     if date_to:
@@ -4978,6 +4981,7 @@ async def list_returns(
     limit: int = Query(50, ge=1, le=500),
     search: Optional[str] = None,
     status: Optional[str] = None,
+    customer_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     branch_id: Optional[str] = Query(None),
@@ -4991,6 +4995,8 @@ async def list_returns(
         conds.append(or_(SalesReturn.number.ilike(f"%{search}%"), SalesReturn.customer_name.ilike(f"%{search}%")))
     if status:
         conds.append(SalesReturn.status == status)
+    if customer_id:
+        conds.append(SalesReturn.customer_id == customer_id)
     if date_from:
         conds.append(SalesReturn.date >= date_from)
     if date_to:

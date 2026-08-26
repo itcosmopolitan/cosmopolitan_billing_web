@@ -280,3 +280,9 @@ export const EyeOff = make(
     <path d="m2 2 20 20" />
   </>
 )
+
+export const Filter = make(
+  <>
+    <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+  </>
+)

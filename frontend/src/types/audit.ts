@@ -2,6 +2,19 @@ export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
 export type ModuleType = "Sales" | "Inventory" | "Finance" | "Cash" | "Purchases" | "Auth";
 
+export type AuditCriteriaJoiner = "and" | "or";
+
+export interface AuditCriteriaRow {
+  field: string;
+  condition: string;
+  value: string;
+}
+
+export interface AuditCriteria {
+  rows: AuditCriteriaRow[];
+  joiners: AuditCriteriaJoiner[];
+}
+
 export interface AuditLog {
   id: number | string;
   action: string;
@@ -33,6 +46,7 @@ export interface AuditFilters {
   risk?: RiskLevel | "";
   operation_type?: "Created" | "Deleted" | "Updated" | "";
   operation_type_not?: "Created" | "Deleted" | "Updated" | "";
+  criteria?: AuditCriteria | null;
   search?: string;
   date_from?: string;
   date_to?: string;

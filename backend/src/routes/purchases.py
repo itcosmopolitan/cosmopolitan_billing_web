@@ -568,6 +568,7 @@ def _purchase_bill_filters(
     search: Optional[str],
     date_from: Optional[str],
     date_to: Optional[str],
+    payment_mode: Optional[str] = None,
 ):
     conds = []
     if branch_id:
@@ -576,6 +577,8 @@ def _purchase_bill_filters(
         conds.append(PurchaseBill.vendor_id == vendor_id)
     if status:
         conds.append(PurchaseBill.status == status)
+    if payment_mode:
+        conds.append(PurchaseBill.payment_mode == payment_mode)
     if date_from:
         conds.append(PurchaseBill.date >= date_from)
     if date_to:
@@ -596,6 +599,7 @@ async def list_bills(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     vendor_id: Optional[str] = None,
     status: Optional[str] = None,
+    payment_mode: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -610,7 +614,7 @@ async def list_bills(
     lim = normalize_limit(limit)
     await refresh_purchase_overdue(db, branch_id)
     await db.commit()
-    conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to)
+    conds = _purchase_bill_filters(branch_id, vendor_id, status, search, date_from, date_to, payment_mode)
     if branch_id is None and not getattr(user, "all_branches", False):
         branch_ids = await get_allowed_branch_ids(user, db)
         if not branch_ids:
@@ -3664,6 +3668,8 @@ async def list_grns(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     conds = []
@@ -3671,6 +3677,10 @@ async def list_grns(
         conds.append(GoodsReceiptNote.vendor_id == vendor_id)
     if status:
         conds.append(GoodsReceiptNote.status == status)
+    if date_from:
+        conds.append(GoodsReceiptNote.date >= date_from)
+    if date_to:
+        conds.append(GoodsReceiptNote.date <= date_to)
     if search:
         conds.append(
             or_(

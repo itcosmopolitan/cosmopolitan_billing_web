@@ -1,19 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { salesAPI, branchesAPI, customersAPI, AUTOCOMPLETE_CUSTOMER_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
+import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, DatePicker, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { SectionHeader, Card, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import {
   QUOTE_STATUS_FILTER_OPTIONS,
   PAYMENT_STATUS_FILTER_OPTIONS,
   PAYMENT_MODE_LABEL_OPTIONS,
-  PAYMENT_METHOD_WITH_CREDIT_OPTIONS,
   statusOptions,
 } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
@@ -22,6 +21,7 @@ import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import SalesTxnDetailPanel from './SalesTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
+import ListFilters, { EMPTY_LIST_FILTERS } from './ListFilters'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
 // reachable via Invoices tab + payment_mode filter. Sales Orders + Returns
@@ -29,14 +29,24 @@ import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 // CRUD). See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
 const TABS = [
   { id: 'quotes',    label: 'Quotations' },
-  { id: 'orders',    label: 'Sales Orders' },
+  { id: 'orders',    label: 'Sales Orders (SO)' },
   { id: 'invoices',  label: 'Invoices' },
-  { id: 'returns',   label: 'Credit Notes / Returns' },
+  { id: 'returns',   label: 'Credit Notes / CN' },
   // 2026-05-24: standalone Payments record — lists every payment ever
   // recorded (single-invoice via the row Pay button OR multi-invoice
   // via + New Payment). See PaymentFormPage for the create flow.
   { id: 'payments',  label: 'Payments' },
 ]
+
+const INVOICE_FILTER_FIELDS = ['customer', 'status', 'paymentMode', 'category', 'discount', 'date']
+const DOC_FILTER_FIELDS = ['customer', 'status', 'date']
+const PAYMENT_FILTER_FIELDS = ['customer', 'status', 'paymentMode', 'date']
+const INVOICE_STATUS_FILTER_OPTIONS = statusOptions(['paid', 'pending', 'partial', 'overdue', 'draft', 'pending_approval'])
+const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['pending', 'processed', 'void'])
+const ORDER_STATUS_FILTER_OPTIONS = ['draft', 'pending_approval', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
+  id: s,
+  label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+}))
 
 const VALID_TABS = new Set(TABS.map((t) => t.id))
 
@@ -70,23 +80,21 @@ export default function SalesPage() {
   const paymentColumnPrefs = useColumnPrefs('sales.payments')
   const tabParam = searchParams.get('tab')
   const tab = VALID_TABS.has(tabParam) ? tabParam : 'quotes'
+  const pageTitle = TABS.find((t) => t.id === tab)?.label || 'Invoices'
   const viewId = searchParams.get('view')
-  const setTab = useCallback((id) => {
-    navigate(`/sales?tab=${id}`, { replace: true })
-  }, [navigate])
   const [search, setSearch]       = useState('')
   const [invStatusF, setInvStatusF]     = useState('')
   const [paymentModeF, setPaymentModeF] = useState('')
   const [customerF, setCustomerF] = useState('')
+  const [customerLabel, setCustomerLabel] = useState('')
   const [categoryF, setCategoryF] = useState('')
+  const [categoryLabel, setCategoryLabel] = useState('')
   const [discountF, setDiscountF] = useState('')
   const [quoteStatusF, setQuoteStatusF] = useState('')
   const [orderStatusF, setOrderStatusF] = useState('')
   const [retStatusF, setRetStatusF]     = useState('')
   const [payStatusF, setPayStatusF]     = useState('')
-  // Branch filter removed 2026-05-23: the Topbar's active-branch picker
-  // already scopes everything the operator sees; a second filter in the
-  // invoice tab was duplicative and confusing.
+  // Branch filter removed — the Topbar active-branch picker scopes list queries.
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
   const [salesDoc, setSalesDoc] = useState(null) // { kind: 'invoice'|'quote'|'order'|'return', data }
@@ -449,6 +457,7 @@ export default function SalesPage() {
           sort_order: quoteSortOrder,
           search: search || undefined,
           status: quoteStatusF || undefined,
+          customer_id: customerF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -467,7 +476,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, customerF, dateFrom, dateTo])
 
   // Credit Purchases tab was removed 2026-05-23 (Sales Phase 1). No
   // separate data-fetch effect — same invoices are available via the main
@@ -488,6 +497,7 @@ export default function SalesPage() {
           sort_order: orderSortOrder,
           search: search || undefined,
           status: orderStatusF || undefined,
+          customer_id: customerF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -503,7 +513,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, customerF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'returns') return
@@ -518,6 +528,7 @@ export default function SalesPage() {
           sort_order: retSortOrder,
           search: search || undefined,
           status: retStatusF || undefined,
+          customer_id: customerF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -536,7 +547,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, search, retStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, retSkip, retLimit, retSortBy, retSortOrder, retListVersion, search, retStatusF, customerF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'payments') return
@@ -551,6 +562,8 @@ export default function SalesPage() {
           sort_order: paySortOrder,
           search: search || undefined,
           status: payStatusF || undefined,
+          customer_id: customerF || undefined,
+          payment_mode: paymentModeF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
         })
@@ -569,7 +582,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, payStatusF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, paySkip, payLimit, paySortBy, paySortOrder, payListVersion, search, payStatusF, customerF, paymentModeF, dateFrom, dateTo])
 
   // Tab-aware sort handler for the four list tabs in this page. Each tab
   // owns its own sortBy/sortOrder pair; the closure picks them up.
@@ -842,9 +855,40 @@ export default function SalesPage() {
     onRefresh: refreshCurrentTab,
   })
 
+  const listToolbarActions = (
+    <>
+      {createAction && (
+        <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>
+          {createAction.label}
+        </button>
+      )}
+      <PageActionsMenu actions={listMenuActions} />
+    </>
+  )
+
+  const clearDateFilters = () => {
+    setDateFrom(EMPTY_LIST_FILTERS.dateFrom)
+    setDateTo(EMPTY_LIST_FILTERS.dateTo)
+  }
+
+  const applyDateFilters = (next) => {
+    setDateFrom(next.dateFrom || '')
+    setDateTo(next.dateTo || '')
+  }
+
+  const applyCustomerFilters = (next) => {
+    setCustomerF(next.customerId || '')
+    setCustomerLabel(next.customerLabel || '')
+  }
+
+  const clearCustomerFilters = () => {
+    setCustomerF(EMPTY_LIST_FILTERS.customerId)
+    setCustomerLabel(EMPTY_LIST_FILTERS.customerLabel)
+  }
+
   return (
-    <div className="page-container">
-      <SectionHeader title="Sales Management" subtitle="Invoices, orders, quotations, and customer payments">
+    <div className="page-container page-container--list">
+      <SectionHeader title={pageTitle}>
         {/* 2026-05-25: Delete N selected — appears only when the operator
             has ticked rows in the active tab. Single button serves all
             5 tabs; submitBulkDelete picks the right API based on `tab`. */}
@@ -858,70 +902,61 @@ export default function SalesPage() {
             </button>
           </>
         )}
-        {createAction && (
-          <button className="btn btn-primary btn-sm" onClick={createAction.onClick}>{createAction.label}</button>
-        )}
-        <PageActionsMenu actions={listMenuActions} />
       </SectionHeader>
-
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       {tab === 'invoices' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search invoice #, customer…" />
-            <AutocompleteDropdown
-              value={invStatusF}
-              onChange={setInvStatusF}
-              options={statusOptions(['paid', 'pending', 'partial', 'overdue', 'draft', 'pending_approval'])}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={paymentModeF}
-              onChange={setPaymentModeF}
-              options={PAYMENT_METHOD_WITH_CREDIT_OPTIONS}
-              prependOptions={[{ id: '', label: 'All Methods' }]}
-              isSearchFieldRequired={false}
-              placeholder="Payment Method"
-              style={{ width: 140 }}
-            />
-            <AutocompleteDropdown
-              value={customerF}
-              onChange={setCustomerF}
-              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
-              isSearchFieldRequired={true}
-              placeholder="Customer"
-              style={{ width: 220 }}
-              clearable
-            />
-            <AutocompleteDropdown
-              value={categoryF}
-              onChange={setCategoryF}
-              fetchUrl={AUTOCOMPLETE_CATEGORY_URL}
-              isSearchFieldRequired={true}
-              placeholder="Category"
-              style={{ width: 180 }}
-              clearable
-            />
-            <AutocompleteDropdown
-              value={discountF}
-              onChange={setDiscountF}
-              options={[{ id: '', label: 'All' }, { id: 'with', label: 'With discount' }, { id: 'without', label: 'Without discount' }]}
-              isSearchFieldRequired={false}
-              placeholder="Discount"
-              style={{ width: 140 }}
-            />
-            {/* Branch filter removed 2026-05-23 — Topbar active-branch
-                picker scopes things globally; a second filter here was
-                duplicative. */}
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} placeholder="From" />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} placeholder="To" />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search invoice #, customer…"
+            toolbarActions={listToolbarActions}
+            fields={INVOICE_FILTER_FIELDS}
+            statusOptions={INVOICE_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: invStatusF,
+              paymentMode: paymentModeF,
+              customerId: customerF,
+              customerLabel,
+              categoryId: categoryF,
+              categoryLabel,
+              discount: discountF,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setInvStatusF(next.status || '')
+              setPaymentModeF(next.paymentMode || '')
+              applyCustomerFilters(next)
+              setCategoryF(next.categoryId || '')
+              setCategoryLabel(next.categoryLabel || '')
+              setDiscountF(next.discount || '')
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setInvStatusF(EMPTY_LIST_FILTERS.status)
+              setPaymentModeF(EMPTY_LIST_FILTERS.paymentMode)
+              clearCustomerFilters()
+              setCategoryF(EMPTY_LIST_FILTERS.categoryId)
+              setCategoryLabel(EMPTY_LIST_FILTERS.categoryLabel)
+              setDiscountF(EMPTY_LIST_FILTERS.discount)
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setInvStatusF('')
+              else if (key === 'paymentMode') setPaymentModeF('')
+              else if (key === 'customer') clearCustomerFilters()
+              else if (key === 'category') {
+                setCategoryF('')
+                setCategoryLabel('')
+              } else if (key === 'discount') setDiscountF('')
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
 
+          <div className="list-page-panel">
           <Card bodyPadding={false}>
+            <div className="list-page-scroll">
             <TablePanel loading={invLoading} isEmpty={!invLoading && invoices.length === 0} emptyIcon="🧾" emptyTitle="No invoices found">
               <table className="data-table">
                 <thead>
@@ -1079,6 +1114,7 @@ export default function SalesPage() {
                 </tbody>
               </table>
             </TablePanel>
+            </div>
             <PaginationBar
               total={invoiceTotal}
               skip={invSkip}
@@ -1088,26 +1124,45 @@ export default function SalesPage() {
               disabled={invLoading}
             />
           </Card>
+          </div>
         </>
       )}
 
       {tab === 'quotes' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search quote #, customer…" />
-            <AutocompleteDropdown
-              value={quoteStatusF}
-              onChange={setQuoteStatusF}
-              options={QUOTE_STATUS_FILTER_OPTIONS}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search quote #, customer…"
+            toolbarActions={listToolbarActions}
+            fields={DOC_FILTER_FIELDS}
+            statusOptions={QUOTE_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: quoteStatusF,
+              customerId: customerF,
+              customerLabel,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setQuoteStatusF(next.status || '')
+              applyCustomerFilters(next)
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setQuoteStatusF('')
+              clearCustomerFilters()
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setQuoteStatusF('')
+              else if (key === 'customer') clearCustomerFilters()
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
+          <div className="list-page-panel">
           <Card bodyPadding={false}>
+            <div className="list-page-scroll">
             <TablePanel loading={quoteLoading} isEmpty={!quoteLoading && quotations.length === 0} emptyIcon="📄" emptyTitle="No quotations" emptyDesc="No quotations created yet">
               <table className="data-table">
                 <thead>
@@ -1242,6 +1297,7 @@ export default function SalesPage() {
                 </tbody>
               </table>
             </TablePanel>
+            </div>
             <PaginationBar
               total={quoteTotal}
               skip={quoteSkip}
@@ -1251,6 +1307,7 @@ export default function SalesPage() {
               disabled={quoteLoading}
             />
           </Card>
+          </div>
         </>
       )}
 
@@ -1327,21 +1384,39 @@ export default function SalesPage() {
 
       {tab === 'returns' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search return #, customer…" />
-            <AutocompleteDropdown
-              value={retStatusF}
-              onChange={setRetStatusF}
-              options={statusOptions(['pending', 'processed', 'void'])}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search return #, customer…"
+            toolbarActions={listToolbarActions}
+            fields={DOC_FILTER_FIELDS}
+            statusOptions={RETURN_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: retStatusF,
+              customerId: customerF,
+              customerLabel,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setRetStatusF(next.status || '')
+              applyCustomerFilters(next)
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setRetStatusF('')
+              clearCustomerFilters()
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setRetStatusF('')
+              else if (key === 'customer') clearCustomerFilters()
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
+          <div className="list-page-panel">
           <Card bodyPadding={false}>
+            <div className="list-page-scroll">
             <TablePanel loading={retLoading} isEmpty={!retLoading && returns.length === 0} emptyIcon="↩" emptyTitle="No credit notes" emptyDesc="Process a return to generate a credit note">
               <table className="data-table">
                 <thead>
@@ -1458,6 +1533,7 @@ export default function SalesPage() {
                 </tbody>
               </table>
             </TablePanel>
+            </div>
             <PaginationBar
               total={retTotal}
               skip={retSkip}
@@ -1467,26 +1543,49 @@ export default function SalesPage() {
               disabled={retLoading}
             />
           </Card>
+          </div>
         </>
       )}
 
       {tab === 'payments' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search payment #, customer…" />
-            <AutocompleteDropdown
-              value={payStatusF}
-              onChange={setPayStatusF}
-              options={PAYMENT_STATUS_FILTER_OPTIONS}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 140 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search payment #, customer…"
+            toolbarActions={listToolbarActions}
+            fields={PAYMENT_FILTER_FIELDS}
+            statusOptions={PAYMENT_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: payStatusF,
+              customerId: customerF,
+              customerLabel,
+              paymentMode: paymentModeF,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setPayStatusF(next.status || '')
+              applyCustomerFilters(next)
+              setPaymentModeF(next.paymentMode || '')
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setPayStatusF('')
+              clearCustomerFilters()
+              setPaymentModeF(EMPTY_LIST_FILTERS.paymentMode)
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setPayStatusF('')
+              else if (key === 'customer') clearCustomerFilters()
+              else if (key === 'paymentMode') setPaymentModeF('')
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
+          <div className="list-page-panel">
           <Card bodyPadding={false}>
+            <div className="list-page-scroll">
             <TablePanel loading={payLoading} isEmpty={!payLoading && payments.length === 0} emptyIcon="💰" emptyTitle="No payments yet" emptyDesc="Record a payment to see it here.">
               <table className="data-table">
                 <thead>
@@ -1600,6 +1699,7 @@ export default function SalesPage() {
                 </tbody>
               </table>
             </TablePanel>
+            </div>
             <PaginationBar
               total={payTotal}
               skip={paySkip}
@@ -1609,29 +1709,45 @@ export default function SalesPage() {
               disabled={payLoading}
             />
           </Card>
+          </div>
         </>
       )}
 
       {tab === 'orders' && (
         <>
-          <div className="filter-bar">
-            <SearchBar value={search} onChange={setSearch} placeholder="Search SO #, customer…" />
-            <AutocompleteDropdown
-              value={orderStatusF}
-              onChange={setOrderStatusF}
-              options={['draft', 'pending_approval', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
-                id: s,
-                label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-              }))}
-              prependOptions={[{ id: '', label: 'All Status' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Status"
-              style={{ width: 160 }}
-            />
-            <DatePicker style={{ width: 140 }} value={dateFrom} onChange={setDateFrom} />
-            <DatePicker style={{ width: 140 }} value={dateTo} onChange={setDateTo} />
-          </div>
+          <ListFilters
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search SO #, customer…"
+            toolbarActions={listToolbarActions}
+            fields={DOC_FILTER_FIELDS}
+            statusOptions={ORDER_STATUS_FILTER_OPTIONS}
+            filters={{
+              status: orderStatusF,
+              customerId: customerF,
+              customerLabel,
+              dateFrom,
+              dateTo,
+            }}
+            onApply={(next) => {
+              setOrderStatusF(next.status || '')
+              applyCustomerFilters(next)
+              applyDateFilters(next)
+            }}
+            onClear={() => {
+              setOrderStatusF('')
+              clearCustomerFilters()
+              clearDateFilters()
+            }}
+            onRemoveChip={(key) => {
+              if (key === 'status') setOrderStatusF('')
+              else if (key === 'customer') clearCustomerFilters()
+              else if (key === 'date') clearDateFilters()
+            }}
+          />
+          <div className="list-page-panel">
           <Card bodyPadding={false}>
+            <div className="list-page-scroll">
             <TablePanel loading={orderLoading} isEmpty={!orderLoading && orders.length === 0} emptyIcon="📦" emptyTitle="No sales orders" emptyDesc="Create one directly or convert a quotation.">
               <table className="data-table">
                 <thead>
@@ -1775,6 +1891,7 @@ export default function SalesPage() {
                 </tbody>
               </table>
             </TablePanel>
+            </div>
             <PaginationBar
               total={orderTotal}
               skip={orderSkip}
@@ -1784,6 +1901,7 @@ export default function SalesPage() {
               disabled={orderLoading}
             />
           </Card>
+          </div>
         </>
       )}
 

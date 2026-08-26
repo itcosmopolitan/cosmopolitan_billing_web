@@ -1,19 +1,19 @@
 import { api } from "./index";
 import type { AuditFilters, AuditLog, AuditLogListResponse } from "../types/audit";
 
-const toParams = (filters: Record<string, unknown>): URLSearchParams => {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      params.set(key, String(value));
-    }
-  });
+const serializeFilters = (filters: AuditFilters): Record<string, unknown> => {
+  const params: Record<string, unknown> = { ...filters };
+  if (filters.criteria) {
+    params.criteria = JSON.stringify(filters.criteria);
+  } else {
+    delete params.criteria;
+  }
   return params;
 };
 
 export const auditApi = {
   list: async (filters: AuditFilters): Promise<AuditLogListResponse> => {
-    return api.get("/audit/", { params: filters, noBranchScope: true });
+    return api.get("/audit/", { params: serializeFilters(filters), noBranchScope: true });
   },
 
   get: async (id: number | string): Promise<AuditLog> => {
@@ -22,7 +22,7 @@ export const auditApi = {
 
   exportCsv: async (filters: Omit<AuditFilters, "page" | "limit">): Promise<void> => {
     const blob = await api.get("/audit/export/csv", {
-      params: filters,
+      params: serializeFilters(filters as AuditFilters),
       noBranchScope: true,
       responseType: "blob",
     });
