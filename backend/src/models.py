@@ -1534,3 +1534,17 @@ class DiscountReason(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     branch = relationship("Branch", backref="discount_reasons")
+
+
+class UserColumnPrefs(Base):
+    """Per-user list-table column order + visibility (Customize Columns).
+
+    `prefs` is a map of table_key → { order: string[], hidden: string[] },
+    e.g. {"customers.list": {"order": ["customer", "contact"], "hidden": ["kam"]}}.
+    Created on first save; empty dict until then. Hydrated at app boot.
+    """
+    __tablename__ = "user_column_prefs"
+
+    user_id    = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    prefs      = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

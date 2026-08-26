@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { SectionHeader, Card, SearchBar, Tag, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import { SectionHeader, Card, SearchBar, Tag, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 
 const AUDIT_LOGS = [
   { id:1, action:'Invoice Created',       user:'Arjun M.',    module:'Sales',    ref:'INV-2024-1847', detail:'Created invoice for Rajesh Stores — MVR10,642', time:'16 Apr 2024, 10:42 AM', risk:'low' },
@@ -19,6 +20,7 @@ const RISK_COLORS = { low:'var(--green)', medium:'var(--amber)', high:'var(--red
 const MODULE_COLORS = { Sales:'var(--accent)', Purchases:'var(--purple)', Inventory:'var(--teal)', Finance:'var(--green)', Cash:'var(--amber)', Auth:'var(--blue)' }
 
 export default function AuditPage() {
+  const columnPrefs = useColumnPrefs('audit.list')
   const [search, setSearch] = useState('')
   const [module, setModule] = useState('')
   const [risk, setRisk]     = useState('')
@@ -68,26 +70,68 @@ export default function AuditPage() {
 
       <Card bodyPadding={false}>
         <table className="data-table">
-          <thead><tr><th>Action</th><th>User</th><th>Module</th><th>Reference</th><th>Detail</th><th>Risk</th><th>Time</th></tr></thead>
+          <thead>
+            <tr>
+              <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+              {columnPrefs.visibleIds.map((id) => {
+                if (id === 'action') return <th key={id}>Action</th>
+                if (id === 'user') return <th key={id}>User</th>
+                if (id === 'module') return <th key={id}>Module</th>
+                if (id === 'reference') return <th key={id}>Reference</th>
+                if (id === 'detail') return <th key={id}>Detail</th>
+                if (id === 'risk') return <th key={id}>Risk</th>
+                if (id === 'time') return <th key={id}>Time</th>
+                return null
+              })}
+            </tr>
+          </thead>
           <tbody>
             {filtered.map(l=>(
               <tr key={l.id}>
-                <td style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{l.action}</td>
-                <td style={{fontSize:12.5}}>{l.user}</td>
-                <td><Tag color={MODULE_COLORS[l.module]}>{l.module}</Tag></td>
-                <td><span className="mono" style={{fontSize:11.5,color:'var(--accent)'}}>{l.ref}</span></td>
-                <td style={{fontSize:12,color:'var(--text-muted)',maxWidth:260}}>{l.detail}</td>
-                <td>
-                  <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,fontWeight:700,background:RISK_COLORS[l.risk]+'18',color:RISK_COLORS[l.risk]}}>
-                    {l.risk.toUpperCase()}
-                  </span>
-                </td>
-                <td style={{fontSize:11.5,color:'var(--text-muted)',whiteSpace:'nowrap'}}>{l.time}</td>
+                <ColumnPrefsSpacer />
+                {columnPrefs.visibleIds.map((id) => {
+                  if (id === 'action') {
+                    return <td key={id} style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{l.action}</td>
+                  }
+                  if (id === 'user') {
+                    return <td key={id} style={{fontSize:12.5}}>{l.user}</td>
+                  }
+                  if (id === 'module') {
+                    return <td key={id}><Tag color={MODULE_COLORS[l.module]}>{l.module}</Tag></td>
+                  }
+                  if (id === 'reference') {
+                    return <td key={id}><span className="mono" style={{fontSize:11.5,color:'var(--accent)'}}>{l.ref}</span></td>
+                  }
+                  if (id === 'detail') {
+                    return <td key={id} style={{fontSize:12,color:'var(--text-muted)',maxWidth:260}}>{l.detail}</td>
+                  }
+                  if (id === 'risk') {
+                    return (
+                      <td key={id}>
+                        <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,fontWeight:700,background:RISK_COLORS[l.risk]+'18',color:RISK_COLORS[l.risk]}}>
+                          {l.risk.toUpperCase()}
+                        </span>
+                      </td>
+                    )
+                  }
+                  if (id === 'time') {
+                    return <td key={id} style={{fontSize:11.5,color:'var(--text-muted)',whiteSpace:'nowrap'}}>{l.time}</td>
+                  }
+                  return null
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </Card>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
     </div>
   )
 }

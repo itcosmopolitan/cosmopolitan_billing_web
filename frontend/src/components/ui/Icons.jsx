@@ -123,6 +123,36 @@ export const Settings = make(
   </>
 )
 
+/** Horizontal sliders — column customize trigger (Zoho-style). */
+export const SlidersHorizontal = make(
+  <>
+    <path d="M4 21v-7M4 10V3" />
+    <path d="M12 21v-9M12 8V3" />
+    <path d="M20 21v-5M20 12V3" />
+    <circle cx="4" cy="14" r="2.25" />
+    <circle cx="12" cy="12" r="2.25" />
+    <circle cx="20" cy="16" r="2.25" />
+  </>
+)
+
+export const Lock = make(
+  <>
+    <rect x="5" y="11" width="14" height="10" rx="2" />
+    <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+  </>
+)
+
+export const GripVertical = make(
+  <>
+    <circle cx="9" cy="6" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="6" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="9" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="9" cy="18" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="18" r="1.25" fill="currentColor" stroke="none" />
+  </>
+)
+
 export const Search = make(
   <>
     <circle cx="11" cy="11" r="7" />

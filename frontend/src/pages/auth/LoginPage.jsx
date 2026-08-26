@@ -61,6 +61,7 @@ export default function LoginPage() {
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
+  const setColumnTables = useAppStore((s) => s.setColumnTables)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [rememberMe, setRememberMe] = useState(true)
@@ -83,7 +84,13 @@ export default function LoginPage() {
       setSession({ user, permissions: user.permissions || [] })
       setDecimalPrecisionPrefs(user)
       const boot = await bootstrapAuthenticatedData()
-      applyBootstrapToStore(boot, { setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs })
+      applyBootstrapToStore(boot, {
+        setSession,
+        setPermCatalog,
+        setBranches,
+        setDecimalPrecisionPrefs,
+        setColumnTables,
+      })
       if (user.must_change_password) {
         toast('Please set a new password to continue', { icon: '🔐' })
         navigate('/change-password', { replace: true })

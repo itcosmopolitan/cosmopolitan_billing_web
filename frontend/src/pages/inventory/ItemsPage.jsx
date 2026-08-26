@@ -12,9 +12,11 @@ import {
   FormGroup, KPICard, EmptyState, Tag, PaginationBar,
   SortableHeader, AlertBar, ConfirmDialog, AutocompleteDropdown,
   TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
+  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 import BatchesModal from './BatchesModal'
 import RowActionsMenu from './RowActionsMenu'
 import ItemDetailPanel from './ItemDetailPanel'
@@ -46,6 +48,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const isMaster = mode === 'master'
   const navigate = useNavigate()
   const can = useCan()
+  const columnPrefs = useColumnPrefs(isMaster ? 'item_master.list' : 'items.list')
   const canActivity = can('history.view', 'comments.view')
   const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
@@ -83,6 +86,7 @@ export default function ItemsPage({ mode = 'branch' }) {
   const [rejectTarget, setRejectTarget] = useState(null)
   const [rejectReason, setRejectReason] = useState('')
 
+  const branchesColumnLabel = tab === 'pending' ? 'Raised By' : tab === 'rejected' ? 'Rejected By' : 'Branches'
   // Client-side sort because the page fetches all items at once via
   // fetchAllList and paginates locally. If/when this switches to true
   // server-side pagination, send sort_by/sort_order in the API call instead
@@ -539,17 +543,62 @@ export default function ItemsPage({ mode = 'branch' }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <SortableHeader label="Item" sortKey="name" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
-                  <th>SKU / Barcode</th>
-                  <SortableHeader label="Category" sortKey="category_id" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
-                  <SortableHeader label={isMaster ? 'Default Cost' : 'Cost'} sortKey="cost_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  <SortableHeader label={isMaster ? 'Default Price' : 'Price'} sortKey="selling_price" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  {isMaster && <th>{tab === 'pending' ? 'Raised By' : tab === 'rejected' ? 'Rejected By' : 'Branches'}</th>}
-                  <th>GST</th>
-                  {!isMaster && (
-                    <SortableHeader label="Stock" sortKey="available_stock" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} className="text-right" align="right" />
-                  )}
-                  {!isMaster && <th>Status</th>}
+                  <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+                  {columnPrefs.visibleIds.map((id) => {
+                    if (id === 'item') {
+                      return <SortableHeader key={id} label="Item" sortKey="name" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
+                    }
+                    if (id === 'sku') return <th key={id}>SKU / Barcode</th>
+                    if (id === 'category') {
+                      return <SortableHeader key={id} label="Category" sortKey="category_id" sortBy={itemSortBy} sortOrder={itemSortOrder} onSort={onSort} />
+                    }
+                    if (id === 'cost') {
+                      return (
+                        <SortableHeader
+                          key={id}
+                          label={isMaster ? 'Default Cost' : 'Cost'}
+                          sortKey="cost_price"
+                          sortBy={itemSortBy}
+                          sortOrder={itemSortOrder}
+                          onSort={onSort}
+                          className="text-right"
+                          align="right"
+                        />
+                      )
+                    }
+                    if (id === 'price') {
+                      return (
+                        <SortableHeader
+                          key={id}
+                          label={isMaster ? 'Default Price' : 'Price'}
+                          sortKey="selling_price"
+                          sortBy={itemSortBy}
+                          sortOrder={itemSortOrder}
+                          onSort={onSort}
+                          className="text-right"
+                          align="right"
+                        />
+                      )
+                    }
+                    if (id === 'branches') return <th key={id}>{branchesColumnLabel}</th>
+                    if (id === 'gst') return <th key={id}>GST</th>
+                    if (id === 'stock') {
+                      return (
+                        <SortableHeader
+                          key={id}
+                          label="Stock"
+                          sortKey="available_stock"
+                          sortBy={itemSortBy}
+                          sortOrder={itemSortOrder}
+                          onSort={onSort}
+                          className="text-right"
+                          align="right"
+                        />
+                      )
+                    }
+                    if (id === 'status') return <th key={id}>Status</th>
+                    return null
+                  })}
                   <th style={{ width: 48 }} aria-label="Actions" />
                 </tr>
               </thead>
@@ -561,77 +610,107 @@ export default function ItemsPage({ mode = 'branch' }) {
                   const { label } = stockStatus(branchStock, p.reorder_level)
                   return (
                     <tr key={p.id} {...tableRowClickProps(() => setShowDetail(p))}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                          <span style={{ fontSize: 20 }}>{p.emoji}</span>
-                          <div>
-                            <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-                              {p.name}
-                              {p.batch_tracking && (
-                                <span title={p.expiry_tracking ? 'FEFO tracked' : 'FIFO tracked'} style={{
-                                  fontSize: 9.5, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
-                                  background: p.expiry_tracking ? 'rgba(245,72,92,.12)' : 'rgba(79,142,247,.12)',
-                                  color: p.expiry_tracking ? 'var(--red)' : 'var(--accent)',
-                                }}>{p.expiry_tracking ? 'FEFO' : 'FIFO'}</span>
+                      <ColumnPrefsSpacer />
+                      {columnPrefs.visibleIds.map((id) => {
+                        if (id === 'item') {
+                          return (
+                            <td key={id}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                                <span style={{ fontSize: 20 }}>{p.emoji}</span>
+                                <div>
+                                  <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    {p.name}
+                                    {p.batch_tracking && (
+                                      <span title={p.expiry_tracking ? 'FEFO tracked' : 'FIFO tracked'} style={{
+                                        fontSize: 9.5, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                                        background: p.expiry_tracking ? 'rgba(245,72,92,.12)' : 'rgba(79,142,247,.12)',
+                                        color: p.expiry_tracking ? 'var(--red)' : 'var(--accent)',
+                                      }}>{p.expiry_tracking ? 'FEFO' : 'FIFO'}</span>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                    {p.brand}
+                                    {!p.active && (
+                                      <span style={{ marginLeft: 6, fontSize: 11.5, color: 'var(--red)' }}>Inactive</span>
+                                    )}
+                                    {!isMaster && p.batch_tracking && p.batches_count > 0 && (
+                                      <span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>
+                                        · {p.batches_count} batch{p.batches_count === 1 ? '' : 'es'}
+                                        {p.nearest_expiry ? ` · exp ${fmtDate(p.nearest_expiry)}` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          )
+                        }
+                        if (id === 'sku') {
+                          return (
+                            <td key={id}>
+                              <div className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{p.sku}</div>
+                              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{p.barcode}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'category') {
+                          return <td key={id}><Tag>{p.categoryName}</Tag></td>
+                        }
+                        if (id === 'cost') {
+                          return (
+                            <td key={id} className="text-right mono">
+                              {fmt(isMaster ? (p.default_cost_price ?? p.cost_price) : p.cost_price)}
+                              {!isMaster && p.branch_cost_override != null && (
+                                <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
                               )}
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                              {p.brand}
-                              {!p.active && (
-                                <span style={{ marginLeft: 6, fontSize: 11.5, color: 'var(--red)' }}>Inactive</span>
+                            </td>
+                          )
+                        }
+                        if (id === 'price') {
+                          return (
+                            <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {fmt(isMaster ? (p.default_selling_price ?? p.selling_price) : p.selling_price)}
+                              {!isMaster && p.branch_price_override != null && (
+                                <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
                               )}
-                              {!isMaster && p.batch_tracking && p.batches_count > 0 && (
-                                <span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>
-                                  · {p.batches_count} batch{p.batches_count === 1 ? '' : 'es'}
-                                  {p.nearest_expiry ? ` · exp ${fmtDate(p.nearest_expiry)}` : ''}
-                                </span>
+                            </td>
+                          )
+                        }
+                        if (id === 'branches') {
+                          return (
+                            <td key={id}>
+                              {tab === 'pending' ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                  <div>{p.created_by || '—'}</div>
+                                  {p.created_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.created_at)}</div> : null}
+                                </div>
+                              ) : tab === 'rejected' ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                  <div>{p.rejected_by || '—'}</div>
+                                  {p.rejected_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.rejected_at)}</div> : null}
+                                  {p.rejection_reason ? <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{p.rejection_reason}</div> : null}
+                                </div>
+                              ) : (
+                                <Tag>{p.available_branch_count ?? 0} active</Tag>
                               )}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="mono" style={{ color: 'var(--accent)', fontSize: 12 }}>{p.sku}</div>
-                        <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{p.barcode}</div>
-                      </td>
-                      <td><Tag>{p.categoryName}</Tag></td>
-                      <td className="text-right mono">
-                        {fmt(isMaster ? (p.default_cost_price ?? p.cost_price) : p.cost_price)}
-                        {!isMaster && p.branch_cost_override != null && (
-                          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
-                        )}
-                      </td>
-                      <td className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {fmt(isMaster ? (p.default_selling_price ?? p.selling_price) : p.selling_price)}
-                        {!isMaster && p.branch_price_override != null && (
-                          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
-                        )}
-                      </td>
-                      {isMaster && (
-                        <td>
-                          {tab === 'pending' ? (
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                              <div>{p.created_by || '—'}</div>
-                              {p.created_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.created_at)}</div> : null}
-                            </div>
-                          ) : tab === 'rejected' ? (
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                              <div>{p.rejected_by || '—'}</div>
-                              {p.rejected_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.rejected_at)}</div> : null}
-                              {p.rejection_reason ? <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{p.rejection_reason}</div> : null}
-                            </div>
-                          ) : (
-                            <Tag>{p.available_branch_count ?? 0} active</Tag>
-                          )}
-                        </td>
-                      )}
-                      <td><Tag>{p.tax_rate}%</Tag></td>
-                      {!isMaster && (
-                        <td className="text-right">
-                          <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{fmtQty(branchStock)}</div>
-                        </td>
-                      )}
-                      {!isMaster && <td><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>}
+                            </td>
+                          )
+                        }
+                        if (id === 'gst') {
+                          return <td key={id}><Tag>{p.tax_rate}%</Tag></td>
+                        }
+                        if (id === 'stock') {
+                          return (
+                            <td key={id} className="text-right">
+                              <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{fmtQty(branchStock)}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'status') {
+                          return <td key={id}><Chip status={label === 'In Stock' ? 'active' : label === 'Low Stock' ? 'low' : 'out'} label={label} /></td>
+                        }
+                        return null
+                      })}
                       <td className="text-right">
                         {isMaster && tab === 'pending' ? (
                             <RowActionsMenu
@@ -754,6 +833,14 @@ export default function ItemsPage({ mode = 'branch' }) {
           disabled={loading}
         />
       </Card>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       <ConfirmDialog
         open={!!confirmAction}

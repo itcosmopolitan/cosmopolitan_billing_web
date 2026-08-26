@@ -588,6 +588,12 @@ export const settingsAPI = {
   updateTaxSettings: (data) => api.patch('/taxes/settings', data),
   getDiscountReasons: (branchId) => api.get(`/settings/branches/${branchId}/discount-reasons`),
   createDiscountReason: (branchId, data) => api.post(`/settings/branches/${branchId}/discount-reasons`, data),
+  getColumnPrefs: (config) => api.get('/settings/column-prefs', config),
+  putColumnPref: (tableKey, data) => api.put('/settings/column-prefs', {
+    tableKey,
+    order: data?.order || [],
+    hidden: data?.hidden || [],
+  }),
 }
 
 // ─── Notifications ────────────────────────────────────────────────────────────
