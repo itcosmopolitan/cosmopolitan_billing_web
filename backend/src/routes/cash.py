@@ -214,43 +214,6 @@ def _breakdown(entries: list, entry_type: str) -> list:
 
 # ─── Categories ───────────────────────────────────────────────────────────────
 
-SYSTEM_CATEGORIES = [
-    ("Sale — Cash",            "in",   True,  1),
-    ("Sale Return — Refund",   "out",  True,  2),
-    ("Purchase — Cash Payment","out",  True,  3),
-    ("Vendor Advance — Cash",  "out",  True,  4),
-    ("Opening Balance",        "in",   True,  5),
-    ("Bank to Cash (Top-up)",  "in",   True,  6),
-    ("Cash to Bank (Deposit)", "out",  True,  7),
-    ("Petty Cash Expense",     "out",  True,  8),
-    ("Salary / Wages (Cash)",  "out",  True,  9),
-    ("Miscellaneous In",       "in",   True, 10),
-    ("Miscellaneous Out",      "out",  True, 11),
-]
-
-
-async def _ensure_categories(db: AsyncSession, org_id: str) -> None:
-    """Seed system categories for an org if they don't exist yet."""
-    existing = (
-        await db.execute(
-            select(CashCategory.name).where(
-                CashCategory.org_id == org_id, CashCategory.is_system == True
-            )
-        )
-    ).scalars().all()
-    existing_names = set(existing)
-    for name, direction, is_system, order in SYSTEM_CATEGORIES:
-        if name not in existing_names:
-            db.add(CashCategory(
-                id=str(uuid.uuid4()),
-                org_id=org_id,
-                name=name,
-                direction=direction,
-                is_system=is_system,
-                sort_order=order,
-            ))
-
-
 @router.get("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_READ))])
 async def list_categories(
     db: AsyncSession = Depends(get_db),
@@ -258,9 +221,6 @@ async def list_categories(
 ):
     # Resolve org_id from the first org (single-org assumption)
     org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
-    if org:
-        await _ensure_categories(db, org.id)
-        await db.commit()
     q = select(CashCategory).order_by(CashCategory.sort_order, CashCategory.name)
     if org:
         q = q.where(CashCategory.org_id == org.id)

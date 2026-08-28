@@ -92,17 +92,6 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt -q
 echo -e "${GREEN}✓ Backend dependencies installed${RESET}"
 
-# ─── Seed database ────────────────────────────────────────────────────────────
-# DISABLED: Seed data insertion disabled. To seed the database manually, run:
-#   cd backend && python src/seed.py
-# if [ ! -f "$ROOT_DIR/backend/retailos.db" ]; then
-#   echo -e "${YELLOW}Seeding demo database...${RESET}"
-#   python3 src/seed.py
-#   echo -e "${GREEN}✓ Database seeded with demo data${RESET}"
-# else
-#   echo -e "${GREEN}✓ Database exists (run 'python src/seed.py' to reseed)${RESET}"
-# fi
-
 echo ""
 echo -e "${BOLD}Starting services...${RESET}"
 
@@ -139,20 +128,6 @@ npm run dev &
 FRONTEND_PID=$!
 
 sleep 3
-
-echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════╗${RESET}"
-echo -e "${BOLD}${GREEN}║       Cosmopolitan Pro is running!        ║${RESET}"
-echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════╣${RESET}"
-echo -e "${BOLD}${GREEN}║  App:      http://localhost:3000          ║${RESET}"
-echo -e "${BOLD}${GREEN}║  API Docs: http://localhost:8080/api/docs ║${RESET}"
-echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════╣${RESET}"
-echo -e "${BOLD}${GREEN}║  Login: suresh@srimurugan.com             ║${RESET}"
-echo -e "${BOLD}${GREEN}║  Pass:  admin123                          ║${RESET}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════╝${RESET}"
-echo ""
-echo "Press Ctrl+C to stop both services"
-echo ""
 
 # ─── Cleanup on exit ──────────────────────────────────────────────────────────
 cleanup() {

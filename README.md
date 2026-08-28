@@ -66,17 +66,6 @@ API Docs: **http://localhost:8080/api/docs**
 
 ---
 
-## 🔐 Demo Accounts
-
-Passwords are bcrypt-hashed by `seed.py` (the plaintext below is what to type at the login screen).
-
-| Name | Email | Password | Role |
-|---|---|---|---|
-| Suresh Anand | suresh@srimurugan.com | admin123 | Super Admin |
-| Kavitha R. | kavitha@srimurugan.com | kavitha123 | Branch Manager |
-| Arjun M. | arjun@srimurugan.com | arjun123 | Cashier |
-| Deepa S. | deepa@srimurugan.com | deepa123 | Inventory Mgr |
-
 ---
 
 ## 🛠 Tech Stack
