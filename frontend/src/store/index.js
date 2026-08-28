@@ -394,7 +394,7 @@ export const usePOSStore = create((set, get) => ({
   setCashCollected: (v) => set({ cashCollected: v }),
   setNotes: (n) => set({ notes: n }),
 
-  holdBill: () => {
+  holdBill: (branchId) => {
     const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, cashCollected } = get()
     if (cart.length === 0) return
     const label = `Hold #${heldBills.length + 1}`
@@ -404,6 +404,7 @@ export const usePOSStore = create((set, get) => ({
         billNumber: label,
         cart: cart.map((i) => applyLineCalc(i)),
         customer,
+        branchId: branchId || null,
         discountPct,
         discountAmt,
         discountReason,
@@ -421,10 +422,10 @@ export const usePOSStore = create((set, get) => ({
     })
   },
 
-  resumeBill: (heldId) => {
+  resumeBill: (heldId, branchId) => {
     const { heldBills } = get()
     const bill = heldBills.find((b) => b.id === heldId)
-    if (!bill) return
+    if (!bill || !branchId || bill.branchId !== branchId) return
     // Migration for held bills created before Sales Phase 1:
     //   • Legacy `paymentMethod: 'credit'`  → unchecked, no method
     //     (pre-2026-05-25 'credit' meant "no payment". Post-cutover

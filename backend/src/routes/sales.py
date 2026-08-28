@@ -2135,6 +2135,7 @@ async def list_payments(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    branch_id: Optional[str] = None,
     customer_id: Optional[str] = None,
     payment_mode: Optional[str] = None,
     status: Optional[str] = None,
@@ -2149,6 +2150,8 @@ async def list_payments(
         conds.append(CustomerPayment.voided == True)  # noqa: E712
     elif status_key == "recorded":
         conds.append(or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)))  # noqa: E712
+    if branch_id:
+        conds.append(CustomerPayment.branch_id == branch_id)
     if customer_id:
         conds.append(CustomerPayment.customer_id == customer_id)
     if payment_mode:

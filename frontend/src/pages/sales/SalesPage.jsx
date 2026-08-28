@@ -560,6 +560,7 @@ export default function SalesPage() {
           limit: payLimit,
           sort_by: paySortBy,
           sort_order: paySortOrder,
+          branch_id: activeBranch?.id || undefined,
           search: search || undefined,
           status: payStatusF || undefined,
           customer_id: customerF || undefined,

@@ -172,6 +172,7 @@ export default function POSPage() {
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
   // Walk-in + unchecked-payment is the "operator forgot a customer on an
   // unpaid invoice" case — there's no-one to follow up with for collection.
   // We surface this exactly once per Complete-Sale attempt via this ref so
@@ -370,7 +371,7 @@ export default function POSPage() {
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'F2') { searchRef.current?.focus(); e.preventDefault() }
-      if (e.key === 'F4') { store.holdBill(); toast('Bill held'); }
+      if (e.key === 'F4') { store.holdBill(activeBranch?.id); toast('Bill held'); }
       if (e.key === 'F8') handleComplete()
       if (e.key === 'Escape') searchRef.current?.blur()
     }
@@ -896,7 +897,7 @@ export default function POSPage() {
           )}
           <button className="btn btn-secondary btn-sm" style={{ position: 'relative' }} onClick={() => setShowHeld(true)}>
             ⏸ Hold
-            {heldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{heldBills.length}</span>}
+            {branchHeldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{branchHeldBills.length}</span>}
           </button>
           <PanelDragHandle
             panel="products"
@@ -1107,6 +1108,7 @@ export default function POSPage() {
                 }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              fetchParams={{ branch_id: activeBranch?.id }}
               isSearchFieldRequired
               prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
               selectedLabel={customer?.name}
@@ -1550,16 +1552,16 @@ export default function POSPage() {
 
       {/* Held Bills Modal */}
       <Modal open={showHeld} onClose={() => setShowHeld(false)} title="Held Bills" icon="⏸" size="sm">
-        {heldBills.length === 0 ? (
+        {branchHeldBills.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>No held bills</div>
         ) : (
-          heldBills.map((b) => (
+          branchHeldBills.map((b) => (
             <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border-subtle)' }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{b.billNumber}</div>
                 <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{b.cart.length} items · {b.customer?.name || 'Walk-in'}</div>
               </div>
-              <button className="btn btn-primary btn-sm" onClick={() => { store.resumeBill(b.id); setShowHeld(false); toast('Bill resumed') }}>Resume</button>
+              <button className="btn btn-primary btn-sm" onClick={() => { store.resumeBill(b.id, activeBranch?.id); setShowHeld(false); toast('Bill resumed') }}>Resume</button>
             </div>
           ))
         )}
@@ -1578,7 +1580,7 @@ export default function POSPage() {
         footer={<>
           <button className="btn btn-secondary" onClick={() => setPendingNav(null)}>Stay on POS</button>
           <button className="btn btn-ghost" onClick={() => {
-            store.holdBill()
+            store.holdBill(activeBranch?.id)
             const proceed = pendingNav
             setPendingNav(null)
             toast('Bill held')

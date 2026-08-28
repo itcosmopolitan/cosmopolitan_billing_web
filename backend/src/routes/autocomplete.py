@@ -19,12 +19,15 @@ DEFAULT_UNITS = ("Pcs", "Kg", "Gram", "Litre", "ML", "Pack", "Box", "Dozen")
 
 @router.get("/customer", dependencies=[Depends(require_perm("customers.view"))])
 async def autocomplete_customer(
+    branch_id: Optional[str] = None,
     search_text: Optional[str] = None,
     limit: int = Query(30, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     """Return `{ id, text }` rows for customer name dropdowns."""
     q = select(Customer).where(Customer.active.is_(True))
+    if branch_id:
+        q = q.where(Customer.branch_id == branch_id)
     if search_text:
         term = f"%{search_text.strip()}%"
         q = q.where(

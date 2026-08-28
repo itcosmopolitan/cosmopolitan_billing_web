@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useAppStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { notificationsAPI } from '@/api'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import * as Icon from '@/components/ui/Icons'
+import { Modal } from '@/components/ui'
 
 // Topbar is intentionally chrome-only: it carries global context (active
 // branch) and global actions (new sale, notifications, theme, help). The
@@ -34,11 +35,13 @@ function formatRelativeTime(iso) {
 
 export default function Topbar() {
   const { user, activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
+  const { cart, holdBill, clearCart } = usePOSStore()
   const navigate = useNavigate()
   const location = useLocation()
 
   const [notifOpen, setNotifOpen]   = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
+  const [pendingBranch, setPendingBranch] = useState(null)
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
   const notifRef  = useRef(null)
@@ -129,6 +132,25 @@ export default function Topbar() {
     if (!n.read) markRead(n.id)
     setNotifOpen(false)
     if (n.href) navigate(n.href)
+  }
+
+  const handleBranchSelect = (branch) => {
+    setBranchOpen(false)
+    const hasCartItems = (cart?.length || 0) > 0
+    if (location.pathname === '/pos' && hasCartItems && branch.id !== activeBranch?.id) {
+      setPendingBranch(branch)
+      return
+    }
+    setActiveBranch(branch)
+  }
+
+  const switchBranchWithCartAction = (hold) => {
+    if (!pendingBranch) return
+    if (hold) holdBill(activeBranch?.id)
+    else clearCart()
+    const branch = pendingBranch
+    setPendingBranch(null)
+    setActiveBranch(branch)
   }
 
   // Branch picker filtered to the user's assigned branches. Users with
@@ -262,7 +284,7 @@ export default function Topbar() {
               return (
                 <button
                   key={b.id}
-                  onClick={() => { setActiveBranch(b); setBranchOpen(false) }}
+                  onClick={() => handleBranchSelect(b)}
                   style={{
                     width: '100%', padding: '10px 14px',
                     display: 'flex', alignItems: 'center', gap: 10,
@@ -456,6 +478,27 @@ export default function Topbar() {
       <IconButton title="Help & shortcuts">
         <Icon.HelpCircle size={17} />
       </IconButton>
+
+      <Modal
+        open={!!pendingBranch}
+        onClose={() => setPendingBranch(null)}
+        title="Switch branch with items in cart?"
+        icon="🛒"
+        size="sm"
+        footer={(
+          <>
+            <button className="btn btn-secondary" onClick={() => setPendingBranch(null)}>Stay</button>
+            <button className="btn btn-ghost" onClick={() => switchBranchWithCartAction(true)}>Hold &amp; Switch</button>
+            <button className="btn btn-danger" onClick={() => switchBranchWithCartAction(false)}>Discard &amp; Switch</button>
+          </>
+        )}
+      >
+        <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+          You have <strong>{cart?.length || 0} item{(cart?.length || 0) === 1 ? '' : 's'}</strong> in the current POS transaction.
+          Choose <strong>Hold &amp; Switch</strong> to save it for later, or discard it and start fresh at{' '}
+          <strong>{pendingBranch?.name}</strong>.
+        </div>
+      </Modal>
     </header>
   )
 }
