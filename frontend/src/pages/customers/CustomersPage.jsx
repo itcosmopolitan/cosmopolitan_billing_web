@@ -20,6 +20,10 @@ export default function CustomersPage() {
   const [customerModalOpen, setCustomerModalOpen] = useState(false)
   const [customerModalMode, setCustomerModalMode] = useState('add')
   const [editingCustomer, setEditingCustomer] = useState(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importFile, setImportFile] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importResult, setImportResult] = useState(null)
   const [showDetail, setShowDetail] = useState(null)
   const [ledgerCustomer, setLedgerCustomer] = useState(null)
   const [ledgerEntries, setLedgerEntries] = useState([])
@@ -328,7 +332,10 @@ export default function CustomersPage() {
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
         {can('customers.create') && (
-          <button className="btn btn-primary btn-sm" onClick={openAddCustomerModal}>+ Add Customer</button>
+          <>
+            <button className="btn btn-primary btn-sm" onClick={openAddCustomerModal}>+ Add Customer</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setImportOpen(true)} style={{ marginLeft: 8 }}>Import</button>
+          </>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
           onExport: () => {
@@ -351,6 +358,75 @@ export default function CustomersPage() {
           },
         })} />
       </SectionHeader>
+
+      <Modal
+        open={importOpen}
+        onClose={() => !importBusy && setImportOpen(false)}
+        title="Import Customers"
+        icon="⬆️"
+        size="lg"
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setImportOpen(false)} disabled={importBusy}>Close</button>
+          <button className="btn btn-primary" onClick={async () => {
+            if (!importFile) { toast.error('Select a file to upload'); return }
+            if (!activeBranch?.id) { toast.error('Select a branch before importing'); return }
+            setImportBusy(true)
+            try {
+              const res = await customersAPI.import(importFile, activeBranch.id)
+              setImportResult(res)
+              toast.success(`${res.created || 0} customers imported`)
+              setListVersion((v) => v + 1)
+              setImportFile(null)
+            } catch (err) {
+              console.error('Customer import failed', err)
+              const detail = err?.response?.data?.detail
+              const message =
+                typeof detail === 'string'
+                  ? detail
+                  : detail?.message ||
+                    (Array.isArray(detail)
+                      ? detail.map((item) => item?.msg || item?.message || JSON.stringify(item)).join(', ')
+                      : err?.message || 'Customer import failed')
+              toast.error(message)
+            } finally {
+              setImportBusy(false)
+            }
+          }} disabled={importBusy}>{importBusy ? 'Uploading…' : 'Upload'}</button>
+        </>}
+      >
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Upload instructions</div>
+            <div>Customers will be added to the currently selected branch. Name, Street 1, City, and Country are required.</div>
+            <div style={{ marginTop: 6 }}><strong>Columns:</strong> Customer Name, Phone, Email, GST Reg No, Street 1, Street 2, Street 3, City, State/Province, Country, Postal Code, Credit Limit, Customer Type, Key Account Manager, Credit Terms</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
+            <button className="btn btn-ghost btn-sm" onClick={async () => {
+              try {
+                const blob = await customersAPI.downloadTemplate()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'customer_import_template.xlsx'
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+                URL.revokeObjectURL(url)
+              } catch (err) {
+                console.error('Failed to download customer template', err)
+                toast.error(err?.response?.data?.detail || err?.message || 'Failed to download customer template')
+              }
+            }}>Download template</button>
+          </div>
+          {importResult && importResult.errors && importResult.errors.length > 0 && (
+            <div style={{ maxHeight: 200, overflowY: 'auto', padding: 8, background: 'var(--bg-raised)', borderRadius: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Errors</div>
+              {importResult.errors.map((err) => <div key={err.row} style={{ fontSize: 13 }}>[Row {err.row}] {err.error}</div>)}
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* <div className="grid-kpi" style={{ marginBottom: 20 }}>
         <KPICard label="Total Customers"    value={totals.total}                    color="var(--accent)" icon="👥" />

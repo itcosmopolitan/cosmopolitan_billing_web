@@ -256,9 +256,10 @@ export const itemsAPI = {
     list:   ()     => api.get('/items/categories'),
     create: (data) => api.post('/items/categories', data),
   },
-  import: (file) => {
+  import: (file, branchId) => {
     const fd = new FormData()
     fd.append('file', file)
+    fd.append('branch_id', branchId)
     return api.post('/items/import', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120_000 })
   },
   downloadTemplate: async () => {
@@ -416,6 +417,16 @@ export const customersAPI = {
   creditLedger: (id, params) => api.get(`/customers/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/customers/', data),
   update: (id, data) => api.put(`/customers/${id}`, data),
+  import: (file, branchId) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('branch_id', branchId)
+    return api.post('/customers/import', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120_000 })
+  },
+  downloadTemplate: async () => {
+    const data = await api.get('/customers/import/template', { responseType: 'arraybuffer', noBranchScope: true })
+    return new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  },
 }
 
 // ─── Autocomplete (dropdown typeahead) ───────────────────────────────────────
