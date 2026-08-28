@@ -377,19 +377,26 @@ export function Receipt({ sale, branch }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, justifyContent: 'center' }}>
-        <button 
-          className={`btn ${invoiceFormat === 'standard' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setInvoiceFormat('standard')}
-        >
-          📄 Standard Format
-        </button>
-        <button 
-          className={`btn ${invoiceFormat === 'thermal' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setInvoiceFormat('thermal')}
-        >
-          🖨 Thermal Receipt
-        </button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 16 }}>
+        <div className="tabs-bar" role="tablist" style={{ marginBottom: 0, justifySelf: 'start', maxWidth: '100%', minWidth: 0 }}>
+          <button
+            className={`tab-btn ${invoiceFormat === 'standard' ? 'active' : ''}`}
+            role="tab"
+            aria-selected={invoiceFormat === 'standard'}
+            onClick={() => setInvoiceFormat('standard')}
+          >
+            📄 Standard Format
+          </button>
+          <button
+            className={`tab-btn ${invoiceFormat === 'thermal' ? 'active' : ''}`}
+            role="tab"
+            aria-selected={invoiceFormat === 'thermal'} 
+            onClick={() => setInvoiceFormat('thermal')}
+          >
+            🖨 Thermal Receipt
+          </button>
+        </div>
+        <button className="btn btn-primary" onClick={handlePrint} style={{ flexShrink: 0 }}>🖨 Print</button>
       </div>
 
       <div ref={ref} style={{
@@ -407,9 +414,6 @@ export function Receipt({ sale, branch }) {
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
-        <button className="btn btn-primary" onClick={handlePrint}>🖨 Print</button>
-      </div>
     </div>
   )
 }
