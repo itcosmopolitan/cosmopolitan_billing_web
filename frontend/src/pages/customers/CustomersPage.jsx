@@ -352,12 +352,12 @@ export default function CustomersPage() {
         })} />
       </SectionHeader>
 
-      <div className="grid-kpi" style={{ marginBottom: 20 }}>
+      {/* <div className="grid-kpi" style={{ marginBottom: 20 }}>
         <KPICard label="Total Customers"    value={totals.total}                    color="var(--accent)" icon="👥" />
         <KPICard label="Outstanding Total"  value={fmt(totals.outstanding)}         color="var(--red)"   icon="📋" />
         <KPICard label="With Balance Due"   value={totals.overdue}                  color="var(--amber)" icon="⚠️" />
         <KPICard label="Top Buyer"          value={totals.topBuyer?.name?.split(' ')[0] || '—'} color="var(--green)" icon="🏆" sub={totals.topBuyer ? fmt(totals.topBuyer.total_purchases || 0) : '—'} />
-      </div>
+      </div> */}
 
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, phone, email…" />

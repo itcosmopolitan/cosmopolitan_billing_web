@@ -227,12 +227,12 @@ export default function VendorsPage() {
         })} />
       </SectionHeader>
 
-      <div className="grid-kpi" style={{marginBottom:20}}>
+      {/* <div className="grid-kpi" style={{marginBottom:20}}>
         <KPICard label="Total Vendors"   value={totals.total}              color="var(--accent)"  icon="🏭" />
         <KPICard label="Total Payables"  value={fmt(totals.outstanding)}   color="var(--red)"     icon="💳" />
         <KPICard label="With Balance Due" value={totals.overdue}           color="var(--amber)"   icon="⚠️" />
         <KPICard label="Top Vendor"      value={totals.topVendor?.name?.split(' ')[0] || '—'} color="var(--green)" sub={totals.topVendor ? fmt(totals.topVendor.totalPurchases || 0) : '—'} icon="🏆" />
-      </div>
+      </div> */}
 
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, contact, phone, email…" />
