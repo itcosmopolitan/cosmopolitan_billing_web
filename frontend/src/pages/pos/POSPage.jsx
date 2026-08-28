@@ -907,10 +907,10 @@ export default function POSPage() {
         </div>
 
         {/* Category pills */}
-        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 76, overflowY: 'auto', alignContent: 'flex-start', padding: '1px 2px 4px 0' }}>
           {categories.map((c) => (
             <button key={c.id} onClick={() => setActiveCat(c.id)}
-              style={{ padding: '6px 13px', borderRadius: 20, border: `1.5px solid ${activeCat === c.id ? 'var(--accent)' : 'var(--border-default)'}`, background: activeCat === c.id ? 'var(--accent-bg)' : 'transparent', color: activeCat === c.id ? 'var(--accent)' : 'var(--text-muted)', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.12s', fontFamily: 'DM Sans,sans-serif', fontWeight: 500 }}>
+              style={{ padding: '6px 13px', borderRadius: 20, border: `1.5px solid ${activeCat === c.id ? 'var(--accent)' : 'var(--border-default)'}`, background: activeCat === c.id ? 'var(--accent-bg)' : 'transparent', color: activeCat === c.id ? 'var(--accent)' : 'var(--text-muted)', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto', transition: 'all 0.12s', fontFamily: 'DM Sans,sans-serif', fontWeight: 500 }}>
               <span style={{ marginRight: 4 }}>{c.icon}</span>{c.name}
             </button>
           ))}
