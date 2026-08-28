@@ -777,6 +777,7 @@ async def create_category(data: InventoryCategoryCreate, db: AsyncSession = Depe
 async def list_items(
     search: Optional[str] = None,
     category_id: Optional[str] = None,
+    category_ids: Optional[str] = None,
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     status: Optional[str] = None,
     include_inactive: bool = False,
@@ -873,7 +874,11 @@ async def list_items(
         cq = cq.where(
             (Item.name.ilike(term)) | (Item.sku.ilike(term)) | (Item.barcode.ilike(term))
         )
-    if category_id:
+    selected_category_ids = [value.strip() for value in (category_ids or '').split(',') if value.strip()]
+    if selected_category_ids:
+        q = q.where(Item.category_id.in_(selected_category_ids))
+        cq = cq.where(Item.category_id.in_(selected_category_ids))
+    elif category_id:
         q = q.where(Item.category_id == category_id)
         cq = cq.where(Item.category_id == category_id)
     total = 0

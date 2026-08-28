@@ -13,8 +13,7 @@ import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
-import { PRODUCTS } from '@/utils/seedData'
-import { Modal, AutocompleteDropdown, FormGroup, Spinner } from '@/components/ui'
+import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import CashTenderFields from '@/components/CashTenderFields'
@@ -104,31 +103,12 @@ function writeBranchCustomDiscountReasons(branchId, options) {
   }
 }
 
-const mapSeedProductsForBranch = (branchId) =>
-  (PRODUCTS || []).map((p) => ({
-    id: p.id,
-    name: p.name,
-    sku: p.sku,
-    barcode: p.barcode,
-    categoryId: p.catId,
-    categoryName: p.category,
-    unit: p.unit,
-    cost_price: p.costPrice,
-    selling_price: p.sellingPrice,
-    tax_rate: p.taxRate,
-    hsn_code: p.hsnCode,
-    reorder_level: p.reorderLevel,
-    emoji: p.emoji,
-    available_stock: p.stock?.[branchId] ?? 0,
-  }))
-
-
 export default function POSPage() {
   const can = useCan()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [activeCat, setActiveCat] = useState('all')
+  const [activeCat, setActiveCat] = useState([])
   const [showHeld, setShowHeld] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
   const [lastSale, setLastSale] = useState(null)
@@ -241,7 +221,7 @@ export default function POSPage() {
       page_no: pageNo,
       per_page: perPage,
       search: debouncedSearch || undefined,
-      category_id: activeCat !== 'all' ? activeCat : undefined,
+      category_ids: activeCat.length > 0 ? activeCat.join(',') : undefined,
       sort_by: 'name',
       sort_order: 'asc',
       pos_mode: true,
@@ -276,19 +256,12 @@ export default function POSPage() {
       await loadProductsPage({ branchId, pageNo: 1, reset: true, resetCategories })
     } catch (err) {
       console.error('Failed to fetch items:', err)
-      const fallbackProducts = mapSeedProductsForBranch(branchId)
-      setProducts(fallbackProducts)
-      setProductTotal(fallbackProducts.length)
+      setProducts([])
+      setProductTotal(0)
       setProductPageNo(1)
       setHasMoreProducts(false)
-      const uniqueCats = [...new Set(fallbackProducts.map((p) => p.categoryId))]
-      const catData = uniqueCats.map((catId) => ({
-        id: catId,
-        name: fallbackProducts.find((p) => p.categoryId === catId)?.categoryName || catId,
-        icon: '📦',
-      }))
-      setCategories([{ id: 'all', name: 'All', icon: '⊞' }, ...catData])
-      toast.error('API failed. Loaded seeded POS data.')
+      setCategories([{ id: 'all', name: 'All', icon: '⊞' }])
+      toast.error('Unable to load branch products. Please try again.')
     } finally {
       if (showFullPageLoader) setInitialLoading(false)
       else setLoadingProducts(false)
@@ -317,7 +290,7 @@ export default function POSPage() {
       branch_id: branchId,
       per_page: perPage,
       search: debouncedSearch || undefined,
-      category_id: activeCat !== 'all' ? activeCat : undefined,
+      category_ids: activeCat.length > 0 ? activeCat.join(',') : undefined,
       sort_by: 'name',
       sort_order: 'asc',
       pos_mode: true,
@@ -887,6 +860,17 @@ export default function POSPage() {
               autoFocus
             />
           </div>
+          <div style={{ width: 132, flexShrink: 0 }}>
+            <MultiSelect
+              options={categories.filter((category) => category.id !== 'all').map((category) => ({
+                id: category.id,
+                label: category.name,
+              }))}
+              value={activeCat}
+              onChange={setActiveCat}
+              placeholder="All categories"
+            />
+          </div>
           <button
             className="btn btn-secondary btn-sm"
             title="Focus input then scan barcode"
@@ -904,16 +888,6 @@ export default function POSPage() {
             onDragEnd={onPanelDragEnd}
             title="Drag onto the other column to swap sides"
           />
-        </div>
-
-        {/* Category pills */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 76, overflowY: 'auto', alignContent: 'flex-start', padding: '1px 2px 4px 0' }}>
-          {categories.map((c) => (
-            <button key={c.id} onClick={() => setActiveCat(c.id)}
-              style={{ padding: '6px 13px', borderRadius: 20, border: `1.5px solid ${activeCat === c.id ? 'var(--accent)' : 'var(--border-default)'}`, background: activeCat === c.id ? 'var(--accent-bg)' : 'transparent', color: activeCat === c.id ? 'var(--accent)' : 'var(--text-muted)', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto', transition: 'all 0.12s', fontFamily: 'DM Sans,sans-serif', fontWeight: 500 }}>
-              <span style={{ marginRight: 4 }}>{c.icon}</span>{c.name}
-            </button>
-          ))}
         </div>
 
         {/* Products grid */}
