@@ -153,7 +153,7 @@ export default function LoginPage() {
                       type="email"
                       value={recoveryEmail}
                       onChange={(e) => setRecoveryEmail(e.target.value)}
-                      placeholder="sellostore@company.com"
+                      placeholder="Enter work email"
                       required
                       autoFocus
                     />
@@ -181,7 +181,7 @@ export default function LoginPage() {
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder=""
+                      placeholder="Enter work email"
                       required
                       autoFocus
                     />
@@ -197,7 +197,7 @@ export default function LoginPage() {
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder=""
+                      placeholder="Enter password"
                       required
                       autoComplete="current-password"
                     />

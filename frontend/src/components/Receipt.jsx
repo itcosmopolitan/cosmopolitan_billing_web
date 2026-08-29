@@ -189,7 +189,7 @@ export function Receipt({ sale, branch }) {
             </div>
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top: 10px; font-size: 11px;">
-            <div class="bold" style="font-size:13px;">Sales Tax-Invoice</div>
+            <div class="bold" style="font-size:13px;">Sales Invoice</div>
             ${paymentTerms ? `<div style="font-size:10px;">${paymentTerms}</div>` : ''}
           </div>
         </div>
