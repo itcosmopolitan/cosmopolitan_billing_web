@@ -273,6 +273,16 @@ async def reverse_vendor_payment(db: AsyncSession, pay: VendorPayment) -> None:
                 vendor_ids.add(bill.vendor_id)
     if pay.vendor_id:
         vendor_ids.add(pay.vendor_id)
+    if pay.payment_mode == "credit" and pay.vendor_id and (pay.total_amount or 0) > 0:
+        await adjust_vendor_credit(
+            db,
+            pay.vendor_id,
+            float(pay.total_amount or 0),
+            entry_type="void_restore",
+            source_type="vendor_payment",
+            source_ref=pay.id,
+            source_number=pay.number,
+        )
     if (pay.credit_applied or 0) > 0 and pay.vendor_id:
         await adjust_vendor_credit(
             db,

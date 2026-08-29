@@ -5,7 +5,7 @@
  * invoice from their records and load returnable lines.
  */
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -17,20 +17,29 @@ import { lineTaxAmount } from '@/utils/taxCalc'
 
 export default function ReturnFormPage() {
   const navigate = useNavigate()
+  const { returnId } = useParams()
+  const isEdit = Boolean(returnId)
+  const [searchParams] = useSearchParams()
+  const prefillInvoiceId = searchParams.get('invoiceId')
+  const refundMode = searchParams.get('mode')
   const can = useCan()
   const [customer, setCustomer] = useState(null)
   const [customerInvoices, setCustomerInvoices] = useState([])
   const [invoicesLoading, setInvoicesLoading] = useState(false)
-  const [selectedInvoiceId, setSelectedInvoiceId] = useState('')
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState(prefillInvoiceId || '')
   const [invoice, setInvoice] = useState(null)
   const [alreadyReturned, setAlreadyReturned] = useState({})
   const [returnQtys, setReturnQtys] = useState({})
   const [batchAllocByLine, setBatchAllocByLine] = useState({})
-  const [refundMethod, setRefundMethod] = useState('cash')
+  const [refundMethod, setRefundMethod] = useState(refundMode === 'credit' ? 'credit' : 'cash')
   const [reason, setReason] = useState('')
   const [notes, setNotes] = useState('')
-  const [invoiceLoading, setInvoiceLoading] = useState(false)
+  const [invoiceLoading, setInvoiceLoading] = useState(Boolean(prefillInvoiceId) || isEdit)
+  const [editLoading, setEditLoading] = useState(isEdit)
+  const [editingNumber, setEditingNumber] = useState(null)
+  const [editSeedQtys, setEditSeedQtys] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [prefilled, setPrefilled] = useState(Boolean(prefillInvoiceId) || isEdit)
 
   useEffect(() => {
     if (!can('invoices.create')) {
@@ -39,6 +48,48 @@ export default function ReturnFormPage() {
   }, [can, navigate])
 
   const goBack = () => navigate('/sales?tab=returns')
+
+  useEffect(() => {
+    if (!isEdit || !returnId) return
+    let cancelled = false
+    ;(async () => {
+      setEditLoading(true)
+      try {
+        const ret = await salesAPI.returns.get(returnId)
+        if (cancelled) return
+        if (String(ret.status || '').toLowerCase() === 'void') {
+          toast.error('Cannot edit a voided credit note')
+          navigate('/sales?tab=returns', { replace: true })
+          return
+        }
+        setEditingNumber(ret.number)
+        setReason(ret.reason || '')
+        setNotes(ret.notes || '')
+        setRefundMethod(ret.refundMethod || 'cash')
+        setSelectedInvoiceId(ret.invoiceId)
+        if (ret.customerId) {
+          setCustomer({ id: ret.customerId, name: ret.customerName || 'Customer' })
+        } else {
+          setCustomer({ id: '', name: 'Walk-in' })
+        }
+        // Seed qtys from return lines after invoice loads — stash on window-free state
+        const qtys = {}
+        for (const li of ret.items || []) {
+          if (li.invoiceLineId) qtys[li.invoiceLineId] = Number(li.returnQty || 0)
+        }
+        setEditSeedQtys(qtys)
+        setReturnQtys(qtys)
+      } catch {
+        if (!cancelled) {
+          toast.error('Credit note not found')
+          navigate('/sales?tab=returns', { replace: true })
+        }
+      } finally {
+        if (!cancelled) setEditLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isEdit, returnId, navigate])
 
   const resetInvoiceState = () => {
     setSelectedInvoiceId('')
@@ -110,12 +161,18 @@ export default function ReturnFormPage() {
     try {
       const full = await salesAPI.get(invoiceId)
       setInvoice(full)
+      if (full.customerId) {
+        setCustomer((cur) => (cur?.id ? cur : { id: full.customerId, name: full.customerName || 'Customer' }))
+      } else {
+        setCustomer((cur) => cur || { id: '', name: 'Walk-in' })
+      }
 
       const allReturns = (await salesAPI.returns.list({ limit: 500 }))?.items || []
       const tally = {}
       for (const r of allReturns) {
         if (r.invoiceId !== full.id) continue
         if (r.status === 'void') continue
+        if (isEdit && r.id === returnId) continue
         for (const li of r.items || []) {
           if (!li.invoiceLineId) continue
           tally[li.invoiceLineId] = (tally[li.invoiceLineId] || 0) + Number(li.returnQty || 0)
@@ -123,10 +180,22 @@ export default function ReturnFormPage() {
       }
       setAlreadyReturned(tally)
 
+      const fillRemaining = !isEdit && invoiceId === prefillInvoiceId
       const initialQtys = {}
-      for (const il of full.items || []) initialQtys[il.id] = 0
+      const initialAlloc = {}
+      for (const il of full.items || []) {
+        const remaining = Math.max(0, Number(il.qty || 0) - (tally[il.id] || 0))
+        const seeded = editSeedQtys?.[il.id]
+        const q = isEdit
+          ? Math.min(Number(seeded || 0), remaining)
+          : (fillRemaining ? remaining : 0)
+        initialQtys[il.id] = q
+        if (q > 0 && sourceBatches(il).length > 0) {
+          initialAlloc[il.id] = fefoDistribute(il, q)
+        }
+      }
       setReturnQtys(initialQtys)
-      setBatchAllocByLine({})
+      setBatchAllocByLine(initialAlloc)
     } catch (err) {
       console.error('Failed to load invoice:', err)
       setInvoice(null)
@@ -146,6 +215,14 @@ export default function ReturnFormPage() {
     loadInvoice(selectedInvoiceId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedInvoiceId])
+
+  useEffect(() => {
+    if (!prefillInvoiceId) return
+    setSelectedInvoiceId(prefillInvoiceId)
+    setPrefilled(true)
+    if (refundMode === 'credit') setRefundMethod('credit')
+    else if (refundMode === 'refund') setRefundMethod('cash')
+  }, [prefillInvoiceId, refundMode])
 
   const remainingFor = (line) => {
     const prior = alreadyReturned[line.id] || 0
@@ -231,27 +308,36 @@ export default function ReturnFormPage() {
       })
     setSubmitting(true)
     try {
-      const res = await salesAPI.returns.create({
+      const payload = {
         invoice_id: invoice.id,
         reason: reason.trim() || null,
         refund_method: refundMethod,
         items,
         notes: notes.trim() || null,
-      })
+      }
+      const res = isEdit
+        ? await salesAPI.returns.update(returnId, payload)
+        : await salesAPI.returns.create(payload)
       const credited = Number(res?.credited_amount || 0)
       if (res?.refund_method === 'credit' && credited > 0) {
         toast.success(
-          `Return ${res.number} processed. ${fmt(credited)} added to store credit for ${invoice.customerName}`,
+          isEdit
+            ? `Credit note ${res.number} updated. ${fmt(credited)} store credit`
+            : `Return ${res.number} processed. ${fmt(credited)} added to store credit for ${invoice.customerName}`,
           { duration: 5000 },
         )
       } else if (res?.refund_method === 'cash' && credited > 0) {
-        toast.success(`Return ${res.number} processed. Refund ${fmt(credited)} cash from drawer`)
+        toast.success(
+          isEdit
+            ? `Credit note ${res.number} updated. Refund ${fmt(credited)} cash`
+            : `Return ${res.number} processed. Refund ${fmt(credited)} cash from drawer`,
+        )
       } else {
-        toast.success(`Return ${res?.number || ''} processed`)
+        toast.success(isEdit ? `Credit note ${res?.number || ''} updated` : `Return ${res?.number || ''} processed`)
       }
       goBack()
     } catch (err) {
-      console.error('Failed to create return:', err)
+      console.error(isEdit ? 'Failed to update return:' : 'Failed to create return:', err)
     } finally {
       setSubmitting(false)
     }
@@ -262,67 +348,78 @@ export default function ReturnFormPage() {
     label: `${inv.number} · ${inv.date} · ${fmt(inv.total)}`,
   }))
 
-  const saveDisabled = !invoice || !totals.anyReturned
+  const saveDisabled = !invoice || !totals.anyReturned || editLoading
+
+  if (editLoading) {
+    return (
+      <div className="page-container">
+        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
+      </div>
+    )
+  }
 
   return (
     <DocumentFormShell
-      title="Create Credit Note"
+      title={isEdit ? `Edit Credit Note — ${editingNumber || ''}` : 'Create Credit Note'}
       subtitle="Returns"
       icon="↩"
       onBack={goBack}
       onSave={handleSubmit}
-      saveLabel="Process Return"
+      saveLabel={isEdit ? 'Save Changes' : 'Process Return'}
       saving={submitting}
       saveDisabled={saveDisabled}
     >
       <div style={{ display: 'grid', gap: 18 }}>
         <FormGroup label="Customer" required>
           <AutocompleteDropdown
-            value={customer?.id || ''}
-            clearable
-            onClear={() => {
-              setCustomer(null)
-              resetCustomerState()
-            }}
-            onSelectOption={async (opt) => {
-              if (!opt) {
+              value={customer?.id || ''}
+              clearable={!prefilled}
+              onClear={() => {
+                if (prefilled) return
                 setCustomer(null)
                 resetCustomerState()
-                return
-              }
-              try {
-                const c = await customersAPI.get(opt.id)
-                setCustomer({ id: c.id, name: c.name })
-              } catch {
-                setCustomer({ id: opt.id, name: opt.label })
-              }
-              resetInvoiceState()
-            }}
-            fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
-            isSearchFieldRequired
-            selectedLabel={customer?.name}
-            placeholder="Search customers…"
-            searchPlaceholder="Search customers…"
-            emptyLabel="No customers found. Add via the Customers page."
-            style={{ width: '100%', maxWidth: 420 }}
-          />
+              }}
+              onSelectOption={async (opt) => {
+                if (prefilled) return
+                if (!opt) {
+                  setCustomer(null)
+                  resetCustomerState()
+                  return
+                }
+                try {
+                  const c = await customersAPI.get(opt.id)
+                  setCustomer({ id: c.id, name: c.name })
+                } catch {
+                  setCustomer({ id: opt.id, name: opt.label })
+                }
+                resetInvoiceState()
+              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              selectedLabel={customer?.name}
+              placeholder="Search customers…"
+              searchPlaceholder="Search customers…"
+              emptyLabel="No customers found. Add via the Customers page."
+              style={{ width: '100%', maxWidth: 420 }}
+              disabled={prefilled}
+            />
         </FormGroup>
 
-        {!customer ? (
+        {!customer && !prefillInvoiceId ? (
           <EmptyState
             icon="👤"
             title="Choose a customer to begin"
             desc="Pick a customer above to load their invoices and start a credit note."
           />
-        ) : invoicesLoading ? (
+        ) : invoicesLoading && !prefilled ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
             Loading invoices…
           </div>
-        ) : customerInvoices.length === 0 ? (
+        ) : !prefilled && customerInvoices.length === 0 ? (
           <EmptyState
             icon="🧾"
             title="No invoices found"
-            desc={`${customer.name} has no invoices available for return.`}
+            desc={`${customer?.name || 'This customer'} has no invoices available for return.`}
           />
         ) : (
           <>
@@ -336,7 +433,7 @@ export default function ReturnFormPage() {
                 searchPlaceholder="Search invoice #…"
                 emptyLabel="No matching invoices"
                 style={{ width: '100%', maxWidth: 420 }}
-                disabled={invoiceLoading}
+                disabled={invoiceLoading || prefilled}
               />
             </FormGroup>
 

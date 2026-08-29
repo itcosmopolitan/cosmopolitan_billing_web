@@ -22,6 +22,16 @@ import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import SalesTxnDetailPanel from './SalesTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from './ListFilters'
+import {
+  canShowCreditNoteAction,
+  canShowDeletePayment,
+  canShowDeleteReturn,
+  canShowInvoiceEdit,
+  invoiceEditPath,
+  invoiceHasPayment,
+  invoiceHasReturn,
+  invoiceReturnPath,
+} from './salesFormShared'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
 // reachable via Invoices tab + payment_mode filter. Sales Orders + Returns
@@ -333,6 +343,10 @@ export default function SalesPage() {
   const [paySortOrder, setPaySortOrder] = useState('desc')
   const [payDetail, setPayDetail] = useState(null)
   const [showCancelInvoice, setShowCancelInvoice] = useState(null)
+  const [showDeletePayment, setShowDeletePayment] = useState(null)
+  const [deletePaySaving, setDeletePaySaving] = useState(false)
+  const [showDeleteReturn, setShowDeleteReturn] = useState(null)
+  const [deleteRetSaving, setDeleteRetSaving] = useState(false)
 
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -656,6 +670,57 @@ export default function SalesPage() {
       // "Invoice already settled"). Don't double-toast here.
     } finally {
       setPaySaving(false)
+    }
+  }
+
+  const goEditInvoice = (inv) => {
+    if (invoiceHasPayment(inv)) {
+      toast.error('Delete the payment first, then edit this invoice.')
+      return
+    }
+    if (invoiceHasReturn(inv)) {
+      toast.error('Delete the return first, then edit this invoice.')
+      return
+    }
+    navigate(invoiceEditPath(inv, can))
+  }
+
+  const deleteInvoicePayments = async () => {
+    const inv = showDeletePayment
+    if (!inv?.id || deletePaySaving) return
+    setDeletePaySaving(true)
+    try {
+      await salesAPI.deletePayments(inv.id)
+      setSalesListVersion((v) => v + 1)
+      setPayListVersion((v) => v + 1)
+      setShowDeletePayment(null)
+      if (invoiceHasReturn(inv)) {
+        toast.success(`Payment removed from ${inv.number}. Delete the return next — Full Return is a credit note, not the payment.`)
+        setShowDeleteReturn(inv)
+      } else {
+        toast.success(`Payment removed from ${inv.number} — you can edit it now`)
+      }
+    } catch (err) {
+      console.error('Failed to delete payment:', err)
+    } finally {
+      setDeletePaySaving(false)
+    }
+  }
+
+  const deleteInvoiceReturns = async () => {
+    const inv = showDeleteReturn
+    if (!inv?.id || deleteRetSaving) return
+    setDeleteRetSaving(true)
+    try {
+      await salesAPI.deleteReturns(inv.id)
+      setSalesListVersion((v) => v + 1)
+      setRetListVersion((v) => v + 1)
+      toast.success(`Return removed from ${inv.number} — you can edit it now`)
+      setShowDeleteReturn(null)
+    } catch (err) {
+      console.error('Failed to delete return:', err)
+    } finally {
+      setDeleteRetSaving(false)
     }
   }
 
@@ -1044,20 +1109,34 @@ export default function SalesPage() {
                             },
                             {
                               label: 'Edit',
-                              // Drafts: create-only makers can revise before submit.
-                              // Posted unpaid: needs invoices.edit (stock already applied).
-                              hidden: !(
-                                !(inv.paidAmount > 0)
-                                && (inv.origin || 'invoice').toLowerCase() !== 'pos'
-                                && inv.status !== 'cancelled'
-                                && inv.status !== 'pending_approval'
-                                && (
-                                  (inv.status === 'draft' && can('invoices.create', 'invoices.edit'))
-                                  || (['pending', 'partial', 'overdue'].includes(inv.status) && can('invoices.edit'))
-                                )
-                              ),
+                              // Unpaid invoices (regular + POS) can be edited unless
+                              // they are awaiting approval, cancelled, or have credit notes.
+                              // Paid invoices still show Edit so the operator sees both
+                              // Delete payment and Edit; clicking Edit asks them to
+                              // delete the payment first.
+                              hidden: !canShowInvoiceEdit(inv, can),
                               disabled: isRowBusy(inv.id),
-                              onClick: () => navigate(`/sales/invoices/${inv.id}/edit`),
+                              onClick: () => goEditInvoice(inv),
+                            },
+                            {
+                              label: 'Delete payment',
+                              danger: true,
+                              hidden: !canShowDeletePayment(inv, can),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setShowDeletePayment(inv),
+                            },
+                            {
+                              label: 'Delete return',
+                              danger: true,
+                              hidden: !canShowDeleteReturn(inv, can),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setShowDeleteReturn(inv),
+                            },
+                            {
+                              label: 'Create refund',
+                              hidden: !canShowCreditNoteAction(inv, can),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => navigate(invoiceReturnPath(inv)),
                             },
                             {
                               label: 'Submit for approval',
@@ -1378,7 +1457,9 @@ export default function SalesPage() {
         partyLabel="Customer"
         partyName={payDetail?.customerName || 'Walk-in'}
         canVoid={can('invoices.edit')}
+        canEdit={can('invoices.edit')}
         onVoid={voidPayment}
+        onEdit={(p) => navigate(`/sales/payments/${p.id}/edit`)}
       />
 
       {/* Credit Purchases tab removed 2026-05-23 (Sales Phase 1). */}
@@ -1499,6 +1580,12 @@ export default function SalesPage() {
                               label: 'View',
                               disabled: isRowBusy(r.id),
                               onClick: () => setSalesDoc({ kind: 'return', data: r }),
+                            },
+                            {
+                              label: 'Edit',
+                              hidden: !can('invoices.create') || r.status === 'void',
+                              disabled: isRowBusy(r.id),
+                              onClick: () => navigate(`/sales/returns/${r.id}/edit`),
                             },
                             {
                               label: 'Activity',
@@ -1677,6 +1764,12 @@ export default function SalesPage() {
                             ariaLabel={`Actions for payment ${p.number}`}
                             actions={[
                               { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
+                              {
+                                label: 'Edit',
+                                hidden: !can('invoices.edit') || p.voided,
+                                disabled: isRowBusy(p.id),
+                                onClick: () => navigate(`/sales/payments/${p.id}/edit`),
+                              },
                               {
                                 label: actionKind === 'void-payment' && isRowBusy(p.id) ? 'Voiding…' : 'Void',
                                 danger: true,
@@ -1920,6 +2013,9 @@ export default function SalesPage() {
         onPrint={(inv, branch) => openInvoicePrintWindow(inv, branch)}
         onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
         onRecordPayment={(inv) => setShowPayment(inv)}
+        onEditInvoice={(inv) => { goEditInvoice(inv); setSalesDoc(null) }}
+        onDeletePayment={(inv) => { setShowDeletePayment(inv); setSalesDoc(null) }}
+        onDeleteReturn={(inv) => { setShowDeleteReturn(inv); setSalesDoc(null) }}
         onVoidReturn={(ret) => voidReturn(ret)}
         branchLookup={(inv) => branches.find((b) => b.id === inv?.branchId)}
       />
@@ -2029,6 +2125,51 @@ export default function SalesPage() {
           <AlertBar type="amber" icon="⚠">
             Cancelling <strong>{showCancelInvoice.number}</strong> restores stock and marks the invoice
             void. Void or delete any payments first — invoices with active payments cannot be cancelled.
+          </AlertBar>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!showDeletePayment}
+        onClose={() => setShowDeletePayment(null)}
+        title="Delete payment"
+        icon="💳"
+        size="sm"
+        busy={deletePaySaving}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setShowDeletePayment(null)} disabled={deletePaySaving}>Keep payment</button>
+          <button className="btn btn-danger" onClick={deleteInvoicePayments} disabled={deletePaySaving}>
+            {deletePaySaving ? 'Deleting…' : 'Delete payment'}
+          </button>
+        </>}
+      >
+        {showDeletePayment && (
+          <AlertBar type="amber" icon="⚠">
+            This removes payment(s) on <strong>{showDeletePayment.number}</strong> and marks the invoice unpaid.
+            You can then edit the transaction.
+          </AlertBar>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!showDeleteReturn}
+        onClose={() => setShowDeleteReturn(null)}
+        title="Delete return"
+        icon="↩"
+        size="sm"
+        busy={deleteRetSaving}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setShowDeleteReturn(null)} disabled={deleteRetSaving}>Keep return</button>
+          <button className="btn btn-danger" onClick={deleteInvoiceReturns} disabled={deleteRetSaving}>
+            {deleteRetSaving ? 'Deleting…' : 'Delete return'}
+          </button>
+        </>}
+      >
+        {showDeleteReturn && (
+          <AlertBar type="amber" icon="⚠">
+            <strong>Full Return</strong> on <strong>{showDeleteReturn.number}</strong> is a credit note,
+            not the payment. Deleting the payment does not clear this column.
+            This removes the credit note(s), restores stock, and clears the Returns column so you can edit.
           </AlertBar>
         )}
       </Modal>

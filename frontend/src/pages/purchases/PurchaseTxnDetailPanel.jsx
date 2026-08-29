@@ -5,6 +5,11 @@ import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { Chip, ReturnStatusChip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import {
+  canShowBillEdit,
+  canShowDeleteBillPayment,
+  canShowDeleteBillReturn,
+} from './purchaseFormShared'
 
 function displayPaymentMode(raw) {
   if (!raw) return '—'
@@ -27,6 +32,9 @@ export default function PurchaseTxnDetailPanel({
   document: doc,
   onClose,
   onRecordPayment,
+  onEditBill,
+  onDeletePayment,
+  onDeleteReturn,
   onVoidReturn,
   onBillFromGrn,
 }) {
@@ -94,8 +102,18 @@ export default function PurchaseTxnDetailPanel({
               Record payment
             </button>
           )}
-          {can('purchases.edit') && !['cancelled', 'paid'].includes(detail?.status) && (
-            <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/purchases/bills/${detail.id}/edit`) }}>
+          {canShowDeleteBillPayment(detail, can) && (
+            <button type="button" className="btn btn-danger" onClick={() => { onDeletePayment?.(detail); onClose?.() }}>
+              Delete payment
+            </button>
+          )}
+          {canShowDeleteBillReturn(detail, can) && (
+            <button type="button" className="btn btn-danger" onClick={() => { onDeleteReturn?.(detail); onClose?.() }}>
+              Delete return
+            </button>
+          )}
+          {canShowBillEdit(detail, can) && (
+            <button type="button" className="btn btn-secondary" onClick={() => { onEditBill?.(detail); onClose?.() }}>
               Edit
             </button>
           )}
@@ -129,10 +147,23 @@ export default function PurchaseTxnDetailPanel({
         </button>
       )}
 
-      {kind === 'return' && can('purchases.edit') && detail?.status !== 'void' && !detail?.voided && (
-        <button type="button" className="btn btn-danger" onClick={() => onVoidReturn?.(detail)}>
-          Void return
-        </button>
+      {kind === 'return' && detail?.status !== 'void' && !detail?.voided && (
+        <>
+          {can('purchases.create') && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => { onClose?.(); navigate(`/purchases/returns/${detail.id}/edit`) }}
+            >
+              Edit
+            </button>
+          )}
+          {can('purchases.edit') && (
+            <button type="button" className="btn btn-danger" onClick={() => onVoidReturn?.(detail)}>
+              Void return
+            </button>
+          )}
+        </>
       )}
     </>
   )

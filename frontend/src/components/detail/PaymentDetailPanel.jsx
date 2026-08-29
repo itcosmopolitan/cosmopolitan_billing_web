@@ -15,7 +15,9 @@ export default function PaymentDetailPanel({
   partyName,
   accentColor = 'var(--accent)',
   canVoid = false,
+  canEdit = false,
   onVoid,
+  onEdit,
 }) {
   const [tab, setTab] = useState('overview')
   const detail = payment
@@ -50,6 +52,9 @@ export default function PaymentDetailPanel({
       footer={(
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+          {canEdit && !detail?.voided && (
+            <button type="button" className="btn btn-secondary" onClick={() => { onEdit?.(detail); onClose?.() }}>Edit</button>
+          )}
           {canVoid && !detail?.voided && (
             <button type="button" className="btn btn-danger" onClick={() => onVoid?.(detail)}>Void payment</button>
           )}

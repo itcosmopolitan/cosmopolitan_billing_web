@@ -14,16 +14,33 @@ async def record_customer_payment(
     db: AsyncSession,
     pay: CustomerPayment,
 ) -> None:
-    """Mirror a CustomerPayment row into payment_records."""
+    """Mirror a CustomerPayment row into payment_records.
+
+    Re-recording after an edit (void-then-rebuild) refreshes a voided
+    ledger row in place so the source document id stays stable.
+    """
     existing = (
         await db.execute(
-            select(PaymentRecord.id).where(
+            select(PaymentRecord).where(
                 PaymentRecord.source_document_type == "customer_payment",
                 PaymentRecord.source_document_id == pay.id,
             )
         )
     ).scalar_one_or_none()
-    if existing:
+    if existing is not None:
+        existing.number = pay.number
+        existing.party_id = pay.customer_id
+        existing.party_name = pay.customer_name
+        existing.branch_id = pay.branch_id
+        existing.branch_name = pay.branch_name
+        existing.date = pay.date
+        existing.amount = float(pay.total_amount or 0)
+        existing.payment_mode = pay.payment_mode
+        existing.payment_ref = pay.payment_ref
+        existing.voided = bool(getattr(pay, "voided", False))
+        existing.voided_at = getattr(pay, "voided_at", None)
+        existing.notes = pay.notes
+        existing.created_by = pay.created_by
         return
     db.add(PaymentRecord(
         id=str(uuid.uuid4()),
@@ -51,16 +68,32 @@ async def record_vendor_payment(
     db: AsyncSession,
     pay: VendorPayment,
 ) -> None:
-    """Mirror a VendorPayment row into payment_records."""
+    """Mirror a VendorPayment row into payment_records.
+
+    Re-recording after an edit refreshes a voided ledger row in place.
+    """
     existing = (
         await db.execute(
-            select(PaymentRecord.id).where(
+            select(PaymentRecord).where(
                 PaymentRecord.source_document_type == "vendor_payment",
                 PaymentRecord.source_document_id == pay.id,
             )
         )
     ).scalar_one_or_none()
-    if existing:
+    if existing is not None:
+        existing.number = pay.number
+        existing.party_id = pay.vendor_id
+        existing.party_name = pay.vendor_name
+        existing.branch_id = pay.branch_id
+        existing.branch_name = pay.branch_name
+        existing.date = pay.date
+        existing.amount = float(pay.total_amount or 0)
+        existing.payment_mode = pay.payment_mode
+        existing.payment_ref = pay.payment_ref
+        existing.voided = bool(getattr(pay, "voided", False))
+        existing.voided_at = getattr(pay, "voided_at", None)
+        existing.notes = pay.notes
+        existing.created_by = pay.created_by
         return
     db.add(PaymentRecord(
         id=str(uuid.uuid4()),

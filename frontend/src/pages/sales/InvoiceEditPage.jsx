@@ -5,7 +5,7 @@ import { salesAPI, itemsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import InvoiceFormModal from './InvoiceFormModal'
-import { invoiceFromRow, lineDiscountToPercent } from './salesFormShared'
+import { invoiceFromRow, lineDiscountToPercent, canShowInvoiceEdit, invoiceEditPath, invoiceHasPayment, invoiceHasReturn, isPosInvoice } from './salesFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'
@@ -36,11 +36,8 @@ async function enrichLinesWithBatchFlags(items, branchId) {
 
 function invoiceEditable(inv, can) {
   if (!inv) return false
-  if (inv.status === 'cancelled' || inv.status === 'paid' || inv.status === 'pending_approval') return false
-  if ((inv.paidAmount || 0) > 0) return false
-  if ((inv.origin || 'invoice').toLowerCase() === 'pos') return false
-  if (inv.status === 'draft') return can('invoices.create', 'invoices.edit')
-  return can('invoices.edit')
+  if (invoiceHasPayment(inv) || invoiceHasReturn(inv)) return false
+  return canShowInvoiceEdit(inv, can)
 }
 
 export default function InvoiceEditPage() {
@@ -70,6 +67,10 @@ export default function InvoiceEditPage() {
         if (!invoiceEditable(inv, can)) {
           toast.error('This invoice cannot be edited')
           navigate('/sales?tab=invoices', { replace: true })
+          return
+        }
+        if (isPosInvoice(inv) && can('pos.use')) {
+          navigate(invoiceEditPath(inv, can), { replace: true })
           return
         }
         const base = invoiceFromRow(inv, inv.branchId)

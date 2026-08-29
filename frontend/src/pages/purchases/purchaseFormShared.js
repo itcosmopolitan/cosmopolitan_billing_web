@@ -100,3 +100,40 @@ export function billFromRow(doc, branchId) {
     notes: doc.notes || '',
   }
 }
+
+export function billHasPayment(bill) {
+  if (!bill) return false
+  if (Number((bill.paidAmount ?? bill.paid_amount) || 0) > 0) return true
+  const status = String(bill.status || '').toLowerCase()
+  return status === 'paid' || status === 'partial'
+}
+
+export function billHasReturn(bill) {
+  if (!bill) return false
+  if (Number((bill.creditedAmount ?? bill.credited_amount) || 0) > 0) return true
+  const returns = String(bill.returnStatus || 'none').toLowerCase()
+  return Boolean(returns && returns !== 'none')
+}
+
+export function billLockedForEdit(bill) {
+  const status = String(bill?.status || '')
+  return status === 'cancelled' || status === 'pending_approval'
+}
+
+export function canShowBillEdit(bill, can) {
+  if (!bill || billLockedForEdit(bill)) return false
+  if (bill.status === 'draft') return can('purchases.create', 'purchases.edit')
+  return can('purchases.edit')
+}
+
+export function canShowDeleteBillPayment(bill, can) {
+  if (!bill || !billHasPayment(bill)) return false
+  if (['cancelled', 'draft', 'pending_approval'].includes(String(bill.status || ''))) return false
+  return can('purchases.edit', 'purchases.delete', 'purchases.create')
+}
+
+export function canShowDeleteBillReturn(bill, can) {
+  if (!bill || !billHasReturn(bill)) return false
+  if (['cancelled', 'draft', 'pending_approval'].includes(String(bill.status || ''))) return false
+  return can('purchases.edit', 'purchases.delete', 'purchases.create')
+}

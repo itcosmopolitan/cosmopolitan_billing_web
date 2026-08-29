@@ -6,7 +6,7 @@ import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import BillFormModal from './BillFormModal'
-import { billFromRow, lineDiscountToPercent } from './purchaseFormShared'
+import { billFromRow, lineDiscountToPercent, billHasPayment, billHasReturn, billLockedForEdit } from './purchaseFormShared'
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichPurchaseLinesWithSellPrice } from '@/utils/enrichSaleLineCosts'
 
@@ -35,18 +35,22 @@ export default function BillEditPage() {
         setLoading(true)
         const bill = await purchasesAPI.get(billId)
         if (cancelled) return
-        const status = bill.status
-        if (
-          status === 'paid'
-          || status === 'cancelled'
-          || status === 'pending_approval'
-          || (bill.paidAmount || 0) > 0
-        ) {
-          toast.error(`Cannot edit this bill`)
+        if (billLockedForEdit(bill)) {
+          toast.error('Cannot edit this bill')
           navigate('/purchases?tab=bills', { replace: true })
           return
         }
-        if (status !== 'draft' && !can('purchases.edit')) {
+        if (billHasPayment(bill)) {
+          toast.error('Delete the payment first, then edit this bill.')
+          navigate('/purchases?tab=bills', { replace: true })
+          return
+        }
+        if (billHasReturn(bill)) {
+          toast.error('Delete the return first, then edit this bill.')
+          navigate('/purchases?tab=bills', { replace: true })
+          return
+        }
+        if (bill.status !== 'draft' && !can('purchases.edit')) {
           toast.error('Editing this bill requires purchases.edit')
           navigate('/purchases?tab=bills', { replace: true })
           return

@@ -164,3 +164,68 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) 
     notes: doc.notes || '',
   }
 }
+
+export function isPosInvoice(inv) {
+  return String(inv?.origin || 'invoice').toLowerCase() === 'pos'
+}
+
+export function invoiceHasPayment(inv) {
+  if (!inv) return false
+  if (Number((inv.paidAmount ?? inv.paid_amount) || 0) > 0) return true
+  const status = String(inv.status || '').toLowerCase()
+  return status === 'paid' || status === 'partial'
+}
+
+export function invoiceHasReturn(inv) {
+  if (!inv) return false
+  if (Number((inv.creditedAmount ?? inv.credited_amount) || 0) > 0) return true
+  const returns = String(inv.returnStatus || 'none').toLowerCase()
+  return Boolean(returns && returns !== 'none')
+}
+
+export function invoiceLockedForEdit(inv) {
+  const status = String(inv?.status || '')
+  return status === 'cancelled' || status === 'pending_approval'
+}
+
+export function canShowInvoiceEdit(inv, can) {
+  if (!inv || invoiceLockedForEdit(inv)) return false
+  if (inv.status === 'draft') return can('invoices.create', 'invoices.edit')
+  if (isPosInvoice(inv)) return can('pos.use', 'invoices.edit')
+  return can('invoices.edit')
+}
+
+export function invoiceEditPath(inv, can) {
+  if (isPosInvoice(inv) && can('pos.use')) return `/pos?edit=${inv.id}`
+  return `/sales/invoices/${inv.id}/edit`
+}
+
+export function canShowDeletePayment(inv, can) {
+  if (!inv || !invoiceHasPayment(inv)) return false
+  if (['cancelled', 'draft', 'pending_approval'].includes(String(inv.status || ''))) return false
+  // Anyone who can work invoices or the till can unwind a recorded payment.
+  return can('invoices.edit', 'invoices.delete', 'invoices.create', 'pos.use')
+}
+
+export function canShowDeleteReturn(inv, can) {
+  if (!inv || !invoiceHasReturn(inv)) return false
+  if (['cancelled', 'draft', 'pending_approval'].includes(String(inv.status || ''))) return false
+  return can('invoices.edit', 'invoices.delete', 'invoices.create', 'pos.use')
+}
+
+export function canShowCreditNoteAction(inv, can) {
+  if (!inv || !can('invoices.create')) return false
+  if (['cancelled', 'draft', 'pending_approval'].includes(inv.status)) return false
+  return String(inv.returnStatus || 'none').toLowerCase() !== 'full'
+}
+
+/** Open the desk credit-note form for this invoice (POS and desk alike). */
+export function invoiceReturnPath(inv) {
+  return `/sales/returns/new?invoiceId=${encodeURIComponent(inv.id)}`
+}
+
+export function creditNotePath(invoiceId, mode) {
+  const params = new URLSearchParams({ invoiceId })
+  if (mode) params.set('mode', mode)
+  return `/sales/returns/new?${params.toString()}`
+}
