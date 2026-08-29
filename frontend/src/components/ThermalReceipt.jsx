@@ -114,12 +114,10 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
             <td>Subtotal</td>
             <td class="right">${formatCurrency(sale.subtotal || sale.items?.reduce((sum, i) => sum + (i.lineTotal || i.qty * i.price), 0) || 0)}</td>
           </tr>
-          ${config.taxMode === 'itemized' ? `
-            <tr>
-              <td>Tax Amount</td>
-              <td class="right">${formatCurrency(sale.taxTotal || sale.tax_total || 0)}</td>
-            </tr>
-          ` : ''}
+          <tr>
+            <td>Tax Amount</td>
+            <td class="right">${formatCurrency(sale.taxTotal || sale.tax_total || 0)}</td>
+          </tr>
           <tr class="bold">
             <td>RECEIPT TOTAL</td>
             <td class="right">${formatCurrency(sale.total || 0)}</td>
@@ -258,12 +256,10 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           <div>Subtotal</div>
           <div style={{ textAlign: 'right' }}>{fmt(sale.subtotal || sale.items?.reduce((sum, i) => sum + (i.lineTotal || i.qty * i.price), 0) || 0)}</div>
         </div>
-        {config.taxMode === 'itemized' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 11, marginBottom: 2 }}>
-            <div>Tax Amount</div>
-            <div style={{ textAlign: 'right' }}>{fmt(sale.taxTotal || sale.tax_total || 0)}</div>
-          </div>
-        )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 11, marginBottom: 2 }}>
+          <div>Tax Amount</div>
+          <div style={{ textAlign: 'right' }}>{fmt(sale.taxTotal || sale.tax_total || 0)}</div>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 12, fontWeight: 700, marginBottom: 8 }}>
           <div>RECEIPT TOTAL</div>
           <div style={{ textAlign: 'right' }}>{fmt(sale.total || 0)}</div>
