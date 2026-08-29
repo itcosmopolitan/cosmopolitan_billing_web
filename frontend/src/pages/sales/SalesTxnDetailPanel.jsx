@@ -13,14 +13,23 @@ import {
   invoiceReturnPath,
 } from './salesFormShared'
 
-function displayPaymentMode(raw) {
+import { formatSettlementLabel } from '@/utils/storeCredit'
+
+function displayPaymentMode(raw, detail) {
+  if (detail) {
+    return formatSettlementLabel({
+      paymentMode: raw || detail.paymentMode,
+      storeCreditApplied: detail.storeCreditApplied,
+      payments: detail.payments,
+    })
+  }
   if (!raw) return '—'
 
   const value = String(raw).trim()
   const standardMap = {
     cash: 'Cash',
     card: 'Card',
-    credit: 'Credit',
+    credit: 'Store credit',
     upi: 'UPI',
     bank_transfer: 'Bank Transfer',
     banktransfer: 'Bank Transfer',
@@ -285,7 +294,7 @@ export default function SalesTxnDetailPanel({
               { label: 'Branch', value: detail?.branchName || detail?.branchId || '—' },
               ...(kind === 'invoice' ? [
                 { label: 'Cashier', value: detail?.cashier || 'N/A' },
-                { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode) },
+                { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode, detail) },
                 { label: 'Payment ref', value: detail?.paymentRef || '—' },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
                 { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
@@ -309,7 +318,7 @@ export default function SalesTxnDetailPanel({
                   label: 'Refund method',
                   value: (
                     <Tag color={detail?.refundMethod === 'credit' ? 'var(--accent)' : detail?.refundMethod === 'adjustment' ? 'var(--amber)' : undefined}>
-                      {detail?.refundMethod === 'credit' ? 'Credit' : detail?.refundMethod === 'adjustment' ? 'Adjustment' : 'Cash'}
+                      {detail?.refundMethod === 'credit' || detail?.refundMethod === 'adjustment' ? 'Outstanding' : 'Cash'}
                     </Tag>
                   ),
                 },
@@ -436,7 +445,7 @@ export default function SalesTxnDetailPanel({
                     <td>{p.date || '—'}</td>
                     <td>
                       {p.paymentMode
-                        ? <Chip status={p.paymentMode} label={displayPaymentMode(p.paymentMode)} />
+                        ? <Chip status={p.paymentMode} label={p.paymentMode === 'credit' ? 'Store credit' : displayPaymentMode(p.paymentMode)} />
                         : '—'}
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>{p.paymentRef || '—'}</td>

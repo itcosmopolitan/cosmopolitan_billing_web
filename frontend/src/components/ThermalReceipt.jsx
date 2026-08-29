@@ -1,6 +1,7 @@
 import { useRef, forwardRef, useImperativeHandle } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
+import { formatSettlementLabel } from '@/utils/storeCredit'
 
 // ─── Thermal Receipt Component ────────────────────────────────────────────────
 export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch }, ref) {
@@ -128,7 +129,11 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           <table class="summary">
             <tr>
               <td>Payment Mode</td>
-              <td class="right">${sale.paymentMode || sale.payment_mode || 'CASH'}</td>
+              <td class="right">${formatSettlementLabel({
+                paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
+                storeCreditApplied: sale.storeCreditApplied,
+                payments: sale.payments,
+              })}</td>
             </tr>
           </table>
         ` : ''}
@@ -160,7 +165,15 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
       (sale.discount ? `Discount: -MVR${sale.discount.toLocaleString('en-MV')}\n` : '') +
       `Tax amount: MVR${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-MV')}\n` +
       `*TOTAL: MVR${(sale.total || 0).toLocaleString('en-MV')}*\n` +
-      `Payment: ${(sale.paymentMode || sale.payment_mode || '').toUpperCase()}\n\n` +
+      `Payment: ${formatSettlementLabel({
+        paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
+        storeCreditApplied: sale.storeCreditApplied,
+        payments: sale.payments,
+      })}\n` +
+      (Number(sale.storeCreditApplied || 0) > 0
+        ? `Account credit: ${fmt(sale.storeCreditApplied)}\n`
+        : '') +
+      `\n` +
       `Thank you for your purchase! 🙏`
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')
   }
@@ -268,7 +281,11 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
         {config.showPayment && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 11, marginBottom: 8 }}>
             <div>Payment Mode</div>
-            <div style={{ textAlign: 'right' }}>{sale.paymentMode || sale.payment_mode || 'CASH'}</div>
+            <div style={{ textAlign: 'right' }}>{formatSettlementLabel({
+              paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
+              storeCreditApplied: sale.storeCreditApplied,
+              payments: sale.payments,
+            })}</div>
           </div>
         )}
 

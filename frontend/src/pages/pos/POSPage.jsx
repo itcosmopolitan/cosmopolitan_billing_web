@@ -14,7 +14,7 @@ import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
-import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect } from '@/components/ui'
+import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import CashTenderFields from '@/components/CashTenderFields'
@@ -31,6 +31,11 @@ import {
   invoiceLockedForEdit,
   isPosInvoice,
 } from '@/pages/sales/salesFormShared'
+import {
+  storeCreditApplyAmount,
+  remainingAfterStoreCredit,
+  customerRequiresImmediatePayment,
+} from '@/utils/storeCredit'
 import {
   POS_STORAGE_SPLIT,
   POS_STORAGE_LEADING,
@@ -213,11 +218,6 @@ export default function POSPage() {
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
-  // Walk-in + unchecked-payment is the "operator forgot a customer on an
-  // unpaid invoice" case — there's no-one to follow up with for collection.
-  // We surface this exactly once per Complete-Sale attempt via this ref so
-  // the operator can either add a customer or confirm they really mean it.
-  const walkinUnpaidWarnedRef = useRef(false)
 
   // Guard route changes when the cart has unsaved lines. We stash the
   // resume-callback in state so a custom Modal (rather than window.confirm)
@@ -485,6 +485,15 @@ export default function POSPage() {
   const handleComplete = async () => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
+    const submitTotals = calcCartTotals(cart, { discountPct, discountAmt })
+    const submitTotal = submitTotals.total
+    const creditAppliedNow = storeCreditApplyAmount(
+      customer?.credit_balance,
+      submitTotal,
+      !!customer?.id,
+    )
+    const remainingDue = remainingAfterStoreCredit(submitTotal, creditAppliedNow)
+    const settling = paymentReceived || creditAppliedNow > 0
     const hasBillDiscountForSubmit = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
     const hasLineDiscountForSubmit = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
     const hasDiscountForSubmit = hasBillDiscountForSubmit || hasLineDiscountForSubmit
@@ -493,36 +502,30 @@ export default function POSPage() {
       return
     }
 
-    // Sales Phase 1 validation: when "Payment received?" is checked, a
-    // method MUST be picked. Backend would 422 on null mode + paid_amount
-    // anyway, but inline feedback is friendlier.
-    if (paymentReceived && !paymentMethod) {
-      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer / Credit)')
+    const mustPay = customerRequiresImmediatePayment(customer)
+    if (mustPay && !settling) {
+      toast.error(
+        customer?.id
+          ? 'Retail customers must pay at sale — select a payment method'
+          : 'Walk-in customers must pay at sale — select a payment method',
+      )
+      return
+    }
+    if (mustPay && remainingDue > 0.001 && !paymentMethod) {
+      toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer)')
       return
     }
 
-    // 2026-05-25: credit-mode safety gates. The dropdown disables the
-    // option for walk-ins + when balance is insufficient, but a stale
-    // selection (e.g. operator picked credit then changed customers)
-    // could slip through. Re-check at submit.
-    if (paymentReceived && paymentMethod === 'cash') {
-      const err = cashTenderError(cashCollected, total)
-      if (err) {
-        toast.error(err)
-        return
-      }
+    // When settling with a remainder, a tender method MUST be picked.
+    if (settling && remainingDue > 0.001 && !paymentMethod) {
+      toast.error('Pick a payment method for the remaining amount (Cash / Card / UPI / Bank Transfer)')
+      return
     }
 
-    if (paymentReceived && paymentMethod === 'credit') {
-      if (!customer?.id) {
-        toast.error('Store credit requires a customer — pick one or change the method')
-        return
-      }
-      const avail = Number(customer.credit_balance || 0)
-      if (avail < total) {
-        toast.error(
-          `Insufficient store credit — ${fmt(avail)} available, ${fmt(total)} needed`,
-        )
+    if (settling && paymentMethod === 'cash' && remainingDue > 0.001) {
+      const err = cashTenderError(cashCollected, remainingDue)
+      if (err) {
+        toast.error(err)
         return
       }
     }
@@ -536,21 +539,6 @@ export default function POSPage() {
         }
       }
     }
-
-    // Walk-in + unchecked = unpaid invoice with nobody to follow up with.
-    // Warn the operator exactly ONCE per attempt; the second click
-    // (within the same cart) lets the sale through. Reset the flag on
-    // cart clear so the next sale gets a fresh warning.
-    if (!paymentReceived && !customer?.id && !walkinUnpaidWarnedRef.current) {
-      walkinUnpaidWarnedRef.current = true
-      toast(
-        'Walk-in + unpaid: nobody to chase for collection. ' +
-        'Click again to confirm, or add a customer first.',
-        { icon: '⚠️', duration: 6000 },
-      )
-      return
-    }
-    walkinUnpaidWarnedRef.current = false
 
     setCompleting(true)
     try {
@@ -583,10 +571,17 @@ export default function POSPage() {
           }
         }),
         discount: disc,
-        payment_mode: paymentReceived ? paymentMethod : null,
+        payment_mode: settling && remainingDue > 0.001 ? paymentMethod : (settling && creditAppliedNow > 0 && remainingDue <= 0.001 ? null : null),
+        store_credit_amount: creditAppliedNow > 0 ? creditAppliedNow : undefined,
         origin: 'pos',
         notes: notes || null,
-        payment_ref: paymentReceived ? paymentRef || '' : undefined,
+        payment_ref: settling && remainingDue > 0.001 ? paymentRef || '' : undefined,
+      }
+      // Credit-only settlement: backend accepts store_credit_amount without tender mode.
+      if (settling && remainingDue > 0.001) {
+        salePayload.payment_mode = paymentMethod
+      } else if (!settling) {
+        salePayload.payment_mode = null
       }
 
       const result = editingInvoice
@@ -595,8 +590,8 @@ export default function POSPage() {
 
       const soldItemIds = cart.map((i) => i.id)
 
-      const cashTender = paymentReceived && paymentMethod === 'cash'
-        ? cashTenderSummary(cashCollected, result.total)
+      const cashTender = settling && paymentMethod === 'cash' && remainingDue > 0.001
+        ? cashTenderSummary(cashCollected, remainingDue)
         : null
 
       let fullSale
@@ -616,22 +611,21 @@ export default function POSPage() {
           subtotal: sub,
           taxTotal: tax,
           discount: disc,
+          storeCreditApplied: creditAppliedNow,
         }
       }
 
       setLastSale({
         ...fullSale,
         discountReason: hasDiscountForSubmit ? discountReason : '',
-        method: paymentReceived ? paymentMethod : null,
+        method: settling ? (paymentMethod || (creditAppliedNow > 0 ? 'credit' : null)) : null,
+        storeCreditApplied: fullSale.storeCreditApplied ?? creditAppliedNow,
         cashCollected: cashTender?.collected ?? null,
         cashChange: cashTender?.change ?? null,
       });
 
-      // 2026-05-25: refresh local customer credit_balance after a
-      // credit-mode sale so the next cart sees the updated balance.
-      // Cheap optimistic update — backend already debited atomically.
-      if (paymentReceived && paymentMethod === 'credit' && customer?.id) {
-        const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
+      if (creditAppliedNow > 0 && customer?.id) {
+        const newBalance = Math.max(0, Number(customer.credit_balance || 0) - creditAppliedNow)
         store.setCustomer({ ...customer, credit_balance: newBalance })
       }
       store.clearCart()
@@ -752,16 +746,14 @@ export default function POSPage() {
     ? posEntityDiscountShares(cart, discount)
     : cart.map(() => 0)
   const cartMargin = posDocumentMargin(cart, { discountPct, discountAmt })
+  const creditAvail = customer?.id ? Number(customer.credit_balance || 0) : 0
+  const creditAppliedPreview = storeCreditApplyAmount(creditAvail, total, !!customer?.id)
+  const remainingDuePreview = remainingAfterStoreCredit(total, creditAppliedPreview)
   const paymentMethodOptions = [
     { id: 'cash', label: '💵 Cash' },
     { id: 'card', label: '💳 Card' },
     { id: 'upi', label: '📱 UPI' },
     { id: 'bank_transfer', label: '🏦 Bank Transfer' },
-    ...(customer?.id ? [{
-      id: 'credit',
-      label: `🏦 Store credit (${fmt(Number(customer.credit_balance || 0))})`,
-      disabled: Number(customer.credit_balance || 0) < total,
-    }] : []),
   ]
 
   const { displayCode, regenerate: regenerateDisplayCode } = usePosDisplaySession()
@@ -1233,7 +1225,7 @@ export default function POSPage() {
                   fontWeight: 600,
                   whiteSpace: 'nowrap',
                 }}
-                title="Store credit available (from returns / overpayments)"
+                title="Account credit available (from returns / overpayments)"
               >
                 {fmt(Number(customer.credit_balance || 0))}
               </span>
@@ -1477,6 +1469,14 @@ export default function POSPage() {
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
+              {customer?.id && creditAvail > 0 && (
+                <AlertBar type="green" icon="✓" style={{ marginBottom: 8 }}>
+                  Account credit <strong>{fmt(creditAvail)}</strong> will be applied automatically
+                  {remainingDuePreview > 0.001
+                    ? <> — collect <strong>{fmt(remainingDuePreview)}</strong> remaining</>
+                    : <> — sale fully covered</>}
+                </AlertBar>
+              )}
               <div
                 style={{
                   display: 'flex',
@@ -1487,7 +1487,7 @@ export default function POSPage() {
               >
                 {paymentMethodOptions.map((option) => {
                   const isSelected = paymentMethod === option.id
-                  const isDisabled = Boolean(option.disabled)
+                  const isDisabled = remainingDuePreview <= 0.001 && creditAppliedPreview > 0
 
                   return (
                     <button
@@ -1520,7 +1520,7 @@ export default function POSPage() {
                     </button>
                   )
                 })}
-                {paymentMethod && (paymentMethod === 'upi' || paymentMethod === 'bank_transfer') && (
+                {paymentMethod && (paymentMethod === 'upi' || paymentMethod === 'bank_transfer') && remainingDuePreview > 0.001 && (
                   <input
                     className="form-input"
                     placeholder="REF number"
@@ -1530,37 +1530,20 @@ export default function POSPage() {
                   />
                 )}
               </div>
-              {paymentMethod === 'cash' && (
+              {paymentMethod === 'cash' && remainingDuePreview > 0.001 && (
                 <CashTenderFields
                   compact
                   autoFocus
-                  due={total}
+                  due={remainingDuePreview}
                   value={cashCollected}
                   onChange={store.setCashCollected}
                 />
               )}
-              {paymentReceived ? (
-                <>
-                  {paymentMethod === 'credit' && customer?.id && Number(customer.credit_balance || 0) < total && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        padding: '6px 8px',
-                        border: '1px solid var(--amber)',
-                        borderRadius: 6,
-                        background: 'rgba(245,166,35,0.08)',
-                        fontSize: 11,
-                        color: 'var(--amber)',
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      Store credit short by {fmt(total - Number(customer.credit_balance || 0))} — pick another method.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                  Saved as <strong>pending</strong> — collect payment later in Sales → Invoices.
+              {!(paymentReceived || creditAppliedPreview > 0) && (
+                <div style={{ marginTop: 5, fontSize: 10.5, color: customerRequiresImmediatePayment(customer) ? 'var(--amber)' : 'var(--text-muted)', lineHeight: 1.4 }}>
+                  {customerRequiresImmediatePayment(customer)
+                    ? <>Payment method is <strong>required</strong> for walk-in / retail customers.</>
+                    : <>Saved as <strong>pending</strong> — collect payment later in Sales → Invoices.</>}
                 </div>
               )}
             </div>
@@ -1625,6 +1608,21 @@ export default function POSPage() {
                       <MarginBadge margin={cartMargin} showAmount size="sm" />
                     </div>
                   )}
+                  {creditAppliedPreview > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--accent)',
+                        marginBottom: 3,
+                      }}
+                    >
+                      <span>Account credit</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(creditAppliedPreview)}</span>
+                    </div>
+                  )}
                 </div>
               )}
               <div
@@ -1637,11 +1635,18 @@ export default function POSPage() {
                   borderTop: cart.length > 0 ? '1px solid var(--border-default)' : 'none',
                 }}
               >
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Total</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {creditAppliedPreview > 0 ? 'Remaining' : 'Total'}
+                </span>
                 <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 24, fontWeight: 700, color: 'var(--accent)', lineHeight: 1.1 }}>
-                  {fmt(total)}
+                  {fmt(creditAppliedPreview > 0 ? remainingDuePreview : total)}
                 </span>
               </div>
+              {creditAppliedPreview > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, textAlign: 'right' }}>
+                  Bill total {fmt(total)}
+                </div>
+              )}
             </div>
           </div>
 

@@ -9,6 +9,7 @@ import { invoiceFromRow, lineDiscountToPercent, canShowInvoiceEdit, invoiceEditP
 import { entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'
+import { customerRequiresImmediatePayment } from '@/utils/storeCredit'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const withCost = await enrichSaleLinesWithCosts(items, branchId)
@@ -107,6 +108,18 @@ export default function InvoiceEditPage() {
     }
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
       toast.error('Enter the payment reference for UPI or Bank Transfer')
+      return
+    }
+    const mustPay = customerRequiresImmediatePayment({
+      id: form.customerId,
+      customer_type: form.customerType,
+    })
+    if (mustPay && !form.paymentMethod) {
+      toast.error(
+        form.customerId
+          ? 'Retail customers must pay at sale — select a payment method'
+          : 'Walk-in customers must pay at sale — select a payment method',
+      )
       return
     }
     setSaving(true)

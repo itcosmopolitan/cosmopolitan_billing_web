@@ -101,6 +101,7 @@ export const emptyInvoiceForm = (branchId) => ({
   customerName: '',
   customerId: '',
   customerType: 'retail',
+  customerCreditBalance: 0,
   branchId,
   number: '',
   items: [emptySaleLine()],
@@ -161,6 +162,8 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) 
     paymentReceived: Boolean(doc.paymentMode),
     paymentMethod: doc.paymentMode || null,
     paymentRef: doc.paymentRef || '',
+    customerType: customerPricingType(doc.customerType || doc.customer_type || 'retail'),
+    customerCreditBalance: Number(doc.creditBalance ?? doc.credit_balance ?? 0) || 0,
     notes: doc.notes || '',
   }
 }

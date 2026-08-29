@@ -247,6 +247,7 @@ export const usePOSStore = create((set, get) => ({
   paymentMethod: null,
   paymentRef: '',
   cashCollected: '',
+  applyStoreCredit: false,
   splitPayments: [],
   heldBills: [],
   notes: '',
@@ -364,7 +365,7 @@ export const usePOSStore = create((set, get) => ({
   clearCart: () => set({
     cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '', notes: '',
     // PR 1: reset payment fields so the next sale starts fresh + unchecked.
-    paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '',
+    paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '', applyStoreCredit: false,
   }),
 
   hydrateSession: (payload) => set({
@@ -378,12 +379,14 @@ export const usePOSStore = create((set, get) => ({
     paymentMethod: payload.paymentMethod || null,
     paymentRef: payload.paymentRef || '',
     cashCollected: payload.cashCollected || '',
+    applyStoreCredit: !!payload.applyStoreCredit,
   }),
 
   setCustomer: (customer) => {
     const type = customerPricingType(customer)
     set((s) => ({
       customer,
+      applyStoreCredit: customer?.id ? s.applyStoreCredit : false,
       cart: s.cart.map((i) => {
         const resolved = resolveCategoryLinePricing(i, type)
         return applyLineCalc({
@@ -405,12 +408,20 @@ export const usePOSStore = create((set, get) => ({
     paymentReceived: !!received,
     paymentMethod: received ? s.paymentMethod : null,
     cashCollected: received && s.paymentMethod === 'cash' ? s.cashCollected : '',
+    applyStoreCredit: received ? s.applyStoreCredit : false,
   })),
   setPaymentMethod: (m) => set((s) => ({
     paymentMethod: m || null,
-    paymentReceived: !!(m || null),
+    paymentReceived: !!(m || s.applyStoreCredit),
     cashCollected: m === 'cash' ? s.cashCollected : '',
   })),
+  setApplyStoreCredit: (on) => set((s) => {
+    const apply = !!on
+    return {
+      applyStoreCredit: apply,
+      paymentReceived: !!(apply || s.paymentMethod),
+    }
+  }),
   setPaymentRef: (r) => set({ paymentRef: r }),
   setCashCollected: (v) => set({ cashCollected: v }),
   setNotes: (n) => set({ notes: n }),
@@ -439,7 +450,7 @@ export const usePOSStore = create((set, get) => ({
         heldAt: new Date(),
       }],
       cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '',
-      paymentReceived: false, paymentMethod: null, cashCollected: '',
+      paymentReceived: false, paymentMethod: null, cashCollected: '', applyStoreCredit: false,
     })
   },
 

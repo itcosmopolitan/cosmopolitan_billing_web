@@ -29,7 +29,7 @@ class CustomerCreate(BaseModel):
     address: Optional[str] = None
     gst_in: Optional[str] = None
     branch_id: str
-    credit_limit: float = 10000
+    credit_limit: float = 0
     customer_type: str = "retail"
     key_account_manager: Optional[str] = None
     credit_terms: Optional[str] = None
@@ -354,7 +354,13 @@ async def import_customers(
                 raise ValueError(f"Required field(s) missing: {', '.join(missing)}")
 
             customer_type = _normalize_customer_type(as_text(data.get("customer_type")) or "retail")
-            credit_limit = float(data.get("credit_limit") or 10000)
+            raw_limit = data.get("credit_limit")
+            if customer_type == "retail":
+                credit_limit = 0.0
+                credit_terms = None
+            else:
+                credit_limit = float(raw_limit if raw_limit not in (None, "") else 10000)
+                credit_terms = as_text(data.get("credit_terms")) or None
             customer_id = str(uuid.uuid4())
             customer = Customer(
                 id=customer_id,
@@ -366,7 +372,7 @@ async def import_customers(
                 credit_limit=credit_limit,
                 type=customer_type,
                 key_account_manager=as_text(data.get("key_account_manager")) or None,
-                credit_terms=as_text(data.get("credit_terms")) or None,
+                credit_terms=credit_terms,
                 street1=required["street1"],
                 street2=as_text(data.get("street2")) or None,
                 street3=as_text(data.get("street3")) or None,
@@ -415,15 +421,18 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)
     customer_type = _normalize_customer_type(data.customer_type)
+    # Retail has no account credit facility — force limit/terms off.
+    credit_limit = 0.0 if customer_type == "retail" else float(data.credit_limit or 0)
+    credit_terms = None if customer_type == "retail" else (data.credit_terms or None)
     address = _compose_address_from_parts(data)
     customer_id = str(uuid.uuid4())
     customer_code = _build_customer_code(customer_id)
     c = Customer(id=customer_id, name=data.name, phone=data.phone,
                  email=data.email, address=address, customer_code=customer_code,
                  gstin=data.gst_in, branch_id=data.branch_id,
-                 credit_limit=data.credit_limit, type=customer_type,
+                 credit_limit=credit_limit, type=customer_type,
                  key_account_manager=(data.key_account_manager or None),
-                 credit_terms=(data.credit_terms or None),
+                 credit_terms=credit_terms,
                  street1=data.street1, street2=data.street2, street3=data.street3,
                  city=data.city, state_province=data.state_province,
                  country=data.country, postal_code=data.postal_code)
@@ -456,6 +465,12 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
         if k in ["street1", "street2", "street3", "city", "state_province", "country", "postal_code"]:
             continue
         setattr(c, _FIELD_TO_COLUMN.get(k, k), v)
+
+    # After applying fields: retail never keeps an account limit / terms.
+    effective_type = (c.type or "retail").strip().lower()
+    if effective_type == "retail":
+        c.credit_limit = 0.0
+        c.credit_terms = None
 
     if not c.customer_code:
         c.customer_code = _build_customer_code(c.id)

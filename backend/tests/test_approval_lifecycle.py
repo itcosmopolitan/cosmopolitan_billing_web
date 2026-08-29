@@ -92,7 +92,13 @@ async def _seed(db: AsyncSession) -> dict:
     )
     db.add_all([creator_role, approver_role, cashier_role])
     db.add(Branch(id="b1", name="Main", code="MAIN"))
-    db.add(Customer(id="c1", name="Acme", credit_balance=500))
+    db.add(Customer(
+        id="c1",
+        name="Acme",
+        credit_balance=0,
+        type="wholesale",
+        credit_limit=10000,
+    ))
     db.add(Vendor(id="v1", name="Vendor Co"))
     item = Item(
         id="i1", name="Widget", sku="W1", cost_price=10, selling_price=25,

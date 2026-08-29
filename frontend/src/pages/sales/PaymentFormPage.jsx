@@ -16,6 +16,7 @@ import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { cashTenderError } from '@/utils/cashTender'
+import { storeCreditApplyAmount, remainingAfterStoreCredit } from '@/utils/storeCredit'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -200,17 +201,10 @@ export default function PaymentFormPage() {
   }, [invoices, checkedIds, applyById, editAllocByInvoice])
 
   const avail = Number(customer?.credit || 0)
-  const creditMode = paymentMode === 'credit'
-  const creditInsufficient = creditMode && totals.allocated > avail + 0.001
+  const creditApplied = storeCreditApplyAmount(avail, totals.allocated, true)
+  const remainingTender = remainingAfterStoreCredit(totals.allocated, creditApplied)
 
-  const paymentModeOptions = useMemo(() => [
-    ...PAYMENT_MODE_LABEL_OPTIONS,
-    {
-      id: 'credit',
-      label: `STORE CREDIT (${fmt(avail)} available)`,
-      disabled: avail <= 0,
-    },
-  ], [avail])
+  const paymentModeOptions = useMemo(() => PAYMENT_MODE_LABEL_OPTIONS, [])
 
   const seedApplyToBalances = () => {
     const seed = {}
@@ -224,14 +218,10 @@ export default function PaymentFormPage() {
     if (submitting) return
     if (!customer?.id) { toast.error('Pick a customer first'); return }
     if (totals.count === 0) { toast.error('Select at least one invoice'); return }
-    if (!paymentMode) { toast.error('Pick a payment method'); return }
-    if (paymentMode === 'cash') {
-      const err = cashTenderError(cashCollected, totals.allocated)
+    if (remainingTender > 0.001 && !paymentMode) { toast.error('Pick a payment method for the remaining amount'); return }
+    if (paymentMode === 'cash' && remainingTender > 0.001) {
+      const err = cashTenderError(cashCollected, remainingTender)
       if (err) { toast.error(err); return }
-    }
-    if (creditMode && creditInsufficient) {
-      toast.error(`Insufficient store credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
-      return
     }
     const allocations = []
     for (const inv of invoices) {
@@ -245,12 +235,62 @@ export default function PaymentFormPage() {
     }
     setSubmitting(true)
     try {
-      const payload = {
-        customer_id: customer.id,
-        payment_mode: paymentMode,
-        payment_ref: paymentRef.trim() || null,
-        notes: notes.trim() || null,
-        allocations,
+      // When store credit is applied, send credit-mode payment for that
+      // portion first (FIFO via payment_mode=credit legacy), then tender.
+      // Backend multi-pay still uses payment_mode; for split we create
+      // credit payment when covering fully with credit, else tender with
+      // store_credit_amount once backend multi-pay supports it.
+      // Interim: if credit covers all → payment_mode credit; else tender
+      // only for remaining by reducing allocation amounts after credit FIFO.
+      let payload
+      if (creditApplied > 0 && remainingTender <= 0.001) {
+        payload = {
+          customer_id: customer.id,
+          payment_mode: 'credit',
+          payment_ref: paymentRef.trim() || null,
+          notes: notes.trim() || null,
+          allocations,
+        }
+      } else if (creditApplied > 0) {
+        // Split allocations: credit portion FIFO, then tender for rest.
+        let creditLeft = creditApplied
+        const creditAllocs = []
+        const tenderAllocs = []
+        for (const a of allocations) {
+          const take = Math.min(creditLeft, a.amount)
+          if (take > 0.001) creditAllocs.push({ invoice_id: a.invoice_id, amount: round2(take) })
+          const rest = round2(a.amount - take)
+          if (rest > 0.001) tenderAllocs.push({ invoice_id: a.invoice_id, amount: rest })
+          creditLeft = round2(creditLeft - take)
+        }
+        if (creditAllocs.length) {
+          await salesAPI.payments.create({
+            customer_id: customer.id,
+            payment_mode: 'credit',
+            notes: notes.trim() || 'Store credit applied',
+            allocations: creditAllocs,
+          })
+        }
+        payload = {
+          customer_id: customer.id,
+          payment_mode: paymentMode,
+          payment_ref: paymentRef.trim() || null,
+          notes: notes.trim() || null,
+          allocations: tenderAllocs,
+        }
+        if (!tenderAllocs.length) {
+          toast.success('Store credit applied')
+          goBack()
+          return
+        }
+      } else {
+        payload = {
+          customer_id: customer.id,
+          payment_mode: paymentMode,
+          payment_ref: paymentRef.trim() || null,
+          notes: notes.trim() || null,
+          allocations,
+        }
       }
       const res = isEdit
         ? await salesAPI.payments.update(paymentId, payload)
@@ -272,7 +312,9 @@ export default function PaymentFormPage() {
     }
   }
 
-  const saveDisabled = !customer || totals.count === 0 || !paymentMode || creditInsufficient || editLoading
+  const round2 = (n) => Math.round(Number(n) * 100) / 100
+
+  const saveDisabled = !customer || totals.count === 0 || (remainingTender > 0.001 && !paymentMode) || editLoading
 
   if (editLoading) {
     return (
@@ -404,7 +446,7 @@ export default function PaymentFormPage() {
                     const checked = checkedIds.has(inv.id)
                     const balance = balanceFor(inv)
                     const apply = Number(applyById[inv.id]) || 0
-                    const excess = checked && !creditMode ? Math.max(0, apply - balance) : 0
+                    const excess = checked ? Math.max(0, apply - balance) : 0
                     return (
                       <tr key={inv.id} style={!checked ? { opacity: 0.55 } : null}>
                         <td>
@@ -431,7 +473,7 @@ export default function PaymentFormPage() {
                             min="0"
                             step={amountInputStep()}
                             value={applyById[inv.id] || ''}
-                            disabled={!checked || creditMode}
+                            disabled={!checked}
                             onChange={(e) =>
                               setApplyById((prev) => ({ ...prev, [inv.id]: e.target.value }))
                             }
@@ -458,44 +500,51 @@ export default function PaymentFormPage() {
                     <span style={totalsLabelStyle}>Total Selected</span>
                     <span style={totalsValueStyle}>{totals.count} {totals.count === 1 ? 'invoice' : 'invoices'}</span>
                   </div>
+                  {creditApplied > 0 && (
+                    <div style={totalsRowStyle}>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--accent)' }}>Account credit</span>
+                      <span className="mono" style={{ ...totalsValueStyle, color: 'var(--accent)' }}>-{fmt(creditApplied)}</span>
+                    </div>
+                  )}
                   {totals.credit > 0 && (
                     <div style={totalsRowStyle}>
-                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>To store credit</span>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>To account credit</span>
                       <span className="mono" style={{ ...totalsValueStyle, color: 'var(--amber)' }}>{fmt(totals.credit)}</span>
                     </div>
                   )}
                   <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
-                    <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Allocated</span>
-                    <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{fmt(totals.allocated)}</span>
+                    <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {creditApplied > 0 ? 'Remaining to collect' : 'Allocated'}
+                    </span>
+                    <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>
+                      {fmt(creditApplied > 0 ? remainingTender : totals.allocated)}
+                    </span>
                   </div>
                 </div>
               </div>
             </div>
 
+            {avail > 0 && (
+              <AlertBar type="green" icon="✓">
+                Account credit <strong>{fmt(avail)}</strong> will be applied automatically
+                {remainingTender > 0.001
+                  ? <> — collect <strong>{fmt(remainingTender)}</strong> remaining</>
+                  : <> — fully covers this payment</>}
+              </AlertBar>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <FormGroup label="Method" required>
+              <FormGroup label="Method" required={remainingTender > 0.001}>
                 <AutocompleteDropdown
                   value={paymentMode}
                   onChange={(v) => {
                     setPaymentMode(v)
                     if (v !== 'cash') setCashCollected('')
                   }}
-                  onSelectOption={(opt) => {
-                    if (opt?.id === 'credit') seedApplyToBalances()
-                  }}
                   options={paymentModeOptions}
                   isSearchFieldRequired={false}
+                  disabled={remainingTender <= 0.001}
                 />
-                {creditMode && (
-                  <div style={{
-                    fontSize: 11, marginTop: 4,
-                    color: creditInsufficient ? 'var(--amber)' : 'var(--text-muted)',
-                  }}>
-                    {creditInsufficient
-                      ? `Allocated ${fmt(totals.allocated)} exceeds store credit ${fmt(avail)}. Reduce selection.`
-                      : `Drawing ${fmt(totals.allocated)} from ${fmt(avail)} store credit.`}
-                  </div>
-                )}
               </FormGroup>
               <FormGroup label="Reference">
                 <input
@@ -503,21 +552,16 @@ export default function PaymentFormPage() {
                   value={paymentRef}
                   onChange={(e) => setPaymentRef(e.target.value)}
                   placeholder="UTR / transaction id"
-                  disabled={creditMode}
+                  disabled={remainingTender <= 0.001}
                 />
               </FormGroup>
             </div>
-            {paymentMode === 'cash' && (
+            {paymentMode === 'cash' && remainingTender > 0.001 && (
               <CashTenderFields
-                due={totals.allocated}
+                due={remainingTender}
                 value={cashCollected}
                 onChange={setCashCollected}
               />
-            )}
-            {creditMode && creditInsufficient && (
-              <AlertBar type="red" icon="⚠">
-                Insufficient store credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
-              </AlertBar>
             )}
             <FormGroup label="Notes (optional)">
               <textarea

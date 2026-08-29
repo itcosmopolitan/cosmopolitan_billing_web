@@ -141,24 +141,33 @@ async def recalc_bill_after_vendor_credit(db: AsyncSession, bill_id: str) -> Non
 
 
 async def sync_customer_outstanding(db: AsyncSession, customer_id: Optional[str]) -> None:
+    """Net AR vs account credit. Negative = we owe the customer (from returns)."""
     if not customer_id:
         return
     cust = (await db.execute(select(Customer).where(Customer.id == customer_id))).scalar_one_or_none()
     if not cust:
         return
     open_statuses = (InvoiceStatus.pending, InvoiceStatus.partial, InvoiceStatus.overdue)
-    total = float(
-        (await db.execute(
-            select(func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0)).where(
-                and_(
-                    SaleInvoice.customer_id == customer_id,
-                    SaleInvoice.status.in_(open_statuses),
-                )
+    rows = (await db.execute(
+        select(
+            SaleInvoice.total,
+            SaleInvoice.paid_amount,
+            SaleInvoice.credited_amount,
+        ).where(
+            and_(
+                SaleInvoice.customer_id == customer_id,
+                SaleInvoice.status.in_(open_statuses),
             )
-        )).scalar()
-        or 0
-    )
-    cust.outstanding = round(max(0.0, total), 2)
+        )
+    )).all()
+    ar = 0.0
+    for inv_total, paid, credited in rows:
+        bal = float(inv_total or 0) - float(paid or 0) - float(credited or 0)
+        if bal > 0:
+            ar += bal
+    credit = float(getattr(cust, "credit_balance", 0) or 0)
+    # Positive = customer owes us; negative = account credit from returns/overpay.
+    cust.outstanding = round(ar - credit, 2)
 
 
 async def sync_vendor_outstanding(db: AsyncSession, vendor_id: Optional[str]) -> None:
