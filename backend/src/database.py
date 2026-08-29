@@ -374,6 +374,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("vendor_payments", "voided_at", "VARCHAR"),
     # Phase 0 (2026-06-09): org inventory policy + document return tracking.
     ("organisations", "allow_overselling", "BOOLEAN DEFAULT 1 NOT NULL"),
+    ("organisations", "allow_price_editing", "BOOLEAN DEFAULT 0 NOT NULL"),
     # Display precision for amounts and quantities (default 2).
     ("organisations", "amount_decimal_precision", "INTEGER DEFAULT 2 NOT NULL"),
     ("organisations", "quantity_decimal_precision", "INTEGER DEFAULT 2 NOT NULL"),

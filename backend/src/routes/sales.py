@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.database import get_db
-from src.document_numbering import allocate_number, resolve_number
+from src.document_numbering import allocate_customer_payment_number, allocate_number, resolve_number
 from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
 from src.models import (
     AuditLog,
@@ -180,6 +180,33 @@ def _coerce_payment_mode_value(v):
     if s == "":
         return None
     return s
+
+
+async def _validate_unpaid_account_limit(
+    db: AsyncSession,
+    customer_id: Optional[str],
+    invoice_total: float,
+) -> None:
+    """Prevent a new unpaid invoice from exceeding the customer's limit."""
+    if not customer_id:
+        return
+
+    await sync_customer_outstanding(db, customer_id)
+    customer = (
+        await db.execute(select(Customer).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+    if not customer:
+        return
+
+    outstanding = float(customer.outstanding or 0)
+    limit = float(customer.credit_limit or 0)
+    projected = round(outstanding + invoice_total, 2)
+    if projected > limit + 0.01:
+        raise HTTPException(
+            400,
+            f"Customer account limit exhausted — outstanding is MVR {outstanding:.2f}, "
+            f"limit is MVR {limit:.2f}. Select a payment method to continue.",
+        )
 
 
 def _log_sales_invoice_history(
@@ -1190,6 +1217,9 @@ async def create_invoice(
     if status in ("pending", "partial"):
         due_date = compute_due_date(data.date or today, None)
 
+    if direct and data.payment_mode is None:
+        await _validate_unpaid_account_limit(db, data.customer_id, total)
+
     # 2026-05-25: 'credit' mode debits the customer's stored credit
     # balance. Validations:
     #   • customer_id required — walk-ins don't have a credit balance
@@ -1327,10 +1357,9 @@ async def create_invoice(
         # Also write a CustomerPayment row so the Payments tab shows
         # this sale alongside cash/upi/etc payments. Parity with the
         # record_payment retrofit below.
-        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
         pay = CustomerPayment(
             id=str(uuid.uuid4()),
-            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=await allocate_customer_payment_number(db),
             customer_id=credit_customer.id,
             customer_name=credit_customer.name,
             branch_id=data.branch_id,
@@ -1360,10 +1389,9 @@ async def create_invoice(
     # so cash-paid POS invoices were missing from the Payments tab.
     # Draft invoices skip this — the payment runs on approval.
     if direct and is_paid_at_create and data.payment_mode != "credit":
-        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
         pos_pay = CustomerPayment(
             id=str(uuid.uuid4()),
-            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=await allocate_customer_payment_number(db),
             customer_id=inv.customer_id,
             customer_name=inv.customer_name or "Walk-in",
             branch_id=data.branch_id,
@@ -1630,7 +1658,6 @@ async def record_payment(
                 branch_id=getattr(pre_row, "branch_id", None),
             ))
     # (no customer_id) get "Walk-in" without a query.
-    pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
     if pre_row.customer_id:
         cust_name_row = await db.execute(
             select(Customer.name).where(Customer.id == pre_row.customer_id)
@@ -1641,7 +1668,7 @@ async def record_payment(
 
     pay = CustomerPayment(
         id=str(uuid.uuid4()),
-        number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+        number=await allocate_customer_payment_number(db),
         customer_id=pre_row.customer_id,  # nullable for walk-ins
         customer_name=resolved_customer_name,
         branch_id=None,                   # not surfaced in single-invoice payload
@@ -1825,6 +1852,9 @@ async def approve_invoice(
     allow_oversell = await get_allow_overselling(db)
     today_str = datetime.now().strftime("%Y-%m-%d")
 
+    if inv.payment_mode is None:
+        await _validate_unpaid_account_limit(db, inv.customer_id, float(inv.total or 0))
+
     # Apply stock for each tracked line item
     for li in inv.line_items:
         if not li.item_id:
@@ -1897,10 +1927,9 @@ async def approve_invoice(
                     risk="low", ip_address=None,
                     branch_id=inv.branch_id,
                 ))
-                pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
                 pay = CustomerPayment(
                     id=str(uuid.uuid4()),
-                    number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+                    number=await allocate_customer_payment_number(db),
                     customer_id=cust.id, customer_name=cust.name,
                     branch_id=inv.branch_id, branch_name=inv.branch_name,
                     date=today_str, total_amount=total, payment_mode="credit",
@@ -1915,10 +1944,9 @@ async def approve_invoice(
                 await record_customer_payment(db, pay)
                 inv.paid_amount = total
     elif payment_mode is not None:
-        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
         pay = CustomerPayment(
             id=str(uuid.uuid4()),
-            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=await allocate_customer_payment_number(db),
             customer_id=inv.customer_id, customer_name=inv.customer_name or "Walk-in",
             branch_id=inv.branch_id, branch_name=inv.branch_name,
             date=today_str, total_amount=total, payment_mode=payment_mode,
@@ -2402,8 +2430,7 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
         total_credit += excess
         total_amount += float(a.amount)
 
-    count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
-    pay_num = f"PAY-{datetime.now().year}-{1000 + count:04d}"
+    pay_num = await allocate_customer_payment_number(db)
 
     # Bump customer.credit_balance + audit log if any excess.
     if total_credit > 0:
@@ -4550,10 +4577,9 @@ async def convert_order_to_invoice(
     )
 
     if data.payment_received and paid > 0:
-        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
         conv_pay = CustomerPayment(
             id=str(uuid.uuid4()),
-            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=await allocate_customer_payment_number(db),
             customer_id=inv.customer_id,
             customer_name=inv.customer_name or "Walk-in",
             branch_id=inv.branch_id,
@@ -4823,10 +4849,9 @@ async def convert_quote_to_invoice(
                     )
 
     if data.payment_received and paid > 0:
-        pay_count = (await db.execute(select(func.count(CustomerPayment.id)))).scalar() or 0
         conv_pay = CustomerPayment(
             id=str(uuid.uuid4()),
-            number=f"PAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=await allocate_customer_payment_number(db),
             customer_id=inv.customer_id,
             customer_name=inv.customer_name or "Walk-in",
             branch_id=inv.branch_id,

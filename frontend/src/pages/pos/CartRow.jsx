@@ -28,6 +28,7 @@ export default function CartRow({
   item,
   branchId,
   onQtyChange,
+  onPriceChange,
   onRemove,
   onDiscChange,
   onDiscTypeChange,
@@ -35,6 +36,7 @@ export default function CartRow({
   onEditAllocation,
   onBatchesLoaded,
   disableDiscount,
+  allowPriceEditing = false,
   entityDiscountShare = 0,
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
@@ -165,8 +167,21 @@ export default function CartRow({
           style={{ width: 56, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, verticalAlign: 'top' }}>
-        {fmt(item.price)}
+      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
+        {allowPriceEditing ? (
+          <input
+            className="form-input"
+            type="number"
+            min={0}
+            step="0.01"
+            value={item.price}
+            onChange={(e) => onPriceChange?.(Number(e.target.value))}
+            style={{ width: 86, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
+            aria-label={`Rate for ${item.name}`}
+          />
+        ) : (
+          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }}>{fmt(item.price)}</span>
+        )}
       </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: disableDiscount ? 0.6 : 1 }}>

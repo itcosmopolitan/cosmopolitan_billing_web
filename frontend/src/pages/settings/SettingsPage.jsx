@@ -22,6 +22,7 @@ const EMPTY_ORG_FORM = {
   state_code: '33',
   financial_year: 'Apr-Mar',
   allow_overselling: true,
+  allow_price_editing: false,
   amount_decimal_precision: 2,
   quantity_decimal_precision: 2,
 }
@@ -313,6 +314,7 @@ export default function SettingsPage() {
             state_code: data.state_code || '33',
             financial_year: data.financial_year || 'Apr-Mar',
             allow_overselling: data.allowOverselling !== false,
+            allow_price_editing: data.allowPriceEditing === true,
             amount_decimal_precision: data.amountDecimalPrecision ?? 2,
             quantity_decimal_precision: data.quantityDecimalPrecision ?? 2,
           })
@@ -346,6 +348,7 @@ export default function SettingsPage() {
         state_code: orgForm.state_code?.trim() || '33',
         financial_year: orgForm.financial_year || 'Apr-Mar',
         allow_overselling: orgForm.allow_overselling,
+        allow_price_editing: orgForm.allow_price_editing,
         amount_decimal_precision: Number(orgForm.amount_decimal_precision),
         quantity_decimal_precision: Number(orgForm.quantity_decimal_precision),
       })
@@ -362,6 +365,7 @@ export default function SettingsPage() {
         state_code: saved?.state_code ?? prev.state_code,
         financial_year: saved?.financial_year ?? prev.financial_year,
         allow_overselling: saved?.allowOverselling !== false,
+        allow_price_editing: saved?.allowPriceEditing === true,
         amount_decimal_precision: saved?.amountDecimalPrecision ?? prev.amount_decimal_precision,
         quantity_decimal_precision: saved?.quantityDecimalPrecision ?? prev.quantity_decimal_precision,
       }))
@@ -632,6 +636,20 @@ export default function SettingsPage() {
               </label>
               <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
                 When off, POS, invoices, and sales orders block sales that exceed available stock.
+              </div>
+            </FormGroup>
+            <FormGroup label="POS pricing">
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                <input
+                  type="checkbox"
+                  checked={orgForm.allow_price_editing}
+                  onChange={e => pof('allow_price_editing', e.target.checked)}
+                  disabled={!can('settings.edit')}
+                />
+                Allow editing item rates in POS
+              </label>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                When on, POS operators can change the rate before completing a sale.
               </div>
             </FormGroup>
             <FormRow>

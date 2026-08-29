@@ -15,11 +15,11 @@ import re
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Branch, DocumentNumberCounter, DocumentNumbering, SaleInvoice
+from src.models import Branch, CustomerPayment, DocumentNumberCounter, DocumentNumbering, SaleInvoice
 
 _SEQ_TOKEN = re.compile(r"(#+)")
 _BRANCH_CLEAN = re.compile(r"-{2,}")
@@ -282,6 +282,48 @@ async def allocate_number(
         return number
 
     raise ValueError(f"Could not allocate a free number for {doc_type}")
+
+
+async def allocate_customer_payment_number(
+    db: AsyncSession,
+    *,
+    when: datetime | None = None,
+) -> str:
+    """Allocate a unique customer payment number without count-based reuse."""
+    if db.bind and db.bind.dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(742019)"))
+
+    key = "customer_payment:central"
+    counter = (
+        await db.execute(
+            select(DocumentNumberCounter)
+            .where(DocumentNumberCounter.id == key)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not counter:
+        numbers = (
+            await db.execute(select(CustomerPayment.number))
+        ).scalars().all()
+        max_seq = 999
+        for number in numbers:
+            match = re.fullmatch(r"PAY-\d{4}-(\d+)", number or "")
+            if match:
+                max_seq = max(max_seq, int(match.group(1)))
+        counter = DocumentNumberCounter(
+            id=key,
+            doc_type="customer_payment",
+            branch_id=None,
+            next_seq=max_seq + 1,
+        )
+        db.add(counter)
+        await db.flush()
+
+    sequence = int(counter.next_seq or 1000)
+    counter.next_seq = sequence + 1
+    await db.flush()
+    year = (when or datetime.utcnow()).year
+    return f"PAY-{year}-{sequence:04d}"
 
 
 async def peek_next_number(

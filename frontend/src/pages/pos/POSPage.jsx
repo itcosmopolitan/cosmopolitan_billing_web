@@ -137,6 +137,7 @@ export default function POSPage() {
   //   { item, batches, allocation }
   const [allocEditor, setAllocEditor] = useState(null)
   const [allowOverselling, setAllowOverselling] = useState(true)
+  const [allowPriceEditing, setAllowPriceEditing] = useState(false)
   const [showRefund, setShowRefund] = useState(false)
   const [discountReasonOptions, setDiscountReasonOptions] = useState(DISCOUNT_REASON_OPTIONS)
   const [showAddDiscountReason, setShowAddDiscountReason] = useState(false)
@@ -179,9 +180,13 @@ export default function POSPage() {
       .then((res) => {
         const data = res?.data ?? res
         setAllowOverselling(data?.allowOverselling !== false)
+        setAllowPriceEditing(data?.allowPriceEditing === true)
         setDecimalPrecisionPrefs(data)
       })
-      .catch(() => setAllowOverselling(true))
+      .catch(() => {
+        setAllowOverselling(true)
+        setAllowPriceEditing(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -530,7 +535,6 @@ export default function POSPage() {
       setShowComplete(true)
     } catch (err) {
       console.error('Failed to complete sale:', err)
-      toast.error('Failed to save sale. Please try again.')
     } finally {
       setCompleting(false)
     }
@@ -1221,6 +1225,7 @@ export default function POSPage() {
                         }
                         store.updateQty(item.id, qty)
                       }}
+                      onPriceChange={(price) => store.setLinePrice(item.id, price)}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
@@ -1228,6 +1233,7 @@ export default function POSPage() {
                       onEditAllocation={(payload) => setAllocEditor(payload)}
                       onBatchesLoaded={(itemId, rows) => setBatchListByItem((m) => ({ ...m, [itemId]: rows }))}
                       disableDiscount={hasBillLevelDiscount || !can('pos.discount')}
+                      allowPriceEditing={allowPriceEditing}
                     />
                   ))}
                 </tbody>

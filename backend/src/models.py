@@ -139,6 +139,8 @@ class Organisation(Base):
     tax_pricing_mode = Column(String, default="inclusive")
     # Phase 0: when True (default), POS/SO convert may sell below available stock.
     allow_overselling = Column(Boolean, default=True, nullable=False)
+    # When True, POS operators may override the catalog rate on a cart line.
+    allow_price_editing = Column(Boolean, default=False, nullable=False)
     # Display precision for money and qty throughout the app (default 2).
     amount_decimal_precision = Column(Integer, default=2, nullable=False)
     quantity_decimal_precision = Column(Integer, default=2, nullable=False)

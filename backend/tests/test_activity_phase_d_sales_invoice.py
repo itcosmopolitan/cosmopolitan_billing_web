@@ -41,7 +41,7 @@ async def _build_session() -> AsyncSession:
 async def _seed(db: AsyncSession) -> None:
     db.add_all([
         Branch(id="b1", name="Main", code="MAIN"),
-        Customer(id="c1", name="Acme Customer", credit_balance=0),
+        Customer(id="c1", name="Acme Customer", credit_balance=0, credit_limit=10000),
     ])
     await db.commit()
 

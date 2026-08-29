@@ -349,6 +349,14 @@ export const usePOSStore = create((set, get) => ({
     }))
   },
 
+  setLinePrice: (id, price) => {
+    set((s) => ({
+      cart: s.cart.map((i) => (
+        i.id === id ? applyLineCalc({ ...i, price: Math.max(0, Number(price) || 0) }) : i
+      )),
+    }))
+  },
+
   // Backward-compatible wrappers
   setLineDiscountPct: (id, pct) => get().setLineDiscount(id, pct, 'pct'),
   setLineDiscountFlat: (id, amt) => get().setLineDiscount(id, amt, 'flat'),

@@ -73,6 +73,7 @@ class OrganisationUpdate(BaseModel):
     financial_year: Optional[str] = Field(None, max_length=16, alias="financialYear")
     logo_url: Optional[str] = Field(None, max_length=500, alias="logoUrl")
     allow_overselling: Optional[bool] = Field(None, alias="allowOverselling")
+    allow_price_editing: Optional[bool] = Field(None, alias="allowPriceEditing")
     numbering_config: Optional[NumberingConfig] = Field(None, alias="numberingConfig")
     amount_decimal_precision: Optional[int] = Field(None, ge=0, le=6, alias="amountDecimalPrecision")
     quantity_decimal_precision: Optional[int] = Field(None, ge=0, le=6, alias="quantityDecimalPrecision")
@@ -101,6 +102,7 @@ def _serialize_organisation(org: Organisation) -> dict:
         "financial_year": org.financial_year or "Apr-Mar",
         "logo_url": org.logo_url or "",
         "allowOverselling": bool(getattr(org, "allow_overselling", True)),
+        "allowPriceEditing": bool(getattr(org, "allow_price_editing", False)),
         "numberingConfig": _numbering_out(getattr(org, "numbering_config", None)),
         "amountDecimalPrecision": amount_prec,
         "quantityDecimalPrecision": qty_prec,
@@ -128,6 +130,7 @@ async def get_organisation(db: AsyncSession = Depends(get_db)):
             "financial_year": "Apr-Mar",
             "logo_url": "",
             "allowOverselling": True,
+            "allowPriceEditing": False,
             "numberingConfig": _numbering_out(None),
             "amountDecimalPrecision": 2,
             "quantityDecimalPrecision": 2,
@@ -168,6 +171,7 @@ async def update_organisation(
     for key, val in payload.items():
         if key in (
             "allow_overselling",
+            "allow_price_editing",
             "numbering_config",
             "amount_decimal_precision",
             "quantity_decimal_precision",
@@ -214,6 +218,8 @@ async def _apply_organisation_update(org: Organisation, data: OrganisationUpdate
         org.logo_url = data.logo_url
     if data.allow_overselling is not None:
         org.allow_overselling = data.allow_overselling
+    if data.allow_price_editing is not None:
+        org.allow_price_editing = data.allow_price_editing
     if data.amount_decimal_precision is not None:
         org.amount_decimal_precision = clamp_precision(data.amount_decimal_precision)
     if data.quantity_decimal_precision is not None:
