@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
@@ -24,6 +25,12 @@ import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
 import POSRefundModal from './POSRefundModal'
 import PanelDragHandle from './PanelDragHandle'
+import {
+  invoiceHasPayment,
+  invoiceHasReturn,
+  invoiceLockedForEdit,
+  isPosInvoice,
+} from '@/pages/sales/salesFormShared'
 import {
   POS_STORAGE_SPLIT,
   POS_STORAGE_LEADING,
@@ -103,8 +110,56 @@ function writeBranchCustomDiscountReasons(branchId, options) {
   }
 }
 
+function hydrateBatchAllocation(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((e) => e && (e.batch_id || e.id) && Number(e.qty) > 0)
+    .map((e) => ({
+      id: e.batch_id || e.id,
+      batchNumber: e.batchNumber || e.batch_number || String(e.batch_id || e.id).slice(-6),
+      qty: Number(e.qty),
+      expiryDate: e.expiryDate || e.expiry_date || null,
+    }))
+}
+
+function invoiceToCartSession(inv, customer) {
+  const notes = String(inv.notes || '')
+  const reasonMatch = notes.match(/Discount reason:\s*(.+)/i)
+  const discountReason = reasonMatch ? reasonMatch[1].trim() : ''
+  const userNotes = notes.replace(/\n?Discount reason:\s*.+/i, '').trim()
+  return {
+    cart: (inv.items || []).map((it) => ({
+      id: it.itemId || it.item_id,
+      name: it.name,
+      qty: it.qty,
+      price: it.price,
+      taxRate: it.taxRate ?? it.tax_rate ?? 0,
+      sku: it.sku,
+      hsnCode: it.hsn_code || it.hsnCode || '',
+      costPrice: it.costPrice ?? it.cost_price ?? 0,
+      batchTracking: Boolean(it.batchTracking),
+      expiryTracking: Boolean(it.expiryTracking),
+      batchAllocation: hydrateBatchAllocation(it.batchAllocation),
+      batchAllocationCustom: Boolean(it.batchAllocation?.length),
+      lineDiscountType: 'pct',
+      lineDiscountValue: Number(it.discount) || 0,
+    })),
+    customer: customer || (inv.customerId ? { id: inv.customerId, name: inv.customerName } : null),
+    discountPct: 0,
+    discountAmt: Number(inv.discount) || 0,
+    discountReason,
+    notes: userNotes,
+    paymentReceived: false,
+    paymentMethod: null,
+    paymentRef: '',
+  }
+}
+
 export default function POSPage() {
   const can = useCan()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const editInvoiceId = searchParams.get('edit')
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -142,6 +197,8 @@ export default function POSPage() {
   const [discountReasonOptions, setDiscountReasonOptions] = useState(DISCOUNT_REASON_OPTIONS)
   const [showAddDiscountReason, setShowAddDiscountReason] = useState(false)
   const [newDiscountReason, setNewDiscountReason] = useState('')
+  const [editingInvoice, setEditingInvoice] = useState(null)
+  const [editLoading, setEditLoading] = useState(false)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -150,6 +207,8 @@ export default function POSPage() {
 
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const setActiveBranch = useAppStore((s) => s.setActiveBranch)
+  const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
@@ -168,6 +227,64 @@ export default function POSPage() {
     cart.length > 0 && !pendingNav,
     useCallback((proceed) => setPendingNav(() => proceed), []),
   )
+
+  useEffect(() => {
+    if (!editInvoiceId) {
+      setEditingInvoice(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      setEditLoading(true)
+      try {
+        const inv = await salesAPI.get(editInvoiceId)
+        if (cancelled) return
+        if (!isPosInvoice(inv)) {
+          navigate(`/sales/invoices/${inv.id}/edit`, { replace: true })
+          return
+        }
+        if (invoiceLockedForEdit(inv)) {
+          toast.error('This POS bill cannot be edited')
+          navigate('/sales?tab=invoices', { replace: true })
+          return
+        }
+        if (invoiceHasPayment(inv)) {
+          toast.error('Delete the payment first, then edit this bill.')
+          navigate('/sales?tab=invoices', { replace: true })
+          return
+        }
+        if (invoiceHasReturn(inv)) {
+          toast.error('Delete the return first, then edit this bill.')
+          navigate('/sales?tab=invoices', { replace: true })
+          return
+        }
+        if (inv.branchId && activeBranch?.id && inv.branchId !== activeBranch.id) {
+          const match = (branches || []).find((b) => b.id === inv.branchId)
+          if (match) setActiveBranch(match)
+        }
+        let customer = null
+        if (inv.customerId) {
+          try {
+            customer = await customersAPI.get(inv.customerId)
+          } catch {
+            customer = { id: inv.customerId, name: inv.customerName }
+          }
+        }
+        if (cancelled) return
+        store.hydrateSession(invoiceToCartSession(inv, customer))
+        setEditingInvoice({ id: inv.id, number: inv.number })
+      } catch {
+        if (!cancelled) {
+          toast.error('POS bill not found')
+          navigate('/sales?tab=invoices', { replace: true })
+        }
+      } finally {
+        if (!cancelled) setEditLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editInvoiceId])
 
   // Debounce product search to reduce API calls while typing.
   useEffect(() => {
@@ -410,7 +527,7 @@ export default function POSPage() {
       }
     }
 
-    if (!allowOverselling) {
+    if (!allowOverselling && !editingInvoice) {
       for (const line of cart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
         if (line.qty > stock) {
@@ -444,8 +561,7 @@ export default function POSPage() {
         hasDiscountForSubmit ? `Discount reason: ${discountReason}` : '',
       ].filter(Boolean).join('\n')
 
-      // Call API to create sale
-      const result = await salesAPI.create({
+      const salePayload = {
         customer_id: customer?.id || null,
         customer_name: customer?.name || 'Walk-in',
         branch_id: activeBranch.id,
@@ -463,21 +579,19 @@ export default function POSPage() {
             tax_rate: i.taxRate || 0,
             line_discount: Math.round(effPct * 10000) / 10000,
             line_discount_amount: Math.round(lineDiscountAmount * 100) / 100,
-            // Per-line batch split. For tracked items CartRow keeps this in
-            // sync with the auto FIFO/FEFO flow (or the operator's manual
-            // split saved via the BatchAllocationModal). Untracked items
-            // skip this and the backend falls through to aggregate stock.
             batch_allocation: toApiPayload(i.batchAllocation),
           }
         }),
         discount: disc,
-        // PR 1: null payment_mode → backend creates a pending (unpaid)
-        // invoice. Operator records payment later via Sales → Invoices.
         payment_mode: paymentReceived ? paymentMethod : null,
         origin: 'pos',
         notes: notes || null,
         payment_ref: paymentReceived ? paymentRef || '' : undefined,
-      })
+      }
+
+      const result = editingInvoice
+        ? await salesAPI.update(editingInvoice.id, salePayload)
+        : await salesAPI.create(salePayload)
 
       const soldItemIds = cart.map((i) => i.id)
 
@@ -520,8 +634,9 @@ export default function POSPage() {
         const newBalance = Math.max(0, Number(customer.credit_balance || 0) - Number(total || 0))
         store.setCustomer({ ...customer, credit_balance: newBalance })
       }
-      // Keep customer info available during the redirect; clear cart afterward.
       store.clearCart()
+      setEditingInvoice(null)
+      if (editInvoiceId) navigate('/pos', { replace: true })
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
         const next = { ...prev }
@@ -530,11 +645,12 @@ export default function POSPage() {
       })
       await refreshProductStock()
       queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
-      toast.success(`Sale ${result.number} completed!`)
+      toast.success(editingInvoice ? `Sale ${result.number} updated` : `Sale ${result.number} completed!`)
       // Show the receipt modal for user to choose format and print
       setShowComplete(true)
     } catch (err) {
       console.error('Failed to complete sale:', err)
+      toast.error(editingInvoice ? 'Failed to update sale. Please try again.' : 'Failed to save sale. Please try again.')
     } finally {
       setCompleting(false)
     }
@@ -883,7 +999,13 @@ export default function POSPage() {
           {can('pos.use') && can('invoices.create') && (
             <button className="btn btn-secondary btn-sm" onClick={() => setShowRefund(true)}>↩ Refund</button>
           )}
-          <button className="btn btn-secondary btn-sm" style={{ position: 'relative' }} onClick={() => setShowHeld(true)}>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ position: 'relative' }}
+            onClick={() => setShowHeld(true)}
+            disabled={!!editingInvoice}
+            title={editingInvoice ? 'Hold is unavailable while editing a saved bill' : undefined}
+          >
             ⏸ Hold
             {branchHeldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{branchHeldBills.length}</span>}
           </button>
@@ -1062,9 +1184,15 @@ export default function POSPage() {
               title="Drag onto the other column to swap sides"
             />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.2 }}>🧾 Cart</div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.2 }}>
+                {editingInvoice ? `Editing ${editingInvoice.number}` : '🧾 Cart'}
+              </div>
               <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
-                {cart.length === 0 ? 'Add items from the catalog' : `${cart.length} line${cart.length === 1 ? '' : 's'}`}
+                {editLoading
+                  ? 'Loading bill…'
+                  : cart.length === 0
+                    ? 'Add items from the catalog'
+                    : `${cart.length} line${cart.length === 1 ? '' : 's'}${editingInvoice ? ' · save to update' : ''}`}
               </div>
             </div>
             <div style={{ flex: 1 }} />
@@ -1112,9 +1240,15 @@ export default function POSPage() {
             )}
             <button
               className="btn btn-ghost btn-sm"
-              onClick={() => store.clearCart()}
+              onClick={() => {
+                store.clearCart()
+                if (editingInvoice) {
+                  setEditingInvoice(null)
+                  navigate('/sales?tab=invoices')
+                }
+              }}
               style={{ padding: '4px 8px', color: 'var(--text-muted)' }}
-              title="Clear cart"
+              title={editingInvoice ? 'Cancel edit' : 'Clear cart'}
             >
               ✕
             </button>
@@ -1517,14 +1651,14 @@ export default function POSPage() {
               width: '100%',
               justifyContent: 'center',
               fontSize: 15,
-              opacity: completing || !can('pos.use') ? 0.6 : 1,
-              cursor: completing || !can('pos.use') ? 'not-allowed' : 'pointer',
+              opacity: completing || !can('pos.use') || editLoading ? 0.6 : 1,
+              cursor: completing || !can('pos.use') || editLoading ? 'not-allowed' : 'pointer',
             }}
             onClick={handleComplete}
-            disabled={completing || !can('pos.use')}
+            disabled={completing || !can('pos.use') || editLoading}
             title={!can('pos.use') ? 'POS billing requires pos.use permission' : undefined}
           >
-            {completing ? '⏳ Saving...' : `✓ Complete Sale — ${fmt(total)}`}
+            {completing ? '⏳ Saving...' : editingInvoice ? `✓ Save changes — ${fmt(total)}` : `✓ Complete Sale — ${fmt(total)}`}
             <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>F8</span>
           </button>
         </div>
@@ -1554,24 +1688,26 @@ export default function POSPage() {
       <Modal
         open={!!pendingNav}
         onClose={() => setPendingNav(null)}
-        title="Leave POS with items in cart?"
+        title={editingInvoice ? 'Leave without saving edits?' : 'Leave POS with items in cart?'}
         icon="🛒"
         size="sm"
         footer={<>
           <button className="btn btn-secondary" onClick={() => setPendingNav(null)}>Stay on POS</button>
-          <button className="btn btn-ghost" onClick={() => {
-            store.holdBill(activeBranch?.id)
-            const proceed = pendingNav
-            setPendingNav(null)
-            toast('Bill held')
-            proceed?.()
-          }}>Hold & Leave</button>
+          {!editingInvoice && (
+            <button className="btn btn-ghost" onClick={() => {
+              store.holdBill(activeBranch?.id)
+              const proceed = pendingNav
+              setPendingNav(null)
+              toast('Bill held')
+              proceed?.()
+            }}>Hold & Leave</button>
+          )}
           <button className="btn btn-danger" onClick={() => {
             store.clearCart()
             const proceed = pendingNav
             setPendingNav(null)
             proceed?.()
-          }}>Discard & Leave</button>
+          }}>{editingInvoice ? 'Discard edits' : 'Discard & Leave'}</button>
         </>}
       >
         <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>

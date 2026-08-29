@@ -5,7 +5,7 @@
  * outstanding invoices load and the rest of the form becomes actionable.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -21,10 +21,14 @@ const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
 export default function PaymentFormPage() {
   const navigate = useNavigate()
+  const { paymentId } = useParams()
+  const isEdit = Boolean(paymentId)
   const can = useCan()
   const [customer, setCustomer] = useState(null)
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(false)
+  const [editLoading, setEditLoading] = useState(isEdit)
+  const [editingNumber, setEditingNumber] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [checkedIds, setCheckedIds] = useState(new Set())
   const [applyById, setApplyById] = useState({})
@@ -32,6 +36,7 @@ export default function PaymentFormPage() {
   const [cashCollected, setCashCollected] = useState('')
   const [paymentRef, setPaymentRef] = useState('')
   const [notes, setNotes] = useState('')
+  const [editAllocByInvoice, setEditAllocByInvoice] = useState({})
 
   useEffect(() => {
     if (!can('invoices.edit')) {
@@ -48,6 +53,62 @@ export default function PaymentFormPage() {
   }
 
   useEffect(() => {
+    if (!isEdit || !paymentId) return
+    let cancelled = false
+    ;(async () => {
+      setEditLoading(true)
+      try {
+        const pay = await salesAPI.payments.get(paymentId)
+        if (cancelled) return
+        if (pay.voided) {
+          toast.error('Cannot edit a voided payment')
+          navigate('/sales?tab=payments', { replace: true })
+          return
+        }
+        setEditingNumber(pay.number)
+        setPaymentMode(pay.paymentMode || 'cash')
+        setPaymentRef(pay.paymentRef || '')
+        setNotes(pay.notes || '')
+        const allocMap = {}
+        for (const a of pay.allocations || []) {
+          allocMap[a.invoiceId] = Number(a.amount || 0)
+        }
+        setEditAllocByInvoice(allocMap)
+        setCheckedIds(new Set(Object.keys(allocMap)))
+        const seed = {}
+        Object.entries(allocMap).forEach(([id, amt]) => {
+          seed[id] = formatAmountInput(amt)
+        })
+        setApplyById(seed)
+        if (pay.customerId) {
+          try {
+            const c = await customersAPI.get(pay.customerId)
+            if (!cancelled) {
+              setCustomer({
+                id: c.id,
+                name: c.name,
+                credit: Number(c.credit_balance || 0),
+              })
+            }
+          } catch {
+            if (!cancelled) {
+              setCustomer({ id: pay.customerId, name: pay.customerName, credit: 0 })
+            }
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error('Payment not found')
+          navigate('/sales?tab=payments', { replace: true })
+        }
+      } finally {
+        if (!cancelled) setEditLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isEdit, paymentId, navigate])
+
+  useEffect(() => {
     if (!customer?.id) return
     let cancelled = false
     setLoading(true)
@@ -57,24 +118,50 @@ export default function PaymentFormPage() {
       sort_by: 'date',
       sort_order: 'asc',
     })
-      .then((raw) => {
+      .then(async (raw) => {
         if (cancelled) return
-        const rows = (raw?.items || []).filter((inv) => {
+        let rows = (raw?.items || []).filter((inv) => {
           const st = String(inv.status || '').toLowerCase()
-          return ACTIVE_STATUSES.has(st)
+          return ACTIVE_STATUSES.has(st) || Boolean(editAllocByInvoice[inv.id])
         })
+        // Include allocated invoices that are fully paid by this payment.
+        const missingIds = Object.keys(editAllocByInvoice).filter((id) => !rows.some((r) => r.id === id))
+        if (missingIds.length) {
+          const extras = await Promise.all(
+            missingIds.map((id) => salesAPI.get(id).catch(() => null)),
+          )
+          rows = [...rows, ...extras.filter(Boolean)]
+        }
         setInvoices(rows)
-        const seed = {}
-        rows.forEach((inv) => {
-          const balance = (inv.total || 0) - (inv.paidAmount || 0)
-          seed[inv.id] = formatAmountInput(Math.max(0, balance))
-        })
-        setApplyById(seed)
+        if (!isEdit) {
+          const seed = {}
+          rows.forEach((inv) => {
+            const balance = (inv.total || 0) - (inv.paidAmount || 0)
+            seed[inv.id] = formatAmountInput(Math.max(0, balance))
+          })
+          setApplyById(seed)
+        } else {
+          setApplyById((prev) => {
+            const next = { ...prev }
+            rows.forEach((inv) => {
+              if (next[inv.id] != null) return
+              const mine = editAllocByInvoice[inv.id] || 0
+              const balance = Math.max(0, (inv.total || 0) - (inv.paidAmount || 0) + mine)
+              next[inv.id] = formatAmountInput(balance)
+            })
+            return next
+          })
+        }
       })
       .catch(() => { if (!cancelled) setInvoices([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [customer])
+  }, [customer, editAllocByInvoice, isEdit])
+
+  const balanceFor = (inv) => {
+    const mine = editAllocByInvoice[inv.id] || 0
+    return Math.max(0, (inv.total || 0) - (inv.paidAmount || 0) + mine)
+  }
 
   const toggleCheck = (id) => {
     setCheckedIds((prev) => {
@@ -101,7 +188,7 @@ export default function PaymentFormPage() {
       if (!checkedIds.has(inv.id)) continue
       count += 1
       const amt = Number(applyById[inv.id]) || 0
-      const balance = (inv.total || 0) - (inv.paidAmount || 0)
+      const balance = balanceFor(inv)
       allocated += amt
       credit += Math.max(0, amt - balance)
     }
@@ -110,7 +197,7 @@ export default function PaymentFormPage() {
       credit: Math.round(credit * 100) / 100,
       count,
     }
-  }, [invoices, checkedIds, applyById])
+  }, [invoices, checkedIds, applyById, editAllocByInvoice])
 
   const avail = Number(customer?.credit || 0)
   const creditMode = paymentMode === 'credit'
@@ -128,8 +215,7 @@ export default function PaymentFormPage() {
   const seedApplyToBalances = () => {
     const seed = {}
     invoices.forEach((inv) => {
-      const bal = Math.max(0, (inv.total || 0) - (inv.paidAmount || 0))
-      seed[inv.id] = formatAmountInput(bal)
+      seed[inv.id] = formatAmountInput(balanceFor(inv))
     })
     setApplyById(seed)
   }
@@ -159,77 +245,92 @@ export default function PaymentFormPage() {
     }
     setSubmitting(true)
     try {
-      const res = await salesAPI.payments.create({
+      const payload = {
         customer_id: customer.id,
         payment_mode: paymentMode,
         payment_ref: paymentRef.trim() || null,
         notes: notes.trim() || null,
         allocations,
-      })
+      }
+      const res = isEdit
+        ? await salesAPI.payments.update(paymentId, payload)
+        : await salesAPI.payments.create(payload)
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
-          `Payment ${res.number} recorded. ${fmt(credit)} added to store credit for ${customer.name}`,
+          `Payment ${res.number} ${isEdit ? 'updated' : 'recorded'}. ${fmt(credit)} added to store credit for ${customer.name}`,
           { duration: 5000 },
         )
       } else {
-        toast.success(`Payment ${res.number} recorded`)
+        toast.success(isEdit ? `Payment ${res.number} updated` : `Payment ${res.number} recorded`)
       }
       goBack()
     } catch (err) {
-      console.error('Failed to record payment:', err)
+      console.error(isEdit ? 'Failed to update payment:' : 'Failed to record payment:', err)
     } finally {
       setSubmitting(false)
     }
   }
 
-  const saveDisabled = !customer || totals.count === 0 || !paymentMode || creditInsufficient
+  const saveDisabled = !customer || totals.count === 0 || !paymentMode || creditInsufficient || editLoading
+
+  if (editLoading) {
+    return (
+      <div className="page-container">
+        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
+      </div>
+    )
+  }
 
   return (
     <DocumentFormShell
-      title="Create Customer Payment"
+      title={isEdit ? `Edit Payment — ${editingNumber || ''}` : 'Create Customer Payment'}
       subtitle="Payments"
       icon="💰"
       onBack={goBack}
       onSave={handleSubmit}
-      saveLabel="Record Payment"
+      saveLabel={isEdit ? 'Save Changes' : 'Record Payment'}
       saving={submitting}
       saveDisabled={saveDisabled}
     >
       <div style={{ display: 'grid', gap: 18 }}>
         <FormGroup label="Customer" required>
-          <AutocompleteDropdown
-            value={customer?.id || ''}
-            clearable
-            onClear={() => {
-              setCustomer(null)
-              resetCustomerState()
-            }}
-            onSelectOption={async (opt) => {
-              if (!opt) {
+          {isEdit ? (
+            <div style={{ fontWeight: 500, fontSize: 14 }}>{customer?.name || '—'}</div>
+          ) : (
+            <AutocompleteDropdown
+              value={customer?.id || ''}
+              clearable
+              onClear={() => {
                 setCustomer(null)
                 resetCustomerState()
-                return
-              }
-              try {
-                const c = await customersAPI.get(opt.id)
-                setCustomer({
-                  id: c.id,
-                  name: c.name,
-                  credit: Number(c.credit_balance || 0),
-                })
-              } catch {
-                setCustomer({ id: opt.id, name: opt.label, credit: 0 })
-              }
-            }}
-            fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
-            isSearchFieldRequired
-            selectedLabel={customer?.name}
-            placeholder="Search customers…"
-            searchPlaceholder="Search customers…"
-            emptyLabel="No customers found. Add via the Customers page."
-            style={{ width: '100%', maxWidth: 420 }}
-          />
+              }}
+              onSelectOption={async (opt) => {
+                if (!opt) {
+                  setCustomer(null)
+                  resetCustomerState()
+                  return
+                }
+                try {
+                  const c = await customersAPI.get(opt.id)
+                  setCustomer({
+                    id: c.id,
+                    name: c.name,
+                    credit: Number(c.credit_balance || 0),
+                  })
+                } catch {
+                  setCustomer({ id: opt.id, name: opt.label, credit: 0 })
+                }
+              }}
+              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+              isSearchFieldRequired
+              selectedLabel={customer?.name}
+              placeholder="Search customers…"
+              searchPlaceholder="Search customers…"
+              emptyLabel="No customers found. Add via the Customers page."
+              style={{ width: '100%', maxWidth: 420 }}
+            />
+          )}
         </FormGroup>
 
         {!customer ? (
@@ -251,8 +352,7 @@ export default function PaymentFormPage() {
         ) : (
           <>
             {(() => {
-              const totalBalance = invoices.reduce((acc, inv) =>
-                acc + Math.max(0, (inv.total || 0) - (inv.paidAmount || 0)), 0)
+              const totalBalance = invoices.reduce((acc, inv) => acc + balanceFor(inv), 0)
               return (
                 <AlertBar type="blue" icon="ℹ">
                   {invoices.length} pending {invoices.length === 1 ? 'invoice' : 'invoices'} ·{' '}
@@ -302,7 +402,7 @@ export default function PaymentFormPage() {
                 <tbody>
                   {invoices.map((inv) => {
                     const checked = checkedIds.has(inv.id)
-                    const balance = (inv.total || 0) - (inv.paidAmount || 0)
+                    const balance = balanceFor(inv)
                     const apply = Number(applyById[inv.id]) || 0
                     const excess = checked && !creditMode ? Math.max(0, apply - balance) : 0
                     return (

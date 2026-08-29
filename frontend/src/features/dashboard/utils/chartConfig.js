@@ -1,5 +1,5 @@
 export const chartColors = {
-  primary: '#1f7a4d',
+  primary: '#ff8c61',
   orange: '#e87722',
   blue: '#2563eb',
   emerald: '#22a86b',

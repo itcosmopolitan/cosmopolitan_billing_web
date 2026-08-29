@@ -38,6 +38,13 @@ import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
+import {
+  billHasPayment,
+  billHasReturn,
+  canShowBillEdit,
+  canShowDeleteBillPayment,
+  canShowDeleteBillReturn,
+} from './purchaseFormShared'
 
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
 
@@ -288,10 +295,14 @@ export default function PurchasesPage() {
   }, [tab, viewId])
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
+  const [showDeletePayment, setShowDeletePayment] = useState(null)
+  const [showDeleteReturn, setShowDeleteReturn] = useState(null)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
   const [paySaving, setPaySaving] = useState(false)
   const [cancelSaving, setCancelSaving] = useState(false)
+  const [deletePaySaving, setDeletePaySaving] = useState(false)
+  const [deleteRetSaving, setDeleteRetSaving] = useState(false)
 
   const isRowBusy = useCallback((id) => actionBusy === id, [actionBusy])
 
@@ -581,6 +592,55 @@ export default function PurchasesPage() {
       console.error('Failed to cancel bill:', err)
     } finally {
       setCancelSaving(false)
+    }
+  }
+
+  const goEditBill = (bill) => {
+    if (billHasPayment(bill)) {
+      toast.error('Delete the payment first, then edit this bill.')
+      return
+    }
+    if (billHasReturn(bill)) {
+      toast.error('Delete the return first, then edit this bill.')
+      return
+    }
+    navigate(`/purchases/bills/${bill.id}/edit`)
+  }
+
+  const deleteBillPayments = async () => {
+    const bill = showDeletePayment
+    if (!bill?.id || deletePaySaving) return
+    setDeletePaySaving(true)
+    try {
+      await purchasesAPI.deletePayments(bill.id)
+      setListVersion((v) => v + 1)
+      setShowDeletePayment(null)
+      if (billHasReturn(bill)) {
+        toast.success(`Payment removed from ${bill.number}. Delete the return next.`)
+        setShowDeleteReturn(bill)
+      } else {
+        toast.success(`Payment removed from ${bill.number} — you can edit it now`)
+      }
+    } catch (err) {
+      console.error('Failed to delete payment:', err)
+    } finally {
+      setDeletePaySaving(false)
+    }
+  }
+
+  const deleteBillReturns = async () => {
+    const bill = showDeleteReturn
+    if (!bill?.id || deleteRetSaving) return
+    setDeleteRetSaving(true)
+    try {
+      await purchasesAPI.deleteReturns(bill.id)
+      setListVersion((v) => v + 1)
+      toast.success(`Return removed from ${bill.number} — you can edit it now`)
+      setShowDeleteReturn(null)
+    } catch (err) {
+      console.error('Failed to delete return:', err)
+    } finally {
+      setDeleteRetSaving(false)
     }
   }
 
@@ -898,7 +958,6 @@ export default function PurchasesPage() {
                     const isDraft = b.status === 'draft'
                     const isPendingApproval = b.status === 'pending_approval'
                     const canPay = !['paid', 'cancelled', 'draft', 'pending_approval'].includes(b.status)
-                    const canEdit = !['paid', 'cancelled', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     const canCancel = !['cancelled', 'draft', 'pending_approval'].includes(b.status) && !(b.paidAmount > 0)
                     return (
                       <tr
@@ -949,16 +1008,23 @@ export default function PurchasesPage() {
                               },
                               {
                                 label: 'Edit',
-                                hidden: !(
-                                  canEdit
-                                  && b.status !== 'pending_approval'
-                                  && (
-                                    (isDraft && can('purchases.create', 'purchases.edit'))
-                                    || (!isDraft && can('purchases.edit'))
-                                  )
-                                ),
+                                hidden: !canShowBillEdit(b, can),
                                 disabled: isRowBusy(b.id),
-                                onClick: () => navigate(`/purchases/bills/${b.id}/edit`),
+                                onClick: () => goEditBill(b),
+                              },
+                              {
+                                label: 'Delete payment',
+                                danger: true,
+                                hidden: !canShowDeleteBillPayment(b, can),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => setShowDeletePayment(b),
+                              },
+                              {
+                                label: 'Delete return',
+                                danger: true,
+                                hidden: !canShowDeleteBillReturn(b, can),
+                                disabled: isRowBusy(b.id),
+                                onClick: () => setShowDeleteReturn(b),
                               },
                               {
                                 label: 'Submit for approval',
@@ -1467,6 +1533,12 @@ export default function PurchasesPage() {
                           actions={[
                             { label: 'View', disabled: isRowBusy(r.id), onClick: () => setPurchaseDoc({ kind: 'return', data: r }) },
                             {
+                              label: 'Edit',
+                              hidden: !can('purchases.create') || r.status === 'void' || r.voided,
+                              disabled: isRowBusy(r.id),
+                              onClick: () => navigate(`/purchases/returns/${r.id}/edit`),
+                            },
+                            {
                               label: 'Activity',
                               hidden: !canActivity,
                               disabled: isRowBusy(r.id),
@@ -1629,6 +1701,12 @@ export default function PurchasesPage() {
                             actions={[
                               { label: 'View', disabled: isRowBusy(p.id), onClick: () => setPayDetail(p) },
                               {
+                                label: 'Edit',
+                                hidden: !can('purchases.edit') || p.voided,
+                                disabled: isRowBusy(p.id),
+                                onClick: () => navigate(`/purchases/payments/${p.id}/edit`),
+                              },
+                              {
                                 label: actionKind === 'void-payment' && isRowBusy(p.id) ? 'Voiding…' : 'Void',
                                 danger: true,
                                 hidden: !can('purchases.edit') || p.voided,
@@ -1675,6 +1753,9 @@ export default function PurchasesPage() {
           }
         }}
         onRecordPayment={(b) => setShowPay(b)}
+        onEditBill={(b) => { goEditBill(b); setPurchaseDoc(null) }}
+        onDeletePayment={(b) => setShowDeletePayment(b)}
+        onDeleteReturn={(b) => setShowDeleteReturn(b)}
         onVoidReturn={voidVendorReturn}
         onBillFromGrn={billFromGrn}
       />
@@ -1736,10 +1817,54 @@ export default function PurchasesPage() {
           <>
             <AlertBar type="amber" icon="⚠">
               Cancelling <strong>{showCancel.number}</strong> marks it ignored in payable totals.
-              Void or delete any payments first. It does NOT reverse stock — goods already received
+              Delete any payments first. It does NOT reverse stock — goods already received
               stay in inventory. Use Vendor Returns to physically return stock.
             </AlertBar>
           </>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!showDeletePayment}
+        onClose={() => setShowDeletePayment(null)}
+        title="Delete payment"
+        icon="💳"
+        size="sm"
+        busy={deletePaySaving}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setShowDeletePayment(null)} disabled={deletePaySaving}>Keep payment</button>
+          <button className="btn btn-danger" onClick={deleteBillPayments} disabled={deletePaySaving}>
+            {deletePaySaving ? 'Deleting…' : 'Delete payment'}
+          </button>
+        </>}
+      >
+        {showDeletePayment && (
+          <AlertBar type="amber" icon="⚠">
+            This removes payment(s) on <strong>{showDeletePayment.number}</strong> and marks the bill unpaid.
+            You can then edit the transaction.
+          </AlertBar>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!showDeleteReturn}
+        onClose={() => setShowDeleteReturn(null)}
+        title="Delete return"
+        icon="↩"
+        size="sm"
+        busy={deleteRetSaving}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setShowDeleteReturn(null)} disabled={deleteRetSaving}>Keep return</button>
+          <button className="btn btn-danger" onClick={deleteBillReturns} disabled={deleteRetSaving}>
+            {deleteRetSaving ? 'Deleting…' : 'Delete return'}
+          </button>
+        </>}
+      >
+        {showDeleteReturn && (
+          <AlertBar type="amber" icon="⚠">
+            This removes vendor return(s) on <strong>{showDeleteReturn.number}</strong> and restores bill totals.
+            You can then edit the transaction.
+          </AlertBar>
         )}
       </Modal>
 
@@ -1752,7 +1877,9 @@ export default function PurchasesPage() {
         partyName={payDetail?.vendorName || '—'}
         accentColor="var(--purple)"
         canVoid={can('purchases.edit')}
+        canEdit={can('purchases.edit')}
         onVoid={voidVendorPayment}
+        onEdit={(p) => navigate(`/purchases/payments/${p.id}/edit`)}
       />
 
       <ActivityDrawer

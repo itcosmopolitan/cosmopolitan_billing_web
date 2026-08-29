@@ -24,15 +24,23 @@ from src.models import (  # noqa: E402
     PurchaseOrderStatus,
     Role,
     SaleInvoice,
+    SaleLineItem,
     User,
     Vendor,
 )
 from src.routes.sales import (  # noqa: E402
     InvoiceApproveReject,
+    InvoiceUpdate,
     SaleCreate,
+    SalesReturnCreate,
+    SalesReturnLineIn,
     approve_invoice,
     create_invoice,
+    create_return,
+    delete_invoice_payments,
+    delete_invoice_returns,
     submit_invoice,
+    update_invoice,
 )
 from src.routes.purchases import (  # noqa: E402
     BillApproveReject,
@@ -223,6 +231,193 @@ async def test_pos_without_pos_use_rejected() -> None:
         assert exc.status_code == 403
 
 
+async def test_pos_invoice_edit_after_delete_payment() -> None:
+    db = await _session()
+    users = await _seed(db)
+    cashier = users["cashier"]
+    from fastapi import HTTPException
+
+    unpaid = await create_invoice(
+        SaleCreate(
+            customer_name="Walk-in",
+            branch_id="b1",
+            branch_name="Main",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+            discount=0,
+            payment_mode=None,
+            origin="pos",
+        ),
+        user=cashier,
+        db=db,
+    )
+    assert unpaid["status"] == "pending"
+
+    edited = await update_invoice(
+        unpaid["id"],
+        InvoiceUpdate(
+            items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+            discount=0,
+        ),
+        db=db,
+        user=cashier,
+    )
+    assert edited["status"] == "pending"
+    assert abs(float(edited["total"]) - 50) < 0.01
+
+    paid = await create_invoice(
+        SaleCreate(
+            customer_name="Walk-in",
+            branch_id="b1",
+            branch_name="Main",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+            discount=0,
+            payment_mode="cash",
+            origin="pos",
+        ),
+        user=cashier,
+        db=db,
+    )
+    assert paid["status"] == "paid"
+    try:
+        await update_invoice(
+            paid["id"],
+            InvoiceUpdate(
+                items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+                discount=0,
+            ),
+            db=db,
+            user=cashier,
+        )
+        raise AssertionError("expected 400 when editing a paid POS bill")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+    deleted = await delete_invoice_payments(paid["id"], db=db, user=cashier)
+    assert deleted["count"] >= 1 or deleted.get("cleared_legacy")
+
+    after = await update_invoice(
+        paid["id"],
+        InvoiceUpdate(
+            items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+            discount=0,
+            payment_mode="cash",
+        ),
+        db=db,
+        user=cashier,
+    )
+    assert after["status"] == "paid"
+    assert abs(float(after["total"]) - 50) < 0.01
+
+
+async def test_invoice_edit_after_delete_return() -> None:
+    db = await _session()
+    users = await _seed(db)
+    cashier = users["cashier"]
+    from fastapi import HTTPException
+
+    unpaid = await create_invoice(
+        SaleCreate(
+            customer_name="Walk-in",
+            branch_id="b1",
+            branch_name="Main",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+            discount=0,
+            payment_mode=None,
+            origin="pos",
+        ),
+        user=cashier,
+        db=db,
+    )
+    line = (
+        await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == unpaid["id"]))
+    ).scalars().first()
+    assert line is not None
+
+    await create_return(
+        SalesReturnCreate(
+            invoice_id=unpaid["id"],
+            reason="Wrong item",
+            refund_method="cash",
+            items=[
+                SalesReturnLineIn(
+                    invoice_line_id=line.id,
+                    item_id="i1",
+                    name="Widget",
+                    return_qty=1,
+                )
+            ],
+            notes="test return",
+            created_by="Cashier",
+        ),
+        db=db,
+        user=cashier,
+    )
+
+    try:
+        await update_invoice(
+            unpaid["id"],
+            InvoiceUpdate(
+                items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+                discount=0,
+            ),
+            db=db,
+            user=cashier,
+        )
+        raise AssertionError("expected 400 when editing an invoice with a return")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+    deleted = await delete_invoice_returns(unpaid["id"], db=db, user=cashier)
+    assert deleted["count"] >= 1 or deleted.get("cleared_legacy")
+
+    after = await update_invoice(
+        unpaid["id"],
+        InvoiceUpdate(
+            items=[{"item_id": "i1", "name": "Widget", "qty": 3, "price": 25, "tax_rate": 0}],
+            discount=0,
+        ),
+        db=db,
+        user=cashier,
+    )
+    assert after["status"] == "pending"
+    assert abs(float(after["total"]) - 75) < 0.01
+
+
+async def test_pending_approval_invoice_cannot_be_edited() -> None:
+    db = await _session()
+    users = await _seed(db)
+    creator = users["creator"]
+    from fastapi import HTTPException
+
+    created = await create_invoice(
+        SaleCreate(
+            customer_id="c1",
+            customer_name="Acme",
+            branch_id="b1",
+            branch_name="Main",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+            discount=0,
+            payment_mode=None,
+        ),
+        user=creator,
+        db=db,
+    )
+    await submit_invoice(created["id"], db=db, user=creator)
+    try:
+        await update_invoice(
+            created["id"],
+            InvoiceUpdate(
+                items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+                discount=0,
+            ),
+            db=db,
+            user=creator,
+        )
+        raise AssertionError("expected 400 when editing pending_approval")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+
 async def test_purchase_bill_and_po_lifecycle() -> None:
     db = await _session()
     users = await _seed(db)
@@ -359,6 +554,9 @@ def test_run_all():
     asyncio.get_event_loop().run_until_complete(test_sales_draft_submit_approve_lifecycle())
     asyncio.get_event_loop().run_until_complete(test_pos_direct_with_pos_use())
     asyncio.get_event_loop().run_until_complete(test_pos_without_pos_use_rejected())
+    asyncio.get_event_loop().run_until_complete(test_pos_invoice_edit_after_delete_payment())
+    asyncio.get_event_loop().run_until_complete(test_invoice_edit_after_delete_return())
+    asyncio.get_event_loop().run_until_complete(test_pending_approval_invoice_cannot_be_edited())
     asyncio.get_event_loop().run_until_complete(test_purchase_bill_and_po_lifecycle())
     asyncio.get_event_loop().run_until_complete(test_grn_draft_submit_approve_lifecycle())
     asyncio.get_event_loop().run_until_complete(test_self_approve_blocked())

@@ -1,13 +1,13 @@
 /**
- * Purchases > Payments > "+ New Payment" full page.
+ * Purchases > Payments > "+ New Payment" / edit full page.
  *
- * Mirrors the Invoice creation page UX (DocumentFormShell): pick the vendor
- * first, then the vendor's outstanding bills load and the rest of the form
- * becomes actionable. Overpayment routes to vendor.credit_balance; credit mode
- * settles bills from stored vendor advance.
+ * Mirrors PaymentFormPage UX: pick the vendor first, then the vendor's
+ * outstanding bills load and the rest of the form becomes actionable.
+ * Overpayment routes to vendor.credit_balance; credit mode settles bills
+ * from stored vendor advance.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -21,16 +21,21 @@ const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
 export default function VendorPaymentFormPage() {
   const navigate = useNavigate()
+  const { paymentId } = useParams()
+  const isEdit = Boolean(paymentId)
   const can = useCan()
   const [vendor, setVendor] = useState(null)
   const [bills, setBills] = useState([])
   const [loading, setLoading] = useState(false)
+  const [editLoading, setEditLoading] = useState(isEdit)
+  const [editingNumber, setEditingNumber] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [checkedIds, setCheckedIds] = useState(new Set())
   const [applyById, setApplyById] = useState({})
   const [paymentMode, setPaymentMode] = useState('bank_transfer')
   const [paymentRef, setPaymentRef] = useState('')
   const [notes, setNotes] = useState('')
+  const [editAllocByBill, setEditAllocByBill] = useState({})
 
   useEffect(() => {
     if (!can('purchases.edit')) {
@@ -47,6 +52,62 @@ export default function VendorPaymentFormPage() {
   }
 
   useEffect(() => {
+    if (!isEdit || !paymentId) return
+    let cancelled = false
+    ;(async () => {
+      setEditLoading(true)
+      try {
+        const pay = await purchasesAPI.payments.get(paymentId)
+        if (cancelled) return
+        if (pay.voided) {
+          toast.error('Cannot edit a voided payment')
+          navigate('/purchases?tab=payments', { replace: true })
+          return
+        }
+        setEditingNumber(pay.number)
+        setPaymentMode(pay.paymentMode || 'bank_transfer')
+        setPaymentRef(pay.paymentRef || '')
+        setNotes(pay.notes || '')
+        const allocMap = {}
+        for (const a of pay.allocations || []) {
+          allocMap[a.billId] = Number(a.amount || 0)
+        }
+        setEditAllocByBill(allocMap)
+        setCheckedIds(new Set(Object.keys(allocMap)))
+        const seed = {}
+        Object.entries(allocMap).forEach(([id, amt]) => {
+          seed[id] = formatAmountInput(amt)
+        })
+        setApplyById(seed)
+        if (pay.vendorId) {
+          try {
+            const v = await vendorsAPI.get(pay.vendorId)
+            if (!cancelled) {
+              setVendor({
+                id: v.id,
+                name: v.name,
+                credit: Number(v.credit_balance || v.creditBalance || 0),
+              })
+            }
+          } catch {
+            if (!cancelled) {
+              setVendor({ id: pay.vendorId, name: pay.vendorName, credit: 0 })
+            }
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error('Payment not found')
+          navigate('/purchases?tab=payments', { replace: true })
+        }
+      } finally {
+        if (!cancelled) setEditLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isEdit, paymentId, navigate])
+
+  useEffect(() => {
     if (!vendor?.id) return
     let cancelled = false
     setLoading(true)
@@ -56,24 +117,50 @@ export default function VendorPaymentFormPage() {
       sort_by: 'date',
       sort_order: 'asc',
     })
-      .then((raw) => {
+      .then(async (raw) => {
         if (cancelled) return
-        const rows = (raw?.items || []).filter((b) => {
+        let rows = (raw?.items || []).filter((b) => {
           const st = String(b.status || '').toLowerCase()
-          return ACTIVE_STATUSES.has(st)
+          return ACTIVE_STATUSES.has(st) || Boolean(editAllocByBill[b.id])
         })
+        // Include allocated bills that are fully paid by this payment.
+        const missingIds = Object.keys(editAllocByBill).filter((id) => !rows.some((r) => r.id === id))
+        if (missingIds.length) {
+          const extras = await Promise.all(
+            missingIds.map((id) => purchasesAPI.get(id).catch(() => null)),
+          )
+          rows = [...rows, ...extras.filter(Boolean)]
+        }
         setBills(rows)
-        const seed = {}
-        rows.forEach((b) => {
-          const balance = (b.total || 0) - (b.paidAmount || 0)
-          seed[b.id] = formatAmountInput(Math.max(0, balance))
-        })
-        setApplyById(seed)
+        if (!isEdit) {
+          const seed = {}
+          rows.forEach((b) => {
+            const balance = (b.total || 0) - (b.paidAmount || 0)
+            seed[b.id] = formatAmountInput(Math.max(0, balance))
+          })
+          setApplyById(seed)
+        } else {
+          setApplyById((prev) => {
+            const next = { ...prev }
+            rows.forEach((b) => {
+              if (next[b.id] != null) return
+              const mine = editAllocByBill[b.id] || 0
+              const balance = Math.max(0, (b.total || 0) - (b.paidAmount || 0) + mine)
+              next[b.id] = formatAmountInput(balance)
+            })
+            return next
+          })
+        }
       })
       .catch(() => { if (!cancelled) setBills([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [vendor])
+  }, [vendor, editAllocByBill, isEdit])
+
+  const balanceFor = (b) => {
+    const mine = editAllocByBill[b.id] || 0
+    return Math.max(0, (b.total || 0) - (b.paidAmount || 0) + mine)
+  }
 
   const toggleCheck = (id) => {
     setCheckedIds((prev) => {
@@ -100,7 +187,7 @@ export default function VendorPaymentFormPage() {
       if (!checkedIds.has(b.id)) continue
       count += 1
       const amt = Number(applyById[b.id]) || 0
-      const balance = (b.total || 0) - (b.paidAmount || 0)
+      const balance = balanceFor(b)
       allocated += amt
       credit += Math.max(0, amt - balance)
     }
@@ -109,7 +196,7 @@ export default function VendorPaymentFormPage() {
       credit: Math.round(credit * 100) / 100,
       count,
     }
-  }, [bills, checkedIds, applyById])
+  }, [bills, checkedIds, applyById, editAllocByBill])
 
   const avail = Number(vendor?.credit || 0)
   const creditMode = paymentMode === 'credit'
@@ -118,8 +205,7 @@ export default function VendorPaymentFormPage() {
   const seedApplyToBalances = () => {
     const seed = {}
     bills.forEach((b) => {
-      const bal = Math.max(0, (b.total || 0) - (b.paidAmount || 0))
-      seed[b.id] = formatAmountInput(bal)
+      seed[b.id] = formatAmountInput(balanceFor(b))
     })
     setApplyById(seed)
   }
@@ -145,77 +231,92 @@ export default function VendorPaymentFormPage() {
     }
     setSubmitting(true)
     try {
-      const res = await purchasesAPI.payments.create({
+      const payload = {
         vendor_id: vendor.id,
         payment_mode: paymentMode,
         payment_ref: paymentRef.trim() || null,
         notes: notes.trim() || null,
         allocations,
-      })
+      }
+      const res = isEdit
+        ? await purchasesAPI.payments.update(paymentId, payload)
+        : await purchasesAPI.payments.create(payload)
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
-          `Payment ${res.number} recorded. ${fmt(credit)} credited to ${vendor.name}`,
+          `Payment ${res.number} ${isEdit ? 'updated' : 'recorded'}. ${fmt(credit)} credited to ${vendor.name}`,
           { duration: 5000 },
         )
       } else {
-        toast.success(`Payment ${res.number} recorded`)
+        toast.success(isEdit ? `Payment ${res.number} updated` : `Payment ${res.number} recorded`)
       }
       goBack()
     } catch (err) {
-      console.error('Failed to record payment:', err)
+      console.error(isEdit ? 'Failed to update payment:' : 'Failed to record payment:', err)
     } finally {
       setSubmitting(false)
     }
   }
 
-  const saveDisabled = !vendor || totals.count === 0 || !paymentMode || creditInsufficient
+  const saveDisabled = !vendor || totals.count === 0 || !paymentMode || creditInsufficient || editLoading
+
+  if (editLoading) {
+    return (
+      <div className="page-container">
+        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
+      </div>
+    )
+  }
 
   return (
     <DocumentFormShell
-      title="Create Vendor Payment"
+      title={isEdit ? `Edit Payment — ${editingNumber || ''}` : 'Create Vendor Payment'}
       subtitle="Payments"
       icon="💸"
       onBack={goBack}
       onSave={handleSubmit}
-      saveLabel="Record Payment"
+      saveLabel={isEdit ? 'Save Changes' : 'Record Payment'}
       saving={submitting}
       saveDisabled={saveDisabled}
     >
       <div style={{ display: 'grid', gap: 18 }}>
         <FormGroup label="Vendor" required>
-          <AutocompleteDropdown
-            value={vendor?.id || ''}
-            clearable
-            onClear={() => {
-              setVendor(null)
-              resetVendorState()
-            }}
-            onSelectOption={async (opt) => {
-              if (!opt) {
+          {isEdit ? (
+            <div style={{ fontWeight: 500, fontSize: 14 }}>{vendor?.name || '—'}</div>
+          ) : (
+            <AutocompleteDropdown
+              value={vendor?.id || ''}
+              clearable
+              onClear={() => {
                 setVendor(null)
                 resetVendorState()
-                return
-              }
-              try {
-                const v = await vendorsAPI.get(opt.id)
-                setVendor({
-                  id: v.id,
-                  name: v.name,
-                  credit: Number(v.credit_balance || v.creditBalance || 0),
-                })
-              } catch {
-                setVendor({ id: opt.id, name: opt.label, credit: 0 })
-              }
-            }}
-            fetchUrl={AUTOCOMPLETE_VENDOR_URL}
-            isSearchFieldRequired
-            selectedLabel={vendor?.name}
-            placeholder="Search vendors…"
-            searchPlaceholder="Search vendors…"
-            emptyLabel="No vendors found. Add via the Vendors page."
-            style={{ width: '100%', maxWidth: 420 }}
-          />
+              }}
+              onSelectOption={async (opt) => {
+                if (!opt) {
+                  setVendor(null)
+                  resetVendorState()
+                  return
+                }
+                try {
+                  const v = await vendorsAPI.get(opt.id)
+                  setVendor({
+                    id: v.id,
+                    name: v.name,
+                    credit: Number(v.credit_balance || v.creditBalance || 0),
+                  })
+                } catch {
+                  setVendor({ id: opt.id, name: opt.label, credit: 0 })
+                }
+              }}
+              fetchUrl={AUTOCOMPLETE_VENDOR_URL}
+              isSearchFieldRequired
+              selectedLabel={vendor?.name}
+              placeholder="Search vendors…"
+              searchPlaceholder="Search vendors…"
+              emptyLabel="No vendors found. Add via the Vendors page."
+              style={{ width: '100%', maxWidth: 420 }}
+            />
+          )}
         </FormGroup>
 
         {!vendor ? (
@@ -237,8 +338,7 @@ export default function VendorPaymentFormPage() {
         ) : (
           <>
             {(() => {
-              const totalBalance = bills.reduce((acc, b) =>
-                acc + Math.max(0, (b.total || 0) - (b.paidAmount || 0)), 0)
+              const totalBalance = bills.reduce((acc, b) => acc + balanceFor(b), 0)
               return (
                 <AlertBar type="blue" icon="ℹ">
                   {bills.length} pending {bills.length === 1 ? 'bill' : 'bills'} ·{' '}
@@ -288,7 +388,7 @@ export default function VendorPaymentFormPage() {
                 <tbody>
                   {bills.map((b) => {
                     const checked = checkedIds.has(b.id)
-                    const balance = (b.total || 0) - (b.paidAmount || 0)
+                    const balance = balanceFor(b)
                     const apply = Number(applyById[b.id]) || 0
                     const excess = checked && !creditMode ? Math.max(0, apply - balance) : 0
                     return (

@@ -4,30 +4,31 @@
 @tailwind utilities;
 
 :root {
-  /* Background layers — soft sage tint (palm leaf) */
-  --bg-base:    #f4f9f6;
+  /* Background layers — warm neutral (pairs with palm orange) */
+  --bg-base:    #f7f5f3;
   --bg-surface: #ffffff;
-  --bg-raised:  #ecf5f0;
-  --bg-hover:   #e2eee7;
-  --bg-active:  #d4e8dc;
+  --bg-raised:  #f1eeeb;
+  --bg-hover:   #ebe7e3;
+  --bg-active:  #e4dfda;
 
   /* Borders */
-  --border-subtle:   rgba(22,99,57,0.06);
-  --border-default:  rgba(22,99,57,0.11);
-  --border-strong:   rgba(22,99,57,0.18);
+  --border-subtle:   rgba(15,23,42,0.06);
+  --border-default:  rgba(15,23,42,0.11);
+  --border-strong:   rgba(15,23,42,0.18);
 
   /* Text */
   --text-primary:   #0f172a;
   --text-secondary: #334155;
   --text-muted:     #64748b;
 
-  /* Brand — palm leaf green + stem orange (from logo) */
-  --accent:           #00a843;
-  --accent-dim:       #008f38;
-  --accent-bg:        rgba(0,168,67,0.12);
+  /* Brand — palm orange (logo trunk) */
+  --accent:           #ff8c61;
+  --accent-dim:       #e86f42;
+  --accent-bg:        rgba(255,140,97,0.14);
   --brand-orange:     #ff8c61;
   --brand-orange-dim: #e86f42;
-  --brand-orange-bg:  rgba(255,140,97,0.12);
+  --brand-orange-bg:  rgba(255,140,97,0.14);
+  --brand-primary:    var(--accent);
 
   /* Semantic */
   --green:     #22c97a;
@@ -156,7 +157,7 @@ body {
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Selection */
-::selection { background: rgba(31,122,77,0.28); }
+::selection { background: rgba(255,140,97,0.28); }
 
 [data-theme='dark'] .brand-logo-wrap:not(:has(.brand-logo--icon)) {
   background: rgba(255,255,255,0.94);
@@ -2675,7 +2676,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   width: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  background: radial-gradient(circle at top left, rgba(31,122,77,0.18), transparent 18%), radial-gradient(circle at bottom right, rgba(232,119,34,0.14), transparent 20%), linear-gradient(135deg, #f4f9f6 0%, #f0f7f3 28%, #ffffff 100%);
+  background: radial-gradient(circle at top left, rgba(255,140,97,0.16), transparent 18%), radial-gradient(circle at bottom right, rgba(232,111,66,0.12), transparent 20%), linear-gradient(135deg, #f7f5f3 0%, #f3efeb 28%, #ffffff 100%);
   animation: login-shell-fade 0.85s ease;
 }
 
@@ -2753,7 +2754,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   padding: 16px 18px;
   border-radius: 18px;
   background: rgba(244,249,246,0.95);
-  border: 1px solid rgba(31,122,77,0.1);
+  border: 1px solid rgba(255,140,97,0.1);
   opacity: 0;
   transform: translateY(16px);
   animation: login-fade-up 0.7s ease forwards;
@@ -2787,9 +2788,9 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   position: relative;
   border-radius: 32px;
   background: linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(236,245,240,0.98) 36%, rgba(244,249,246,1) 100%);
-  border: 1px solid rgba(31,122,77,0.14);
+  border: 1px solid rgba(255,140,97,0.14);
   padding: 28px;
-  box-shadow: 0 26px 90px rgba(31,122,77,0.12);
+  box-shadow: 0 26px 90px rgba(255,140,97,0.12);
   overflow: hidden;
   opacity: 0;
   transform: translateY(20px);
@@ -2870,7 +2871,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   justify-content: space-between;
   padding: 22px;
   border-radius: 24px;
-  background: linear-gradient(180deg, #f4f9f6 0%, #ffffff 100%);
+  background: linear-gradient(180deg, #f7f5f3 0%, #ffffff 100%);
   border: 1px solid rgba(15,23,42,0.06);
   opacity: 0;
   transform: translateY(20px);
@@ -2897,7 +2898,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 .login-chart-bar {
   flex: 1;
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(31,122,77,0.92), rgba(31,122,77,0.18));
+  background: linear-gradient(180deg, rgba(255,140,97,0.92), rgba(255,140,97,0.18));
   transform: scaleY(0);
   transform-origin: bottom;
   animation: bar-rise 0.75s ease forwards;
@@ -2942,10 +2943,10 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 .login-card,
 .login-demo-card {
   background: rgba(255,255,255,0.96);
-  border: 1px solid rgba(31,122,77,0.12);
+  border: 1px solid rgba(255,140,97,0.12);
   border-radius: 28px;
   padding: 30px;
-  box-shadow: 0 28px 90px rgba(31,122,77,0.12);
+  box-shadow: 0 28px 90px rgba(255,140,97,0.12);
   opacity: 0;
   transform: translateY(20px);
   animation: login-fade-up 0.7s ease forwards;
@@ -3040,10 +3041,10 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   gap: 10px;
   padding: 14px 16px;
   border-radius: 16px;
-  background: linear-gradient(135deg, rgba(31,122,77,0.12), rgba(232,119,34,0.08));
+  background: linear-gradient(135deg, rgba(255,140,97,0.12), rgba(232,119,34,0.08));
   color: var(--text-primary);
   font-size: 0.95rem;
-  border: 1px solid rgba(31,122,77,0.18);
+  border: 1px solid rgba(255,140,97,0.18);
 }
 
 .login-demo-header {
@@ -3078,7 +3079,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   width: 100%;
   padding: 16px 18px;
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(232,119,34,0.08), rgba(31,122,77,0.1));
+  background: linear-gradient(135deg, rgba(232,119,34,0.08), rgba(255,140,97,0.1));
   border: 1px solid transparent;
   color: var(--text-primary);
   cursor: pointer;
@@ -3088,8 +3089,8 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 
 .login-demo-user:hover,
 .login-demo-user.active {
-  background: #f4f9f6;
-  border-color: rgba(31,122,77,0.25);
+  background: #f7f5f3;
+  border-color: rgba(255,140,97,0.35);
 }
 
 .login-demo-avatar {

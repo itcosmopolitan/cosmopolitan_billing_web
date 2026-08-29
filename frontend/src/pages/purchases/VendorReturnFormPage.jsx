@@ -1,12 +1,12 @@
 /**
- * Purchases > Returns > "+ New Return" full page.
+ * Purchases > Returns > "+ New Return" / edit full page.
  *
- * Mirrors VendorPaymentFormPage UX: pick the vendor first, then choose a
- * bill from that vendor's records and load returnable lines. Overpayment
- * credit logic is server-side; frontend caps return qty per line.
+ * Mirrors ReturnFormPage UX: pick the vendor first, then choose a bill from
+ * that vendor's records and load returnable lines. Overpayment credit logic
+ * is server-side; frontend caps return qty per line.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -19,6 +19,8 @@ const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Dam
 
 export default function VendorReturnFormPage() {
   const navigate = useNavigate()
+  const { returnId } = useParams()
+  const isEdit = Boolean(returnId)
   const can = useCan()
   const [vendor, setVendor] = useState(null)
   const [vendorBills, setVendorBills] = useState([])
@@ -30,8 +32,12 @@ export default function VendorReturnFormPage() {
   const [billLotRemaining, setBillLotRemaining] = useState({})
   const [reason, setReason] = useState('Defective')
   const [notes, setNotes] = useState('')
-  const [billLoading, setBillLoading] = useState(false)
+  const [billLoading, setBillLoading] = useState(isEdit)
+  const [editLoading, setEditLoading] = useState(isEdit)
+  const [editingNumber, setEditingNumber] = useState(null)
+  const [editSeedQtys, setEditSeedQtys] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [locked, setLocked] = useState(isEdit)
 
   useEffect(() => {
     if (!can('purchases.create')) {
@@ -40,6 +46,45 @@ export default function VendorReturnFormPage() {
   }, [can, navigate])
 
   const goBack = () => navigate('/purchases?tab=returns')
+
+  useEffect(() => {
+    if (!isEdit || !returnId) return
+    let cancelled = false
+    ;(async () => {
+      setEditLoading(true)
+      try {
+        const ret = await purchasesAPI.returns.get(returnId)
+        if (cancelled) return
+        if (ret.voided || String(ret.status || '').toLowerCase() === 'void') {
+          toast.error('Cannot edit a voided vendor return')
+          navigate('/purchases?tab=returns', { replace: true })
+          return
+        }
+        setEditingNumber(ret.number)
+        setReason(ret.reason || 'Defective')
+        setNotes(ret.notes || '')
+        setSelectedBillId(ret.billId)
+        setLocked(true)
+        if (ret.vendorId) {
+          setVendor({ id: ret.vendorId, name: ret.vendorName || 'Vendor' })
+        }
+        const qtys = {}
+        for (const li of ret.items || []) {
+          if (li.billLineId) qtys[li.billLineId] = Number(li.returnQty || 0)
+        }
+        setEditSeedQtys(qtys)
+        setReturnQtys(qtys)
+      } catch {
+        if (!cancelled) {
+          toast.error('Vendor return not found')
+          navigate('/purchases?tab=returns', { replace: true })
+        }
+      } finally {
+        if (!cancelled) setEditLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isEdit, returnId, navigate])
 
   const resetBillState = () => {
     setSelectedBillId('')
@@ -85,15 +130,13 @@ export default function VendorReturnFormPage() {
     try {
       const full = await purchasesAPI.get(billId)
       setBill(full)
-      const initial = {}
-      for (const li of full.items || []) initial[li.id] = 0
-      setReturnQtys(initial)
 
       const allReturns = (await purchasesAPI.returns.list({ limit: 500 }))?.items || []
       const tally = {}
       for (const r of allReturns) {
         if (r.billId !== full.id) continue
         if (r.voided || r.status === 'void') continue
+        if (isEdit && r.id === returnId) continue
         for (const li of r.items || []) {
           if (!li.billLineId) continue
           tally[li.billLineId] = (tally[li.billLineId] || 0) + Number(li.returnQty || 0)
@@ -117,9 +160,28 @@ export default function VendorReturnFormPage() {
         remByItem[id] = lots.reduce((s, b) => s + Number(b.quantity || 0), 0)
       }
       for (const li of full.items || []) {
-        lotMap[li.id] = li.itemId ? remByItem[li.itemId] ?? null : null
+        let rem = li.itemId ? remByItem[li.itemId] ?? null : null
+        // This return already consumed stock — add its qty back into the cap.
+        if (rem != null && isEdit && editSeedQtys?.[li.id]) {
+          rem = rem + Number(editSeedQtys[li.id] || 0)
+        }
+        lotMap[li.id] = rem
       }
       setBillLotRemaining(lotMap)
+
+      const initialQtys = {}
+      for (const li of full.items || []) {
+        const prior = tally[li.id] || 0
+        const byCap = Math.max(0, Number(li.qty || 0) - prior)
+        let remaining = byCap
+        const lot = lotMap[li.id]
+        if (lot != null) remaining = Math.min(byCap, Math.max(0, Number(lot)))
+        const seeded = editSeedQtys?.[li.id]
+        initialQtys[li.id] = isEdit
+          ? Math.min(Number(seeded || 0), remaining)
+          : 0
+      }
+      setReturnQtys(initialQtys)
     } catch (err) {
       console.error('Failed to load bill:', err)
       setBill(null)
@@ -205,17 +267,24 @@ export default function VendorReturnFormPage() {
       }))
     setSubmitting(true)
     try {
-      const res = await purchasesAPI.returns.create({
+      const payload = {
         bill_id: bill.id,
         vendor_id: bill.vendorId,
         reason: reason.trim() || 'Other',
         items,
         notes: notes.trim() || null,
-      })
-      toast.success(`Return ${res?.number || ''} processed`)
+      }
+      const res = isEdit
+        ? await purchasesAPI.returns.update(returnId, payload)
+        : await purchasesAPI.returns.create(payload)
+      toast.success(
+        isEdit
+          ? `Return ${res?.number || ''} updated`
+          : `Return ${res?.number || ''} processed`,
+      )
       goBack()
     } catch (err) {
-      console.error('Failed to create return:', err)
+      console.error(isEdit ? 'Failed to update return:' : 'Failed to create return:', err)
     } finally {
       setSubmitting(false)
     }
@@ -226,16 +295,32 @@ export default function VendorReturnFormPage() {
     label: `${b.number} · ${b.date} · ${fmt(b.total)}`,
   }))
 
-  const saveDisabled = !bill || !totals.anyReturned
+  const reasonOptions = useMemo(() => {
+    const opts = REASONS.map((r) => ({ id: r, label: r }))
+    if (reason && !REASONS.includes(reason)) {
+      opts.unshift({ id: reason, label: reason })
+    }
+    return opts
+  }, [reason])
+
+  const saveDisabled = !bill || !totals.anyReturned || editLoading
+
+  if (editLoading) {
+    return (
+      <div className="page-container">
+        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
+      </div>
+    )
+  }
 
   return (
     <DocumentFormShell
-      title="Create Vendor Return"
+      title={isEdit ? `Edit Vendor Return — ${editingNumber || ''}` : 'Create Vendor Return'}
       subtitle="Returns"
       icon="↩"
       onBack={goBack}
       onSave={handleSubmit}
-      saveLabel="Process Return"
+      saveLabel={isEdit ? 'Save Changes' : 'Process Return'}
       saving={submitting}
       saveDisabled={saveDisabled}
     >
@@ -243,12 +328,14 @@ export default function VendorReturnFormPage() {
         <FormGroup label="Vendor" required>
           <AutocompleteDropdown
             value={vendor?.id || ''}
-            clearable
+            clearable={!locked}
             onClear={() => {
+              if (locked) return
               setVendor(null)
               resetVendorState()
             }}
             onSelectOption={async (opt) => {
+              if (locked) return
               if (!opt) {
                 setVendor(null)
                 resetVendorState()
@@ -269,6 +356,7 @@ export default function VendorReturnFormPage() {
             searchPlaceholder="Search vendors…"
             emptyLabel="No vendors found. Add via the Vendors page."
             style={{ width: '100%', maxWidth: 420 }}
+            disabled={locked}
           />
         </FormGroup>
 
@@ -278,11 +366,11 @@ export default function VendorReturnFormPage() {
             title="Choose a vendor to begin"
             desc="Pick a vendor above to load their bills and start a return."
           />
-        ) : billsLoading ? (
+        ) : billsLoading && !locked ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
             Loading bills…
           </div>
-        ) : vendorBills.length === 0 ? (
+        ) : !locked && vendorBills.length === 0 ? (
           <EmptyState
             icon="📋"
             title="No bills found"
@@ -300,7 +388,7 @@ export default function VendorReturnFormPage() {
                 searchPlaceholder="Search bill #…"
                 emptyLabel="No matching bills"
                 style={{ width: '100%', maxWidth: 420 }}
-                disabled={billLoading}
+                disabled={billLoading || locked}
               />
             </FormGroup>
 
@@ -326,7 +414,7 @@ export default function VendorReturnFormPage() {
                     <AutocompleteDropdown
                       value={reason}
                       onChange={setReason}
-                      options={REASONS.map((r) => ({ id: r, label: r }))}
+                      options={reasonOptions}
                       isSearchFieldRequired={false}
                     />
                   </FormGroup>

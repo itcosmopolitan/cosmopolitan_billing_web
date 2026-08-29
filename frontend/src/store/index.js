@@ -367,6 +367,19 @@ export const usePOSStore = create((set, get) => ({
     paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '',
   }),
 
+  hydrateSession: (payload) => set({
+    cart: (payload.cart || []).map((i) => normalizeCartItem(i)),
+    customer: payload.customer ?? null,
+    discountPct: Number(payload.discountPct) || 0,
+    discountAmt: Number(payload.discountAmt) || 0,
+    discountReason: payload.discountReason || '',
+    notes: payload.notes || '',
+    paymentReceived: !!payload.paymentReceived,
+    paymentMethod: payload.paymentMethod || null,
+    paymentRef: payload.paymentRef || '',
+    cashCollected: payload.cashCollected || '',
+  }),
+
   setCustomer: (customer) => {
     const type = customerPricingType(customer)
     set((s) => ({

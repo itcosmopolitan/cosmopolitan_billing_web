@@ -69,6 +69,7 @@ from src.routes._approval import (
     assert_may_edit_document,
     can_direct_commit,
     can_direct_pos_bill,
+    user_can,
 )
 from src.permissions import SALES_DOCUMENT_READ
 from src.security import (
@@ -398,7 +399,11 @@ class SaleCreate(BaseModel):
 
 
 class InvoiceUpdate(BaseModel):
-    """Editable fields for an unpaid invoice with no payments or credit notes."""
+    """Editable fields for an unpaid invoice with no payments or credit notes.
+
+    POS receipts use the same path. Pass `payment_mode` to settle on save;
+    omit / null to leave the invoice unpaid.
+    """
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     date: Optional[str] = None
@@ -408,6 +413,11 @@ class InvoiceUpdate(BaseModel):
     payment_mode: Optional[PaymentMode] = None
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _coerce_payment_mode(cls, v):
+        return _coerce_payment_mode_value(v)
 
 
 class SourceOrderLineIn(BaseModel):
@@ -1036,18 +1046,20 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
     return d
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
-@router.put("/{invoice_id}", dependencies=[Depends(require_perm("invoices.edit", "invoices.create"))])
+@router.put("/{invoice_id}", dependencies=[Depends(require_perm("invoices.edit", "invoices.create", "pos.use"))])
 async def update_invoice(
     invoice_id: str,
     data: InvoiceUpdate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Edit an unpaid invoice. Replaces line items, reverses then re-applies
-    stock, and recalculates totals. Locked when payments, credit notes, or
-    POS origin — use returns / cancel / refund flows instead.
+    """Edit an unpaid invoice (regular or POS). Replaces line items, reverses
+    then re-applies stock, and recalculates totals. Locked when payments or
+    credit notes exist — delete the payment (or void the credit note) first.
 
     Create-only users may edit private `draft` invoices before submit.
+    POS cashiers (`pos.use`) may edit POS receipts. Pass `payment_mode` to
+    settle on save; omit it to leave the invoice unpaid.
     """
     from sqlalchemy import delete as sa_delete
 
@@ -1075,10 +1087,12 @@ async def update_invoice(
             400,
             "Invoice is awaiting approval and cannot be edited — reject it first or ask the creator to revise after rejection",
         )
-    await assert_may_edit_document(
-        user, db, status=inv_status,
-        create_perm="invoices.create", edit_perm="invoices.edit",
-    )
+    is_pos = _is_pos_origin(inv)
+    if not (is_pos and await user_can(user, db, "pos.use")):
+        await assert_may_edit_document(
+            user, db, status=inv_status,
+            create_perm="invoices.create", edit_perm="invoices.edit",
+        )
 
     if not data.items:
         raise HTTPException(400, "Invoice must have at least one line item")
@@ -1089,8 +1103,10 @@ async def update_invoice(
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
 
     prev_customer_id = inv.customer_id
-    if data.customer_id is not None:
+    if data.customer_id:
         inv.customer_id = await _resolve_customer_id(db, data.customer_id)
+    elif data.customer_name is not None:
+        inv.customer_id = None
     if data.customer_name is not None:
         inv.customer_name = data.customer_name
     if data.date:
@@ -1099,8 +1115,6 @@ async def update_invoice(
         inv.due_date = data.due_date
     elif inv.status in (InvoiceStatus.pending, InvoiceStatus.partial, InvoiceStatus.overdue):
         inv.due_date = compute_due_date(inv.date, None)
-    if data.payment_mode is not None:
-        inv.payment_mode = data.payment_mode
     if data.payment_ref is not None:
         inv.payment_ref = data.payment_ref or None
     inv.subtotal = round(subtotal, 2)
@@ -1147,6 +1161,17 @@ async def update_invoice(
             await sync_customer_outstanding(db, prev_customer_id)
         if inv.customer_id:
             await sync_customer_outstanding(db, inv.customer_id)
+        if data.payment_mode:
+            await _record_full_settlement_payment(
+                db,
+                inv,
+                mode=data.payment_mode,
+                ref=data.payment_ref,
+                user=user,
+                notes="Invoice edit settlement",
+            )
+        else:
+            inv.payment_mode = None
 
     await db.commit()
     result = await db.execute(
@@ -1770,6 +1795,114 @@ async def record_payment(
         "customer_credit_balance": customer_credit_after,
     }
 
+
+@router.post("/{invoice_id}/delete-payments", dependencies=[Depends(require_perm("invoices.edit", "invoices.delete", "invoices.create", "pos.use"))])
+async def delete_invoice_payments(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Remove active payments on an invoice so it can be edited.
+
+    POS cashiers (`pos.use`) and invoice operators (`invoices.edit` /
+    `invoices.delete` / `invoices.create`) may unwind a recorded payment.
+    """
+    res = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    inv = res.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await enforce_branch_access(inv.branch_id, user=user, db=db)
+
+    is_pos = _is_pos_origin(inv)
+    if not (is_pos and await user_can(user, db, "pos.use")):
+        allowed = (
+            await user_can(user, db, "invoices.edit")
+            or await user_can(user, db, "invoices.delete")
+            or await user_can(user, db, "invoices.create")
+        )
+        if not allowed:
+            raise HTTPException(403, "Missing permission: invoices.edit or invoices.delete")
+
+    pay_rows = (await db.execute(
+        select(CustomerPayment)
+        .join(CustomerPaymentAllocation, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
+        .where(
+            CustomerPaymentAllocation.invoice_id == invoice_id,
+            or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)),  # noqa: E712
+        )
+    )).unique().scalars().all()
+    pay_ids = list(dict.fromkeys(p.id for p in pay_rows))
+
+    if not pay_ids:
+        if (inv.paid_amount or 0) > 0:
+            inv.paid_amount = 0
+            inv.payment_mode = None
+            inv.payment_ref = None
+            _recompute_invoice_status(inv)
+            if inv.customer_id:
+                await sync_customer_outstanding(db, inv.customer_id)
+            await db.commit()
+            return {"deleted": [], "count": 0, "cleared_legacy": True, "number": inv.number}
+        raise HTTPException(400, "This invoice has no payments to delete")
+
+    result = await bulk_delete_payments(BulkDeleteIn(ids=pay_ids), db=db, user=user)
+    # bulk_delete_payments commits; reload in case payment_mode still lingers.
+    inv = (await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))).scalar_one_or_none()
+    if inv is not None and (inv.paid_amount or 0) <= 0 and inv.payment_mode:
+        inv.payment_mode = None
+        inv.payment_ref = None
+        await db.commit()
+    return {**result, "number": inv.number if inv is not None else None}
+
+
+@router.post("/{invoice_id}/delete-returns", dependencies=[Depends(require_perm("invoices.edit", "invoices.delete", "invoices.create", "pos.use"))])
+async def delete_invoice_returns(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Remove active credit notes / returns on an invoice so it can be edited.
+
+    POS cashiers (`pos.use`) and invoice operators (`invoices.edit` /
+    `invoices.delete` / `invoices.create`) may unwind a recorded return.
+    """
+    res = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    inv = res.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await enforce_branch_access(inv.branch_id, user=user, db=db)
+
+    is_pos = _is_pos_origin(inv)
+    if not (is_pos and await user_can(user, db, "pos.use")):
+        allowed = (
+            await user_can(user, db, "invoices.edit")
+            or await user_can(user, db, "invoices.delete")
+            or await user_can(user, db, "invoices.create")
+        )
+        if not allowed:
+            raise HTTPException(403, "Missing permission: invoices.edit or invoices.delete")
+
+    ret_rows = (await db.execute(
+        select(SalesReturn).where(
+            SalesReturn.invoice_id == invoice_id,
+            SalesReturn.status != SalesReturnStatus.void,
+        )
+    )).scalars().all()
+    ret_ids = list(dict.fromkeys(r.id for r in ret_rows))
+
+    if not ret_ids:
+        status = str(getattr(inv, "return_status", None) or "none").lower()
+        if status not in ("", "none"):
+            await recalc_invoice_after_cn(db, invoice_id)
+            await db.commit()
+            return {"deleted": [], "count": 0, "cleared_legacy": True, "number": inv.number}
+        raise HTTPException(400, "This invoice has no returns to delete")
+
+    result = await bulk_delete_returns(BulkDeleteIn(ids=ret_ids), db=db, user=user)
+    inv = (await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))).scalar_one_or_none()
+    return {**result, "number": inv.number if inv is not None else None}
+
+
 # ─── INVOICE APPROVAL ─────────────────────────────────────────────────────────
 class InvoiceApproveReject(BaseModel):
     notes: Optional[str] = None
@@ -2237,6 +2370,198 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user:
     return _payment_dict(p, p.allocations)
 
 
+@router.put("/payments/{payment_id}", dependencies=[Depends(require_perm("invoices.edit"))])
+async def update_payment(
+    payment_id: str,
+    data: CustomerPaymentCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Edit an active customer payment — reverse allocations, then re-apply."""
+    from sqlalchemy import delete as sa_delete
+
+    res = await db.execute(
+        select(CustomerPayment)
+        .options(selectinload(CustomerPayment.allocations))
+        .where(CustomerPayment.id == payment_id)
+    )
+    pay = res.unique().scalar_one_or_none()
+    if not pay:
+        raise HTTPException(404, "Payment not found")
+    if getattr(pay, "voided", False):
+        raise HTTPException(400, "Cannot edit a voided payment")
+    if data.customer_id != pay.customer_id:
+        raise HTTPException(400, "Cannot change the customer on a payment — void and recreate instead")
+
+    old_mode = pay.payment_mode
+    await reverse_customer_payment(db, pay)
+    today_void = datetime.now().strftime("%Y-%m-%d")
+    await void_payment_record(
+        db,
+        source_document_type="customer_payment",
+        source_document_id=pay.id,
+        voided_at=today_void,
+    )
+    if old_mode == "cash":
+        await void_cash_for_payment(
+            db,
+            source_type="customer_payment",
+            source_id=pay.id,
+            voided_by=getattr(user, "name", None) or "Staff",
+            reason=f"Payment {pay.number} edited",
+        )
+    await db.execute(
+        sa_delete(CustomerPaymentAllocation).where(CustomerPaymentAllocation.payment_id == pay.id)
+    )
+    await db.flush()
+
+    cust = (await db.execute(
+        select(Customer).where(Customer.id == data.customer_id)
+    )).scalar_one_or_none()
+    if not cust:
+        raise HTTPException(404, "Customer not found")
+
+    invoice_ids = [a.invoice_id for a in data.allocations]
+    if len(set(invoice_ids)) != len(invoice_ids):
+        raise HTTPException(400, "Duplicate invoice in allocations")
+    inv_rows = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id.in_(invoice_ids))
+    )).scalars().all()
+    if len(inv_rows) != len(invoice_ids):
+        raise HTTPException(400, "One or more invoices not found")
+    inv_by_id = {inv.id: inv for inv in inv_rows}
+    for inv in inv_rows:
+        if inv.customer_id != data.customer_id:
+            raise HTTPException(400, f"Invoice {inv.number} does not belong to {cust.name}")
+        st = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+        if st == "cancelled":
+            raise HTTPException(400, f"Invoice {inv.number} is cancelled")
+        balance = max(0.0, float(inv.total or 0) - float(inv.paid_amount or 0))
+        if balance <= 0:
+            raise HTTPException(400, f"Invoice {inv.number} already settled")
+
+    requested_total = sum(float(a.amount) for a in data.allocations)
+    if data.payment_mode == "credit":
+        for a in data.allocations:
+            inv = inv_by_id[a.invoice_id]
+            bal = max(0.0, float(inv.total or 0) - float(inv.paid_amount or 0))
+            if float(a.amount) > bal + 0.001:
+                raise HTTPException(
+                    400,
+                    f"Credit mode can't overpay — {inv.number} balance is MVR{round(bal, 2)}",
+                )
+        avail = float(cust.credit_balance or 0)
+        if avail + 0.001 < requested_total:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — {cust.name} has MVR{round(avail, 2)} available, "
+                f"payment totals MVR{round(requested_total, 2)}",
+            )
+
+    total_credit = 0.0
+    total_amount = 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    status_before: dict[str, str] = {}
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        status_before[inv.id] = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
+        inv_total = float(inv.total or 0)
+        inv_paid = float(inv.paid_amount or 0)
+        balance = max(0.0, inv_total - inv_paid)
+        applied = min(float(a.amount), balance)
+        excess = max(0.0, float(a.amount) - balance)
+        new_paid = round(inv_paid + applied, 2)
+        inv.paid_amount = new_paid
+        inv.payment_mode = data.payment_mode
+        inv.status = "paid" if new_paid >= inv_total else "partial"
+        total_credit += excess
+        total_amount += float(a.amount)
+
+    if total_credit > 0:
+        await adjust_customer_credit(
+            db,
+            data.customer_id,
+            total_credit,
+            entry_type="overpayment",
+            source_type="customer_payment",
+            source_number=pay.number,
+        )
+
+    pay.date = data.date or today
+    pay.total_amount = round(total_amount, 2)
+    pay.payment_mode = data.payment_mode
+    pay.payment_ref = data.payment_ref or ""
+    pay.notes = data.notes
+    pay.credit_applied = round(total_credit, 2)
+    pay.branch_id = data.branch_id or pay.branch_id
+    pay.branch_name = data.branch_name or pay.branch_name
+    pay.customer_name = cust.name
+    pay.voided = False
+    pay.voided_at = None
+
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=round(float(a.amount), 2),
+        ))
+    await record_customer_payment(db, pay)
+    if data.payment_mode == "cash":
+        await record_cash_in(
+            db,
+            branch_id=pay.branch_id or "",
+            amount=round(total_amount, 2),
+            date=pay.date,
+            description=f"Payment {pay.number}",
+            category="Sale — Cash",
+            source_type="customer_payment",
+            source_id=pay.id,
+            source_ref=pay.number,
+            recorded_by=getattr(user, "name", None) or data.created_by or "Staff",
+        )
+
+    if data.payment_mode == "credit":
+        await adjust_customer_credit(
+            db,
+            data.customer_id,
+            -total_amount,
+            entry_type="payment_debit",
+            source_type="customer_payment",
+            source_ref=pay.id,
+            source_number=pay.number,
+        )
+
+    for a in data.allocations:
+        inv = inv_by_id[a.invoice_id]
+        _log_sales_invoice_history(db, user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="payment_recorded",
+            action="update_customer_payment",
+            detail=f"Updated payment {pay.number} allocation on {inv.number}",
+            metadata={
+                "payment_id": pay.id,
+                "payment_number": pay.number,
+                "amount": round(float(a.amount), 2),
+                "payment_mode": data.payment_mode,
+            },
+            branch_id=inv.branch_id,
+        )
+
+    await sync_customer_outstanding(db, data.customer_id)
+    await db.commit()
+    return {
+        "id": pay.id,
+        "number": pay.number,
+        "total_amount": round(total_amount, 2),
+        "credit_applied": round(total_credit, 2),
+        "allocations_count": len(data.allocations),
+    }
+
+
 @router.post("/payments/{payment_id}/void", dependencies=[Depends(require_perm("invoices.edit"))])
 async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Soft-void a payment — reverses invoice allocations + credit effects but
@@ -2573,25 +2898,156 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
 
 
 # ─── HELPER ───────────────────────────────────────────────────────────────────
+def _is_pos_origin(inv: SaleInvoice) -> bool:
+    return (getattr(inv, "origin", None) or "").strip().lower() == "pos"
+
+
+async def _next_sales_return_number(db: AsyncSession) -> str:
+    """Next CN-YYYY-NNNN from max existing suffix.
+
+    Count-based numbering (`count + 1000`) collides after credit-note deletes.
+    """
+    year = datetime.now().year
+    prefix = f"CN-{year}-"
+    rows = (
+        await db.execute(
+            select(SalesReturn.number).where(SalesReturn.number.like(f"{prefix}%"))
+        )
+    ).scalars().all()
+    max_n = 999
+    for num in rows:
+        try:
+            max_n = max(max_n, int(str(num)[len(prefix):]))
+        except (ValueError, TypeError):
+            continue
+    return f"{prefix}{max_n + 1:04d}"
+
+
+async def _record_full_settlement_payment(
+    db: AsyncSession,
+    inv: SaleInvoice,
+    *,
+    mode: str,
+    ref: Optional[str],
+    user: User,
+    notes: str = "",
+) -> None:
+    """Settle an unpaid invoice in full and write the CustomerPayment row."""
+    total = round(float(inv.total or 0), 2)
+    today = datetime.now().strftime("%Y-%m-%d")
+    credit_customer = None
+    if mode == "credit":
+        if not inv.customer_id:
+            raise HTTPException(400, "Credit-mode sale requires a customer (walk-ins can't draw credit)")
+        credit_customer = (
+            await db.execute(select(Customer).where(Customer.id == inv.customer_id))
+        ).scalar_one_or_none()
+        if not credit_customer:
+            raise HTTPException(404, f"Customer {inv.customer_id} not found")
+        available = float(credit_customer.credit_balance or 0)
+        if available < total:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — customer has MVR{round(available, 2)} available, sale total is MVR{total}",
+            )
+
+    inv.paid_amount = total
+    inv.payment_mode = mode
+    inv.payment_ref = (ref or "").strip() or None
+    inv.status = InvoiceStatus.paid
+
+    if mode == "credit" and credit_customer is not None:
+        prev_balance, new_balance = await adjust_customer_credit(
+            db,
+            credit_customer.id,
+            -total,
+            entry_type="sale_debit",
+            source_type="sale_invoice",
+            source_ref=inv.id,
+            source_number=inv.number,
+            created_by=getattr(user, "name", None) or "Staff",
+        )
+        db.add(AuditLog(
+            id=str(uuid.uuid4()),
+            action="customer_credit_debit",
+            user_id=getattr(user, "id", None),
+            user_name=getattr(user, "name", None),
+            module="sales",
+            ref=inv.number,
+            detail=(
+                f"Credit-mode sale {inv.number}: −MVR{total} from "
+                f"{credit_customer.name}'s credit (was MVR{prev_balance:.2f}, "
+                f"now MVR{new_balance:.2f})"
+            ),
+            risk="low",
+            ip_address=None,
+            branch_id=inv.branch_id,
+        ))
+
+    pay = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=await allocate_customer_payment_number(db),
+        customer_id=inv.customer_id,
+        customer_name=inv.customer_name or "Walk-in",
+        branch_id=inv.branch_id,
+        branch_name=inv.branch_name,
+        date=today,
+        total_amount=total,
+        payment_mode=mode,
+        payment_ref=ref or "",
+        notes=notes or "Invoice edit settlement",
+        credit_applied=0.0,
+        created_by=getattr(user, "name", None) or "Staff",
+    )
+    db.add(pay)
+    db.add(CustomerPaymentAllocation(
+        id=str(uuid.uuid4()),
+        payment_id=pay.id,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        amount=total,
+    ))
+    await record_customer_payment(db, pay)
+    if mode == "cash":
+        await record_cash_in(
+            db,
+            branch_id=inv.branch_id or "",
+            amount=total,
+            date=today,
+            description=f"Sale {inv.number}",
+            category="Sale — Cash",
+            source_type="customer_payment",
+            source_id=pay.id,
+            source_ref=pay.number,
+            recorded_by=getattr(user, "name", None) or "Staff",
+        )
+
+
 async def _assert_invoice_editable(db: AsyncSession, inv: SaleInvoice) -> None:
     """Raise 400 when an invoice must not be edited in place."""
     status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
     if status == "cancelled":
         raise HTTPException(400, "Cannot edit a cancelled invoice")
+    if status == "pending_approval":
+        raise HTTPException(
+            400,
+            "Invoice is awaiting approval and cannot be edited",
+        )
     if (inv.paid_amount or 0) > 0:
         raise HTTPException(
             400,
-            "Cannot edit an invoice with payments recorded. Void payments first.",
+            "Cannot edit an invoice with payments recorded. Delete the payment first.",
         )
-    if (getattr(inv, "origin", None) or "").strip().lower() == "pos":
-        raise HTTPException(400, "POS receipts cannot be edited — use the refund flow")
     return_count = int((await db.execute(
-        select(func.count(SalesReturn.id)).where(SalesReturn.invoice_id == inv.id)
+        select(func.count(SalesReturn.id)).where(
+            SalesReturn.invoice_id == inv.id,
+            SalesReturn.status != SalesReturnStatus.void,
+        )
     )).scalar() or 0)
     if return_count > 0:
         raise HTTPException(
             400,
-            f"Cannot edit invoice with {return_count} credit note(s). Void returns first.",
+            f"Cannot edit invoice with {return_count} credit note(s). Delete the return first.",
         )
     pay_count = int((await db.execute(
         select(func.count(CustomerPaymentAllocation.id))
@@ -2604,7 +3060,7 @@ async def _assert_invoice_editable(db: AsyncSession, inv: SaleInvoice) -> None:
     if pay_count > 0:
         raise HTTPException(
             400,
-            "Cannot edit an invoice with active payment allocations. Void payments first.",
+            "Cannot edit an invoice with active payment allocations. Delete the payment first.",
         )
 
 
@@ -5076,6 +5532,37 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db), user: U
     return _return_dict(ret, ret.line_items)
 
 
+@router.put("/returns/{return_id}", dependencies=[Depends(require_perm("invoices.create", "invoices.edit"))])
+async def update_return(
+    return_id: str,
+    data: SalesReturnCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Edit an active credit note — reverse stock/credit, then re-apply."""
+    from sqlalchemy import delete as sa_delete
+
+    res = await db.execute(
+        select(SalesReturn)
+        .options(selectinload(SalesReturn.line_items))
+        .where(SalesReturn.id == return_id)
+    )
+    ret = res.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    if ret.status == SalesReturnStatus.void:
+        raise HTTPException(400, "Cannot edit a voided credit note")
+    if data.invoice_id != ret.invoice_id:
+        raise HTTPException(400, "Cannot change the invoice on a credit note — void and recreate instead")
+
+    await _resolve_branch_scope(user, db, ret.branch_id)
+    await _reverse_sales_return_effects(db, ret)
+    await db.execute(sa_delete(SalesReturnLineItem).where(SalesReturnLineItem.return_id == ret.id))
+    await db.flush()
+    await recalc_invoice_after_cn(db, ret.invoice_id)
+    return await _apply_sales_return(data, db, user, existing=ret)
+
+
 @router.post("/returns/{return_id}/void", dependencies=[Depends(require_perm("invoices.edit"))])
 async def void_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Soft-void a credit note — reverses stock + invoice adjustments but keeps the row."""
@@ -5315,7 +5802,18 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
 # `/{invoice_id}/*` routes later.
 @router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
 async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    """Process a customer return against an existing invoice.
+    """Process a customer return against an existing invoice."""
+    return await _apply_sales_return(data, db, user)
+
+
+async def _apply_sales_return(
+    data: SalesReturnCreate,
+    db: AsyncSession,
+    user: User,
+    *,
+    existing: Optional[SalesReturn] = None,
+):
+    """Create or re-apply a sales return. Used by create_return and update_return.
 
     Flow:
       1. Validate invoice exists + isn't cancelled.
@@ -5433,29 +5931,41 @@ async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_
         credited = 0.0
 
     today = datetime.now().strftime("%Y-%m-%d")
-    count = (await db.execute(select(func.count(SalesReturn.id)))).scalar() or 0
-    ret_num = f"CN-{datetime.now().year}-{1000 + count}"
+    if existing is not None:
+        ret = existing
+        ret.date = data.date or today
+        ret.reason = data.reason
+        ret.refund_method = method
+        ret.subtotal = round(subtotal, 2)
+        ret.tax_total = round(tax_total, 2)
+        ret.total = total
+        ret.credited_amount = credited
+        ret.status = SalesReturnStatus.processed
+        ret.notes = data.notes
+        await db.flush()
+    else:
+        ret_num = await _next_sales_return_number(db)
 
-    ret = SalesReturn(
-        id=str(uuid.uuid4()), number=ret_num,
-        invoice_id=inv.id, invoice_number=inv.number,
-        customer_id=inv.customer_id,
-        customer_name=inv.customer_name,
-        branch_id=inv.branch_id,         # bound to where the sale happened
-        branch_name=inv.branch_name,
-        date=data.date or today,
-        reason=data.reason,
-        refund_method=method,
-        subtotal=round(subtotal, 2),
-        tax_total=round(tax_total, 2),
-        total=total,
-        credited_amount=credited,
-        status=SalesReturnStatus.processed,
-        notes=data.notes,
-        created_by=data.created_by,
-    )
-    db.add(ret)
-    await db.flush()  # need ret.id for the line FK
+        ret = SalesReturn(
+            id=str(uuid.uuid4()), number=ret_num,
+            invoice_id=inv.id, invoice_number=inv.number,
+            customer_id=inv.customer_id,
+            customer_name=inv.customer_name,
+            branch_id=inv.branch_id,         # bound to where the sale happened
+            branch_name=inv.branch_name,
+            date=data.date or today,
+            reason=data.reason,
+            refund_method=method,
+            subtotal=round(subtotal, 2),
+            tax_total=round(tax_total, 2),
+            total=total,
+            credited_amount=credited,
+            status=SalesReturnStatus.processed,
+            notes=data.notes,
+            created_by=data.created_by,
+        )
+        db.add(ret)
+        await db.flush()  # need ret.id for the line FK
 
     total_return_qty = int(sum(int(getattr(r, "return_qty", 0) or 0) for r in (data.items or [])))
 
@@ -6134,6 +6644,8 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                 inv.paid_amount = new_paid
                 if new_paid <= 0:
                     inv.status = "pending"
+                    inv.payment_mode = None
+                    inv.payment_ref = None
                 elif new_paid < float(inv.total or 0):
                     inv.status = "partial"
                 _log_sales_invoice_history(db, user=user,

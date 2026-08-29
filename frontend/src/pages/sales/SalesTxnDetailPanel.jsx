@@ -5,6 +5,13 @@ import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { Chip, CopyableId, ReturnStatusChip, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import {
+  canShowCreditNoteAction,
+  canShowDeletePayment,
+  canShowDeleteReturn,
+  canShowInvoiceEdit,
+  invoiceReturnPath,
+} from './salesFormShared'
 
 function displayPaymentMode(raw) {
   if (!raw) return '—'
@@ -55,6 +62,9 @@ export default function SalesTxnDetailPanel({
   onPrint,
   onCancelInvoice,
   onRecordPayment,
+  onEditInvoice,
+  onDeletePayment,
+  onDeleteReturn,
   onVoidReturn,
   branchLookup,
 }) {
@@ -144,13 +154,32 @@ export default function SalesTxnDetailPanel({
               Record payment
             </button>
           )}
-          {can('invoices.edit') && !['cancelled', 'paid'].includes(detail?.status) && (
+          {canShowDeletePayment(detail, can) && (
+            <button type="button" className="btn btn-danger" onClick={() => { onDeletePayment?.(detail); onClose?.() }}>
+              Delete payment
+            </button>
+          )}
+          {canShowDeleteReturn(detail, can) && (
+            <button type="button" className="btn btn-danger" onClick={() => { onDeleteReturn?.(detail); onClose?.() }}>
+              Delete return
+            </button>
+          )}
+          {canShowInvoiceEdit(detail, can) && (
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => { onClose?.(); navigate(`/sales/invoices/${detail.id}/edit`) }}
+              onClick={() => { onEditInvoice?.(detail); onClose?.() }}
             >
               Edit
+            </button>
+          )}
+          {canShowCreditNoteAction(detail, can) && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => { onClose?.(); navigate(invoiceReturnPath(detail)) }}
+            >
+              Create refund
             </button>
           )}
         </>
@@ -192,10 +221,23 @@ export default function SalesTxnDetailPanel({
         </>
       )}
 
-      {kind === 'return' && can('invoices.edit') && detail?.status !== 'void' && (
-        <button type="button" className="btn btn-danger" onClick={() => onVoidReturn?.(detail)}>
-          Void credit note
-        </button>
+      {kind === 'return' && detail?.status !== 'void' && (
+        <>
+          {can('invoices.create') && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => { onClose?.(); navigate(`/sales/returns/${detail.id}/edit`) }}
+            >
+              Edit
+            </button>
+          )}
+          {can('invoices.edit') && (
+            <button type="button" className="btn btn-danger" onClick={() => onVoidReturn?.(detail)}>
+              Void credit note
+            </button>
+          )}
+        </>
       )}
     </>
   )

@@ -58,7 +58,7 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
 )
 from src.routes._serializers import get_user_branch_ids
-from src.routes._approval import assert_may_edit_document, can_direct_commit
+from src.routes._approval import assert_may_edit_document, can_direct_commit, user_can
 from src.permissions import PURCHASE_DOCUMENT_READ
 from src.security import (
     current_user,
@@ -1420,8 +1420,8 @@ async def update_bill(
     user: User = Depends(current_user),
 ):
     """Edit a draft, pending, or partial bill. Replaces line items and recalculates
-    totals. Paid and cancelled bills are locked — use vendor returns or
-    Record Payment to adjust settled bills. Create-only users may edit drafts."""
+    totals. Locked when payments or vendor returns exist — delete those first.
+    Create-only users may edit drafts."""
     from sqlalchemy import delete as sa_delete
     result = await db.execute(
         select(PurchaseBill)
@@ -1447,15 +1447,18 @@ async def update_bill(
     if (bill.paid_amount or 0) > 0:
         raise HTTPException(
             400,
-            "Cannot edit a bill with payments recorded. Void payments first.",
+            "Cannot edit a bill with payments recorded. Delete the payment first.",
         )
     return_count = int((await db.execute(
-        select(func.count(VendorReturn.id)).where(VendorReturn.bill_id == bill_id)
+        select(func.count(VendorReturn.id)).where(
+            VendorReturn.bill_id == bill_id,
+            or_(VendorReturn.voided == False, VendorReturn.voided.is_(None)),  # noqa: E712
+        )
     )).scalar() or 0)
     if return_count > 0:
         raise HTTPException(
             400,
-            f"Cannot edit bill with {return_count} vendor return(s). Void returns first.",
+            f"Cannot edit bill with {return_count} vendor return(s). Delete the return first.",
         )
     pay_count = int((await db.execute(
         select(func.count(VendorPaymentAllocation.id))
@@ -1468,7 +1471,7 @@ async def update_bill(
     if pay_count > 0:
         raise HTTPException(
             400,
-            "Cannot edit a bill with active payment allocations. Void payments first.",
+            "Cannot edit a bill with active payment allocations. Delete the payment first.",
         )
     if not data.items:
         raise HTTPException(400, "Bill must have at least one line item")
@@ -1558,6 +1561,100 @@ async def update_bill(
         )
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
     return _bill_dict(bill, li_res.scalars().all())
+
+
+@router.post("/{bill_id}/delete-payments", dependencies=[Depends(require_perm("purchases.edit", "purchases.delete", "purchases.create"))])
+async def delete_bill_payments(
+    bill_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Remove active payments on a bill so it can be edited."""
+    res = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
+    bill = res.scalar_one_or_none()
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
+
+    allowed = (
+        await user_can(user, db, "purchases.edit")
+        or await user_can(user, db, "purchases.delete")
+        or await user_can(user, db, "purchases.create")
+    )
+    if not allowed:
+        raise HTTPException(403, "Missing permission: purchases.edit or purchases.delete")
+
+    pay_rows = (await db.execute(
+        select(VendorPayment)
+        .join(VendorPaymentAllocation, VendorPaymentAllocation.payment_id == VendorPayment.id)
+        .where(
+            VendorPaymentAllocation.bill_id == bill_id,
+            or_(VendorPayment.voided == False, VendorPayment.voided.is_(None)),  # noqa: E712
+        )
+    )).unique().scalars().all()
+    pay_ids = list(dict.fromkeys(p.id for p in pay_rows))
+
+    if not pay_ids:
+        if (bill.paid_amount or 0) > 0:
+            bill.paid_amount = 0
+            bill.payment_mode = None
+            bill.payment_ref = None
+            bill.status = InvoiceStatus.pending
+            if bill.vendor_id:
+                await sync_vendor_outstanding(db, bill.vendor_id)
+            await db.commit()
+            return {"deleted": [], "count": 0, "cleared_legacy": True, "number": bill.number}
+        raise HTTPException(400, "This bill has no payments to delete")
+
+    result = await bulk_delete_payments(BulkDeleteIn(ids=pay_ids), db=db, user=user)
+    bill = (await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))).scalar_one_or_none()
+    if bill is not None and (bill.paid_amount or 0) <= 0 and bill.payment_mode:
+        bill.payment_mode = None
+        bill.payment_ref = None
+        await db.commit()
+    return {**result, "number": bill.number if bill is not None else None}
+
+
+@router.post("/{bill_id}/delete-returns", dependencies=[Depends(require_perm("purchases.edit", "purchases.delete", "purchases.create"))])
+async def delete_bill_returns(
+    bill_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Remove active vendor returns on a bill so it can be edited."""
+    res = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
+    bill = res.scalar_one_or_none()
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    await enforce_branch_access(bill.branch_id, user=user, db=db)
+
+    allowed = (
+        await user_can(user, db, "purchases.edit")
+        or await user_can(user, db, "purchases.delete")
+        or await user_can(user, db, "purchases.create")
+    )
+    if not allowed:
+        raise HTTPException(403, "Missing permission: purchases.edit or purchases.delete")
+
+    ret_rows = (await db.execute(
+        select(VendorReturn).where(
+            VendorReturn.bill_id == bill_id,
+            or_(VendorReturn.voided == False, VendorReturn.voided.is_(None)),  # noqa: E712
+        )
+    )).scalars().all()
+    ret_ids = list(dict.fromkeys(r.id for r in ret_rows))
+
+    if not ret_ids:
+        status = str(getattr(bill, "return_status", None) or "none").lower()
+        if status not in ("", "none"):
+            await recalc_bill_after_vendor_credit(db, bill_id)
+            await db.commit()
+            return {"deleted": [], "count": 0, "cleared_legacy": True, "number": bill.number}
+        raise HTTPException(400, "This bill has no returns to delete")
+
+    result = await bulk_delete_returns(BulkDeleteIn(ids=ret_ids), db=db, user=user)
+    bill = (await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))).scalar_one_or_none()
+    return {**result, "number": bill.number if bill is not None else None}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1700,6 +1797,179 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user:
         raise HTTPException(404, "Payment not found")
     await enforce_branch_access(p.branch_id, user=user, db=db)
     return _vendor_payment_dict(p, p.allocations)
+
+
+@router.put("/payments/{payment_id}", dependencies=[Depends(require_perm("purchases.edit"))])
+async def update_payment(
+    payment_id: str,
+    data: VendorPaymentCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Edit an active vendor payment — reverse allocations, then re-apply."""
+    from sqlalchemy import delete as sa_delete
+
+    res = await db.execute(
+        select(VendorPayment)
+        .options(selectinload(VendorPayment.allocations))
+        .where(VendorPayment.id == payment_id)
+    )
+    pay = res.unique().scalar_one_or_none()
+    if not pay:
+        raise HTTPException(404, "Payment not found")
+    await enforce_branch_access(pay.branch_id, user=user, db=db)
+    if getattr(pay, "voided", False):
+        raise HTTPException(400, "Cannot edit a voided payment")
+    if data.vendor_id != pay.vendor_id:
+        raise HTTPException(400, "Cannot change the vendor on a payment — void and recreate instead")
+
+    old_mode = pay.payment_mode
+    await reverse_vendor_payment(db, pay)
+    today_void = datetime.now().strftime("%Y-%m-%d")
+    await void_payment_record(
+        db,
+        source_document_type="vendor_payment",
+        source_document_id=pay.id,
+        voided_at=today_void,
+    )
+    if old_mode == "cash":
+        await void_cash_for_payment(
+            db,
+            source_type="purchase_payment",
+            source_id=pay.id,
+            voided_by=getattr(user, "name", None) or "Staff",
+            reason=f"Vendor payment {pay.number} edited",
+        )
+    await db.execute(
+        sa_delete(VendorPaymentAllocation).where(VendorPaymentAllocation.payment_id == pay.id)
+    )
+    await db.flush()
+
+    vendor = (await db.execute(
+        select(Vendor).where(Vendor.id == data.vendor_id)
+    )).scalar_one_or_none()
+    if not vendor:
+        raise HTTPException(404, "Vendor not found")
+
+    bill_ids = [a.bill_id for a in data.allocations]
+    if len(set(bill_ids)) != len(bill_ids):
+        raise HTTPException(400, "Duplicate bill in allocations")
+    bill_rows = (await db.execute(
+        select(PurchaseBill).where(PurchaseBill.id.in_(bill_ids))
+    )).scalars().all()
+    if len(bill_rows) != len(bill_ids):
+        raise HTTPException(400, "One or more bills not found")
+    bill_by_id = {b.id: b for b in bill_rows}
+    for branch_id in {b.branch_id for b in bill_rows if b.branch_id}:
+        await enforce_branch_access(branch_id, user=user, db=db)
+    for b in bill_rows:
+        if b.vendor_id != data.vendor_id:
+            raise HTTPException(400, f"Bill {b.number} does not belong to {vendor.name}")
+        st = str(b.status.value) if hasattr(b.status, "value") else str(b.status)
+        if st == "cancelled":
+            raise HTTPException(400, f"Bill {b.number} is cancelled")
+        balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+        if balance <= 0:
+            raise HTTPException(400, f"Bill {b.number} already settled")
+
+    requested_total = sum(float(a.amount) for a in data.allocations)
+    if data.payment_mode == "credit":
+        for a in data.allocations:
+            b = bill_by_id[a.bill_id]
+            balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+            if float(a.amount) > balance + 0.001:
+                raise HTTPException(
+                    400,
+                    f"Credit mode can't overpay — {b.number} balance is MVR{round(balance, 2)}",
+                )
+        avail = float(vendor.credit_balance or 0)
+        if avail + 0.001 < requested_total:
+            raise HTTPException(
+                400,
+                f"Insufficient vendor credit — {vendor.name} has MVR{round(avail, 2)} available, "
+                f"payment totals MVR{round(requested_total, 2)}",
+            )
+
+    total_credit = 0.0
+    total_amount = 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    for a in data.allocations:
+        b = bill_by_id[a.bill_id]
+        balance = max(0.0, float(b.total or 0) - float(b.paid_amount or 0))
+        applied = min(float(a.amount), balance)
+        excess = max(0.0, float(a.amount) - balance)
+        b.paid_amount = round(float(b.paid_amount or 0) + applied, 2)
+        b.payment_mode = data.payment_mode
+        b.status = "paid" if b.paid_amount >= float(b.total or 0) else "partial"
+        total_credit += excess
+        total_amount += float(a.amount)
+
+    if total_credit > 0:
+        await adjust_vendor_credit(
+            db,
+            data.vendor_id,
+            total_credit,
+            entry_type="overpayment",
+            source_type="vendor_payment",
+            source_number=pay.number,
+        )
+
+    pay.date = data.date or today
+    pay.total_amount = round(total_amount, 2)
+    pay.payment_mode = data.payment_mode
+    pay.payment_ref = data.payment_ref or ""
+    pay.notes = data.notes
+    pay.credit_applied = round(total_credit, 2)
+    pay.branch_id = data.branch_id or pay.branch_id
+    pay.branch_name = data.branch_name or pay.branch_name
+    pay.vendor_name = vendor.name
+    pay.voided = False
+    pay.voided_at = None
+
+    for a in data.allocations:
+        b = bill_by_id[a.bill_id]
+        db.add(VendorPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pay.id,
+            bill_id=b.id,
+            bill_number=b.number,
+            amount=round(float(a.amount), 2),
+        ))
+
+    if data.payment_mode == "credit":
+        await adjust_vendor_credit(
+            db,
+            data.vendor_id,
+            -round(total_amount, 2),
+            entry_type="payment_debit",
+            source_type="vendor_payment",
+            source_ref=pay.id,
+            source_number=pay.number,
+        )
+
+    await record_vendor_payment(db, pay)
+    if data.payment_mode == "cash":
+        await record_cash_out(
+            db,
+            branch_id=pay.branch_id or "",
+            amount=round(total_amount, 2),
+            date=pay.date,
+            description=f"Vendor payment {pay.number}",
+            category="Purchase — Cash Payment",
+            source_type="purchase_payment",
+            source_id=pay.id,
+            source_ref=pay.number,
+            recorded_by=getattr(user, "name", None) or data.created_by or "Staff",
+        )
+    await sync_vendor_outstanding(db, data.vendor_id)
+    await db.commit()
+    return {
+        "id": pay.id,
+        "number": pay.number,
+        "total_amount": round(total_amount, 2),
+        "credit_applied": round(total_credit, 2),
+        "allocations_count": len(data.allocations),
+    }
 
 
 @router.post("/payments/{payment_id}/void", dependencies=[Depends(require_perm("purchases.edit"))])
@@ -2151,9 +2421,52 @@ async def get_return(return_id: str, db: AsyncSession = Depends(get_db), user: U
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == return_id))
     return _return_dict(r, li_res.scalars().all())
 
+
+@router.put("/returns/{return_id}", dependencies=[Depends(require_perm("purchases.create", "purchases.edit"))])
+async def update_return(
+    return_id: str,
+    data: VendorReturnCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Edit an active vendor return — reverse stock/bill effects, then re-apply."""
+    from sqlalchemy import delete as sa_delete
+
+    result = await db.execute(
+        select(VendorReturn)
+        .options(selectinload(VendorReturn.line_items))
+        .where(VendorReturn.id == return_id)
+    )
+    ret = result.unique().scalar_one_or_none()
+    if not ret:
+        raise HTTPException(404, "Return not found")
+    await enforce_branch_access(ret.branch_id, user=user, db=db)
+    if getattr(ret, "voided", False) or str(getattr(ret, "status", "")).lower() == "void":
+        raise HTTPException(400, "Cannot edit a voided vendor return")
+    if data.bill_id != ret.bill_id:
+        raise HTTPException(400, "Cannot change the bill on a return — void and recreate instead")
+
+    await _reverse_vendor_return_effects(db, ret)
+    await db.execute(sa_delete(ReturnLineItem).where(ReturnLineItem.return_id == ret.id))
+    await db.flush()
+    await recalc_bill_after_vendor_credit(db, ret.bill_id)
+    return await _apply_vendor_return(data, db, user, existing=ret)
+
+
 @router.post("/returns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
 async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
-    """Process a vendor return against an existing bill.
+    """Process a vendor return against an existing bill."""
+    return await _apply_vendor_return(data, db, user)
+
+
+async def _apply_vendor_return(
+    data: VendorReturnCreate,
+    db: AsyncSession,
+    user: User,
+    *,
+    existing: Optional[VendorReturn] = None,
+):
+    """Create or re-apply a vendor return. Used by create_return and update_return.
 
     2026-05-25 changes:
       • Per-line cumulative cap — matches sales returns. Rejects when
@@ -2234,10 +2547,6 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
         tax_total += line_tax
 
     today = datetime.now().strftime("%Y-%m-%d")
-    count_res = await db.execute(select(func.count(VendorReturn.id)))
-    count = count_res.scalar() or 0
-    return_num = f"RET-{datetime.now().year}-{300 + count:04d}"
-
     vendor_result = await db.execute(select(Vendor).where(Vendor.id == data.vendor_id))
     vendor = vendor_result.scalar_one_or_none()
 
@@ -2247,28 +2556,44 @@ async def create_return(data: VendorReturnCreate, db: AsyncSession = Depends(get
     # payment already made is reduced by up to the return total.
     credited = round(min(return_total, bill_paid), 2)
 
-    ret = VendorReturn(
-        id=str(uuid.uuid4()),
-        number=return_num,
-        bill_id=data.bill_id,
-        bill_number=bill.number,
-        vendor_id=data.vendor_id,
-        vendor_name=vendor.name if vendor else data.vendor_id,
-        branch_id=bill.branch_id,
-        branch_name=bill.branch_name,
-        date=today,
-        reason=data.reason,
-        subtotal=round(subtotal, 2),
-        tax_total=round(tax_total, 2),
-        total=return_total,
-        credited_amount=credited,
-        # 2026-05-25: vendor returns now land as `paid` (= processed /
-        # terminal). The /returns/{id}/approve endpoint stays for legacy
-        # data but isn't used by the new UI.
-        status="paid",
-        notes=data.notes,
-    )
-    db.add(ret)
+    if existing is not None:
+        ret = existing
+        ret.reason = data.reason
+        ret.subtotal = round(subtotal, 2)
+        ret.tax_total = round(tax_total, 2)
+        ret.total = return_total
+        ret.credited_amount = credited
+        ret.status = "paid"
+        ret.voided = False
+        ret.voided_at = None
+        ret.notes = data.notes
+        ret.date = today
+        await db.flush()
+    else:
+        return_num = await _next_vendor_return_number(db)
+
+        ret = VendorReturn(
+            id=str(uuid.uuid4()),
+            number=return_num,
+            bill_id=data.bill_id,
+            bill_number=bill.number,
+            vendor_id=data.vendor_id,
+            vendor_name=vendor.name if vendor else data.vendor_id,
+            branch_id=bill.branch_id,
+            branch_name=bill.branch_name,
+            date=today,
+            reason=data.reason,
+            subtotal=round(subtotal, 2),
+            tax_total=round(tax_total, 2),
+            total=return_total,
+            credited_amount=credited,
+            # 2026-05-25: vendor returns now land as `paid` (= processed /
+            # terminal). The /returns/{id}/approve endpoint stays for legacy
+            # data but isn't used by the new UI.
+            status="paid",
+            notes=data.notes,
+        )
+        db.add(ret)
 
     for r, bill_line, _ln, _lt in return_rows:
         # 2026-05-31: a vendor return SENDS GOODS BACK to the vendor, so it
@@ -2790,6 +3115,24 @@ async def _next_grn_number(db: AsyncSession) -> str:
 async def _next_bill_number(db: AsyncSession) -> str:
     count = (await db.execute(select(func.count(PurchaseBill.id)))).scalar() or 0
     return f"PUR-{datetime.now().year}-{400 + count:04d}"
+
+
+async def _next_vendor_return_number(db: AsyncSession) -> str:
+    """Next RET-YYYY-NNNN from max existing suffix (avoids collisions after deletes)."""
+    year = datetime.now().year
+    prefix = f"RET-{year}-"
+    rows = (
+        await db.execute(
+            select(VendorReturn.number).where(VendorReturn.number.like(f"{prefix}%"))
+        )
+    ).scalars().all()
+    max_n = 299
+    for num in rows:
+        try:
+            max_n = max(max_n, int(str(num)[len(prefix):]))
+        except (ValueError, TypeError):
+            continue
+    return f"{prefix}{max_n + 1:04d}"
 
 
 async def _create_grn_draft(
@@ -4735,6 +5078,8 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                 bill.paid_amount = new_paid
                 if new_paid <= 0:
                     bill.status = "pending"
+                    bill.payment_mode = None
+                    bill.payment_ref = None
                 elif new_paid < float(bill.total or 0):
                     bill.status = "partial"
                 _log_purchase_bill_history(db, user=user,
