@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, statusLabel, exportToCSV } from '@/utils/helpers'
+import { fmt, statusLabel, exportToCSV, formatLabel } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -59,7 +59,7 @@ const INVOICE_STATUS_FILTER_OPTIONS = statusOptions(['paid', 'pending', 'partial
 const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['pending', 'processed', 'void'])
 const ORDER_STATUS_FILTER_OPTIONS = ['draft', 'pending_approval', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
   id: s,
-  label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+  label: formatLabel(s),
 }))
 
 const VALID_TABS = new Set(TABS.map((t) => t.id))
@@ -79,7 +79,7 @@ function displayPaymentMode(raw) {
   if (!raw) return '—'
   const v = String(raw).trim().toLowerCase()
   if (!VALID_PAYMENT_MODES.has(v)) return '—'
-  return v.replace('_', ' ').toUpperCase()
+  return formatLabel(v)
 }
 
 export default function SalesPage() {
@@ -1299,7 +1299,7 @@ export default function SalesPage() {
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
                         if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono">{fmt(q.total)}</td>
-                        if (id === 'status') return <td key={id}><Chip status={q.status === 'sent' ? 'active' : q.status === 'accepted' ? 'success' : 'draft'} label={q.status.charAt(0).toUpperCase() + q.status.slice(1)} /></td>
+                        if (id === 'status') return <td key={id}><Chip status={q.status === 'sent' ? 'active' : q.status === 'accepted' ? 'success' : 'draft'} label={formatLabel(q.status)} /></td>
                         return null
                       })}
                       <td>
@@ -1575,7 +1575,7 @@ export default function SalesPage() {
                           )
                         }
                         if (id === 'reason') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
-                        if (id === 'status') return <td key={id}><Chip status={r.status === 'processed' ? 'paid' : r.status} label={(r.status || '').charAt(0).toUpperCase() + (r.status || '').slice(1)} /></td>
+                        if (id === 'status') return <td key={id}><Chip status={r.status === 'processed' ? 'paid' : r.status} label={formatLabel(r.status)} /></td>
                         return null
                       })}
                       <td>
@@ -1735,7 +1735,7 @@ export default function SalesPage() {
                           if (id === 'method') {
                             return (
                               <td key={id}>{p.paymentMode
-                                ? <Chip status={p.paymentMode} label={String(p.paymentMode).replace('_', ' ').toUpperCase()} />
+                                ? <Chip status={p.paymentMode} label={formatLabel(p.paymentMode)} />
                                 : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                             )
                           }
@@ -1904,7 +1904,7 @@ export default function SalesPage() {
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                           if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                           if (id === 'amount') return <td key={id} className="text-right mono">{fmt(o.total)}</td>
-                          if (id === 'status') return <td key={id}><Chip status={o.status} label={(o.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /></td>
+                          if (id === 'status') return <td key={id}><Chip status={o.status} label={formatLabel(o.status)} /></td>
                           return null
                         })}
                         <td>

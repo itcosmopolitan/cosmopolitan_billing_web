@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
+import { formatLabel } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import OrderFormModal from './OrderFormModal'
@@ -54,7 +55,7 @@ export default function OrderFormPage({ mode = 'create' }) {
           if (cancelled) return
           if (!readOnly) {
             if (['pending_approval', 'converted', 'cancelled', 'partially_invoiced'].includes(so.status)) {
-              toast.error(`Cannot edit a ${String(so.status).replace(/_/g, ' ')} sales order`)
+              toast.error(`Cannot edit a ${formatLabel(so.status)} sales order`)
               navigate('/sales?tab=orders', { replace: true })
               return
             }

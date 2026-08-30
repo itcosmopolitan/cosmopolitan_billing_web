@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fmt } from '@/utils/helpers'
+import { fmt, formatLabel } from '@/utils/helpers'
 import { Chip, CopyableId, AlertBar } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
@@ -30,7 +30,7 @@ export default function PaymentDetailPanel({
       value: (detail?.creditApplied || 0) > 0 ? fmt(detail.creditApplied) : '—',
       tone: (detail?.creditApplied || 0) > 0 ? 'var(--amber)' : undefined,
     },
-    { label: 'Method', value: detail?.paymentMode ? String(detail.paymentMode).replace(/_/g, ' ').toUpperCase() : '—' },
+    { label: 'Method', value: detail?.paymentMode ? formatLabel(detail.paymentMode) : '—' },
     { label: 'Date', value: detail?.date || '—' },
   ]
 
@@ -74,7 +74,7 @@ export default function PaymentDetailPanel({
               {
                 label: 'Method',
                 value: detail?.paymentMode
-                  ? <Chip status={detail.paymentMode} label={String(detail.paymentMode).replace('_', ' ').toUpperCase()} />
+                  ? <Chip status={detail.paymentMode} label={formatLabel(detail.paymentMode)} />
                   : '—',
               },
               { label: 'Reference', value: detail?.paymentRef || '—' },

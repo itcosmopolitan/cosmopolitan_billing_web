@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_USERS_URL } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, exportToCSV } from '@/utils/helpers'
+import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
 import { decomposeAddress } from '@/utils/address'
 import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
@@ -348,7 +348,7 @@ export default function CustomersPage() {
               Email: c.email || '—',
               Address: c.address || '—',
               'GST Reg No': c.gstIn || '—',
-              Type: (c.type || 'Retail').charAt(0).toUpperCase() + (c.type || 'Retail').slice(1),
+              Type: formatLabel(c.type || 'Retail'),
               'Account Limit (MVR)': c.creditLimit || 0,
               'Outstanding (MVR)': c.outstanding || 0,
               'Total Purchases (MVR)': c.totalPurchases || 0,

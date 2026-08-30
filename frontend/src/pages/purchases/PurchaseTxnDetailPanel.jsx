@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { purchasesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtQty } from '@/utils/helpers'
+import { fmt, fmtQty, formatLabel } from '@/utils/helpers'
 import { Chip, ReturnStatusChip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import {
@@ -13,7 +13,7 @@ import {
 
 function displayPaymentMode(raw) {
   if (!raw) return '—'
-  return String(raw).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  return formatLabel(raw)
 }
 
 const META = {

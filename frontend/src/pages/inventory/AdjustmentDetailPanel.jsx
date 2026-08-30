@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useCan } from '@/auth/permissions'
-import { fmtDateTime } from '@/utils/helpers'
+import { fmtDateTime, formatLabel } from '@/utils/helpers'
 import { Chip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
@@ -49,7 +49,7 @@ export default function AdjustmentDetailPanel({
       value: (
         <Chip
           status={detail?.status === 'approved' ? 'active' : detail?.status === 'pending' ? 'pending' : 'draft'}
-          label={detail?.status ? detail.status.charAt(0).toUpperCase() + detail.status.slice(1) : '—'}
+          label={detail?.status ? formatLabel(detail.status) : '—'}
         />
       ),
     },

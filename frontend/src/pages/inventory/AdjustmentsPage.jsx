@@ -12,7 +12,7 @@ import {
 } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
-import { fmtDate, fmtDateTime, fmtQty } from '@/utils/helpers'
+import { fmtDate, fmtDateTime, fmtQty, formatLabel } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
@@ -557,7 +557,7 @@ export default function AdjustmentsPage() {
                             <td key={id}>
                               <Chip
                                 status={r.status === 'approved' ? 'active' : r.status === 'pending' ? 'pending' : 'draft'}
-                                label={r.status?.charAt(0).toUpperCase() + r.status?.slice(1)}
+                                label={formatLabel(r.status)}
                               />
                             </td>
                           )

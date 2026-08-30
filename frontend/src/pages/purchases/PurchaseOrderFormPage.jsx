@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { purchasesAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
+import { formatLabel } from '@/utils/helpers'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import PurchaseOrderFormModal from './PurchaseOrderFormModal'
 import { emptyPoForm, poFromRow, lineDiscountToPercent } from './purchaseFormShared'
@@ -46,7 +47,7 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
         if (cancelled) return
         if (!readOnly) {
           if (['pending_approval', 'converted', 'cancelled', 'partially_received'].includes(po.status)) {
-            toast.error(`Cannot edit a ${String(po.status).replace(/_/g, ' ')} purchase order`)
+            toast.error(`Cannot edit a ${formatLabel(po.status)} purchase order`)
             navigate('/purchases?tab=orders', { replace: true })
             return
           }

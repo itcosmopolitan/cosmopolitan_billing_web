@@ -233,7 +233,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
     const m = log.module ?? '';
     const s = String(m).trim();
     if (!s) return '—';
-    return s.charAt(0).toUpperCase() + s.slice(1);
+    return humanizeLabel(s) || '—';
   })();
 
   const actionName = toTitleCase(log.action || 'Event');

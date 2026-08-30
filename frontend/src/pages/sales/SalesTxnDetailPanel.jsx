@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtQty } from '@/utils/helpers'
+import { fmt, fmtQty, formatLabel } from '@/utils/helpers'
 import { Chip, CopyableId, ReturnStatusChip, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import {
@@ -26,6 +26,8 @@ function displayPaymentMode(raw, detail) {
   if (!raw) return '—'
 
   const value = String(raw).trim()
+  const lower = value.toLowerCase()
+
   const standardMap = {
     cash: 'Cash',
     card: 'Card',
@@ -39,10 +41,10 @@ function displayPaymentMode(raw, detail) {
     wallet: 'Wallet',
   }
 
-  const direct = standardMap[value.toLowerCase()]
+  const direct = standardMap[lower]
   if (direct) return direct
 
-  return value.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  return formatLabel(value)
 }
 
 function formatDiscPct(item) {
@@ -129,12 +131,12 @@ export default function SalesTxnDetailPanel({
     { label: 'Credit total', value: fmt(detail?.total), tone: 'var(--red)' },
     { label: 'Credited', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
     { label: 'Refund', value: detail?.refundMethod || '—' },
-    { label: 'Status', value: <Chip status={detail?.status === 'processed' ? 'paid' : detail?.status} label={(detail?.status || '').charAt(0).toUpperCase() + (detail?.status || '').slice(1)} /> },
+    { label: 'Status', value: <Chip status={detail?.status === 'processed' ? 'paid' : detail?.status} label={formatLabel(detail?.status)} /> },
   ] : [
     { label: 'Total', value: fmt(detail?.total) },
     { label: 'Lines', value: lineCount },
     { label: kind === 'quote' ? 'Valid until' : 'Expected', value: detail?.validUntil || detail?.expectedDate || '—' },
-    { label: 'Status', value: <Chip status={detail?.status} label={String(detail?.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /> },
+    { label: 'Status', value: <Chip status={detail?.status} label={formatLabel(detail?.status)} /> },
   ]
 
   const footer = (
@@ -325,7 +327,7 @@ export default function SalesTxnDetailPanel({
                 { label: 'Created by', value: detail?.createdBy || '—' },
               ] : []),
               { label: 'Date', value: detail?.date || '—' },
-              { label: 'Status', value: <Chip status={detail?.status} label={String(detail?.status || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} /> },
+              { label: 'Status', value: <Chip status={detail?.status} label={formatLabel(detail?.status)} /> },
             ]}
             />
           </DetailSection>

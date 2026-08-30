@@ -23,7 +23,7 @@
  *                     effects". E.g. ["Stock restored: 18 units", ...]
  */
 import { Modal, AlertBar } from './ui'
-import { fmt } from '@/utils/helpers'
+import { fmt, formatLabel } from '@/utils/helpers'
 
 export default function BulkDeleteConfirmModal({
   open,
@@ -37,7 +37,7 @@ export default function BulkDeleteConfirmModal({
 }) {
   const count = items.length
   const pluralLabel = count === 1 ? entityLabel : `${entityLabel}s`
-  const title = `Delete ${count} ${pluralLabel.charAt(0).toUpperCase() + pluralLabel.slice(1)}?`
+  const title = `Delete ${count} ${formatLabel(pluralLabel)}?`
   const hasBlocked = blocked.length > 0
   const errorMessage = hasBlocked
     ? [...new Set(blocked.map((b) => b.reason).filter(Boolean))].join(' ')
@@ -129,7 +129,7 @@ export default function BulkDeleteConfirmModal({
                 )}
                 {it.status && (
                   <span style={statusPillStyle(it.status)}>
-                    {String(it.status).charAt(0).toUpperCase() + String(it.status).slice(1)}
+                    {formatLabel(it.status)}
                   </span>
                 )}
               </div>
