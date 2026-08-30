@@ -54,7 +54,7 @@ export default function CustomersPage() {
     country: '',
     postalCode: '',
     branch_id: '',
-    credit_limit: '10000',
+    credit_limit: '0',
     customer_type: 'retail',
     key_account_manager: '',
     key_account_manager_name: '',
@@ -77,7 +77,7 @@ export default function CustomersPage() {
       country: '',
       postalCode: '',
       branch_id: initial.branch_id || '',
-      credit_limit: initial.credit_limit ?? '10000',
+      credit_limit: initial.credit_limit ?? '0',
       customer_type: initial.customer_type || 'retail',
       key_account_manager: initial.key_account_manager || '',
       key_account_manager_name: initial.key_account_manager_name || '',
@@ -89,7 +89,7 @@ export default function CustomersPage() {
   const openAddCustomerModal = () => {
     resetCustomerForm({
       branch_id: branches[0]?.id || '',
-      credit_limit: '10000',
+      credit_limit: '0',
       customer_type: 'retail',
       key_account_manager: '',
       key_account_manager_name: '',
@@ -250,10 +250,10 @@ export default function CustomersPage() {
         address: '',
         gst_in: form.gst_in?.trim() || undefined,
         branch_id: form.branch_id,
-        credit_limit: Number(form.credit_limit) || 0,
+        credit_limit: form.customer_type === 'retail' ? 0 : (Number(form.credit_limit) || 0),
         customer_type: form.customer_type,
         key_account_manager: form.key_account_manager?.trim() || null,
-        credit_terms: form.credit_terms?.trim() || null,
+        credit_terms: form.customer_type === 'retail' ? null : (form.credit_terms?.trim() || null),
         street1: form.street1?.trim(),
         street2: form.street2?.trim() || undefined,
         street3: form.street3?.trim() || undefined,
@@ -302,7 +302,10 @@ export default function CustomersPage() {
     )
   }
 
-  const creditUsedPct = (c) => c.creditLimit > 0 ? Math.min(100, (c.outstanding / c.creditLimit) * 100) : 0
+  const creditUsedPct = (c) => {
+    const owed = Math.max(0, Number(c.outstanding) || 0)
+    return c.creditLimit > 0 ? Math.min(100, (owed / c.creditLimit) * 100) : 0
+  }
 
   const openCreditLedger = async (customer) => {
     setLedgerCustomer(customer)
@@ -607,7 +610,8 @@ export default function CustomersPage() {
                           <td
                             key={id}
                             className="text-right mono"
-                            style={{ color: c.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}
+                            style={{ color: c.outstanding > 0 ? 'var(--red)' : c.outstanding < 0 ? 'var(--green)' : undefined }}
+                            title={c.outstanding < 0 ? 'Account credit (negative outstanding)' : undefined}
                           >
                             {fmt(c.outstanding)}
                           </td>
@@ -761,7 +765,15 @@ export default function CustomersPage() {
             />
           </FormGroup>
           <FormGroup label="Pricing category" required>
-            <AutocompleteDropdown value={form.customer_type} onChange={(v) => pf('customer_type', v)} options={CUSTOMER_TYPE_OPTIONS} isSearchFieldRequired={false} />
+            <AutocompleteDropdown
+              value={form.customer_type}
+              onChange={(v) => {
+                pf('customer_type', v)
+                if (v === 'retail') pf('credit_limit', '0')
+              }}
+              options={CUSTOMER_TYPE_OPTIONS}
+              isSearchFieldRequired={false}
+            />
           </FormGroup>
         </FormRow>
         <FormRow>
@@ -792,18 +804,22 @@ export default function CustomersPage() {
               emptyLabel="No users found"
             />
           </FormGroup>
-          <FormGroup label="Account limit (MVR)">
-            <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
-          </FormGroup>
+          {form.customer_type !== 'retail' && (
+            <FormGroup label="Account limit (MVR)">
+              <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
+            </FormGroup>
+          )}
         </FormRow>
-        <FormGroup label="Credit terms">
-          <input
-            className="form-input"
-            value={form.credit_terms}
-            onChange={e => pf('credit_terms', e.target.value)}
-            placeholder="e.g. Cash, Net 7 days, Net 30 days"
-          />
-        </FormGroup>
+        {form.customer_type !== 'retail' && (
+          <FormGroup label="Credit terms">
+            <input
+              className="form-input"
+              value={form.credit_terms}
+              onChange={e => pf('credit_terms', e.target.value)}
+              placeholder="e.g. Cash, Net 7 days, Net 30 days"
+            />
+          </FormGroup>
+        )}
       </Modal>
 
       <CustomerDetailPanel

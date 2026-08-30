@@ -159,6 +159,7 @@ don't have), customer.credit_balance >= invoice.total. Both create_invoice
 and record_payment enforce; both atomically debit + AuditLog.
 """
 PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
+TENDER_PAYMENT_MODES = frozenset({"cash", "card", "upi", "bank_transfer"})
 
 
 def _coerce_payment_mode_value(v):
@@ -188,9 +189,12 @@ async def _validate_unpaid_account_limit(
     customer_id: Optional[str],
     invoice_total: float,
 ) -> None:
-    """Prevent a new unpaid invoice from exceeding the customer's limit."""
+    """Block unpaid sales for walk-in/retail; enforce account limit otherwise."""
     if not customer_id:
-        return
+        raise HTTPException(
+            400,
+            "Walk-in sales require a payment method — unpaid invoices are not allowed.",
+        )
 
     await sync_customer_outstanding(db, customer_id)
     customer = (
@@ -198,6 +202,17 @@ async def _validate_unpaid_account_limit(
     ).scalar_one_or_none()
     if not customer:
         return
+
+    ctype = str(
+        getattr(customer, "customer_type", None)
+        or getattr(customer, "type", None)
+        or "retail"
+    ).strip().lower()
+    if ctype in ("", "retail"):
+        raise HTTPException(
+            400,
+            "Retail customers must pay at sale — select a payment method to continue.",
+        )
 
     outstanding = float(customer.outstanding or 0)
     limit = float(customer.credit_limit or 0)
@@ -385,6 +400,10 @@ class SaleCreate(BaseModel):
     payment_mode: Optional[PaymentMode] = None
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
+    # Optional store-credit draw (not a payment method). Capped to
+    # min(requested, available balance, sale total). Remainder must use
+    # cash/card/upi/bank_transfer when > 0.
+    store_credit_amount: Optional[float] = None
     # Phase 4: pos | invoice | sales_order | quotation (default invoice).
     origin: Optional[str] = None
     # Prefilled-form conversions: link the new invoice back to its source doc.
@@ -402,7 +421,8 @@ class InvoiceUpdate(BaseModel):
     """Editable fields for an unpaid invoice with no payments or credit notes.
 
     POS receipts use the same path. Pass `payment_mode` to settle on save;
-    omit / null to leave the invoice unpaid.
+    omit / null to leave the invoice unpaid. Pass `store_credit_amount` to
+    apply available store credit before the tender method.
     """
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
@@ -413,6 +433,7 @@ class InvoiceUpdate(BaseModel):
     payment_mode: Optional[PaymentMode] = None
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
+    store_credit_amount: Optional[float] = None
 
     @field_validator("payment_mode", mode="before")
     @classmethod
@@ -426,22 +447,12 @@ class SourceOrderLineIn(BaseModel):
     qty: int = Field(..., gt=0)
 
 class PaymentIn(BaseModel):
-    amount: float
-    # Sales Phase 1 (2026-05-23): `mode` is now required (was defaulted to
-    # "bank_transfer" before). Settling an invoice without recording the
-    # method loses the audit trail of what cleared it — and the new POS
-    # checkbox flow makes the operator pick a method explicitly anyway, so
-    # there's no reason this endpoint should silently default.
-    #
-    # 2026-05-24: tightened from `str` → `PaymentMode` Literal. Same
-    # allow-list as SaleCreate.payment_mode (POS). The record-payment
-    # modal in SalesPage.jsx offers the same 4 options as POS — cheque
-    # was removed at user request (POS never supported it; carrying a
-    # wider allow-list here just caused drift). Bogus values now
-    # return 422 with the expected list. The mode is also PERSISTED on
-    # the invoice (see `record_payment` → `add_payment_atomic`).
-    mode: PaymentMode
+    amount: float = 0
+    # Tender method for the cash/card/upi/bank portion. Optional when
+    # store_credit_amount covers the full amount being settled.
+    mode: Optional[PaymentMode] = None
     ref: str = ""
+    store_credit_amount: Optional[float] = None
 
     @field_validator("mode", mode="before")
     @classmethod
@@ -1030,6 +1041,19 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
         sales_order_number = so_res.scalar_one_or_none()
     d = _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
     d["payments"] = await _payments_for_invoice(db, inv.id)
+    credit_spent = 0.0
+    tender_paid = 0.0
+    for p in d["payments"] or []:
+        if p.get("voided"):
+            continue
+        amt = float(p.get("amount") or p.get("totalAmount") or 0)
+        mode = str(p.get("paymentMode") or "").lower()
+        if mode == "credit":
+            credit_spent += amt
+        else:
+            tender_paid += amt
+    d["storeCreditApplied"] = round(credit_spent, 2)
+    d["tenderPaid"] = round(tender_paid, 2)
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if org_row:
         d.setdefault('organisation', {})
@@ -1161,7 +1185,7 @@ async def update_invoice(
             await sync_customer_outstanding(db, prev_customer_id)
         if inv.customer_id:
             await sync_customer_outstanding(db, inv.customer_id)
-        if data.payment_mode:
+        if data.payment_mode or float(data.store_credit_amount or 0) > 0:
             await _record_full_settlement_payment(
                 db,
                 inv,
@@ -1169,9 +1193,13 @@ async def update_invoice(
                 ref=data.payment_ref,
                 user=user,
                 notes="Invoice edit settlement",
+                store_credit_amount=data.store_credit_amount,
             )
         else:
             inv.payment_mode = None
+            # Editing an unpaid live invoice — re-check walk-in/retail + account limit.
+            if float(inv.paid_amount or 0) <= 0.001:
+                await _validate_unpaid_account_limit(db, inv.customer_id, float(inv.total or 0))
 
     await db.commit()
     result = await db.execute(
@@ -1230,48 +1258,72 @@ async def create_invoice(
     # Line amount after line discount; document discount is applied next,
     # then GST is extracted from the remaining inclusive amount.
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
-    is_paid_at_create = data.payment_mode is not None
+    is_paid_at_create = data.payment_mode is not None or float(data.store_credit_amount or 0) > 0
     if direct:
         paid   = total if is_paid_at_create else 0.0
         status = "paid" if paid >= total else "pending"
     else:
         # Pending approval — land as draft; stock + payment deferred to approve step.
+        # payment_mode is kept on the row so approve can tender the remainder after
+        # auto-applying account credit (store_credit_amount is not persisted).
         paid   = 0.0
         status = InvoiceStatus.draft.value
     due_date = None
     if status in ("pending", "partial"):
         due_date = compute_due_date(data.date or today, None)
 
-    if direct and data.payment_mode is None:
-        await _validate_unpaid_account_limit(db, data.customer_id, total)
-
-    # 2026-05-25: 'credit' mode debits the customer's stored credit
-    # balance. Validations:
-    #   • customer_id required — walk-ins don't have a credit balance
-    #     to draw from. 400.
-    #   • customer.credit_balance >= total — partial-credit isn't
-    #     supported in this flow (would need a split-payment UI). 400.
-    # On success, the customer.credit_balance is debited atomically +
-    # an AuditLog row is written. The debit happens BELOW after the
-    # invoice is added, so it can be rolled back together with the
-    # invoice insert if anything later in the txn fails.
-    # Draft invoices skip the credit validation — the debit runs on approval.
-    credit_customer = None
-    if direct and data.payment_mode == "credit":
-        if not data.customer_id:
-            raise HTTPException(400, "Credit-mode sale requires a customer (walk-ins can't draw credit)")
-        cust_row = await db.execute(
-            select(Customer).where(Customer.id == data.customer_id)
+    # Resolve store-credit + tender split early so we can set paid/status.
+    # Direct invoices always auto-apply available account credit (POS parity),
+    # even when the client omits store_credit_amount.
+    settle_credit_use = 0.0
+    settle_tender = 0.0
+    settle_display_mode = data.payment_mode
+    if direct:
+        tender_mode = None if data.payment_mode == "credit" else data.payment_mode
+        require_tender = tender_mode is not None or float(data.store_credit_amount or 0) > 0
+        # Peek credit availability so unpaid account sales still draw credit.
+        _peek_cust, settle_credit_use = await _resolve_store_credit_use(
+            db,
+            customer_id=data.customer_id,
+            requested=data.store_credit_amount,
+            due=total,
+            legacy_full_credit=(data.payment_mode == "credit"),
+            auto_apply=(
+                data.payment_mode != "credit"
+                and float(data.store_credit_amount or 0) <= 0
+            ),
         )
-        credit_customer = cust_row.scalar_one_or_none()
-        if not credit_customer:
-            raise HTTPException(404, f"Customer {data.customer_id} not found")
-        available = float(credit_customer.credit_balance or 0)
-        if available < total:
-            raise HTTPException(
-                400,
-                f"Insufficient credit — customer has MVR{round(available, 2)} available, sale total is MVR{total}",
-            )
+        settle_tender = round(max(0.0, total - settle_credit_use), 2)
+        if settle_tender > 0.001 and tender_mode not in TENDER_PAYMENT_MODES:
+            if require_tender or float(data.store_credit_amount or 0) > 0:
+                raise HTTPException(
+                    400,
+                    "Select a payment method (Cash / Card / UPI / Bank Transfer) for the remaining amount",
+                )
+            # Unpaid remainder (account sale) — only credit portion settles now.
+            settle_tender = 0.0
+            tender_mode = None
+        paid_now = round(settle_credit_use + settle_tender, 2)
+        if settle_tender > 0.001:
+            settle_display_mode = tender_mode
+        elif settle_credit_use > 0 and paid_now >= total - 0.001:
+            settle_display_mode = "credit"
+        else:
+            settle_display_mode = None
+
+        if paid_now > 0.001:
+            is_paid_at_create = True
+            paid = paid_now
+            status = "paid" if paid_now >= total - 0.001 else "partial"
+        elif tender_mode in TENDER_PAYMENT_MODES:
+            # Explicit tender with zero due after credit — treat as paid.
+            is_paid_at_create = True
+            paid = total
+            status = "paid"
+
+        remaining_due = round(max(0.0, total - paid), 2)
+        if remaining_due > 0.001:
+            await _validate_unpaid_account_limit(db, data.customer_id, remaining_due)
 
     await _resolve_branch_scope(user, db, data.branch_id)
 
@@ -1305,10 +1357,9 @@ async def create_invoice(
         total=round(total, 2),
         paid_amount=round(paid, 2),
         # Stored value is either None (no payment yet) or one of the
-        # PaymentMode literals. Old rows with "credit" predate the
-        # 2026-05-23 tightening and stay as-is — read paths still
-        # tolerate them, but no new writes produce that value.
-        payment_mode=data.payment_mode,
+        # PaymentMode literals. Prefer tender method when split with
+        # store credit; "credit" only when credit covers the full total.
+        payment_mode=settle_display_mode if (direct and is_paid_at_create) else data.payment_mode,
         payment_ref=(data.payment_ref or '').strip() or None,
         status=status,
         due_date=due_date,
@@ -1347,112 +1398,32 @@ async def create_invoice(
                 allow_oversell=allow_oversell,
             )
 
-    # 2026-05-25: debit customer.credit_balance for credit-mode sales.
-    # The validation above already confirmed sufficient balance + a
-    # real customer; this just commits the debit + writes the audit
-    # trail. Same commit as the invoice insert so failure rolls back.
-    # Draft invoices skip this — the debit runs on approval.
-    if direct and data.payment_mode == "credit" and credit_customer is not None:
-        prev_balance, new_balance = await adjust_customer_credit(
+    # Settle: optional store-credit draw + tender for remainder.
+    # Use the amounts resolved above (incl. auto-apply) so drafts aren't needed
+    # for direct commits — and so a missing store_credit_amount still applies.
+    if direct and (is_paid_at_create or settle_credit_use > 0):
+        tender_for_apply = (
+            None
+            if data.payment_mode == "credit"
+            else data.payment_mode
+        )
+        await _apply_settlement_split(
             db,
-            credit_customer.id,
-            -total,
-            entry_type="sale_debit",
-            source_type="sale_invoice",
-            source_ref=inv.id,
-            source_number=inv.number,
-            created_by="POS",
-        )
-        db.add(AuditLog(
-            id=str(uuid.uuid4()),
-            action="customer_credit_debit",
-            user_id=getattr(user, "id", None),
-            user_name=getattr(user, "name", None),
-            module="sales",
-            ref=inv.number,
-            detail=(
-                f"Credit-mode sale {inv.number}: −MVR{total} from "
-                f"{credit_customer.name}'s credit (was MVR{prev_balance:.2f}, "
-                f"now MVR{new_balance:.2f})"
+            inv=inv,
+            due=total,
+            store_credit_amount=settle_credit_use if settle_credit_use > 0 else data.store_credit_amount,
+            payment_mode=tender_for_apply if settle_tender > 0.001 else (
+                data.payment_mode if data.payment_mode == "credit" else None
             ),
-            risk="low",
-            ip_address=None,
-            branch_id=data.branch_id,
-        ))
-        # Also write a CustomerPayment row so the Payments tab shows
-        # this sale alongside cash/upi/etc payments. Parity with the
-        # record_payment retrofit below.
-        pay = CustomerPayment(
-            id=str(uuid.uuid4()),
-            number=await allocate_customer_payment_number(db),
-            customer_id=credit_customer.id,
-            customer_name=credit_customer.name,
-            branch_id=data.branch_id,
-            branch_name=data.branch_name,
-            date=today,
-            total_amount=total,
-            payment_mode="credit",
-            payment_ref=data.payment_ref or "",
-            notes="POS credit-mode sale",
-            credit_applied=0.0,
-            created_by="POS",
+            payment_ref=data.payment_ref,
+            user=user,
+            notes_credit="Account credit applied at sale",
+            notes_tender="POS sale" if inv_origin == "pos" else "Invoice settlement",
+            auto_apply_credit=False,
+            require_tender_for_remainder=settle_tender > 0.001,
         )
-        db.add(pay)
-        db.add(CustomerPaymentAllocation(
-            id=str(uuid.uuid4()),
-            payment_id=pay.id,
-            invoice_id=inv.id,
-            invoice_number=inv.number,
-            amount=total,
-        ))
-        await record_customer_payment(db, pay)
 
-    # 2026-05-31: record a CustomerPayment for EVERY paid-at-POS sale (cash /
-    # card / upi / bank_transfer), not just credit-mode, so the Payments tab
-    # is a complete ledger — parity with record_payment + multi-invoice
-    # payments. Previously these settled the invoice but left no payment row,
-    # so cash-paid POS invoices were missing from the Payments tab.
-    # Draft invoices skip this — the payment runs on approval.
-    if direct and is_paid_at_create and data.payment_mode != "credit":
-        pos_pay = CustomerPayment(
-            id=str(uuid.uuid4()),
-            number=await allocate_customer_payment_number(db),
-            customer_id=inv.customer_id,
-            customer_name=inv.customer_name or "Walk-in",
-            branch_id=data.branch_id,
-            branch_name=data.branch_name,
-            date=today,
-            total_amount=total,
-            payment_mode=data.payment_mode,
-            payment_ref=data.payment_ref or "",
-            notes="POS sale",
-            credit_applied=0.0,
-            created_by="POS",
-        )
-        db.add(pos_pay)
-        db.add(CustomerPaymentAllocation(
-            id=str(uuid.uuid4()),
-            payment_id=pos_pay.id,
-            invoice_id=inv.id,
-            invoice_number=inv.number,
-            amount=total,
-        ))
-        await record_customer_payment(db, pos_pay)
-        if data.payment_mode == "cash":
-            await record_cash_in(
-                db,
-                branch_id=data.branch_id,
-                amount=total,
-                date=today,
-                description=f"Sale {inv.number}",
-                category="Sale — Cash",
-                source_type="sale_invoice",
-                source_id=pos_pay.id,
-                source_ref=inv.number,
-                recorded_by=data.cashier or "POS",
-            )
-
-    if direct and data.customer_id and status in ("pending", "partial"):
+    if direct and data.customer_id:
         await sync_customer_outstanding(db, data.customer_id)
 
     # For direct-commit invoices, link to source document immediately.
@@ -1590,67 +1561,62 @@ async def record_payment(
     if pre_balance <= 0:
         raise HTTPException(400, "Invoice already settled")
 
-    # 2026-05-25: credit-mode follow-up payment. Validate + debit
-    # customer.credit_balance the same way create_invoice does.
-    # Settling a pending invoice from existing credit is a common
-    # workflow (operator records the payment AFTER the sale).
-    credit_customer = None
-    if data.mode == "credit":
-        if not pre_row.customer_id:
-            raise HTTPException(400, "Credit-mode payment requires a customer (walk-in invoice can't draw credit)")
-        cust_row = await db.execute(
-            select(Customer).where(Customer.id == pre_row.customer_id)
-        )
-        credit_customer = cust_row.scalar_one_or_none()
-        if not credit_customer:
-            raise HTTPException(404, f"Customer {pre_row.customer_id} not found")
-        available = float(credit_customer.credit_balance or 0)
-        if available < data.amount:
+    inv_full = (
+        await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    ).scalar_one()
+
+    tender_amount = round(float(data.amount or 0), 2)
+    mode = data.mode
+    store_credit_req = data.store_credit_amount
+    if mode == "credit":
+        # Legacy: amount was drawn entirely from store credit.
+        store_credit_req = tender_amount if tender_amount > 0 else pre_balance
+        tender_amount = 0.0
+        mode = None
+
+    credit_cust, credit_use = await _resolve_store_credit_use(
+        db,
+        customer_id=pre_row.customer_id,
+        requested=store_credit_req,
+        due=pre_balance,
+        legacy_full_credit=False,
+    )
+    remaining_after_credit = round(max(0.0, pre_balance - credit_use), 2)
+
+    if tender_amount > 0.001:
+        if mode not in TENDER_PAYMENT_MODES:
             raise HTTPException(
                 400,
-                f"Insufficient credit — customer has MVR{round(available, 2)} available, payment is MVR{data.amount}",
+                "Select a payment method (Cash / Card / UPI / Bank Transfer) for the remaining amount",
             )
+    elif credit_use <= 0:
+        raise HTTPException(400, "amount must be > 0")
 
-    # Pass `mode` down so the atomic UPDATE also sets sale_invoices.payment_mode
-    # in the same statement (no risk of a partial update). Without this the
-    # invoice's payment_mode would stay at whatever it was at create time
-    # (None for pending invoices), making the UI Mode column lie / show "—".
+    total_toward = round(credit_use + tender_amount, 2)
+    display_mode = mode if tender_amount > 0.001 else ("credit" if credit_use > 0 else None)
+
     result = await add_payment_atomic(
         db,
         invoice_id=invoice_id,
-        amount=data.amount,
-        mode=data.mode,
+        amount=total_toward,
+        mode=display_mode,
     )
     if result is None:
         raise HTTPException(400, "amount must be > 0")
     paid, balance, credit_applied = result
+    # Overpay excess comes from the tender portion only.
+    if credit_applied > 0 and tender_amount + 0.001 < credit_applied:
+        credit_applied = round(max(0.0, tender_amount - remaining_after_credit), 2)
 
-    # Overpayment handling: route excess to customer credit OR reject for
-    # walk-ins. The pre-check above guarantees pre_balance > 0; any excess
-    # means the operator typed an amount larger than what was owed.
     customer_credit_after: Optional[float] = None
     if credit_applied > 0:
         if not pre_row.customer_id:
-            # Walk-in overpayment — nothing to credit. Bail BEFORE commit so
-            # the partial UPDATE rolls back cleanly. The atomic helper
-            # already capped the invoice at `total`, so without this rollback
-            # the invoice would settle correctly but the overpayment would
-            # silently vanish.
             await db.rollback()
             raise HTTPException(
                 400,
-                f"Walk-in invoice — reduce amount to MVR{round(pre_balance, 2)} "
+                f"Walk-in invoice — reduce amount to MVR{round(remaining_after_credit, 2)} "
                 f"or assign a customer first to capture the MVR{credit_applied} excess as credit",
             )
-        # Customer set — bump credit_balance + audit log.
-        # 2026-05-25: NEVER re-import Customer / AuditLog here. Both are
-        # already imported at the top of the file. A local import inside
-        # this conditional branch makes `Customer` a LOCAL variable for
-        # the entire function (Python scoping), so the retrofit code
-        # below that uses `Customer` in the credit_applied=0 path hits
-        # `UnboundLocalError` because the local was never assigned. The
-        # bug looked like a generic 500 on every legacy single-invoice
-        # payment without overpay. (Discovered 2026-05-25.)
         cust_row = await db.execute(
             select(Customer).where(Customer.id == pre_row.customer_id)
         )
@@ -1682,106 +1648,60 @@ async def record_payment(
                 ip_address=None,
                 branch_id=getattr(pre_row, "branch_id", None),
             ))
-    # (no customer_id) get "Walk-in" without a query.
-    if pre_row.customer_id:
-        cust_name_row = await db.execute(
-            select(Customer.name).where(Customer.id == pre_row.customer_id)
-        )
-        resolved_customer_name = cust_name_row.scalar() or "—"
-    else:
-        resolved_customer_name = "Walk-in"
 
-    pay = CustomerPayment(
-        id=str(uuid.uuid4()),
-        number=await allocate_customer_payment_number(db),
-        customer_id=pre_row.customer_id,  # nullable for walk-ins
-        customer_name=resolved_customer_name,
-        branch_id=None,                   # not surfaced in single-invoice payload
-        branch_name=None,
-        date=datetime.now().strftime("%Y-%m-%d"),
-        total_amount=round(float(data.amount), 2),
-        payment_mode=data.mode,
-        payment_ref=data.ref or "",
-        notes=None,
-        credit_applied=round(credit_applied, 2),
-        created_by="Staff",
-    )
-    db.add(pay)
-    db.add(CustomerPaymentAllocation(
-        id=str(uuid.uuid4()),
-        payment_id=pay.id,
-        invoice_id=invoice_id,
-        invoice_number=pre_row.number,
-        amount=round(float(data.amount), 2),
-    ))
-    await record_customer_payment(db, pay)
-    if data.mode == "cash":
-        await record_cash_in(
+    pay = None
+    if credit_use > 0 and credit_cust is not None:
+        pay = await _write_store_credit_payment(
             db,
-            branch_id=pay.branch_id or "",
-            amount=float(data.amount),
-            date=pay.date,
-            description=f"Payment on {pre_row.number}",
-            category="Sale — Cash",
-            source_type="customer_payment",
-            source_id=pay.id,
-            source_ref=pay.number,
-            recorded_by=pay.created_by or "Staff",
-        )
-
-    # 2026-05-25: debit credit balance for credit-mode payments. Same
-    # pattern as create_invoice — the validation above guaranteed
-    # sufficient balance; this commits the debit + writes audit.
-    if data.mode == "credit" and credit_customer is not None:
-        prev_balance, new_balance = await adjust_customer_credit(
-            db,
-            credit_customer.id,
-            -data.amount,
+            inv=inv_full,
+            customer=credit_cust,
+            amount=credit_use,
+            user=user,
+            notes="Store credit applied",
             entry_type="payment_debit",
-            source_type="sale_invoice",
-            source_ref=invoice_id,
-            source_number=pre_row.number,
         )
-        db.add(AuditLog(
-            id=str(uuid.uuid4()),
-            action="customer_credit_debit",
-            user_id=getattr(user, "id", None),
-            user_name=getattr(user, "name", None),
-            module="sales",
-            ref=pre_row.number,
-            detail=(
-                f"Credit-mode payment on {pre_row.number}: −MVR{data.amount} "
-                f"from {credit_customer.name}'s credit (was MVR{prev_balance:.2f}, "
-                f"now MVR{new_balance:.2f})"
-            ),
-            risk="low",
-            ip_address=None,
-            branch_id=getattr(pre_row, "branch_id", None),
-        ))
+        customer_credit_after = float(credit_cust.credit_balance or 0)
+
+    if tender_amount > 0.001 and mode:
+        pay = await _write_tender_payment(
+            db,
+            inv=inv_full,
+            amount=tender_amount,
+            mode=mode,
+            ref=data.ref,
+            user=user,
+            notes="Invoice payment",
+            overpay_credit=credit_applied,
+        )
 
     if pre_row.customer_id:
         await sync_customer_outstanding(db, pre_row.customer_id)
 
     next_status = "paid" if balance <= 0 else "partial"
-    applied_amount = round(max(0.0, float(data.amount) - float(credit_applied or 0)), 2)
+    applied_amount = round(credit_use + max(0.0, tender_amount - float(credit_applied or 0)), 2)
     await db.commit()
     await _write_post_commit_audit(
         db,
         action="Payment Recorded",
         module="Sales",
         reference_id=pre_row.number,
-        detail=f"Recorded payment of ₹{round(float(data.amount), 2)} for {pre_row.number}",
+        detail=(
+            f"Recorded payment of ₹{round(total_toward, 2)} for {pre_row.number}"
+            + (f" (store credit ₹{credit_use})" if credit_use else "")
+        ),
         user=user,
         request=request,
         branch_id=getattr(pre_row, "branch_id", None),
         metadata={
             "invoice_id": invoice_id,
-            "payment_id": pay.id,
-            "payment_number": pay.number,
-            "amount": round(float(data.amount), 2),
+            "payment_id": getattr(pay, "id", None),
+            "payment_number": getattr(pay, "number", None),
+            "amount": round(total_toward, 2),
+            "store_credit_applied": credit_use,
+            "tender_amount": tender_amount,
             "applied": applied_amount,
             "credit_applied": round(float(credit_applied or 0), 2),
-            "payment_mode": data.mode,
+            "payment_mode": display_mode,
             "payment_ref": data.ref or "",
             "status_from": pre_status,
             "status_to": next_status,
@@ -1792,6 +1712,8 @@ async def record_payment(
         "paid_amount": paid,
         "balance": balance,
         "credit_applied": credit_applied,
+        "store_credit_applied": credit_use,
+        "tender_amount": tender_amount,
         "customer_credit_balance": customer_credit_after,
     }
 
@@ -1983,10 +1905,6 @@ async def approve_invoice(
         raise HTTPException(403, "You cannot approve your own invoice")
 
     allow_oversell = await get_allow_overselling(db)
-    today_str = datetime.now().strftime("%Y-%m-%d")
-
-    if inv.payment_mode is None:
-        await _validate_unpaid_account_limit(db, inv.customer_id, float(inv.total or 0))
 
     # Apply stock for each tracked line item
     for li in inv.line_items:
@@ -2034,76 +1952,38 @@ async def approve_invoice(
     total = float(inv.total or 0)
     payment_mode = inv.payment_mode
 
-    # Apply payment recorded at create time
-    if payment_mode == "credit":
-        if inv.customer_id:
-            cust_res = await db.execute(select(Customer).where(Customer.id == inv.customer_id))
-            cust = cust_res.scalar_one_or_none()
-            if cust:
-                available = float(cust.credit_balance or 0)
-                if available < total:
-                    raise HTTPException(
-                        400,
-                        f"Insufficient credit — customer has MVR{round(available, 2)} available, invoice total is MVR{total}",
-                    )
-                prev_bal, new_bal = await adjust_customer_credit(
-                    db, cust.id, -total,
-                    entry_type="sale_debit", source_type="sale_invoice",
-                    source_ref=inv.id, source_number=inv.number, created_by=user.name,
-                )
-                db.add(AuditLog(
-                    id=str(uuid.uuid4()), action="customer_credit_debit",
-                    user_id=getattr(user, "id", None), user_name=getattr(user, "name", None),
-                    module="sales", ref=inv.number,
-                    detail=(f"Credit-mode invoice {inv.number} approved: −MVR{total} from "
-                            f"{cust.name}'s credit (was MVR{prev_bal:.2f}, now MVR{new_bal:.2f})"),
-                    risk="low", ip_address=None,
-                    branch_id=inv.branch_id,
-                ))
-                pay = CustomerPayment(
-                    id=str(uuid.uuid4()),
-                    number=await allocate_customer_payment_number(db),
-                    customer_id=cust.id, customer_name=cust.name,
-                    branch_id=inv.branch_id, branch_name=inv.branch_name,
-                    date=today_str, total_amount=total, payment_mode="credit",
-                    payment_ref="", notes="Approved credit-mode invoice", credit_applied=0.0,
-                    created_by=user.name,
-                )
-                db.add(pay)
-                db.add(CustomerPaymentAllocation(
-                    id=str(uuid.uuid4()), payment_id=pay.id,
-                    invoice_id=inv.id, invoice_number=inv.number, amount=total,
-                ))
-                await record_customer_payment(db, pay)
-                inv.paid_amount = total
-    elif payment_mode is not None:
-        pay = CustomerPayment(
-            id=str(uuid.uuid4()),
-            number=await allocate_customer_payment_number(db),
-            customer_id=inv.customer_id, customer_name=inv.customer_name or "Walk-in",
-            branch_id=inv.branch_id, branch_name=inv.branch_name,
-            date=today_str, total_amount=total, payment_mode=payment_mode,
-            payment_ref="", notes="Invoice approved", credit_applied=0.0,
-            created_by=user.name,
-        )
-        db.add(pay)
-        db.add(CustomerPaymentAllocation(
-            id=str(uuid.uuid4()), payment_id=pay.id,
-            invoice_id=inv.id, invoice_number=inv.number, amount=total,
-        ))
-        await record_customer_payment(db, pay)
-        if payment_mode == "cash":
-            await record_cash_in(
-                db, branch_id=inv.branch_id, amount=total, date=today_str,
-                description=f"Sale {inv.number}", category="Sale — Cash",
-                source_type="sale_invoice", source_id=pay.id, source_ref=inv.number,
-                recorded_by=user.name,
-            )
-        inv.paid_amount = total
+    # Auto-apply account credit on approve (draft create deferred settlement —
+    # store_credit_amount is not persisted on the invoice, so mirror POS and
+    # draw whatever balance is available now). Tender covers the remainder
+    # when payment_mode was chosen at create; otherwise leftover stays unpaid.
+    credit_use, tender_amt, display_mode = await _apply_settlement_split(
+        db,
+        inv=inv,
+        due=total,
+        store_credit_amount=None,
+        payment_mode=payment_mode,
+        payment_ref=inv.payment_ref,
+        user=user,
+        notes_credit="Account credit applied on approval",
+        notes_tender="Invoice approved",
+        auto_apply_credit=True,
+        require_tender_for_remainder=payment_mode is not None and str(payment_mode) != "credit",
+    )
+    paid_now = round(credit_use + tender_amt, 2)
+    inv.paid_amount = paid_now
+    if display_mode is not None:
+        inv.payment_mode = display_mode
+    elif credit_use > 0 and tender_amt <= 0.001:
+        inv.payment_mode = "credit"
+
+    # Re-check unpaid / retail limit against remaining balance after credit.
+    remaining_due = round(max(0.0, total - paid_now), 2)
+    if remaining_due > 0.001:
+        await _validate_unpaid_account_limit(db, inv.customer_id, remaining_due)
 
     # Determine new status
     paid_amount = float(inv.paid_amount or 0)
-    new_status = "paid" if paid_amount >= total else "pending"
+    new_status = "paid" if paid_amount >= total - 0.001 else ("partial" if paid_amount > 0.001 else "pending")
     inv.status = new_status
     if new_status in ("pending", "partial") and not inv.due_date:
         inv.due_date = compute_due_date(inv.date, None)
@@ -2125,7 +2005,7 @@ async def approve_invoice(
         await _link_quotation_to_invoice(db, pending_quote_id, inv, user=user)
         inv.pending_quote_id = None
 
-    if inv.customer_id and new_status in ("pending", "partial"):
+    if inv.customer_id:
         await sync_customer_outstanding(db, inv.customer_id)
 
     from src.notifications.store import notify_refresh, resolve_notification
@@ -2902,6 +2782,249 @@ def _is_pos_origin(inv: SaleInvoice) -> bool:
     return (getattr(inv, "origin", None) or "").strip().lower() == "pos"
 
 
+async def _resolve_store_credit_use(
+    db: AsyncSession,
+    *,
+    customer_id: Optional[str],
+    requested: Optional[float],
+    due: float,
+    legacy_full_credit: bool = False,
+    auto_apply: bool = False,
+) -> tuple[Optional[Customer], float]:
+    """Cap store-credit draw to min(requested|due, available, due).
+
+    `legacy_full_credit` (payment_mode == "credit") requests the full due.
+    `auto_apply` draws whatever balance is available (up to due) — used on
+    invoice approve and any path that mirrors POS auto-apply.
+    Excess credit beyond `due` is never taken — it stays for other invoices.
+    """
+    due = max(0.0, round(float(due or 0), 2))
+    if due <= 0:
+        return None, 0.0
+
+    want = due if (legacy_full_credit or auto_apply) else float(requested or 0)
+    if want <= 0:
+        return None, 0.0
+    if not customer_id:
+        if auto_apply and not legacy_full_credit:
+            return None, 0.0
+        raise HTTPException(400, "Store credit requires a customer (walk-ins can't draw credit)")
+
+    cust = (
+        await db.execute(select(Customer).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+    if not cust:
+        raise HTTPException(404, f"Customer {customer_id} not found")
+    available = float(cust.credit_balance or 0)
+    use = round(min(want, available, due), 2)
+    if use <= 0:
+        if legacy_full_credit or float(requested or 0) > 0:
+            raise HTTPException(
+                400,
+                f"Insufficient credit — customer has MVR{round(available, 2)} available, "
+                f"need MVR{round(min(want, due), 2)}",
+            )
+        return cust, 0.0
+    return cust, use
+
+
+async def _write_store_credit_payment(
+    db: AsyncSession,
+    *,
+    inv: SaleInvoice,
+    customer: Customer,
+    amount: float,
+    user: Optional[User],
+    notes: str,
+    entry_type: str = "sale_debit",
+) -> CustomerPayment:
+    """Debit store credit and mirror a credit-mode CustomerPayment row."""
+    amount = round(float(amount), 2)
+    today = datetime.now().strftime("%Y-%m-%d")
+    prev_balance, new_balance = await adjust_customer_credit(
+        db,
+        customer.id,
+        -amount,
+        entry_type=entry_type,
+        source_type="sale_invoice",
+        source_ref=inv.id,
+        source_number=inv.number,
+        created_by=getattr(user, "name", None) or "Staff",
+    )
+    db.add(AuditLog(
+        id=str(uuid.uuid4()),
+        action="customer_credit_debit",
+        user_id=getattr(user, "id", None),
+        user_name=getattr(user, "name", None),
+        module="sales",
+        ref=inv.number,
+        detail=(
+            f"Store credit on {inv.number}: −MVR{amount} from "
+            f"{customer.name}'s credit (was MVR{prev_balance:.2f}, "
+            f"now MVR{new_balance:.2f})"
+        ),
+        risk="low",
+        ip_address=None,
+        branch_id=inv.branch_id,
+    ))
+    pay = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=await allocate_customer_payment_number(db),
+        customer_id=customer.id,
+        customer_name=customer.name,
+        branch_id=inv.branch_id,
+        branch_name=inv.branch_name,
+        date=today,
+        total_amount=amount,
+        payment_mode="credit",
+        payment_ref="",
+        notes=notes,
+        credit_applied=0.0,
+        created_by=getattr(user, "name", None) or "Staff",
+    )
+    db.add(pay)
+    db.add(CustomerPaymentAllocation(
+        id=str(uuid.uuid4()),
+        payment_id=pay.id,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        amount=amount,
+    ))
+    await record_customer_payment(db, pay)
+    return pay
+
+
+async def _write_tender_payment(
+    db: AsyncSession,
+    *,
+    inv: SaleInvoice,
+    amount: float,
+    mode: str,
+    ref: Optional[str],
+    user: Optional[User],
+    notes: str,
+    overpay_credit: float = 0.0,
+) -> CustomerPayment:
+    """Write a cash/card/upi/bank_transfer CustomerPayment (+ cash drawer)."""
+    amount = round(float(amount), 2)
+    today = datetime.now().strftime("%Y-%m-%d")
+    pay = CustomerPayment(
+        id=str(uuid.uuid4()),
+        number=await allocate_customer_payment_number(db),
+        customer_id=inv.customer_id,
+        customer_name=inv.customer_name or "Walk-in",
+        branch_id=inv.branch_id,
+        branch_name=inv.branch_name,
+        date=today,
+        total_amount=amount,
+        payment_mode=mode,
+        payment_ref=ref or "",
+        notes=notes,
+        credit_applied=round(float(overpay_credit or 0), 2),
+        created_by=getattr(user, "name", None) or "Staff",
+    )
+    db.add(pay)
+    applied_to_invoice = round(amount - float(overpay_credit or 0), 2)
+    if applied_to_invoice > 0:
+        db.add(CustomerPaymentAllocation(
+            id=str(uuid.uuid4()),
+            payment_id=pay.id,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            amount=applied_to_invoice,
+        ))
+    await record_customer_payment(db, pay)
+    if mode == "cash" and amount > 0:
+        await record_cash_in(
+            db,
+            branch_id=inv.branch_id or "",
+            amount=amount,
+            date=today,
+            description=f"Sale {inv.number}" if "POS" in (notes or "") else f"Payment on {inv.number}",
+            category="Sale — Cash",
+            source_type="customer_payment",
+            source_id=pay.id,
+            source_ref=pay.number,
+            recorded_by=getattr(user, "name", None) or "Staff",
+        )
+    return pay
+
+
+async def _apply_settlement_split(
+    db: AsyncSession,
+    *,
+    inv: SaleInvoice,
+    due: float,
+    store_credit_amount: Optional[float],
+    payment_mode: Optional[str],
+    payment_ref: Optional[str],
+    user: Optional[User],
+    notes_credit: str,
+    notes_tender: str,
+    auto_apply_credit: bool = False,
+    require_tender_for_remainder: bool = True,
+) -> tuple[float, float, Optional[str]]:
+    """Apply store credit (optional) + tender method for remainder.
+
+    Returns (credit_used, tender_amount, display_payment_mode).
+    When `require_tender_for_remainder` is False, leftover after credit
+    may stay unpaid (account sale / draft approve without payment).
+    """
+    due = round(float(due or 0), 2)
+    mode = payment_mode
+    legacy_full = mode == "credit"
+    if legacy_full:
+        mode = None
+
+    credit_cust, credit_use = await _resolve_store_credit_use(
+        db,
+        customer_id=inv.customer_id,
+        requested=store_credit_amount,
+        due=due,
+        legacy_full_credit=legacy_full,
+        auto_apply=auto_apply_credit and not legacy_full,
+    )
+    tender = round(max(0.0, due - credit_use), 2)
+
+    if tender > 0.001:
+        if mode in TENDER_PAYMENT_MODES:
+            pass
+        elif require_tender_for_remainder:
+            raise HTTPException(
+                400,
+                "Select a payment method (Cash / Card / UPI / Bank Transfer) for the remaining amount",
+            )
+        else:
+            tender = 0.0
+            mode = None
+    else:
+        mode = None
+
+    if credit_use > 0 and credit_cust is not None:
+        await _write_store_credit_payment(
+            db,
+            inv=inv,
+            customer=credit_cust,
+            amount=credit_use,
+            user=user,
+            notes=notes_credit,
+        )
+
+    if tender > 0.001 and mode:
+        await _write_tender_payment(
+            db,
+            inv=inv,
+            amount=tender,
+            mode=mode,
+            ref=payment_ref,
+            user=user,
+            notes=notes_tender,
+        )
+
+    display_mode = mode if tender > 0.001 else ("credit" if credit_use > 0 else None)
+    return credit_use, tender, display_mode
+
+
 async def _next_sales_return_number(db: AsyncSession) -> str:
     """Next CN-YYYY-NNNN from max existing suffix.
 
@@ -2927,100 +3050,29 @@ async def _record_full_settlement_payment(
     db: AsyncSession,
     inv: SaleInvoice,
     *,
-    mode: str,
+    mode: Optional[str],
     ref: Optional[str],
     user: User,
     notes: str = "",
+    store_credit_amount: Optional[float] = None,
 ) -> None:
-    """Settle an unpaid invoice in full and write the CustomerPayment row."""
+    """Settle an unpaid invoice in full (store credit + tender split)."""
     total = round(float(inv.total or 0), 2)
-    today = datetime.now().strftime("%Y-%m-%d")
-    credit_customer = None
-    if mode == "credit":
-        if not inv.customer_id:
-            raise HTTPException(400, "Credit-mode sale requires a customer (walk-ins can't draw credit)")
-        credit_customer = (
-            await db.execute(select(Customer).where(Customer.id == inv.customer_id))
-        ).scalar_one_or_none()
-        if not credit_customer:
-            raise HTTPException(404, f"Customer {inv.customer_id} not found")
-        available = float(credit_customer.credit_balance or 0)
-        if available < total:
-            raise HTTPException(
-                400,
-                f"Insufficient credit — customer has MVR{round(available, 2)} available, sale total is MVR{total}",
-            )
-
-    inv.paid_amount = total
-    inv.payment_mode = mode
-    inv.payment_ref = (ref or "").strip() or None
-    inv.status = InvoiceStatus.paid
-
-    if mode == "credit" and credit_customer is not None:
-        prev_balance, new_balance = await adjust_customer_credit(
-            db,
-            credit_customer.id,
-            -total,
-            entry_type="sale_debit",
-            source_type="sale_invoice",
-            source_ref=inv.id,
-            source_number=inv.number,
-            created_by=getattr(user, "name", None) or "Staff",
-        )
-        db.add(AuditLog(
-            id=str(uuid.uuid4()),
-            action="customer_credit_debit",
-            user_id=getattr(user, "id", None),
-            user_name=getattr(user, "name", None),
-            module="sales",
-            ref=inv.number,
-            detail=(
-                f"Credit-mode sale {inv.number}: −MVR{total} from "
-                f"{credit_customer.name}'s credit (was MVR{prev_balance:.2f}, "
-                f"now MVR{new_balance:.2f})"
-            ),
-            risk="low",
-            ip_address=None,
-            branch_id=inv.branch_id,
-        ))
-
-    pay = CustomerPayment(
-        id=str(uuid.uuid4()),
-        number=await allocate_customer_payment_number(db),
-        customer_id=inv.customer_id,
-        customer_name=inv.customer_name or "Walk-in",
-        branch_id=inv.branch_id,
-        branch_name=inv.branch_name,
-        date=today,
-        total_amount=total,
+    credit_use, tender, display_mode = await _apply_settlement_split(
+        db,
+        inv=inv,
+        due=total,
+        store_credit_amount=store_credit_amount,
         payment_mode=mode,
-        payment_ref=ref or "",
-        notes=notes or "Invoice edit settlement",
-        credit_applied=0.0,
-        created_by=getattr(user, "name", None) or "Staff",
+        payment_ref=ref,
+        user=user,
+        notes_credit=notes or "Store credit applied",
+        notes_tender=notes or "Invoice edit settlement",
     )
-    db.add(pay)
-    db.add(CustomerPaymentAllocation(
-        id=str(uuid.uuid4()),
-        payment_id=pay.id,
-        invoice_id=inv.id,
-        invoice_number=inv.number,
-        amount=total,
-    ))
-    await record_customer_payment(db, pay)
-    if mode == "cash":
-        await record_cash_in(
-            db,
-            branch_id=inv.branch_id or "",
-            amount=total,
-            date=today,
-            description=f"Sale {inv.number}",
-            category="Sale — Cash",
-            source_type="customer_payment",
-            source_id=pay.id,
-            source_ref=pay.number,
-            recorded_by=getattr(user, "name", None) or "Staff",
-        )
+    inv.paid_amount = total
+    inv.payment_mode = display_mode
+    inv.payment_ref = (ref or "").strip() or None if tender > 0 else None
+    inv.status = InvoiceStatus.paid
 
 
 async def _assert_invoice_editable(db: AsyncSession, inv: SaleInvoice) -> None:
@@ -3301,6 +3353,22 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
             )
             credit_revoked = refund_amt
 
+    # Adjustment returns may have created AR-application payments + leftover store credit.
+    if ret.refund_method == "adjustment":
+        await _reverse_return_outstanding_application(db, ret)
+        if ret.customer_id and (ret.credited_amount or 0) > 0:
+            refund_amt = float(ret.credited_amount or 0)
+            await adjust_customer_credit(
+                db,
+                ret.customer_id,
+                -refund_amt,
+                entry_type="return_void_revoke",
+                source_type="sales_return",
+                source_ref=ret.id,
+                source_number=ret.number,
+            )
+            credit_revoked = refund_amt
+
     return credit_revoked
 
 
@@ -3494,6 +3562,8 @@ def _inv_dict(inv, items=None, sales_order_number=None):
         "customerId": inv.customer_id,
         "customerCode": customer_code,
         "customerName": inv.customer_name or "Walk-in",
+        "customerType": (getattr(customer, "type", None) if customer else None) or "retail",
+        "customer_type": (getattr(customer, "type", None) if customer else None) or "retail",
         "customerAddress": customer.address if customer else None,
         "customer_address": customer.address if customer else None,
         "customerStreet1": customer.street1 if customer else None,
@@ -3693,10 +3763,12 @@ class SalesReturnCreate(BaseModel):
     invoice_id: str
     date: Optional[str] = None
     reason: Optional[str] = None
-    # refund_method: cash | credit | adjustment
+    # refund_method: cash | adjustment
     #   • walk-in invoice → server forces to "cash" regardless of input
-    #   • credit → bumps customer.credit_balance (only valid with customer)
-    #   • adjustment → reduces invoice's outstanding balance (no money moves)
+    #   • adjustment → apply return value to AR outstanding (this invoice via
+    #     CN, then other open invoices FIFO); leftover becomes account credit
+    #     (negative outstanding) and auto-applies on the next sale
+    #   • legacy "credit" is accepted and mapped to adjustment
     refund_method: str = "cash"
     items: List[SalesReturnLineIn]
     notes: Optional[str] = None
@@ -4791,6 +4863,12 @@ async def convert_order_to_invoice(
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
 
+    # Walk-in / retail cannot leave an unpaid invoice at conversion.
+    if not data.payment_received:
+        # Total is computed below; validate with SO total as an upper bound —
+        # partial converts can only be smaller.
+        await _validate_unpaid_account_limit(db, so.customer_id, float(so.total or 0))
+
     line_by_id = {li.id: li for li in so.line_items}
     convert_plan: list[tuple] = []
     if data.lines:
@@ -5180,6 +5258,9 @@ async def convert_quote_to_invoice(
 
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
+
+    if not data.payment_received:
+        await _validate_unpaid_account_limit(db, quote.customer_id, float(quote.total or 0))
 
     today = datetime.now().strftime("%Y-%m-%d")
     inv_num = await allocate_number(db, "sales_invoice", branch_id=quote.branch_id)
@@ -5734,6 +5815,22 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
     ret.status = SalesReturnStatus.processed
     await db.flush()
     await recalc_invoice_after_cn(db, ret.invoice_id)
+
+    # Re-apply AR allocation for adjustment returns (new payment row; old one stays voided).
+    if ret.refund_method == "adjustment" and ret.customer_id:
+        inv_full = (await db.execute(
+            select(SaleInvoice).where(SaleInvoice.id == ret.invoice_id)
+        )).scalar_one_or_none()
+        if inv_full is not None:
+            leftover = await _apply_return_value_to_outstanding(
+                db,
+                ret=ret,
+                source_inv=inv_full,
+                return_total=float(ret.total or 0),
+                user=user,
+            )
+            ret.credited_amount = leftover
+
     customer_ids: set[str] = set()
     if ret.customer_id:
         customer_ids.add(ret.customer_id)
@@ -5804,6 +5901,204 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
 async def create_return(data: SalesReturnCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Process a customer return against an existing invoice."""
     return await _apply_sales_return(data, db, user)
+
+
+# ─── Sales Returns: apply return value to AR outstanding ─────────────────────
+_RETURN_OUTSTANDING_NOTE_PREFIX = "Applied from credit note "
+
+
+async def _apply_return_value_to_outstanding(
+    db: AsyncSession,
+    *,
+    ret: SalesReturn,
+    source_inv: SaleInvoice,
+    return_total: float,
+    user: Optional[User],
+) -> float:
+    """Apply leftover return value to other open invoices (FIFO), then store credit.
+
+    The source invoice is already settled via credit-note `credited_amount`.
+    Any remaining return value is allocated as an adjustment payment against
+    other unpaid invoices for the same customer. Leftover after AR is cleared
+    becomes store credit (tracked on `ret.credited_amount`).
+
+    Returns the store-credit leftover (0 if fully applied to outstanding).
+    """
+    if not source_inv.customer_id or return_total <= 0.001:
+        return 0.0
+
+    # Unpaid balance on the source invoice *before* this return's CN effect
+    # was already reduced by recalc — compute how much of return_total was
+    # needed on the source vs available for other AR.
+    source_bal_after = max(
+        0.0,
+        round(
+            float(source_inv.total or 0)
+            - float(source_inv.paid_amount or 0)
+            - float(getattr(source_inv, "credited_amount", 0) or 0),
+            2,
+        ),
+    )
+    # Amount of this return that landed on the source invoice's CN credit:
+    # return_total minus whatever is still unpaid on source (if any).
+    # Equivalently: min(return_total, source_balance_before). We recover
+    # source_balance_before ≈ source_bal_after + min(return_total, prior_unpaid).
+    # Simpler: remainder available for other invoices =
+    #   max(0, return_total - max(0, return_total - source_bal_after's complement))
+    #
+    # prior_unpaid = source_bal_after + amount_of_this_CN_on_source
+    # amount_of_this_CN_on_source = min(return_total, prior_unpaid)
+    # remainder = return_total - amount_of_this_CN_on_source = max(0, return_total - prior_unpaid)
+    #
+    # Since prior_unpaid = source_bal_after + applied_to_source and
+    # applied_to_source + source_bal_after = prior_unpaid, and
+    # applied_to_source = min(return_total, prior_unpaid):
+    #   if return_total <= prior_unpaid: remainder=0, source_bal_after = prior - return
+    #   if return_total > prior_unpaid: remainder = return - prior, source_bal_after = 0
+    # So remainder = max(0, return_total - (source_bal_after + applied)) ...
+    # With source_bal_after == 0 → remainder could be anything up to return_total
+    # With source_bal_after > 0 → return didn't cover all unpaid → remainder = 0
+    if source_bal_after > 0.001:
+        return 0.0
+
+    # Source fully covered (or was already settled). Apply full return_total
+    # to other open invoices — the CN already "used" value on source only up
+    # to what source owed; excess return on a paid/settled source is free to apply.
+    # Cap: we only apply up to other invoices' balances; excess → store credit.
+    # For a previously-unpaid source that this CN just settled exactly,
+    # return_total equals what was needed on source → applying return_total
+    # again to others would double-count.
+    #
+    # Correct remainder:
+    #   prior_credited_on_source (before this return) = credited_amount - return_total
+    #   (because recalc sums ALL returns including this one)
+    prior_credited = round(
+        float(getattr(source_inv, "credited_amount", 0) or 0) - float(return_total or 0),
+        2,
+    )
+    if prior_credited < -0.001:
+        prior_credited = 0.0
+    prior_unpaid = max(
+        0.0,
+        round(
+            float(source_inv.total or 0)
+            - float(source_inv.paid_amount or 0)
+            - prior_credited,
+            2,
+        ),
+    )
+    remainder = round(max(0.0, float(return_total) - prior_unpaid), 2)
+    if remainder <= 0.001:
+        return 0.0
+
+    open_statuses = (InvoiceStatus.pending, InvoiceStatus.partial, InvoiceStatus.overdue)
+    others = (
+        await db.execute(
+            select(SaleInvoice)
+            .where(
+                SaleInvoice.customer_id == source_inv.customer_id,
+                SaleInvoice.id != source_inv.id,
+                SaleInvoice.status.in_(open_statuses),
+            )
+            .order_by(SaleInvoice.date.asc(), SaleInvoice.number.asc())
+        )
+    ).scalars().all()
+
+    allocations: list[tuple[SaleInvoice, float]] = []
+    left = remainder
+    for oinv in others:
+        if left <= 0.001:
+            break
+        bal = max(
+            0.0,
+            round(
+                float(oinv.total or 0)
+                - float(oinv.paid_amount or 0)
+                - float(getattr(oinv, "credited_amount", 0) or 0),
+                2,
+            ),
+        )
+        if bal <= 0.001:
+            continue
+        take = round(min(left, bal), 2)
+        if take <= 0:
+            continue
+        allocations.append((oinv, take))
+        left = round(left - take, 2)
+
+    applied_total = round(remainder - left, 2)
+    if applied_total > 0.001 and allocations:
+        today = datetime.now().strftime("%Y-%m-%d")
+        pay = CustomerPayment(
+            id=str(uuid.uuid4()),
+            number=await allocate_customer_payment_number(db),
+            customer_id=source_inv.customer_id,
+            customer_name=source_inv.customer_name or "Customer",
+            branch_id=source_inv.branch_id,
+            branch_name=source_inv.branch_name,
+            date=today,
+            total_amount=applied_total,
+            payment_mode="adjustment",
+            payment_ref=ret.number,
+            notes=f"{_RETURN_OUTSTANDING_NOTE_PREFIX}{ret.number}",
+            credit_applied=0.0,
+            created_by=getattr(user, "name", None) or "Staff",
+        )
+        db.add(pay)
+        for oinv, amt in allocations:
+            oinv.paid_amount = round(float(oinv.paid_amount or 0) + amt, 2)
+            _recompute_invoice_status(oinv)
+            db.add(CustomerPaymentAllocation(
+                id=str(uuid.uuid4()),
+                payment_id=pay.id,
+                invoice_id=oinv.id,
+                invoice_number=oinv.number,
+                amount=amt,
+            ))
+        await record_customer_payment(db, pay)
+
+    leftover = round(left, 2)
+    if leftover > 0.001:
+        await adjust_customer_credit(
+            db,
+            source_inv.customer_id,
+            leftover,
+            entry_type="return_credit",
+            source_type="sales_return",
+            source_ref=ret.id,
+            source_number=ret.number,
+            created_by=getattr(user, "name", None) or "Staff",
+        )
+        ret.credited_amount = leftover
+    return leftover
+
+
+async def _reverse_return_outstanding_application(db: AsyncSession, ret: SalesReturn) -> None:
+    """Void adjustment payment(s) created when a credit note was applied to AR."""
+    if not ret.number:
+        return
+    pays = (
+        await db.execute(
+            select(CustomerPayment)
+            .options(selectinload(CustomerPayment.allocations))
+            .where(
+                CustomerPayment.payment_mode == "adjustment",
+                CustomerPayment.payment_ref == ret.number,
+                or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)),  # noqa: E712
+            )
+        )
+    ).scalars().unique().all()
+    today = datetime.now().strftime("%Y-%m-%d")
+    for pay in pays:
+        await reverse_customer_payment(db, pay)
+        pay.voided = True
+        pay.voided_at = today
+        await void_payment_record(
+            db,
+            source_document_type="customer_payment",
+            source_document_id=pay.id,
+            voided_at=today,
+        )
 
 
 async def _apply_sales_return(
@@ -5905,14 +6200,12 @@ async def _apply_sales_return(
     # Refund method resolution.
     is_walkin = not inv.customer_id
     method = (data.refund_method or "cash").strip().lower()
-    if method not in ("cash", "credit", "adjustment"):
-        raise HTTPException(400, f"Invalid refund_method '{method}' — use cash | credit | adjustment")
-    if is_walkin and method == "credit":
-        # Quietly downgrade rather than 400 — the operator's intent is
-        # clear ("give them their money back"); the customer just isn't
-        # in the system to receive a credit balance entry.
-        method = "cash"
-    elif is_walkin and method == "adjustment":
+    # Legacy "credit" refunds are now "apply to outstanding" (account credit).
+    if method == "credit":
+        method = "adjustment"
+    if method not in ("cash", "adjustment"):
+        raise HTTPException(400, f"Invalid refund_method '{method}' — use cash | adjustment")
+    if is_walkin and method == "adjustment":
         # Adjustment on a walk-in would orphan the balance reduction.
         # Force cash to keep the accounting clean.
         method = "cash"
@@ -6134,6 +6427,19 @@ async def _apply_sales_return(
 
     await recalc_invoice_after_cn(db, inv.id)
 
+    # Apply-to-outstanding: after this invoice's CN settles its unpaid slice,
+    # route any leftover return value to other open invoices (then store credit).
+    if method == "adjustment" and inv.customer_id:
+        leftover_credit = await _apply_return_value_to_outstanding(
+            db,
+            ret=ret,
+            source_inv=inv,
+            return_total=total,
+            user=user,
+        )
+        if leftover_credit > 0:
+            credited = leftover_credit
+
     if inv.customer_id:
         await sync_customer_outstanding(db, inv.customer_id)
 
@@ -6203,13 +6509,16 @@ async def _apply_sales_return(
         },
         branch_id=ret.branch_id,
     )
-    if method in ("cash", "credit") and credited > 0:
+    if method in ("cash", "credit", "adjustment") and (credited > 0 or method == "adjustment"):
         _log_sales_return_history(db, user=user,
             return_id=ret.id,
             return_number=ret.number,
             event_type="refund_issued",
             action="issue_sales_return_refund",
-            detail=f"Issued {method} refund of {round(float(credited), 2)} for {ret.number}",
+            detail=(
+                f"Issued {method} settlement for {ret.number}"
+                + (f" (store credit leftover {round(float(credited), 2)})" if credited else "")
+            ),
             metadata={
                 "refund_method": method,
                 "credited_amount": round(float(credited), 2),

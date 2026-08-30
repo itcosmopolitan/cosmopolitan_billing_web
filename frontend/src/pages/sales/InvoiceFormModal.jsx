@@ -3,8 +3,8 @@
  * (quotation → invoice, sales order → invoice).
  */
 import { useState } from 'react'
-import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
-import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { Modal, FormGroup, AutocompleteDropdown, DatePicker, AlertBar } from '@/components/ui'
+import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -18,6 +18,11 @@ import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
+import {
+  customerRequiresImmediatePayment,
+  storeCreditApplyAmount,
+  remainingAfterStoreCredit,
+} from '@/utils/storeCredit'
 
 export default function InvoiceFormModal({
   open,
@@ -108,6 +113,14 @@ export default function InvoiceFormModal({
     entityDiscountType: invoiceForm.discountType || '%',
     enforceExclusive: true,
   })
+  const creditAvail = Number(invoiceForm.customerCreditBalance || 0)
+  const creditAppliedPreview = storeCreditApplyAmount(
+    creditAvail,
+    rollup.total,
+    Boolean(invoiceForm.customerId) && creditAvail > 0,
+  )
+  const remainingDuePreview = remainingAfterStoreCredit(rollup.total, creditAppliedPreview)
+  const creditCoversBill = creditAppliedPreview > 0 && remainingDuePreview <= 0.001
   const discShares = rollup.discountMode === 'entity'
     ? entityDiscountShares(invoiceForm.items, rollup.entityDiscount)
     : invoiceForm.items.map(() => 0)
@@ -134,11 +147,12 @@ export default function InvoiceFormModal({
           <FormGroup label="Customer" required>
             <AutocompleteDropdown
               value={invoiceForm.customerId || ''}
-              onSelectOption={(opt) => {
+              onSelectOption={async (opt) => {
                 if (!opt) {
                   pif('customerId', '')
                   pif('customerName', '')
                   pif('customerType', 'retail')
+                  pif('customerCreditBalance', 0)
                   pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, 'retail'))
                   return
                 }
@@ -147,6 +161,15 @@ export default function InvoiceFormModal({
                 pif('customerName', opt.label)
                 pif('customerType', type)
                 pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, type))
+                try {
+                  const c = await customersAPI.get(opt.id)
+                  pif('customerCreditBalance', Number(c?.credit_balance || 0))
+                  if (c?.customer_type || c?.type) {
+                    pif('customerType', customerPricingType(c.customer_type || c.type || type))
+                  }
+                } catch {
+                  pif('customerCreditBalance', Number(opt.raw?.credit_balance || 0))
+                }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
               isSearchFieldRequired
@@ -166,10 +189,20 @@ export default function InvoiceFormModal({
 
         <div className="invoice-form-payment">
           <FormGroup label="Payment">
+            {invoiceForm.customerId && creditAvail > 0 && !editMode && (
+              <div style={{ marginBottom: 8 }}>
+                <AlertBar type="green" icon="✓">
+                  Account credit <strong>{fmt(creditAvail)}</strong> will be applied automatically
+                  {remainingDuePreview > 0.001
+                    ? <> — collect <strong>{fmt(remainingDuePreview)}</strong> remaining</>
+                    : <> — invoice fully covered</>}
+                </AlertBar>
+              </div>
+            )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: 520 }}>
               {PAYMENT_METHOD_OPTIONS.map((option) => {
                 const selected = invoiceForm.paymentMethod === option.id
-                const disabled = Boolean(option.disabled)
+                const disabled = Boolean(option.disabled) || creditCoversBill
 
                 return (
                   <button
@@ -203,16 +236,16 @@ export default function InvoiceFormModal({
                   </button>
                 )
               })}
-              {invoiceForm.paymentMethod === 'cash' && !editMode && (
+              {invoiceForm.paymentMethod === 'cash' && !editMode && remainingDuePreview > 0.001 && (
                 <div style={{ width: '100%', maxWidth: 300 }}>
                   <CashTenderFields
-                    due={rollup.total}
+                    due={remainingDuePreview}
                     value={invoiceForm.cashCollected || ''}
                     onChange={(v) => pif('cashCollected', v)}
                   />
                 </div>
               )}
-              {['upi', 'bank_transfer'].includes(invoiceForm.paymentMethod || '') && (
+              {['upi', 'bank_transfer'].includes(invoiceForm.paymentMethod || '') && remainingDuePreview > 0.001 && (
                 <div style={{ width: '100%', maxWidth: 300 }}>
                   <input
                     className="form-input"
@@ -221,6 +254,15 @@ export default function InvoiceFormModal({
                     placeholder="Payment reference"
                     style={{ fontSize: 13, width: '100%' }}
                   />
+                </div>
+              )}
+              {!invoiceForm.paymentMethod && remainingDuePreview > 0.001 && customerRequiresImmediatePayment({
+                id: invoiceForm.customerId,
+                customer_type: invoiceForm.customerType,
+              }) && (
+                <div style={{ width: '100%', fontSize: 12, color: 'var(--amber)', marginTop: 4 }}>
+                  Payment method is <strong>required</strong> for walk-in / retail customers
+                  {creditAppliedPreview > 0 ? ' (for the remaining amount)' : ''}.
                 </div>
               )}
             </div>
@@ -400,6 +442,12 @@ export default function InvoiceFormModal({
           notesLabel="Remarks"
           notesPlaceholder="Delivery instructions / details…"
           notesHint="Shown on the invoice for delivery and special instructions"
+          accountCreditApplied={!editMode ? creditAppliedPreview : 0}
+          accountCreditRemaining={
+            !editMode && creditAppliedPreview > 0
+              ? Math.round(Math.max(0, creditAvail - creditAppliedPreview) * 100) / 100
+              : null
+          }
         />
       </div>
     </div>

@@ -14,6 +14,9 @@ import { documentMargin } from '@/utils/marginCalc'
  * Discount + totals footer for sales/purchase document forms.
  * Notes left, summary right. Line-item OR document-level discount — not both.
  * Line prices are always tax-inclusive.
+ *
+ * Optional account-credit preview (invoices/POS): when `accountCreditApplied` > 0,
+ * shows credit drawn, credit left on account, and amount still due.
  */
 export default function DocumentTotalsStrip({
   items,
@@ -32,6 +35,10 @@ export default function DocumentTotalsStrip({
   notesLabel = 'Notes',
   notesPlaceholder = 'Thanks for your business.',
   notesHint = 'Will be displayed on the invoice',
+  /** Account credit (negative outstanding) applied to this document. */
+  accountCreditApplied = 0,
+  /** Credit balance left on the customer after this apply. */
+  accountCreditRemaining = null,
 }) {
   if (!showWhenEmpty && (!items || items.length === 0)) return null
 
@@ -57,6 +64,12 @@ export default function DocumentTotalsStrip({
       : null)
 
   const showTax = totals.taxTotal > 0
+  const creditApplied = Math.max(0, Number(accountCreditApplied) || 0)
+  const amountDue = Math.round(Math.max(0, totals.total - creditApplied) * 100) / 100
+  const showCredit = creditApplied > 0.001
+  const creditLeft = accountCreditRemaining == null
+    ? null
+    : Math.max(0, Number(accountCreditRemaining) || 0)
 
   const discountInput = !readOnly && onEntityDiscountChange ? (
     <div className="document-summary-discount-input">
@@ -165,13 +178,45 @@ export default function DocumentTotalsStrip({
         </div>
       )}
 
-      <div className="document-summary-row document-summary-row--total">
-        <span className="document-summary-row__label">Total</span>
+      <div className={`document-summary-row${showCredit ? '' : ' document-summary-row--total'}`}>
+        <span className="document-summary-row__label">{showCredit ? 'Invoice total' : 'Total'}</span>
         <span className="document-summary-row__spacer" />
-        <span className="document-summary-row__value mono document-summary-row__value--total">
+        <span className={`document-summary-row__value mono${showCredit ? '' : ' document-summary-row__value--total'}`}>
           {fmt(totals.total)}
         </span>
       </div>
+
+      {showCredit && (
+        <>
+          <div className="document-summary-row">
+            <span className="document-summary-row__label" style={{ color: 'var(--green)' }}>
+              Account credit applied
+            </span>
+            <span className="document-summary-row__spacer" />
+            <span className="document-summary-row__value mono" style={{ color: 'var(--green)' }}>
+              −{fmt(creditApplied)}
+            </span>
+          </div>
+          {creditLeft != null && (
+            <div className="document-summary-row">
+              <span className="document-summary-row__label" style={{ color: 'var(--text-muted)' }}>
+                Credit remaining
+              </span>
+              <span className="document-summary-row__spacer" />
+              <span className="document-summary-row__value mono" style={{ color: 'var(--text-muted)' }}>
+                {fmt(creditLeft)}
+              </span>
+            </div>
+          )}
+          <div className="document-summary-row document-summary-row--total">
+            <span className="document-summary-row__label">Amount due</span>
+            <span className="document-summary-row__spacer" />
+            <span className="document-summary-row__value mono document-summary-row__value--total">
+              {fmt(amountDue)}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   )
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { salesAPI, branchesAPI, itemsAPI } from '@/api'
+import { salesAPI, branchesAPI, itemsAPI, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { unwrapPaged } from '@/utils/pagination'
@@ -14,6 +14,11 @@ import {
   lineDiscountToPercent,
 } from './salesFormShared'
 import { cashTenderError } from '@/utils/cashTender'
+import {
+  customerRequiresImmediatePayment,
+  storeCreditApplyAmount,
+  remainingAfterStoreCredit,
+} from '@/utils/storeCredit'
 import { computeDocumentTotals, entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
@@ -109,21 +114,46 @@ export default function InvoiceFormPage() {
       toast.error('Each item must have name, qty, and price')
       return
     }
-    if (form.paymentReceived && !form.paymentMethod) {
-      toast.error('Pick a payment method (or uncheck Payment received?)')
+
+    const due = computeDocumentTotals(form.items, {
+      entityDiscount: form.discount,
+      entityDiscountType: form.discountType || '%',
+      enforceExclusive: true,
+    }).total
+
+    let creditAvail = Number(form.customerCreditBalance || 0)
+    try {
+      const cust = await customersAPI.get(form.customerId)
+      creditAvail = Number(cust?.credit_balance || 0)
+      if (creditAvail !== Number(form.customerCreditBalance || 0)) {
+        setForm((f) => ({ ...f, customerCreditBalance: creditAvail }))
+      }
+    } catch {
+      /* keep form balance */
+    }
+    // Always auto-apply account credit when settling (or when it covers the bill).
+    const settling = form.paymentReceived || creditAvail > 0
+    const creditUse = storeCreditApplyAmount(creditAvail, due, settling && !!form.customerId)
+    const remaining = remainingAfterStoreCredit(due, creditUse)
+
+    if (settling && remaining > 0.001 && !form.paymentMethod) {
+      toast.error('Pick a payment method for the remaining amount (Cash / Card / UPI / Bank Transfer)')
       return
     }
-    if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
+    const mustPay = customerRequiresImmediatePayment({
+      id: form.customerId,
+      customer_type: form.customerType,
+    })
+    if (mustPay && remaining > 0.001 && !form.paymentMethod) {
+      toast.error('Retail customers must pay at sale — select a payment method')
+      return
+    }
+    if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && remaining > 0.001 && !String(form.paymentRef || '').trim()) {
       toast.error('Enter the payment reference for UPI or Bank Transfer')
       return
     }
-    if (form.paymentReceived && form.paymentMethod === 'cash') {
-      const due = computeDocumentTotals(form.items, {
-        entityDiscount: form.discount,
-        entityDiscountType: form.discountType || '%',
-        enforceExclusive: true,
-      }).total
-      const err = cashTenderError(form.cashCollected, due)
+    if (form.paymentMethod === 'cash' && remaining > 0.001) {
+      const err = cashTenderError(form.cashCollected, remaining)
       if (err) { toast.error(err); return }
     }
     if (fromOrderId) {
@@ -156,11 +186,25 @@ export default function InvoiceFormPage() {
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
           lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),
         }),
-        payment_mode: form.paymentReceived ? form.paymentMethod : null,
+        payment_mode: remaining > 0.001 && (form.paymentReceived || mustPay || creditUse > 0)
+          ? form.paymentMethod
+          : (creditUse > 0 && remaining <= 0.001 ? null : (form.paymentReceived ? form.paymentMethod : null)),
+        store_credit_amount: creditUse > 0 ? creditUse : undefined,
         payment_ref: form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer'
           ? (form.paymentRef || '').trim() || null
           : null,
         notes: form.notes,
+      }
+      // Settle when payment selected OR account credit covers (any portion with tender/credit).
+      if (creditUse > 0 && remaining <= 0.001) {
+        payload.payment_mode = null
+        payload.store_credit_amount = creditUse
+      } else if (creditUse > 0 || form.paymentReceived || (mustPay && form.paymentMethod)) {
+        payload.payment_mode = form.paymentMethod
+        if (creditUse > 0) payload.store_credit_amount = creditUse
+      } else {
+        payload.payment_mode = null
+        delete payload.store_credit_amount
       }
       const n = form.number?.trim()
       if (n) payload.number = n

@@ -8,6 +8,7 @@ import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
 import openInvoicePrintWindow from '@/utils/printInvoice'
 import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
+import { formatSettlementLabel } from '@/utils/storeCredit'
 
 const formatNumber = (value, options = {}) => {
   const number = Number(value)
@@ -268,8 +269,18 @@ export function Receipt({ sale, branch }) {
         ${config.showPayment ? `
           <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:8px;">
             <div>Payment</div>
-            <div style="text-align:right">${(sale.paymentMode || sale.payment_mode || 'CASH').toUpperCase()}</div>
+            <div style="text-align:right">${formatSettlementLabel({
+              paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
+              storeCreditApplied: sale.storeCreditApplied,
+              payments: sale.payments,
+            })}</div>
           </div>
+          ${Number(sale.storeCreditApplied || 0) > 0 ? `
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:4px;">
+            <div>Account credit applied</div>
+            <div style="text-align:right">${formatNumber(sale.storeCreditApplied)}</div>
+          </div>
+          ` : ''}
           ${sale.cashCollected != null && Number(sale.cashCollected) > 0 ? `
           <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:4px;">
             <div>Cash collected</div>
@@ -355,7 +366,14 @@ export function Receipt({ sale, branch }) {
       (sale.discount ? `Discount: -MVR${sale.discount.toLocaleString('en-MV')}\n` : '') +
       `Tax amount: MVR${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-MV')}\n` +
       `*TOTAL: MVR${(sale.total || 0).toLocaleString('en-MV')}*\n` +
-      `Payment: ${(sale.paymentMode || sale.payment_mode || '').toUpperCase()}\n` +
+      `Payment: ${formatSettlementLabel({
+        paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
+        storeCreditApplied: sale.storeCreditApplied,
+        payments: sale.payments,
+      })}\n` +
+      (Number(sale.storeCreditApplied || 0) > 0
+        ? `Account credit: MVR${Number(sale.storeCreditApplied).toLocaleString('en-MV')}\n`
+        : '') +
       (sale.cashCollected != null && Number(sale.cashCollected) > 0
         ? `Cash collected: MVR${Number(sale.cashCollected).toLocaleString('en-MV')}\nChange: MVR${Number(sale.cashChange || 0).toLocaleString('en-MV')}\n`
         : '') +

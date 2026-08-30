@@ -40,6 +40,7 @@ export default function ReturnFormPage() {
   const [editSeedQtys, setEditSeedQtys] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [prefilled, setPrefilled] = useState(Boolean(prefillInvoiceId) || isEdit)
+  const [customerOutstanding, setCustomerOutstanding] = useState(0)
 
   useEffect(() => {
     if (!can('invoices.create')) {
@@ -65,7 +66,7 @@ export default function ReturnFormPage() {
         setEditingNumber(ret.number)
         setReason(ret.reason || '')
         setNotes(ret.notes || '')
-        setRefundMethod(ret.refundMethod || 'cash')
+        setRefundMethod(ret.refundMethod === 'credit' ? 'adjustment' : (ret.refundMethod || 'cash'))
         setSelectedInvoiceId(ret.invoiceId)
         if (ret.customerId) {
           setCustomer({ id: ret.customerId, name: ret.customerName || 'Customer' })
@@ -150,10 +151,32 @@ export default function ReturnFormPage() {
   }
 
   const isWalkin = !invoice?.customerId
+  const invoiceBalance = Math.max(
+    0,
+    Number(invoice?.total || 0)
+      - Number(invoice?.paidAmount || 0)
+      - Number(invoice?.creditedAmount || 0),
+  )
+  // Net outstanding can be negative (account credit). Positive AR for messaging:
+  const arOutstanding = Math.max(0, customerOutstanding)
 
   useEffect(() => {
     if (isWalkin && refundMethod !== 'cash') setRefundMethod('cash')
   }, [isWalkin, refundMethod])
+
+  useEffect(() => {
+    if (!customer?.id) {
+      setCustomerOutstanding(0)
+      return
+    }
+    let cancelled = false
+    customersAPI.get(customer.id)
+      .then((c) => {
+        if (!cancelled) setCustomerOutstanding(Number(c?.outstanding || 0))
+      })
+      .catch(() => { if (!cancelled) setCustomerOutstanding(0) })
+    return () => { cancelled = true }
+  }, [customer?.id])
 
   const loadInvoice = async (invoiceId) => {
     if (!invoiceId) return
@@ -319,11 +342,12 @@ export default function ReturnFormPage() {
         ? await salesAPI.returns.update(returnId, payload)
         : await salesAPI.returns.create(payload)
       const credited = Number(res?.credited_amount || 0)
-      if (res?.refund_method === 'credit' && credited > 0) {
+      if (res?.refund_method === 'adjustment') {
         toast.success(
           isEdit
-            ? `Credit note ${res.number} updated. ${fmt(credited)} store credit`
-            : `Return ${res.number} processed. ${fmt(credited)} added to store credit for ${invoice.customerName}`,
+            ? `Credit note ${res.number} updated — applied to outstanding`
+            : `Return ${res.number} processed — applied to outstanding`
+            + (credited > 0 ? ` (${fmt(credited)} account credit)` : ''),
           { duration: 5000 },
         )
       } else if (res?.refund_method === 'cash' && credited > 0) {
@@ -584,11 +608,14 @@ export default function ReturnFormPage() {
                       onChange={setRefundMethod}
                       options={[
                         { id: 'cash', label: '💵 Cash (refund from drawer)' },
-                        {
-                          id: 'credit',
-                          label: `🏦 Store credit${isWalkin ? ' (walk-in — pick Cash)' : ''}`,
-                          disabled: isWalkin,
-                        },
+                        ...(!isWalkin
+                          ? [{
+                              id: 'adjustment',
+                              label: arOutstanding > 0.001
+                                ? `📋 Apply to outstanding (${fmt(arOutstanding)})`
+                                : '📋 Apply to outstanding (creates account credit)',
+                            }]
+                          : []),
                       ]}
                       isSearchFieldRequired={false}
                     />
@@ -612,18 +639,20 @@ export default function ReturnFormPage() {
                   />
                 </FormGroup>
 
-                {refundMethod === 'credit' && !isWalkin && totals.total > Number(invoice.paidAmount || 0) && (
-                  <AlertBar type="amber" icon="ℹ">
-                    Return total exceeds paid amount. Only <strong>{fmt(invoice.paidAmount)}</strong> can go to store credit
-                    to the customer; the remaining <strong>{fmt(totals.total - Number(invoice.paidAmount))}</strong> will
-                    reduce the invoice&apos;s outstanding balance.
-                  </AlertBar>
-                )}
                 {refundMethod === 'cash' && !isWalkin && totals.total > Number(invoice.paidAmount || 0) && (
                   <AlertBar type="amber" icon="ℹ">
                     Return total exceeds paid amount. Only <strong>{fmt(invoice.paidAmount)}</strong> will be refunded
                     in cash; the remaining <strong>{fmt(totals.total - Number(invoice.paidAmount))}</strong> reduces
                     the invoice&apos;s outstanding balance.
+                  </AlertBar>
+                )}
+                {refundMethod === 'adjustment' && !isWalkin && (
+                  <AlertBar type="amber" icon="ℹ">
+                    Return value reduces what this customer owes (this invoice, then other open bills).
+                    {arOutstanding <= 0.001 || totals.total > arOutstanding + 0.001
+                      ? <> Any leftover becomes account credit (negative outstanding) and auto-applies on their next sale.</>
+                      : null}
+                    {' '}No cash is paid out.
                   </AlertBar>
                 )}
               </>

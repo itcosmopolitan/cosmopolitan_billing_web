@@ -1,10 +1,10 @@
 /**
  * POS refund flow — lookup a sale by receipt # (or open a specific bill)
- * and create a credit note (cash from drawer or store credit).
+ * and create a credit note (cash, store credit, or apply to outstanding).
  */
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { salesAPI } from '@/api'
+import { salesAPI, customersAPI } from '@/api'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
@@ -17,9 +17,17 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
   const [returnQty, setReturnQty] = useState({})
   const [refundMethod, setRefundMethod] = useState('cash')
   const [reason, setReason] = useState('Customer return')
+  const [customerOutstanding, setCustomerOutstanding] = useState(0)
 
   const isWalkin = !invoice?.customerId
   const lockedToInvoice = Boolean(initialInvoiceId)
+  const invoiceBalance = Math.max(
+    0,
+    Number(invoice?.total || 0)
+      - Number(invoice?.paidAmount || 0)
+      - Number(invoice?.creditedAmount || 0),
+  )
+  const arOutstanding = Math.max(0, customerOutstanding)
 
   const returnTotal = useMemo(() => {
     if (!invoice?.items) return 0
@@ -37,6 +45,7 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
     setReturnQty({})
     setRefundMethod('cash')
     setReason('Customer return')
+    setCustomerOutstanding(0)
   }
 
   const applyInvoice = (detail) => {
@@ -48,6 +57,12 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
     setReturnQty(qtyMap)
     setRefundMethod('cash')
     setSearchNum(detail.number || '')
+    setCustomerOutstanding(0)
+    if (detail.customerId) {
+      customersAPI.get(detail.customerId)
+        .then((c) => setCustomerOutstanding(Number(c?.outstanding || 0)))
+        .catch(() => setCustomerOutstanding(0))
+    }
   }
 
   useEffect(() => {
@@ -140,11 +155,10 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
         items,
       })
       const credited = Number(res?.credited_amount || 0)
-      if (refundMethod === 'credit' && !isWalkin) {
+      if (refundMethod === 'adjustment' && !isWalkin) {
         toast.success(
-          credited > 0
-            ? `Return ${res.number} — ${fmt(credited)} added to store credit`
-            : `Return ${res.number} processed`,
+          `Return ${res.number} — applied to outstanding`
+          + (credited > 0 ? ` (${fmt(credited)} account credit)` : ''),
         )
       } else {
         toast.success(
@@ -188,8 +202,8 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
     >
       <AlertBar type="blue" icon="ℹ">
         {lockedToInvoice
-          ? 'Adjust return quantities on this POS bill, then choose cash or store credit.'
-          : 'Look up the receipt number, select lines to return, and pick cash (drawer) or store credit.'}
+          ? 'Adjust return quantities, then choose cash, store credit, or apply to outstanding.'
+          : 'Look up the receipt, select lines, then choose cash, store credit, or apply to outstanding.'}
       </AlertBar>
       <div style={{ height: 14 }} />
 
@@ -239,11 +253,14 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
               onChange={setRefundMethod}
               options={[
                 { id: 'cash', label: '💵 Cash (refund from drawer)' },
-                {
-                  id: 'credit',
-                  label: 'Store credit',
-                  disabled: isWalkin,
-                },
+                ...(!isWalkin
+                  ? [{
+                      id: 'adjustment',
+                      label: arOutstanding > 0.001
+                        ? `Apply to outstanding (${fmt(arOutstanding)})`
+                        : 'Apply to outstanding (creates account credit)',
+                    }]
+                  : []),
               ]}
               isSearchFieldRequired={false}
             />
@@ -302,9 +319,10 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
               <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmt(returnTotal)}</span>
             </div>
           )}
-          {refundMethod === 'credit' && !isWalkin && returnTotal > Number(invoice.paidAmount || 0) && (
-            <AlertBar type="amber" icon="⚠" style={{ marginTop: 10 }}>
-              Return exceeds amount paid — store credit will be capped at paid amount.
+          {refundMethod === 'adjustment' && !isWalkin && (
+            <AlertBar type="amber" icon="ℹ" style={{ marginTop: 10 }}>
+              Reduces what they owe. Leftover becomes account credit (negative outstanding)
+              and auto-applies on their next sale. No cash paid out.
             </AlertBar>
           )}
         </>

@@ -1014,10 +1014,10 @@ class ReturnLineItem(Base):
 #   • refund_method='credit'     → customer.credit_balance += credited_amount.
 #     Walk-in invoices reject 'credit' (no customer to credit) — the API
 #     forces 'cash' for walk-ins.
-#   • refund_method='adjustment' → no money moves; reduces the invoice's
-#     outstanding balance instead. Useful for "return on a partially-paid
-#     invoice where the return amount exceeds what they've paid so far"
-#     (the excess stays as a balance reduction rather than a cash refund).
+#   • refund_method='adjustment' → apply return value to AR outstanding
+#     (this invoice via CN credited_amount, then other open invoices).
+#     Leftover after outstanding is cleared becomes store credit.
+#     Useful when the customer has unpaid account-sales balance.
 #
 # Stock side-effect: restocks happen at the invoice's branch (where the
 # sale was made), not necessarily the operator's current branch. For
