@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, ItemStock, User
+from src.models import Branch, ItemStock, User, UserBranch
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import get_user_branch_ids, serialize_branch
 from src.security import current_user, enforce_branch_access, require_perm
@@ -157,6 +157,12 @@ async def create_branch(
                country=data.country, postal_code=data.postal_code,
                gstin=data.gstin, active=data.active)
     db.add(b)
+    await db.flush()
+
+    super_admins = (await db.execute(select(User).where(User.all_branches.is_(True)))).scalars().all()
+    for super_admin in super_admins:
+        db.add(UserBranch(user_id=super_admin.id, branch_id=b.id))
+
     add_audit_log(
         db,
         action="Branch created",

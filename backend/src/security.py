@@ -308,8 +308,8 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         "email": user.email,
         "role": user.role.value if hasattr(user.role, "value") else user.role,
         "role_id": user.role_id,
-        # Multi-branch list (2026-05-18). Empty when all_branches=True; in
-        # that case the frontend treats the user as having every branch.
+        # Multi-branch list: super-admins keep a row for every available branch
+        # while all_branches=True still indicates global access.
         "branch_ids": branch_ids,
         "all_branches": bool(getattr(user, "all_branches", False)),
         "avatar": user.avatar,

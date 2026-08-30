@@ -34,9 +34,9 @@ async def attach_branch_ids(db, user_dicts: List[dict]) -> List[dict]:
     """Mutate `user_dicts` in place, adding `branch_ids` to each one.
 
     Bulk-fetches all UserBranch rows for the page in a single query
-    (avoids N+1 in list endpoints). For users with `all_branches=True`
-    the list is left empty — the frontend reads `all_branches` as the
-    "implies all" signal.
+    (avoids N+1 in list endpoints). For super-admin users, the join table
+    is populated with every available branch while `all_branches=True`
+    continues to act as the global-access flag.
 
     Returns the same list for chainability.
     """

@@ -99,11 +99,6 @@ async def _assign_branches(
     selected AND all_branches=False), or if any referenced branch_id is
     unknown.
     """
-    if all_branches:
-        user.all_branches = True
-        await db.execute(delete(UserBranch).where(UserBranch.user_id == user.id))
-        return
-
     # Coalesce branch_ids from either the new field or the legacy single-id
     # shorthand. Strip falsy + dedupe while preserving order (admin's pick of
     # primary).
@@ -114,6 +109,19 @@ async def _assign_branches(
             continue
         ids.append(bid)
         seen.add(bid)
+
+    if all_branches:
+        user.all_branches = True
+        rows = (await db.execute(select(Branch.id).order_by(Branch.id))).scalars().all()
+        available_ids = list(rows)
+        if not available_ids:
+            await db.execute(delete(UserBranch).where(UserBranch.user_id == user.id))
+            return
+
+        await db.execute(delete(UserBranch).where(UserBranch.user_id == user.id))
+        for bid in available_ids:
+            db.add(UserBranch(user_id=user.id, branch_id=bid))
+        return
 
     if not ids:
         # NB: the UI no longer exposes the all_branches=True path (removed

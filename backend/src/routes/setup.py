@@ -157,7 +157,9 @@ async def initialize_setup(data: SetupRequest, db: AsyncSession = Depends(get_db
     db.add(user)
     await db.flush()
 
-    db.add(UserBranch(user_id=user.id, branch_id=branch.id))
+    available_branches = (await db.execute(select(Branch.id).order_by(Branch.id))).scalars().all()
+    for bid in available_branches:
+        db.add(UserBranch(user_id=user.id, branch_id=bid))
     await db.commit()
     await db.refresh(org)
     await db.refresh(branch)
