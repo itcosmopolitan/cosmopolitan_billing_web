@@ -9,6 +9,7 @@ import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, Paginatio
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { tableRowClickProps } from '@/utils/tableRowClick'
+import { formatLabel } from '@/utils/helpers'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import RowActionsMenu from './RowActionsMenu'
 import TransferDetailPanel from './TransferDetailPanel'
@@ -40,7 +41,7 @@ function transferStatusChip(status) {
   if (status === 'transit') return { status: 'transit', label: 'In Transit' }
   if (status === 'pending') return { status: 'pending', label: 'Pending' }
   if (status === 'rejected') return { status: 'draft', label: 'Rejected' }
-  return { status: 'draft', label: status?.charAt(0).toUpperCase() + status?.slice(1) }
+  return { status: 'draft', label: formatLabel(status) }
 }
 
 export default function TransfersPage() {

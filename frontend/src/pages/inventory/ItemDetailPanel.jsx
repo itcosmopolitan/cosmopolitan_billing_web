@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { itemsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtDate, fmtQty, stockStatus } from '@/utils/helpers'
+import { fmt, fmtDate, fmtQty, stockStatus, formatLabel } from '@/utils/helpers'
 import { exclusiveFromInclusive } from '@/utils/taxCalc'
 import { Chip, Tag, EmptyState } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
@@ -31,7 +31,7 @@ const TABS = [
 
 function statusChip(item) {
   const s = (item?.status || item?.approval_status || (item?.active === false ? 'inactive' : 'approved'))
-  const label = String(s).charAt(0).toUpperCase() + String(s).slice(1)
+  const label = formatLabel(s)
   const chipStatus = s === 'approved' || s === 'active' ? 'active'
     : s === 'pending' || s === 'pending_approval' ? 'pending'
       : s === 'rejected' ? 'draft'

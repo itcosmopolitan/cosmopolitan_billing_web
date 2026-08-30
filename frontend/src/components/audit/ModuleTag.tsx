@@ -1,3 +1,5 @@
+import { formatLabel } from "@/utils/helpers";
+
 const styles: Record<string, { background: string; color: string }> = {
   sales: { background: "var(--blue-bg)", color: "var(--blue)" },
   inventory: { background: "var(--green-bg)", color: "var(--green)" },
@@ -10,7 +12,7 @@ const styles: Record<string, { background: string; color: string }> = {
 const toDisplayModule = (module: string) => {
   const value = (module || "").trim();
   if (!value) return "-";
-  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+  return formatLabel(value) || "-";
 };
 
 export function ModuleTag({ module }: { module: string }) {

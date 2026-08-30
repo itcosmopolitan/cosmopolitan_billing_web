@@ -1,10 +1,11 @@
 /** Shared option lists for AutocompleteDropdown / Select. */
+import { formatLabel } from '@/utils/helpers'
 
 export const PAYMENT_METHOD_OPTIONS = [
   { id: 'cash', label: '💵 Cash' },
   { id: 'card', label: '💳 Card' },
   { id: 'upi', label: '📱 UPI' },
-  { id: 'bank_transfer', label: '🏦 Bank Transfer' },
+  { id: 'bank_transfer', label: `🏦 ${formatLabel('bank_transfer')}` },
 ]
 
 export const PAYMENT_METHOD_WITH_CREDIT_OPTIONS = [
@@ -13,10 +14,10 @@ export const PAYMENT_METHOD_WITH_CREDIT_OPTIONS = [
 ]
 
 export const PAYMENT_MODE_LABEL_OPTIONS = [
-  { id: 'cash', label: 'CASH' },
-  { id: 'card', label: 'CARD' },
-  { id: 'upi', label: 'UPI' },
-  { id: 'bank_transfer', label: 'BANK TRANSFER' },
+  { id: 'cash', label: formatLabel('cash') },
+  { id: 'card', label: formatLabel('card') },
+  { id: 'upi', label: formatLabel('upi') },
+  { id: 'bank_transfer', label: formatLabel('bank_transfer') },
 ]
 
 export const CUSTOMER_TYPE_OPTIONS = [
@@ -63,7 +64,7 @@ export const ADJUSTMENT_REASON_OPTIONS = [
 export function statusOptions(statuses) {
   return statuses.map((id) => ({
     id,
-    label: id.charAt(0).toUpperCase() + id.slice(1),
+    label: formatLabel(id),
   }))
 }
 

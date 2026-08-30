@@ -3,6 +3,7 @@ import { ConfirmDialog, Drawer, Spinner, Tag } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
 import { activityAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
+import { formatLabel } from '@/utils/helpers'
 
 function parseEventDate(value) {
   if (!value) return null
@@ -195,7 +196,7 @@ const RECORD_TYPE_LABELS = {
 function getCombinedLabel(event) {
   const key = resolveEventKey(event) || event.event_type
   const def = EVENT_DEFINITIONS[key] || EVENT_DEFINITIONS.comment
-  const recordLabel = RECORD_TYPE_LABELS[event.record_type] || (event.record_type || '').replace(/_/g, ' ')
+  const recordLabel = RECORD_TYPE_LABELS[event.record_type] || formatLabel(event.record_type)
   if (!recordLabel) return def.label
 
   // Build combined label but avoid duplication when the event label already

@@ -36,16 +36,42 @@ export const fmtRelative = (d) => {
   catch { return d }
 }
 
-export const humanizeLabel = (value) => {
+const LABEL_ACRONYM_EXCEPTIONS = new Set([
+  'ACH', 'API', 'BIC', 'CN', 'GST', 'HSN', 'IBAN', 'ID', 'IFSC', 'MVR', 'NEFT', 'OTP', 'PAN', 'PO', 'QR', 'RTGS', 'SKU', 'SO', 'UPI', 'URL', 'UUID', 'VAT',
+])
+
+export const formatLabel = (value) => {
   if (value === null || value === undefined || value === '') return ''
+
   const text = String(value).trim()
   if (text === '') return ''
-  return text
+
+  const normalized = text
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')
-    .replace(/\b(id)\b/gi, 'ID')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) return ''
+
+  const tokens = normalized.split(' ')
+  return tokens.map((token) => {
+    if (!token) return ''
+
+    const upper = token.toUpperCase()
+    if (LABEL_ACRONYM_EXCEPTIONS.has(upper)) return upper
+
+    const cleaned = token.replace(/[^A-Za-z0-9]/g, '')
+    if (!cleaned) return token
+
+    const lower = cleaned.toLowerCase()
+    if (LABEL_ACRONYM_EXCEPTIONS.has(lower.toUpperCase())) return lower.toUpperCase()
+
+    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase()
+  }).join(' ')
 }
+
+export const humanizeLabel = (value) => formatLabel(value)
 
 export const humanizeValue = (value) => {
   if (value === null || value === undefined || value === '') return '—'
@@ -94,11 +120,7 @@ export const humanizeValue = (value) => {
     const lower = normalized.toLowerCase()
     if (Object.prototype.hasOwnProperty.call(map, lower)) return map[lower]
 
-    return normalized
-      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-      .replace(/[_-]+/g, ' ')
-      .replace(/\b(id)\b/gi, 'ID')
-      .replace(/\b\w/g, (char) => char.toUpperCase())
+    return formatLabel(normalized)
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return '[]'

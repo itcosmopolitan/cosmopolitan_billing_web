@@ -2,7 +2,7 @@ import type { AuditLog } from "../../types/audit";
 import { useAppStore } from "../../store";
 import { ModuleTag } from "./ModuleTag";
 import { RiskBadge } from "./RiskBadge";
-import { humanizeValue } from "@/utils/helpers";
+import { humanizeLabel, humanizeValue } from "@/utils/helpers";
 
 interface Props {
   logs: AuditLog[];
@@ -20,18 +20,11 @@ const ACTION_LABELS: Record<string, string> = {
   delete_customer_payment: "Customer Payment Deleted",
 };
 
-const toTitleCase = (value: string) =>
-  value
-    .split(" ")
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
-
 const toDisplayAction = (action: string) => {
   const key = (action || "").trim().toLowerCase();
   if (!key) return "-";
   if (ACTION_LABELS[key]) return ACTION_LABELS[key];
-  return toTitleCase(key.replace(/[_-]+/g, " "));
+  return humanizeLabel(key.replace(/[_-]+/g, " ")) || "-";
 };
 
 const parseUtcToLocal = (value: string) => {

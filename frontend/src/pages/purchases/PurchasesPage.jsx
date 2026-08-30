@@ -24,7 +24,7 @@ import toast from 'react-hot-toast'
 import { purchasesAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, exportToCSV } from '@/utils/helpers'
+import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -62,7 +62,7 @@ const PAYMENT_FILTER_FIELDS = ['vendor', 'status', 'paymentMode', 'date']
 const BILL_STATUS_FILTER_OPTIONS = statusOptions(['paid', 'pending', 'partial', 'overdue', 'cancelled', 'draft', 'pending_approval'])
 const ORDER_STATUS_FILTER_OPTIONS = ['draft', 'pending_approval', 'confirmed', 'partially_received', 'converted', 'cancelled'].map((s) => ({
   id: s,
-  label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+  label: formatLabel(s),
 }))
 const GRN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'pending_approval', 'received', 'cancelled'])
 const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'approved', 'void'])
@@ -75,7 +75,7 @@ function displayPaymentMode(raw) {
   if (!raw) return '—'
   const v = String(raw).trim().toLowerCase()
   if (!VALID_PAYMENT_MODES.has(v)) return '—'
-  return v.replace('_', ' ').toUpperCase()
+  return formatLabel(v)
 }
 
 export default function PurchasesPage() {
@@ -1676,7 +1676,7 @@ export default function PurchasesPage() {
                           if (id === 'method') {
                             return (
                               <td key={id}>{p.paymentMode
-                                ? <Chip status={p.paymentMode} label={String(p.paymentMode).replace('_', ' ').toUpperCase()} />
+                                ? <Chip status={p.paymentMode} label={formatLabel(p.paymentMode)} />
                                 : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                             )
                           }
