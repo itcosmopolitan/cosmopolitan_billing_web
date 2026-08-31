@@ -151,7 +151,7 @@ export function Receipt({ sale, branch }) {
           .footer-note { font-size: 10px; margin-top: 8px; line-height: 1.4; }
           .terms { font-size: 9.5px; line-height: 1.4; margin-top: 10px; }
           .terms strong { display: block; margin-bottom: 4px; }
-          @page { size: A4; margin: 18mm; }
+          @page { size: A5; margin: 15mm; }
           html, body { height: 100%; }
           .print-header,
           .print-footer { position: fixed; left: 0; right: 0; background: white; z-index: 10; }
