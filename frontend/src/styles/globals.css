@@ -966,7 +966,7 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .item-form-inline-opts {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 16px;
   flex-wrap: wrap;
   margin-top: 12px;
