@@ -3,7 +3,6 @@ import { AUTOCOMPLETE_CATEGORY_URL, AUTOCOMPLETE_UNIT_URL, AUTOCOMPLETE_TAX_RATE
 import BranchPricingSection from './BranchPricingSection'
 import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './TaxedPriceInput'
 import { qtyInputStep } from '@/utils/decimalPrecision'
-import { convertEnteredTaxAmount } from '@/utils/taxCalc'
 
 function SegmentedControl({ value, options, onChange, ariaLabel }) {
   return (
@@ -51,21 +50,8 @@ export default function ItemFormFields({
   const setPriceTaxMode = (next) => {
     const normalized = normalizeTaxMode(next)
     if (normalized === priceTaxMode) return
-    const rate = form.tax_rate
-    patchForm('cost_price', convertEnteredTaxAmount(form.cost_price, priceTaxMode, normalized, rate))
-    patchForm('selling_price', convertEnteredTaxAmount(form.selling_price, priceTaxMode, normalized, rate))
-    if (categoryMode === 'price') {
-      patchForm('wholesale_price', convertEnteredTaxAmount(form.wholesale_price, priceTaxMode, normalized, rate))
-      patchForm('staff_price', convertEnteredTaxAmount(form.staff_price, priceTaxMode, normalized, rate))
-    }
+    // Keep typed amounts as-is; only reinterpret Incl. ↔ Excl. (breakdown updates).
     patchForm('priceTaxMode', normalized)
-    if (onBranchConfigsChange) {
-      onBranchConfigsChange((prev) => (prev || []).map((r) => ({
-        ...r,
-        cost_price: convertEnteredTaxAmount(r.cost_price, priceTaxMode, normalized, rate),
-        selling_price: convertEnteredTaxAmount(r.selling_price, priceTaxMode, normalized, rate),
-      })))
-    }
   }
 
   return (

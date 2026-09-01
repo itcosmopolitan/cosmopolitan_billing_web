@@ -17,7 +17,7 @@ import {
   buildBranchUpdatePayload,
 } from './itemFormShared'
 
-const SIDEBAR_W = 244
+const SIDEBAR_W = 220
 const SIDEBAR_W_COLLAPSED = 68
 const DEFAULT_UNIT_OPTIONS = ['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Pack', 'Box', 'Dozen']
 

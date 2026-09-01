@@ -1,7 +1,7 @@
 import { useAppStore } from '@/store'
 import { SectionHeader, Card } from '@/components/ui'
 
-const SIDEBAR_W = 244
+const SIDEBAR_W = 220
 const SIDEBAR_W_COLLAPSED = 68
 
 /**
