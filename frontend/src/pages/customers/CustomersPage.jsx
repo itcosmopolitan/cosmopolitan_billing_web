@@ -253,7 +253,7 @@ export default function CustomersPage() {
         credit_limit: form.customer_type === 'retail' ? 0 : (Number(form.credit_limit) || 0),
         customer_type: form.customer_type,
         key_account_manager: form.key_account_manager?.trim() || null,
-        credit_terms: form.customer_type === 'retail' ? null : (form.credit_terms?.trim() || null),
+        credit_terms: form.customer_type === 'retail' ? null : (form.credit_terms === '' ? null : Number(form.credit_terms)),
         street1: form.street1?.trim(),
         street2: form.street2?.trim() || undefined,
         street3: form.street3?.trim() || undefined,
@@ -814,9 +814,13 @@ export default function CustomersPage() {
           <FormGroup label="Credit terms">
             <input
               className="form-input"
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
               value={form.credit_terms}
-              onChange={e => pf('credit_terms', e.target.value)}
-              placeholder="e.g. Cash, Net 7 days, Net 30 days"
+              onChange={e => pf('credit_terms', e.target.value.replace(/\D/g, ''))}
+              placeholder="Numbers of days"
             />
           </FormGroup>
         )}
