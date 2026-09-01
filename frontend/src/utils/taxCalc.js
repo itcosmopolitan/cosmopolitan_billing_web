@@ -43,7 +43,7 @@ export function catalogInclusiveAmount(entered, mode, taxRate) {
   return priceTaxBreakdown(n, mode === 'exclusive' ? 'exclusive' : 'inclusive', taxRate).inclusive
 }
 
-/** Keep the same catalog (inclusive) price when switching Incl. ↔ Excl. entry. */
+/** Re-express a stored GST-inclusive catalog amount in another entry mode (for display). */
 export function convertEnteredTaxAmount(value, fromMode, toMode, taxRate) {
   if (value === '' || value == null) return value
   const n = Number(value)

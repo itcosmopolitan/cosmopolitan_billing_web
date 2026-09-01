@@ -22,7 +22,7 @@ import {
   EMPTY_LINE,
 } from './transferFormShared'
 
-const SIDEBAR_W = 244
+const SIDEBAR_W = 220
 const SIDEBAR_W_COLLAPSED = 68
 
 export default function TransferFormPage({ mode = 'create' }) {

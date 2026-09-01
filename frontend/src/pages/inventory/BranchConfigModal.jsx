@@ -83,12 +83,7 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
     const normalized = normalizeTaxMode(next)
     const current = normalizeTaxMode(priceTaxMode)
     if (normalized === current) return
-    const rate = item?.tax_rate
-    setRows((prev) => prev.map((r) => ({
-      ...r,
-      cost_price: convertEnteredTaxAmount(r.cost_price, current, normalized, rate),
-      selling_price: convertEnteredTaxAmount(r.selling_price, current, normalized, rate),
-    })))
+    // Keep typed amounts as-is; only reinterpret Incl. ↔ Excl.
     setPriceTaxMode(normalized)
   }
 
