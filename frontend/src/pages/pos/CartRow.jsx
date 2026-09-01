@@ -11,6 +11,7 @@ import {
 } from '@/utils/batchAllocation'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import { posLineMargin } from '@/utils/marginCalc'
+import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 
 /**
  * One row of the POS cart table. Extracted from POSPage to keep that file
@@ -41,6 +42,9 @@ export default function CartRow({
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
   const hsn = item.hsnCode || '—'
+  const metadata = getInvoiceItemMetadata(item)
+  const packing = metadata.packaging === '' ? '—' : metadata.packaging
+  const uom = metadata.units === '' ? '—' : metadata.units
   const hasStock = item.availableStock != null || item.available_stock != null
   const stockQty = hasStock ? Number(item.availableStock ?? item.available_stock) || 0 : null
   const stockExceeded = stockQty != null && item.qty > stockQty
@@ -124,9 +128,11 @@ export default function CartRow({
                 </span>
               )}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-              <span style={{ fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
-              <span style={{ fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty != null ? fmtQty(stockQty) : '—'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 10, rowGap: 2, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
+              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>UOM: {uom}</span>
+              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>Packing: {packing}</span>
+              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty != null ? fmtQty(stockQty) : '—'}</span>
               {stockExceeded && (
                 <span title="Stock exceeded" style={{ color: 'var(--amber)', cursor: 'help', fontSize: 12, lineHeight: 1 }} aria-label="Stock exceeded">⚠️</span>
               )}

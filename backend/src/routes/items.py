@@ -972,6 +972,8 @@ async def list_items(
             "hsn_code": item.hsn_code,
             "reorder_level": eff_reorder,
             "default_reorder_level": item.reorder_level,
+            "is_packaging": item.is_packaging,
+            "packaging_quantity": item.packaging_quantity,
             "emoji": item.emoji,
             "batch_tracking": item.batch_tracking,
             "expiry_tracking": item.expiry_tracking,
