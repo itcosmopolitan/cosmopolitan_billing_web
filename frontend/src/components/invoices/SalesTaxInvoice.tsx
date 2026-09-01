@@ -209,15 +209,16 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
   const logoSrc = branch?.logo || branch?.logo_url || LOGO_SRC
   const companyName = branch?.company || COMPANY_NAME
   const customerName = invoice.billTo?.name || 'Walk-in'
-  const normalizedCustomerName = customerName.trim().toLowerCase()
-  const isWalkin = normalizedCustomerName === 'walk-in' || normalizedCustomerName === 'walkin' || normalizedCustomerName === 'walk in' || normalizedCustomerName === 'walkin customer' || normalizedCustomerName === 'cash customer'
+  const customerNameLower = customerName.trim().toLowerCase()
+  const isWalkin = customerNameLower === 'walk-in' || customerNameLower === 'walkin' || customerNameLower === 'walk in' || customerNameLower === 'walkin customer' || customerNameLower === 'cash customer'
   const displayEmail = invoice.email || branch?.email || branch?.emailAddress || branch?.email_address || ''
   const displayHomepage = invoice.homePage || branch?.homePage || branch?.homepage || branch?.website || ''
-  const displayGstRegNo =  branch?.gstRegNo || branch?.gst || branch?.gstin || ''
+  const displayGstRegNo = branch?.gstRegNo || branch?.gst || branch?.gstin || ''
   const companyAddressLines: string[] = Array.isArray(branch?.address)
     ? branch.address.filter(Boolean)
     : (branch?.address ? String(branch.address).split(/\n|<br\s*\/?\s*>/i).filter(Boolean) : ['LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv', "Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv"])
-  const rowsPerPage = 15
+  const customerAddressLines = (invoice.billTo?.addressLines || []).filter(Boolean)
+  const rowsPerPage = 16
   const totalPages = Math.max(1, Math.ceil((invoice.lineItems || []).length / rowsPerPage))
   const pageItems = Array.from({ length: totalPages }, (_, pageIndex) => {
     const start = pageIndex * rowsPerPage
@@ -228,148 +229,183 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
   return (
     <div className="invoice-template-shell">
       <style>{styles}</style>
-      {pageItems.map((rows, index) => {
-        const pageNumber = index + 1
+      {pageItems.map((rows, pageIndex) => {
+        const pageNumber = pageIndex + 1
+        const isLastPage = pageNumber === totalPages
+
         return (
-          <div className="invoice-page" key={`${invoice.invoiceNo}-${pageNumber}`}>
-            <div className="invoice-header" style={{ alignItems: 'center' }}>
-              <div className="logo-column" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
-                <img src={logoSrc} alt="Cosmopolitan logo" className="logo-image" style={{ width: 150 }} />
-                <div className="badge badge--green" style={{ padding: '6px 10px', minWidth: 110, fontSize: 11 }}>FSSC 22000</div>
+          <div className="page" key={`${invoice.invoiceNo}-${pageNumber}`}>
+            <div className="header">
+              <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                <div className="logo-block">
+                  <img className="logo-img" src={logoSrc} alt="Cosmopolitan" />
+                  <div className="logo-tag">"where quality and service matters"</div>
+                  <div className="fssc">◆ FSSC 22000</div>
+                </div>
               </div>
 
-              <div className="company-center" style={{ flex: 1, textAlign: 'center', paddingLeft: 12, paddingRight: 12 }}>
-                <div className="company-name-row" style={{ fontSize: 18, color: '#28c23d', fontWeight: 800 }}>{companyName}</div>
-                <div style={{ fontSize: 12 }}>LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv</div>
-                <div style={{ fontSize: 12 }}>Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv</div>
+              <div className="company-info">
+                <div className="company-name">{companyName}</div>
+                <div className="company-line">LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv</div>
+                <div className="company-line">Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv</div>
               </div>
 
-              <div className="company-right" style={{ width: 120, display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
-                <SealWithFallback />
+              <div className="gold-badge">
+                <img
+                  className="badge-img"
+                  src="/assets/gold-100-seal.png"
+                  alt="Gold 100 seal"
+                  onError={(event) => {
+                    const target = event.currentTarget as HTMLImageElement
+                    target.style.display = 'none'
+                  }}
+                />
               </div>
             </div>
 
             <div className="title-row">
-              <div className="title-copy-wrap">
-                {invoice.copyType ? <div className="copy-label">{invoice.copyType}</div> : null}
-                <div className="title-text">Sales Tax-Invoice</div>
-              </div>
-              <div className="page-number">Page {pageNumber} of {totalPages}</div>
+              {invoice.copyType ? <div className="copy-label">{invoice.copyType}</div> : null}
+              <h1>Sales Invoice</h1>
+              <div className="pageno">Page {pageNumber} of {totalPages}</div>
             </div>
 
-            <div className="party-grid">
-              <div className="details-box">
+            <div className="parties">
+              <div className="bill-to details-box">
                 <div className="details-title">Customer Details</div>
-                <div className="customer-name">{customerName}</div>
-                {(invoice.billTo.addressLines || []).filter(Boolean).length ? (
-                  <div className="customer-address">{(invoice.billTo.addressLines || []).filter(Boolean).map((line, i) => <div key={`${line}-${i}`}>{line}</div>)}</div>
+                <h2>{customerName}</h2>
+                {customerAddressLines.length ? (
+                  <div className="addr-line">{customerAddressLines.map((line, index) => <div key={`${line}-${index}`}>{line}</div>)}</div>
                 ) : null}
 
-                <div className="detail-list" style={{ marginTop: 10 }}>
-                  {!isWalkin && <div className="detail-row"><span className="detail-label">Bill-to Customer No.</span><span className="detail-value">{formatOptionalText(invoice.billToCustomerNo)}</span></div>}
-                  {!isWalkin && <div className="detail-row"><span className="detail-label">Customer GST IN</span><span className="detail-value">{formatOptionalText(invoice.gstNo)}</span></div>}
-                  <div className="detail-row"><span className="detail-label">Invoice No.</span><span className="detail-value">{formatOptionalText(invoice.invoiceNo)}</span></div>
-                  <div className="detail-row"><span className="detail-label">Posting Date</span><span className="detail-value">{formatOptionalText(invoice.postingDate)}</span></div>
-                </div>
+                <table style={{ marginTop: 10, width: '100%' }}>
+                  {!isWalkin && invoice.billToCustomerNo ? (
+                    <tr><td className="label">Bill-to Customer No.</td><td>{invoice.billToCustomerNo}</td></tr>
+                  ) : null}
+                  {!isWalkin && invoice.gstNo ? (
+                    <tr><td className="label">Customer GST IN</td><td>{invoice.gstNo}</td></tr>
+                  ) : null}
+                  <tr><td className="label">Invoice No.</td><td>{invoice.invoiceNo}</td></tr>
+                  <tr><td className="label">Posting Date</td><td>{invoice.postingDate}</td></tr>
+                </table>
               </div>
 
-              <div className="details-box">
+              <div className="seller-addr details-box">
                 <div className="details-title">Branch Details</div>
-                <div className="customer-name" style={{ marginBottom: 8 }}>{companyName}</div>
-                <div className="customer-address" style={{ marginBottom: 10 }}>
-                  {companyAddressLines.map((line: string, i: number) => <div key={`org-${i}`}>{line}</div>)}
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>{companyName}</div>
+                <div style={{ marginBottom: 8 }}>
+                  {companyAddressLines.map((line, index) => <div key={`org-${index}`}>{line}</div>)}
                 </div>
-
-                <div className="detail-list">
-                  <div className="detail-row"><span className="detail-label">Phone No.</span><span className="detail-value">{formatOptionalText(invoice.phoneNo || branch?.phone)}</span></div>
-                  <div className="detail-row"><span className="detail-label">Branch E-Mail</span><span className="detail-value">{formatOptionalText(displayEmail)}</span></div>
-                  <div className="detail-row"><span className="detail-label">Home Page</span><span className="detail-value">{formatOptionalText(displayHomepage)}</span></div>
-                  <div className="detail-row"><span className="detail-label">GST Reg no</span><span className="detail-value">{formatOptionalText(displayGstRegNo)}</span></div>
-                  <div className="detail-row"><span className="detail-label">Salesperson</span><span className="detail-value">{formatOptionalText(invoice.salesperson)}</span></div>
-                </div>
+                <table style={{ width: '100%' }}>
+                  <tr><td className="label">Phone No.</td><td>{invoice.phoneNo || branch?.phone || ''}</td></tr>
+                  <tr><td className="label">Branch E-Mail</td><td>{displayEmail}</td></tr>
+                  <tr><td className="label">Website</td><td>{displayHomepage}</td></tr>
+                  <tr><td className="label">GST Reg no</td><td>{displayGstRegNo}</td></tr>
+                  <tr><td className="label">Salesperson</td><td>{invoice.salesperson || ''}</td></tr>
+                </table>
               </div>
             </div>
 
-            <table className="invoice-table">
+            <table className="items">
               <thead>
                 <tr>
-                  <th>SKU ID</th>
+                  <th>Product ID</th>
                   <th>Description</th>
                   <th>Packing</th>
                   <th>Origin</th>
                   <th>Units</th>
-                  <th>Qty</th>
-                  <th>Rate</th>
-                  <th>Disc %</th>
-                  <th>GST</th>
-                  <th>Amount</th>
+                  <th className="num">Qty</th>
+                  <th className="num">Rate</th>
+                  <th className="num">Disc %</th>
+                  <th className="num">GST</th>
+                  <th className="num">Amount</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((item, rowIndex) => (
-                  <tr key={`${item.description}-${rowIndex}`}>
-                    <td>{item.sku ?? ''}</td>
-                    <td>{item.description}</td>
-                    <td>{item.packing ?? ''} </td>
-                    <td>{item.origin ?? ''}</td>
-                    <td>{item.units ?? ''}</td>
-                    <td>{formatQtyNumber(item.qty)}</td>
-                    <td>{formatNumber(item.rate)}</td>
-                    <td>{item.discountPct ? `${formatNumber(item.discountPct, 2)}%` : ''}</td>
-                    <td>{formatNumber(item.gstAmount)}</td>
-                    <td>{formatNumber(item.lineTotal)}</td>
-                  </tr>
-                ))}
+                {rows.map((item, rowIndex) => {
+                  const qty = Number(item.qty || 0)
+                  const rate = Number(item.rate || 0)
+                  const discountPct = Number(item.discountPct ?? 0)
+                  const gstAmount = Number(item.gstAmount || 0)
+                  const amount = Number(item.lineTotal || 0)
+
+                  return (
+                    <tr key={`${item.description}-${rowIndex}`}>
+                      <td>{item.sku ?? ''}</td>
+                      <td>{item.description}</td>
+                      <td>{item.packing ?? ''}</td>
+                      <td>{item.origin ?? ''}</td>
+                      <td>{item.units ?? ''}</td>
+                      <td className="num">{formatQtyNumber(qty)}</td>
+                      <td className="num">{formatNumber(rate)}</td>
+                      <td className="num">{discountPct ? `${formatNumber(discountPct, 2)}%` : ''}</td>
+                      <td className="num">{formatNumber(gstAmount)}</td>
+                      <td className="num">{formatNumber(amount)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
 
-            {pageNumber === totalPages ? (
+            {isLastPage ? (
               <>
-                <div className="totals-block">
-                  <div className="totals-row">
-                    <span>Total MRF Excl. GST</span>
-                    <span>{formatNumber(invoice.totalExclGst)}</span>
-                  </div>
-                  <div className="totals-row">
-                    <span>{invoice.gstRatePercent}% GST</span>
-                    <span>{formatNumber(invoice.totalGst)}</span>
-                  </div>
-                  <div className="totals-row totals-row--total">
-                    <span>Total MRF Incl. GST</span>
-                    <span>{formatNumber(invoice.totalInclGst)}</span>
-                  </div>
-                </div>
+                <table className="totals">
+                  <tr>
+                    <td colSpan={6}></td>
+                    <td className="tlabel">Total MRF Excl. GST</td>
+                    <td className="tval">{formatNumber(invoice.totalExclGst)}</td>
+                  </tr>
+                  {invoice.discountAmount ? (
+                    <tr>
+                      <td colSpan={6}></td>
+                      <td className="tlabel">Discount ({invoice.discountPct ?? 0}%)</td>
+                      <td className="tval">-{formatNumber(invoice.discountAmount)}</td>
+                    </tr>
+                  ) : null}
+                  <tr>
+                    <td colSpan={6}></td>
+                    <td className="tlabel">{invoice.gstRatePercent}% GST</td>
+                    <td className="tval">{formatNumber(invoice.totalGst)}</td>
+                  </tr>
+                  <tr className="grand">
+                    <td colSpan={6}></td>
+                    <td className="tlabel grand">Total MRF Incl. GST</td>
+                    <td className="tval grand">{formatNumber(invoice.totalInclGst)}</td>
+                  </tr>
+                </table>
 
                 <div className="amount-words">******* {invoice.amountInWords}</div>
 
                 <div className="payment-section">
                   <div className="payment-row">
-                    <div>Payment Due Date :</div>
-                    <div>{formatOptionalText(invoice.paymentDueDate)}</div>
+                    <div className="plabel">Payment Due Date</div>
+                    <div className="pcolon">:</div>
+                    <div>{invoice.paymentDueDate || ''}</div>
                   </div>
                   <div className="payment-row">
-                    <div>Terms & Conditions :</div>
-                    <div>30DAYS from date of invoice to our account as follows:</div>
+                    <div className="plabel">Terms &amp; Conditions</div>
+                    <div className="pcolon">:</div>
+                    <div>30DAYS &nbsp; from date of invoice to our account as follows:</div>
                   </div>
                   <div className="bank-details">
-                    {BANK_DETAILS.map((detail) => (
-                      <div className="bank-detail-row" key={detail.label}>
-                        <div className="bank-label">{detail.label}</div>
-                        <div className="bank-value">{detail.value}</div>
-                      </div>
-                    ))}
+                    A/C NAME : Cosmopolitan Champa Brothers Maldives Pvt Ltd<br />
+                    Bank Account No : 7730000519444<br />
+                    Bank Name : Bank of Maldives<br />
+                    Bank Address : Boduthakurufaanu Magu, Malé 20094<br />
+                    Swift Code : MALBMVMVXXX
                   </div>
                 </div>
 
-                <ul className="legal-list">
-                  {LEGAL_TERMS.map((term) => (
-                    <li key={term}>{term}</li>
-                  ))}
-                </ul>
+                <div className="terms">
+                  <div>- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoil in transit</div>
+                  <div>- Overdue outstanding will be subject to 1% interest per overdue day.</div>
+                  <div>- Any invoice discrepancies should be made clear via e-mail/fax no later than 24 hours after receiving.</div>
+                  <div>- In case of currency fluctuations, invoices must be settled by the latest maximum legal rate as advised by the MMA.</div>
+                  <div>- By accepting COSMOPOLITAN and/or other products described in the Invoice, the customer accepts these terms and conditions</div>
+                  <div>- The above document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
+                </div>
 
-                <div className="thank-you">Thank you for choosing Cosmopolitan as your preferred partner</div>
-
-                <div className="signature-row">
+                <div className="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
+                <div className="signoff">
                   <div>Recieved By</div>
                 </div>
               </>
@@ -380,312 +416,286 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
     </div>
   )
 }
-
 const styles = `
   * { box-sizing: border-box; }
   .invoice-template-shell {
     font-family: Arial, Helvetica, sans-serif;
-    color: #1b3e6f;
-    background: #ffffff;
-    font-size: 11px;
-    line-height: 1.35;
-  }
-  .invoice-page {
-    width: 100%;
-    max-width: 850px;
-    margin: 0 auto 28px;
-    padding: 18px 20px 24px;
+    color: #222;
     background: #fff;
-    break-after: page;
-  }
-  .invoice-page:last-child { break-after: auto; }
-  .invoice-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 8px;
-  }
-  .logo-column {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: #1b6fb5;
-  }
-  .logo-image {
-    width: 86px;
-    height: 86px;
-    object-fit: contain;
-  }
-  .logo-tagline {
     font-size: 11px;
-    font-weight: 600;
-    color: #2e7d32;
-    text-transform: lowercase;
   }
-  .header-badges {
-    display: flex;
-    gap: 8px;
-    align-items: center;
+  .page {
+    width: 595px;
+    background: #fff;
+    margin: 20px auto;
+    padding: 30px 40px 20px 40px;
+    position: relative;
+    page-break-after: always;
+    page-break-inside: avoid;
   }
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 82px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+  .page:last-child { page-break-after: auto; }
+  table.items { page-break-inside: auto; }
+  table.items thead, table.items tbody, table.items tbody tr { page-break-inside: avoid; }
+  .header {
+    display: grid;
+    grid-template-columns: 140px 1fr 90px;
+    align-items: flex-start;
+    padding-bottom: 6px;
+    gap: 1px;
   }
-  .badge--green {
-    background: #eaf7ea;
-    color: #2e7d32;
-    border: 1px solid #2e7d32;
-  }
-  .badge--gold {
-    background: #f8e8a8;
-    color: #8b6a00;
-    border: 1px solid #8b6a00;
-  }
-  .gold-seal {
-    width: 86px;
-    height: 86px;
-    border-radius: 50%;
-    border: 3px solid #c89b43;
+  .logo-block {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #fff;
-    color: #8b6a00;
-    text-align: center;
-    padding: 4px;
+    gap: 6px;
+    width: 140px;
   }
-  .gold-seal .gold-corporate { font-size: 9px; letter-spacing: 0.6px; color: #8b6a00; margin-bottom: 0; text-transform: uppercase }
-  .gold-seal .gold-text { font-size: 11px; font-weight: 700; margin-top: 2px; letter-spacing: 0.6px }
-  .gold-seal .gold-100 { font-size: 28px; font-weight: 900; line-height: 0.9; margin-top: 0; color: #8b6a00 }
-  .gold-seal .gold-year { font-size: 10px; margin-top: 2px; color: #6d6d6d }
-  .gold-seal-img { width: 86px; height: 86px; object-fit: contain; display: block }
-  .company-contact-row {
+  .logo-img {
+    width: 120px;
+    height: auto;
+    display: block;
+  }
+  .logo-tag {
     font-size: 10px;
-    color: #333;
-    margin-bottom: 2px;
+    font-style: italic;
+    color: #444;
+  }
+  .fssc {
+    font-size: 10px;
+    color: #2e7d32;
+    font-weight: bold;
+    margin-top: 6px;
+  }
+  .company-info {
+    flex: 1;
+    max-width: 350px;
+    padding-top: 10px;
     display: flex;
-    justify-content: space-between;
-    gap: 12px;
+    flex-direction: column;
     align-items: flex-start;
+    justify-content: center;
   }
-  .company-name-row {
-    font-size: 18px;
+  .company-name {
+    color: #6dbe4b;
     font-weight: 800;
-    color: #1aa34a;
-    margin-bottom: 6px;
-    text-transform: none;
+    font-size: 10px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    line-height: 1.2;
   }
-//   .company-left { flex: 1; }
-//   .company-right { text-align: right; font-size: 11px; color: #222 }
+  .company-line {
+    font-size: 8px;
+    color: #222;
+    line-height: 1.4;
+    white-space: pre;
+  }
+  .gold-badge {
+    text-align: center;
+    width: 90px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  .badge-img {
+    width: 70px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
   .title-row {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 10px;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 6px;
+    position: relative;
   }
-  .title-copy-wrap { display: flex; flex-direction: column; gap: 4px; }
   .copy-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    color: #6d6d6d;
-    letter-spacing: 0.4px;
-    text-align: right;
-  }
-  .title-text {
-    font-size: 18px;
+    display: inline-block;
+    font-size: 9.5px;
     font-weight: 700;
-    color: #1b3e6f;
+    letter-spacing: 0.8px;
+    color: #fff;
+    background: #1b3e6f;
+    padding: 3px 7px;
+    border-radius: 4px;
+    margin-bottom: 4px;
   }
-  .page-number {
-    font-size: 10px;
-    color: #4a4a4a;
+  .title-row h1 {
+    font-size: 16px;
+    margin: 0;
+    color: #111;
+    letter-spacing: 0.4px;
+    font-weight: 800;
+    flex: 1;
+    text-align: center;
   }
-  .party-grid {
+  .pageno {
+    font-size: 9.5px;
+    color: #555;
+    white-space: nowrap;
+  }
+  .parties {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin: 14px 0 12px;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 22px;
+    margin-top: 18px;
+    align-items: start;
+  }
+  .bill-to {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .bill-to h2 {
+    font-size: 15px;
+    margin: 0 0 6px 0;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+  }
+  .addr-line {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+    white-space: pre-wrap;
+    margin-top: 2px;
+  }
+  .seller-addr {
+    font-size: 10.5px;
+    text-align: left;
+    line-height: 1.35;
+    color: #222;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
   }
   .details-box {
-    border: 1px solid rgba(0,0,0,0.10);
+    border: 1px solid rgba(0,0,0,0.08);
+    padding: 10px 12px;
     border-radius: 6px;
-    background: rgba(248,249,250,0.85);
-    padding: 12px 12px 8px;
-    min-height: 160px;
+    background: #fbfbfb;
   }
   .details-title {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 800;
-    color: #1b3e6f;
     margin-bottom: 8px;
-  }
-  .customer-name {
-    font-size: 16px;
-    font-weight: 800;
-    color: #1b3e6f;
-    margin-bottom: 4px;
-  }
-  .customer-address {
-    font-size: 11px;
-    color: #2b2b2b;
-    line-height: 1.45;
-  }
-  .detail-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .detail-row {
-    display: grid;
-    grid-template-columns: 110px 1fr;
-    gap: 10px;
-    align-items: start;
-    font-size: 11px;
-  }
-  .detail-label {
-    font-weight: 700;
     color: #1b3e6f;
   }
-  .detail-value {
-    color: #1f1f1f;
-    word-break: break-word;
-  }
-  .info-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  .info-column {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .info-row {
-    display: grid;
-    grid-template-columns: 140px 1fr;
-    gap: 8px;
-    align-items: start;
-  }
-  .info-label {
+  .label {
+    color: #333;
+    white-space: nowrap;
+    width: 130px;
     font-weight: 700;
-    color: #1b3e6f;
+    font-size: 9.8px;
+    letter-spacing: 0.3px;
+    padding: 2px 3px;
   }
-  .info-value { min-height: 14px; }
-  .bill-to-section {
-    margin-bottom: 10px;
-    border-top: 1px solid #1b3e6f;
-    padding-top: 8px;
+  table td {
+    padding: 2px 3px;
+    vertical-align: top;
+    line-height: 1.25;
   }
-  .section-label {
-    font-size: 11px;
-    font-weight: 700;
-    margin-bottom: 4px;
+  table tr {
+    border-bottom: 1px solid rgba(0,0,0,0.08);
   }
-  .bill-to-line, .bill-to-block { min-height: 16px; }
-  .bill-to-name { font-weight: 700; }
-  .invoice-table {
+  table tr:last-child td { border-bottom: none; }
+  table.items {
     width: 100%;
     border-collapse: collapse;
-    font-size: 10px;
-    margin-bottom: 12px;
+    margin-top: 20px;
+    font-size: 10.5px;
   }
-  .invoice-table th {
-    padding: 6px 4px;
-    border-bottom: 1px solid #1b3e6f;
+  table.items thead tr {
+    border-top: 1.5px solid #1b3e6f;
+    border-bottom: 1.5px solid #1b3e6f;
+  }
+  table.items th {
     text-align: left;
-    font-weight: 700;
+    padding: 5px 4px;
+    font-weight: bold;
     color: #1b3e6f;
   }
-  .invoice-table td {
-    padding: 5px 4px;
-    border-bottom: 1px solid #e8e8e8;
+  table.items td {
+    padding: 4px 4px;
     vertical-align: top;
   }
-  .totals-block {
-    margin-left: auto;
-    width: 320px;
-    border-top: 1px solid #1b3e6f;
-    margin-bottom: 10px;
+  table.items th.num, table.items td.num {
+    text-align: right;
   }
-  .totals-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid #e8e8e8;
-    font-weight: 600;
+  table.items tbody tr {
+    border-bottom: 1px solid #eee;
   }
-  .totals-row--total {
-    border-top: 1px solid #1b3e6f;
-    border-bottom: none;
-    font-weight: 700;
-    padding-top: 8px;
+  .totals {
+    width: 100%;
+    margin-top: 4px;
+  }
+  .totals td {
+    padding: 3px 4px;
+    font-size: 10.5px;
+  }
+  .totals .tlabel {
+    text-align: right;
+    padding-right: 10px;
+  }
+  .totals .tval {
+    text-align: right;
+    width: 110px;
+  }
+  .totals .grand {
+    border-top: 1.5px solid #1b3e6f;
+    font-weight: bold;
   }
   .amount-words {
-    font-weight: 700;
-    margin-bottom: 12px;
+    margin-top: 10px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
   }
   .payment-section {
-    margin-bottom: 12px;
+    margin-top: 22px;
+    border-top: 1px solid #333;
+    padding-top: 10px;
+    font-size: 10.5px;
   }
   .payment-row {
-    display: grid;
-    grid-template-columns: 170px 1fr;
-    gap: 8px;
-    margin-bottom: 6px;
-  }
-  .bank-details {
-    margin-top: 8px;
-    border-top: 1px solid #1b3e6f;
-    padding-top: 8px;
-  }
-  .bank-detail-row {
-    display: grid;
-    grid-template-columns: 130px 1fr;
-    gap: 8px;
+    display: flex;
     margin-bottom: 4px;
   }
-  .bank-label {
-    font-weight: 700;
-    color: #1b3e6f;
+  .payment-row .plabel {
+    width: 160px;
+    flex-shrink: 0;
   }
-  .legal-list {
-    padding-left: 18px;
-    margin: 0 0 12px;
-    color: #2b2b2b;
+  .payment-row .pcolon {
+    width: 12px;
   }
-  .legal-list li { margin-bottom: 4px; }
-  .thank-you {
+  .bank-details {
+    margin-left: 172px;
+    line-height: 1.5;
+  }
+  .terms {
+    margin-top: 16px;
+    font-size: 9.5px;
+    color: #333;
+    line-height: 1.6;
+  }
+  .terms div { margin-bottom: 1px; }
+  .thankyou {
+    margin-top: 24px;
     text-align: center;
     font-style: italic;
-    margin: 16px 0 18px;
-    color: #1b3e6f;
-  }
-  .signature-row {
-    display: flex;
-    justify-content: space-between;
-    padding-top: 20px;
-    border-top: 1px solid #d7d7d7;
+    font-weight: bold;
     font-size: 11px;
   }
-  .signature-right {
-    font-weight: 700;
-    color: #1b3e6f;
+  .signoff {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 40px;
+    font-size: 10.5px;
+    font-weight: bold;
   }
+  @page { size: A5; margin: 18mm; }
   @media print {
-    body { margin: 0; background: #fff; }
-    .invoice-template-shell { padding: 0; }
-    .invoice-page { max-width: none; margin: 0; padding: 12mm; box-shadow: none; page-break-after: always; }
-    .invoice-page:last-child { page-break-after: auto; }
+    body { background: #fff; }
+    .page { box-shadow: none; margin: 0; width: auto; }
   }
 `

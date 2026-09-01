@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import toast from 'react-hot-toast'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
@@ -6,6 +7,7 @@ import SalesTaxInvoice, { mapSaleToInvoice } from '@/components/invoices/SalesTa
 import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
 import openInvoicePrintWindow from '@/utils/printInvoice'
+import { exportInvoicePdf } from '@/utils/exportInvoicePdf'
 import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
 import { formatSettlementLabel } from '@/utils/storeCredit'
@@ -393,6 +395,18 @@ export function Receipt({ sale, branch }) {
     }
   }
 
+  const handleExportPdf = async () => {
+    if (!ref.current) return
+    try {
+      const customerName = sale.customerName || sale.customer_name || 'Customer'
+      const fileName = `${customerName}_${sale.number || 'invoice'}`
+      await exportInvoicePdf(ref.current, fileName)
+    } catch (error) {
+      console.error('Failed to export invoice PDF:', error)
+      toast.error('Could not export the invoice as PDF.')
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 16 }}>
@@ -414,7 +428,10 @@ export function Receipt({ sale, branch }) {
             🖨 Thermal Receipt
           </button>
         </div>
-        <button className="btn btn-primary" onClick={handlePrint} style={{ flexShrink: 0 }}>🖨 Print</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <button className="btn btn-secondary" onClick={handleExportPdf} style={{ flexShrink: 0 }}>📤 Export</button>
+          <button className="btn btn-primary" onClick={handlePrint} style={{ flexShrink: 0 }}>🖨 Print</button>
+        </div>
       </div>
 
       <div ref={ref} style={{
