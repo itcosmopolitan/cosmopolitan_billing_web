@@ -10,6 +10,7 @@ import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
@@ -38,6 +39,16 @@ export default function PaymentFormPage() {
   const [paymentRef, setPaymentRef] = useState('')
   const [notes, setNotes] = useState('')
   const [editAllocByInvoice, setEditAllocByInvoice] = useState({})
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    enabled: !isEdit,
+    onCreated: (c) => {
+      setCustomer({
+        id: c.id,
+        name: c.name,
+        credit: Number(c.credit_balance || 0),
+      })
+    },
+  })
 
   useEffect(() => {
     if (!can('invoices.edit')) {
@@ -325,6 +336,7 @@ export default function PaymentFormPage() {
   }
 
   return (
+    <>
     <DocumentFormShell
       title={isEdit ? `Edit Payment — ${editingNumber || ''}` : 'Create Customer Payment'}
       subtitle="Payments"
@@ -369,7 +381,8 @@ export default function PaymentFormPage() {
               selectedLabel={customer?.name}
               placeholder="Search customers…"
               searchPlaceholder="Search customers…"
-              emptyLabel="No customers found. Add via the Customers page."
+              emptyLabel="No customers found"
+              footerAction={addCustomerAction}
               style={{ width: '100%', maxWidth: 420 }}
             />
           )}
@@ -575,6 +588,8 @@ export default function PaymentFormPage() {
         )}
       </div>
     </DocumentFormShell>
+    {addCustomerModal}
+    </>
   )
 }
 

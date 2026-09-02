@@ -99,26 +99,45 @@ echo -e "${BOLD}Starting services...${RESET}"
 cd "$ROOT_DIR/backend"
 # shellcheck disable=SC1091
 source .venv/bin/activate
-kill_port_listener "$BACKEND_PORT" "backend"
-echo -e "${YELLOW}▶ Starting FastAPI backend on port ${BACKEND_PORT}...${RESET}"
-python -m uvicorn src.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload &
-BACKEND_PID=$!
 
-# Wait until the API responds (or fail fast if startup crashed, e.g. missing deps)
 HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/health"
-HEALTH_RETRIES=120
+LOCAL_SQLITE_URL="sqlite+aiosqlite:///./retailos.db"
 HEALTH_COUNT=0
-until curl -fsS -m 2 "$HEALTH_URL" >/dev/null 2>&1; do
-  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+
+start_backend() {
+  kill_port_listener "$BACKEND_PORT" "backend"
+  python -m uvicorn src.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload &
+  BACKEND_PID=$!
+}
+
+wait_for_backend() {
+  local retries="$1"
+  HEALTH_COUNT=0
+  until curl -fsS -m 2 "$HEALTH_URL" >/dev/null 2>&1; do
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+      return 1
+    fi
+    if [ "$HEALTH_COUNT" -ge "$retries" ]; then
+      return 1
+    fi
+    HEALTH_COUNT=$((HEALTH_COUNT + 1))
+    sleep 1
+  done
+  return 0
+}
+
+echo -e "${YELLOW}▶ Starting FastAPI backend on port ${BACKEND_PORT}...${RESET}"
+start_backend
+if ! wait_for_backend 45; then
+  echo -e "${YELLOW}⚠ Postgres did not become reachable. Restarting with local SQLite...${RESET}"
+  kill "$BACKEND_PID" 2>/dev/null || true
+  export DATABASE_URL="$LOCAL_SQLITE_URL"
+  start_backend
+  if ! wait_for_backend 30; then
     echo -e "${YELLOW}❌ Backend exited during startup. Check errors above.${RESET}"
     exit 1
   fi
-  if [ "$HEALTH_COUNT" -ge "$HEALTH_RETRIES" ]; then
-    echo -e "${YELLOW}❌ Backend did not become healthy within ${HEALTH_RETRIES}s.${RESET}"
-    exit 1
-  fi
-  sleep 1
-done
+fi
 echo -e "${GREEN}✓ Backend up (${HEALTH_COUNT}s)${RESET}"
 
 # ─── Start frontend ───────────────────────────────────────────────────────────

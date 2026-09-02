@@ -5,12 +5,13 @@
 import { useState } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker, AlertBar } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import { emptySaleLine, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType, resolveCategoryLinePricing } from './salesFormShared'
+import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
@@ -43,6 +44,18 @@ export default function InvoiceFormModal({
       : 'Create Invoice'
   const pickedIds = invoiceForm.items.map((it) => it.item_id).filter(Boolean)
   const [allocEditor, setAllocEditor] = useState(null)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: invoiceForm.branchId,
+    onCreated: (c) => {
+      const type = customerPricingType(c.customer_type || c.type || 'retail')
+      pif('customerId', c.id)
+      pif('customerName', c.name)
+      pif('customerType', type)
+      pif('customerClassification', customerClassification(c))
+      pif('customerCreditBalance', Number(c.credit_balance || 0))
+      pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
+    },
+  })
 
   const patchLine = (i, patch) => {
     const next = [...invoiceForm.items]
@@ -57,14 +70,18 @@ export default function InvoiceFormModal({
       { ...inv, ...pattern, retailPrice, price: retailPrice },
       invoiceForm.customerType,
     )
+    const priced = linePricingForCustomer(
+      resolved.price,
+      inv.tax_rate || 0,
+      invoiceForm.customerClassification,
+    )
     patchLine(i, {
       item_id: inv.id,
       name: inv.name,
-      price: resolved.price,
       retailPrice,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
-      taxRate: inv.tax_rate || 0,
       ...pattern,
+      ...priced,
       lineDiscount: resolved.discountPct,
       lineDiscountType: '%',
       batchTracking: Boolean(inv.batch_tracking),
@@ -152,21 +169,24 @@ export default function InvoiceFormModal({
                   pif('customerId', '')
                   pif('customerName', '')
                   pif('customerType', 'retail')
+                  pif('customerClassification', 'external')
                   pif('customerCreditBalance', 0)
-                  pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, 'retail'))
+                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail'))
                   return
                 }
                 const type = customerPricingType(opt.raw?.customer_type || 'retail')
+                const cls = customerClassification(opt.raw)
                 pif('customerId', opt.id)
                 pif('customerName', opt.label)
                 pif('customerType', type)
-                pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, type))
+                pif('customerClassification', cls)
+                pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, { customer_type: type, classification: cls }))
                 try {
                   const c = await customersAPI.get(opt.id)
                   pif('customerCreditBalance', Number(c?.credit_balance || 0))
-                  if (c?.customer_type || c?.type) {
-                    pif('customerType', customerPricingType(c.customer_type || c.type || type))
-                  }
+                  pif('customerType', customerPricingType(c.customer_type || c.type || type))
+                  pif('customerClassification', customerClassification(c))
+                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
                 } catch {
                   pif('customerCreditBalance', Number(opt.raw?.credit_balance || 0))
                 }
@@ -176,9 +196,15 @@ export default function InvoiceFormModal({
               selectedLabel={invoiceForm.customerName || undefined}
               placeholder="Search customers…"
               searchPlaceholder="Search customers…"
-              emptyLabel="No customers found. Add via the Customers page."
+              emptyLabel="No customers found"
+              footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />
+            {invoiceForm.customerClassification === 'internal' && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Internal customer — GST is subtracted from item amounts
+              </div>
+            )}
           </FormGroup>
           <FormGroup label="Invoice Date">
             <DatePicker
@@ -453,9 +479,17 @@ export default function InvoiceFormModal({
     </div>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addCustomerModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -474,6 +508,8 @@ export default function InvoiceFormModal({
     >
       {formBody}
     </Modal>
+    {addCustomerModal}
+    </>
   )
 }
 

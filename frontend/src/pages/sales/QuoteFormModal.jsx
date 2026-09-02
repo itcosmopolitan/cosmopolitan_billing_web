@@ -18,10 +18,11 @@
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType, resolveCategoryLinePricing } from './salesFormShared'
+import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -51,6 +52,18 @@ export default function QuoteFormModal({
     : (isEdit ? 'Save Changes' : 'Create')
 
   const pickedIds = quoteForm.items.map((it) => it.item_id).filter(Boolean)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: quoteForm.branchId,
+    enabled: !readOnly,
+    onCreated: (c) => {
+      const type = customerPricingType(c.customer_type || c.type || 'retail')
+      pqf('customerId', c.id)
+      pqf('customerName', c.name)
+      pqf('customerType', type)
+      pqf('customerClassification', customerClassification(c))
+      pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, c))
+    },
+  })
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
@@ -59,17 +72,21 @@ export default function QuoteFormModal({
       { ...inv, ...pattern, retailPrice, price: retailPrice },
       quoteForm.customerType,
     )
+    const priced = linePricingForCustomer(
+      resolved.price,
+      inv.tax_rate || 0,
+      quoteForm.customerClassification,
+    )
     const next = [...quoteForm.items]
     next[i] = {
       ...next[i],
       item_id: inv.id,
       name: inv.name,
-      price: resolved.price,
       retailPrice,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
-      taxRate: inv.tax_rate || 0,
       unit: inv.unit || '',
       ...pattern,
+      ...priced,
       lineDiscount: resolved.discountPct,
       lineDiscountType: '%',
     }
@@ -135,23 +152,32 @@ export default function QuoteFormModal({
                 pqf('customerId', '')
                 pqf('customerName', '')
                 pqf('customerType', 'retail')
-                pqf('items', applySuggestedDiscountsToSaleLines(quoteForm.items, 'retail'))
+                pqf('customerClassification', 'external')
+                pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, 'retail'))
                 return
               }
               const type = customerPricingType(opt.raw?.customer_type || 'retail')
+              const cls = customerClassification(opt.raw)
               pqf('customerId', opt.id)
               pqf('customerName', opt.label)
               pqf('customerType', type)
-              pqf('items', applySuggestedDiscountsToSaleLines(quoteForm.items, type))
+              pqf('customerClassification', cls)
+              pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, { customer_type: type, classification: cls }))
             }}
             fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
             isSearchFieldRequired
             selectedLabel={quoteForm.customerName || undefined}
             placeholder="Search customers…"
             searchPlaceholder="Search customers…"
-            emptyLabel="No customers found. Add via the Customers page."
+            emptyLabel="No customers found"
+            footerAction={addCustomerAction}
             style={{ width: '100%' }}
           />
+          {quoteForm.customerClassification === 'internal' && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+              Internal customer — GST is subtracted from item amounts
+            </div>
+          )}
         </FormGroup>
         <FormGroup label="Valid Until">
           <DatePicker disabled={readOnly}
@@ -229,7 +255,8 @@ export default function QuoteFormModal({
                   <td><input className="form-input" type="number" disabled={readOnly} min={qtyInputStep()} step={qtyInputStep()} style={numInputStyle}
                     value={it.qty} onChange={e => { const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n) }} /></td>
                   <td><input className="form-input" type="number" disabled={readOnly} min="0" step={amountInputStep()} style={numInputStyle}
-                    value={it.price} onChange={e => { const n = [...quoteForm.items]; n[i].price = e.target.value; pqf('items', n) }} /></td>
+                    value={it.price} onChange={e => { const n = [...quoteForm.items]; n[i].price = e.target.value; pqf('items', n) }} />
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
                       <input className="form-input" type="number" disabled={readOnly || disableLineDiscount}
@@ -290,9 +317,17 @@ export default function QuoteFormModal({
     </>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addCustomerModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -314,6 +349,8 @@ export default function QuoteFormModal({
     >
       {formBody}
     </Modal>
+    {addCustomerModal}
+    </>
   )
 }
 

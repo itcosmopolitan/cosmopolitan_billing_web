@@ -12,9 +12,11 @@ import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/di
 import { unwrapPaged } from '@/utils/pagination'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
+import { isInternalCustomer, internalGstReverseSummary } from '@/utils/pricingDiscounts'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
 import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import CashTenderFields from '@/components/CashTenderFields'
@@ -214,6 +216,10 @@ export default function POSPage() {
 
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: activeBranch?.id,
+    onCreated: (c) => store.setCustomer(c),
+  })
   const setActiveBranch = useAppStore((s) => s.setActiveBranch)
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
@@ -532,6 +538,11 @@ export default function POSPage() {
       }
     }
 
+    if (cart.some((line) => !String(line.name || '').trim())) {
+      toast.error('Each item must have a name')
+      return
+    }
+
     if (!allowOverselling && !editingInvoice) {
       for (const line of cart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
@@ -563,7 +574,7 @@ export default function POSPage() {
           const effPct = gross > 0 ? Math.min(100, Math.max(0, (1 - i.lineTotal / gross) * 100)) : 0
           return {
             item_id: i.id,
-            name: i.name,
+            name: String(i.name || '').trim(),
             qty: i.qty,
             price: i.price,
             tax_rate: i.taxRate || 0,
@@ -744,6 +755,7 @@ export default function POSPage() {
     total,
     mode: taxMode,
   } = cartTotals
+  const gstReverse = internalGstReverseSummary(cart)
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
   const hasAnyDiscount = hasLineLevelDiscount || hasBillLevelDiscount
@@ -1217,11 +1229,28 @@ export default function POSPage() {
               fetchParams={{ branch_id: activeBranch?.id }}
               isSearchFieldRequired
               prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
+              footerAction={addCustomerAction}
               selectedLabel={customer?.name}
               placeholder="Walk-in Customer"
               searchPlaceholder="Customer…"
               style={{ width: 148, maxWidth: '36vw' }}
             />
+            {customer && isInternalCustomer(customer) && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  padding: '3px 8px',
+                  borderRadius: 10,
+                  background: 'rgba(46,184,92,0.12)',
+                  color: 'var(--green)',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+                title="Internal customer — GST is subtracted from item amounts"
+              >
+                GST reversed
+              </span>
+            )}
             {customer?.id && Number(customer.credit_balance || 0) > 0 && (
               <span
                 style={{
@@ -1360,6 +1389,7 @@ export default function POSPage() {
                         store.updateQty(item.id, qty)
                       }}
                       onPriceChange={(price) => store.setLinePrice(item.id, price)}
+                      onNameChange={(name) => store.setLineName(item.id, name)}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
@@ -1573,6 +1603,27 @@ export default function POSPage() {
                       <span>Disc</span>
                       <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
                     </div>
+                  )}
+                  {gstReverse.gstReversed > 0 && (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 16,
+                          fontSize: 11.5,
+                          color: 'var(--green)',
+                          marginBottom: 3,
+                        }}
+                      >
+                        <span>GST reversed</span>
+                        <span style={{ fontFamily: 'DM Mono' }}>-{fmt(gstReverse.gstReversed)}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, lineHeight: 1.35 }}>
+                        {fmt(gstReverse.inclusive)} incl. − {fmt(gstReverse.gstReversed)} GST
+                        {gstReverse.rate != null ? ` (${gstReverse.rate}%)` : ''} = {fmt(gstReverse.exclusive)}
+                      </div>
+                    </>
                   )}
                   <div
                     style={{
@@ -1810,6 +1861,8 @@ export default function POSPage() {
           />
         </FormGroup>
       </Modal>
+
+      {addCustomerModal}
 
     </div>
   )

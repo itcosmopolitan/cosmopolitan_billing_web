@@ -105,11 +105,30 @@ def _validate_database_url(database_url: str):
     return url
 
 
+def _prefer_ipv4_host(host: str, port: int) -> str:
+    """Resolve Postgres to IPv4 first.
+
+    asyncpg does not happy-eyeball: if DNS returns IPv6 first and that path
+    black-holes, the SSL handshake times out and IPv4 is never tried. Same
+    class of bug as the Vite `127.0.0.1` proxy target.
+    """
+    if not host or host in ("localhost", "::1"):
+        return "127.0.0.1"
+    try:
+        infos = socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    except OSError:
+        return host
+    if not infos:
+        return host
+    return infos[0][4][0]
+
+
 def _build_postgres_connect_args(url):
     connect_args = {
         "timeout": 20,
         "command_timeout": 120,
         "server_settings": {"application_name": "cosmopolitan_backend"},
+        "host": _prefer_ipv4_host(url.host, url.port or 5432),
     }
 
     sslmode = (
@@ -193,7 +212,7 @@ async def _wait_for_connection(engine, attempts: int = 5) -> None:
                 break
             await asyncio.sleep(min(2 ** (attempt - 1), 10))
     raise RuntimeError(
-        f"Unable to connect to the database after {attempts} attempts."
+        f"Unable to connect to the database after {attempts} attempts: {last_error}"
     ) from last_error
 
 
@@ -305,6 +324,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
     ("customers", "key_account_manager", "VARCHAR"),
     ("customers", "credit_terms", "VARCHAR"),
+    ("customers", "classification", "VARCHAR DEFAULT 'external'"),
     ("items", "wholesale_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "staff_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "wholesale_pricing_mode", "VARCHAR DEFAULT 'pct'"),

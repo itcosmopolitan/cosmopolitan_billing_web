@@ -22,6 +22,7 @@ import { Fragment } from 'react'
 import { todayISO } from '@/utils/batchDates'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
+import { useQuickVendor } from '@/components/useQuickParty'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
@@ -52,6 +53,12 @@ export default function BillFormModal({
 }) {
   const isGrn = mode === 'grn'
   const pickedIds = billForm.items.map((it) => it.item_id).filter(Boolean)
+  const { footerAction: addVendorAction, modal: addVendorModal } = useQuickVendor({
+    onCreated: (v) => {
+      pbf('vendorId', v.id)
+      pbf('vendorName', v.name)
+    },
+  })
   const title = conversionLabel
     ? (isGrn ? `Receive Stock — from ${conversionLabel}` : `Create Bill — from ${conversionLabel}`)
     : (isGrn ? 'New Goods Receipt (GRN)' : 'New Purchase Bill')
@@ -159,7 +166,8 @@ export default function BillFormModal({
               selectedLabel={billForm.vendorName || undefined}
               placeholder="Search vendors…"
               searchPlaceholder="Search vendors…"
-              emptyLabel="No vendors found. Add via the Vendors page."
+              emptyLabel="No vendors found"
+              footerAction={addVendorAction}
               style={{ width: '100%' }}
             />
           </FormGroup>
@@ -396,9 +404,17 @@ export default function BillFormModal({
     </div>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addVendorModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -417,6 +433,8 @@ export default function BillFormModal({
     >
       {formBody}
     </Modal>
+    {addVendorModal}
+    </>
   )
 }
 

@@ -16,6 +16,7 @@
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
+import { useQuickVendor } from '@/components/useQuickParty'
 import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
@@ -53,6 +54,13 @@ export default function PurchaseOrderFormModal({
     : (isEdit ? 'Save Changes' : 'Create')
 
   const pickedIds = poForm.items.map((it) => it.item_id).filter(Boolean)
+  const { footerAction: addVendorAction, modal: addVendorModal } = useQuickVendor({
+    enabled: !readOnly,
+    onCreated: (v) => {
+      ppof('vendorId', v.id)
+      ppof('vendorName', v.name)
+    },
+  })
 
   const handlePick = (i, inv) => {
     const next = [...poForm.items]
@@ -146,7 +154,8 @@ export default function PurchaseOrderFormModal({
             selectedLabel={poForm.vendorName || undefined}
             placeholder="Search vendors…"
             searchPlaceholder="Search vendors…"
-            emptyLabel="No vendors found. Add via the Vendors page."
+            emptyLabel="No vendors found"
+            footerAction={addVendorAction}
             style={{ width: '100%' }}
           />
         </FormGroup>
@@ -275,9 +284,17 @@ export default function PurchaseOrderFormModal({
     </>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addVendorModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -300,6 +317,8 @@ export default function PurchaseOrderFormModal({
     >
       {formBody}
     </Modal>
+    {addVendorModal}
+    </>
   )
 }
 

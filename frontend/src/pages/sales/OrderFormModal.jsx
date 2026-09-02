@@ -21,10 +21,11 @@
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine, discountPatternFromItem, applySuggestedDiscountsToSaleLines, customerPricingType, resolveCategoryLinePricing } from './salesFormShared'
+import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -64,6 +65,18 @@ export default function OrderFormModal({
   // IDs of items already on other rows — passed to each picker so the
   // operator can't accidentally double-pick the same SKU.
   const pickedIds = orderForm.items.map((it) => it.item_id).filter(Boolean)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: orderForm.branchId,
+    enabled: !readOnly,
+    onCreated: (c) => {
+      const type = customerPricingType(c.customer_type || c.type || 'retail')
+      pof('customerId', c.id)
+      pof('customerName', c.name)
+      pof('customerType', type)
+      pof('customerClassification', customerClassification(c))
+      pof('items', applyCustomerPricingToSaleLines(orderForm.items, c))
+    },
+  })
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
@@ -72,16 +85,20 @@ export default function OrderFormModal({
       { ...inv, ...pattern, retailPrice, price: retailPrice },
       orderForm.customerType,
     )
+    const priced = linePricingForCustomer(
+      resolved.price,
+      inv.tax_rate || 0,
+      orderForm.customerClassification,
+    )
     const next = [...orderForm.items]
     next[i] = {
       ...next[i],
       item_id: inv.id,
       name: inv.name,
-      price: resolved.price,
       retailPrice,
       costPrice: inv.cost_price ?? inv.costPrice ?? 0,
-      taxRate: inv.tax_rate || 0,
       ...pattern,
+      ...priced,
       lineDiscount: resolved.discountPct,
       lineDiscountType: '%',
     }
@@ -154,23 +171,32 @@ export default function OrderFormModal({
                   pof('customerId', '')
                   pof('customerName', '')
                   pof('customerType', 'retail')
-                  pof('items', applySuggestedDiscountsToSaleLines(orderForm.items, 'retail'))
+                  pof('customerClassification', 'external')
+                  pof('items', applyCustomerPricingToSaleLines(orderForm.items, 'retail'))
                   return
                 }
                 const type = customerPricingType(opt.raw?.customer_type || 'retail')
+                const cls = customerClassification(opt.raw)
                 pof('customerId', opt.id)
                 pof('customerName', opt.label)
                 pof('customerType', type)
-                pof('items', applySuggestedDiscountsToSaleLines(orderForm.items, type))
+                pof('customerClassification', cls)
+                pof('items', applyCustomerPricingToSaleLines(orderForm.items, { customer_type: type, classification: cls }))
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
               isSearchFieldRequired
               selectedLabel={orderForm.customerName || undefined}
               placeholder="Search customers…"
               searchPlaceholder="Search customers…"
-              emptyLabel="No customers found. Add via the Customers page."
+              emptyLabel="No customers found"
+              footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />
+            {orderForm.customerClassification === 'internal' && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Internal customer — GST is subtracted from item amounts
+              </div>
+            )}
           </FormGroup>
           <FormGroup label="Expected Date">
             <DatePicker disabled={readOnly}
@@ -322,9 +348,17 @@ export default function OrderFormModal({
     </div>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addCustomerModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -347,6 +381,8 @@ export default function OrderFormModal({
     >
       {formBody}
     </Modal>
+    {addCustomerModal}
+    </>
   )
 }
 

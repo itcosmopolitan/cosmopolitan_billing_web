@@ -30,6 +30,7 @@ export default function CartRow({
   branchId,
   onQtyChange,
   onPriceChange,
+  onNameChange,
   onRemove,
   onDiscChange,
   onDiscTypeChange,
@@ -50,6 +51,8 @@ export default function CartRow({
   const stockExceeded = stockQty != null && item.qty > stockQty
   const discType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
   const discValue = Number(item.lineDiscountValue ?? item.lineDiscountPct ?? item.lineDiscountFlat ?? 0) || 0
+  const lastNonEmptyNameRef = useRef(item.name || '')
+  if (String(item.name || '').trim()) lastNonEmptyNameRef.current = String(item.name).trim()
 
   const tracked = Boolean(item.batchTracking || item.batch_tracking)
   const expiryTracked = Boolean(item.expiryTracking || item.expiry_tracking)
@@ -116,7 +119,32 @@ export default function CartRow({
           <span style={{ fontSize: 18, lineHeight: 1.3 }}>{item.emoji || '📦'}</span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.35 }}>{item.name}</span>
+              <input
+                className="form-input"
+                type="text"
+                value={item.name ?? ''}
+                onChange={(e) => onNameChange?.(e.target.value)}
+                onBlur={() => {
+                  const trimmed = String(item.name || '').trim()
+                  if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
+                  else if (trimmed !== item.name) onNameChange?.(trimmed)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                }}
+                aria-label={`Item name for this bill: ${item.name || ''}`}
+                title="Edit name for this bill only. Item master is unchanged."
+                style={{
+                  flex: '1 1 140px',
+                  minWidth: 120,
+                  width: 'auto',
+                  padding: '3px 7px',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  lineHeight: 1.35,
+                  color: 'var(--text-primary)',
+                }}
+              />
               {tracked && (
                 <span style={{
                   fontSize: 9.5, fontWeight: 700, padding: '1px 5px', borderRadius: 3,

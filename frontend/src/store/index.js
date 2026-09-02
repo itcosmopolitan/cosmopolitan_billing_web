@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { customerPricingType, discountPatternFromItem, resolveCategoryLinePricing } from '@/utils/pricingDiscounts'
+import { customerPricingType, discountPatternFromItem, resolveCategoryLinePricing, linePricingForCustomer } from '@/utils/pricingDiscounts'
 import {
   DEFAULT_AMOUNT_DECIMALS,
   DEFAULT_QTY_DECIMALS,
@@ -274,6 +274,7 @@ export const usePOSStore = create((set, get) => ({
             ? applyLineCalc({
                 ...i,
                 ...pattern,
+                name: i.name,
                 retailPrice: i.retailPrice ?? retailPrice,
                 qty: i.qty + 1,
                 batchAllocationCustom: false,
@@ -293,6 +294,11 @@ export const usePOSStore = create((set, get) => ({
             qty: 1,
             lineDiscountType: 'pct',
             lineDiscountValue: resolved.discountPct,
+            ...linePricingForCustomer(
+              resolved.price,
+              product.taxRate ?? product.tax_rate,
+              customer,
+            ),
           }),
         ],
       })
@@ -358,6 +364,14 @@ export const usePOSStore = create((set, get) => ({
     }))
   },
 
+  // Transaction-only label. Does not write back to the item master; the
+  // sale payload already snapshots `name` onto the invoice line.
+  setLineName: (id, name) => {
+    set((s) => ({
+      cart: s.cart.map((i) => (i.id === id ? { ...i, name } : i)),
+    }))
+  },
+
   // Backward-compatible wrappers
   setLineDiscountPct: (id, pct) => get().setLineDiscount(id, pct, 'pct'),
   setLineDiscountFlat: (id, amt) => get().setLineDiscount(id, amt, 'flat'),
@@ -368,9 +382,20 @@ export const usePOSStore = create((set, get) => ({
     paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '', applyStoreCredit: false,
   }),
 
-  hydrateSession: (payload) => set({
-    cart: (payload.cart || []).map((i) => normalizeCartItem(i)),
-    customer: payload.customer ?? null,
+  hydrateSession: (payload) => {
+    const customer = payload.customer ?? null
+    set({
+      cart: (payload.cart || []).map((i) => {
+        const item = normalizeCartItem(i)
+        const catalogRate = Number(item.catalogTaxRate) || 0
+        if (catalogRate <= 0) return item
+        const inclusive = item.catalogInclusivePrice || item.retailPrice || item.price
+        return applyLineCalc({
+          ...item,
+          ...linePricingForCustomer(inclusive, catalogRate, customer),
+        })
+      }),
+      customer,
     discountPct: Number(payload.discountPct) || 0,
     discountAmt: Number(payload.discountAmt) || 0,
     discountReason: payload.discountReason || '',
@@ -380,7 +405,8 @@ export const usePOSStore = create((set, get) => ({
     paymentRef: payload.paymentRef || '',
     cashCollected: payload.cashCollected || '',
     applyStoreCredit: !!payload.applyStoreCredit,
-  }),
+    })
+  },
 
   setCustomer: (customer) => {
     const type = customerPricingType(customer)
@@ -389,9 +415,10 @@ export const usePOSStore = create((set, get) => ({
       applyStoreCredit: customer?.id ? s.applyStoreCredit : false,
       cart: s.cart.map((i) => {
         const resolved = resolveCategoryLinePricing(i, type)
+        const catalogRate = Number(i.catalogTaxRate ?? i.taxRate) || 0
         return applyLineCalc({
           ...i,
-          price: resolved.price,
+          ...linePricingForCustomer(resolved.price, catalogRate, customer),
           lineDiscountType: 'pct',
           lineDiscountValue: resolved.discountPct,
         })
@@ -477,7 +504,16 @@ export const usePOSStore = create((set, get) => ({
       resumedMethod = bill.paymentMethod
     }
     set({
-      cart: bill.cart.map((i) => normalizeCartItem(i)),
+      cart: bill.cart.map((i) => {
+        const item = normalizeCartItem(i)
+        const catalogRate = Number(item.catalogTaxRate ?? i.catalogTaxRate) || 0
+        if (catalogRate <= 0) return item
+        const inclusive = item.catalogInclusivePrice || i.catalogInclusivePrice || item.retailPrice || item.price
+        return applyLineCalc({
+          ...item,
+          ...linePricingForCustomer(inclusive, catalogRate, bill.customer),
+        })
+      }),
       customer: bill.customer,
       discountPct: bill.discountPct,
       discountAmt: bill.discountAmt || 0,

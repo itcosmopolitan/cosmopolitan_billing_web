@@ -3,8 +3,8 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, FormGroup, FormRow, EmptyState, Tag, Chip, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
-import { VENDOR_PAYMENT_TERMS_OPTIONS } from '@/utils/dropdownOptions'
+import { SectionHeader, Card, SearchBar, KPICard, Modal, EmptyState, Tag, Chip, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import VendorFormModal from './VendorFormModal'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
@@ -35,9 +35,6 @@ export default function VendorsPage() {
   const [ledgerEntries, setLedgerEntries] = useState([])
   const [ledgerTotal, setLedgerTotal] = useState(0)
   const [ledgerLoading, setLedgerLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [form, setForm]       = useState({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
-  const pf = (k,v) => setForm(f=>({...f,[k]:v}))
 
   const fetchVendors = useCallback(async () => {
     try {
@@ -99,71 +96,15 @@ export default function VendorsPage() {
       : null,
   }), [vendorTotal, venSummary, vendors])
 
-  const save = async () => {
-    if (saving) return
-    if (!form.name) { toast.error('Vendor name required'); return }
-    setSaving(true)
-    try {
-      await vendorsAPI.create({
-        name: form.name,
-        contact_person: form.contact_person,
-        phone: form.phone,
-        email: form.email,
-        address: form.address,
-        gstin: form.gstin,
-        payment_terms: form.payment_terms,
-      })
-      setListVersion((v) => v + 1)
-      toast.success('Vendor added')
-      setShowAdd(false)
-      setForm({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
-    } catch (err) {
-      console.error('Failed to save vendor:', err)
-      toast.error('Failed to save vendor')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const openEdit = (vendor) => {
     setEditingVendor(vendor)
-    setForm({
-      name: vendor.name,
-      contact_person: vendor.contact_person,
-      phone: vendor.phone,
-      email: vendor.email,
-      address: vendor.address,
-      gstin: vendor.gstin,
-      payment_terms: vendor.payment_terms,
-    })
     setShowEdit(true)
   }
 
-  const saveEdit = async () => {
-    if (saving) return
-    if (!form.name) { toast.error('Vendor name required'); return }
-    setSaving(true)
-    try {
-      await vendorsAPI.update(editingVendor.id, {
-        name: form.name,
-        contact_person: form.contact_person,
-        phone: form.phone,
-        email: form.email,
-        address: form.address,
-        gstin: form.gstin,
-        payment_terms: form.payment_terms,
-      })
-      setListVersion((v) => v + 1)
-      toast.success('Vendor updated')
-      setShowEdit(false)
-      setEditingVendor(null)
-      setForm({ name:'', contact_person:'', phone:'', email:'', address:'', gstin:'', payment_terms:'30 days' })
-    } catch (err) {
-      console.error('Failed to update vendor:', err)
-      toast.error('Failed to update vendor')
-    } finally {
-      setSaving(false)
-    }
+  const closeVendorModal = () => {
+    setShowAdd(false)
+    setShowEdit(false)
+    setEditingVendor(null)
   }
 
   const openCreditLedger = async (vendor) => {
@@ -346,27 +287,12 @@ export default function VendorsPage() {
         onSave={columnPrefs.savePrefs}
       />
 
-      <Modal open={showAdd} onClose={()=>setShowAdd(false)} title="Add Vendor" icon="🏭" size="md" busy={saving}
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowAdd(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Vendor'}</button></>}>
-        <FormRow><FormGroup label="Company / Vendor Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} /></FormGroup>
-        <FormGroup label="Contact Person"><input className="form-input" value={form.contact_person} onChange={e=>pf('contact_person',e.target.value)} /></FormGroup></FormRow>
-        <FormRow><FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} /></FormGroup>
-        <FormGroup label="Email"><input className="form-input" type="email" value={form.email} onChange={e=>pf('email',e.target.value)} /></FormGroup></FormRow>
-        <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
-        <FormRow><FormGroup label="GST Reg No"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="GST registration number" /></FormGroup>
-        <FormGroup label="Payment Terms"><AutocompleteDropdown value={form.payment_terms} onChange={(v) => pf('payment_terms', v)} options={VENDOR_PAYMENT_TERMS_OPTIONS} isSearchFieldRequired={false} /></FormGroup></FormRow>
-      </Modal>
-
-      <Modal open={showEdit} onClose={()=>setShowEdit(false)} title="Edit Vendor" icon="✏️" size="md" busy={saving}
-        footer={<><button className="btn btn-secondary" onClick={()=>setShowEdit(false)} disabled={saving}>Cancel</button><button className="btn btn-primary" onClick={saveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button></>}>
-        <FormRow><FormGroup label="Company / Vendor Name" required><input className="form-input" value={form.name} onChange={e=>pf('name',e.target.value)} /></FormGroup>
-        <FormGroup label="Contact Person"><input className="form-input" value={form.contact_person} onChange={e=>pf('contact_person',e.target.value)} /></FormGroup></FormRow>
-        <FormRow><FormGroup label="Phone"><input className="form-input" value={form.phone} onChange={e=>pf('phone',e.target.value)} /></FormGroup>
-        <FormGroup label="Email"><input className="form-input" type="email" value={form.email} onChange={e=>pf('email',e.target.value)} /></FormGroup></FormRow>
-        <FormGroup label="Address"><textarea className="form-input" style={{height:64}} value={form.address} onChange={e=>pf('address',e.target.value)} /></FormGroup>
-        <FormRow><FormGroup label="GST Reg No"><input className="form-input" value={form.gstin} onChange={e=>pf('gstin',e.target.value)} placeholder="GST registration number" /></FormGroup>
-        <FormGroup label="Payment Terms"><AutocompleteDropdown value={form.payment_terms} onChange={(v) => pf('payment_terms', v)} options={VENDOR_PAYMENT_TERMS_OPTIONS} isSearchFieldRequired={false} /></FormGroup></FormRow>
-      </Modal>
+      <VendorFormModal
+        open={showAdd || showEdit}
+        onClose={closeVendorModal}
+        vendor={showEdit ? editingVendor : null}
+        onSaved={() => setListVersion((v) => v + 1)}
+      />
 
       <VendorDetailPanel
         open={!!showDetail}

@@ -32,6 +32,16 @@ export const CUSTOMER_TYPE_LABELS = {
   staff: 'Staff',
 }
 
+export const CUSTOMER_CLASSIFICATION_OPTIONS = [
+  { id: 'external', label: 'External' },
+  { id: 'internal', label: 'Internal' },
+]
+
+export const CUSTOMER_CLASSIFICATION_LABELS = {
+  external: 'External',
+  internal: 'Internal',
+}
+
 export const VENDOR_PAYMENT_TERMS_OPTIONS = [
   'Advance', 'COD', '7 days', '15 days', '30 days', '45 days', '60 days', 'Weekly',
 ].map((t) => ({ id: t, label: t }))

@@ -20,12 +20,29 @@ function mapSelectOptions(options = []) {
   })
 }
 
+// Topmost open modal owns Escape so a nested create-party dialog does not
+// also close the invoice / PO form underneath.
+const modalEscapeStack = []
+
 // ─── Modal ────────────────────────────────────────────────────────────────────
-export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false, hideHeaderClose = false }) {
+export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false, hideHeaderClose = false, zIndex }) {
   useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape' && !busy) onClose() }
-    if (open) document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
+    if (!open) return undefined
+    const token = {}
+    modalEscapeStack.push(token)
+    const handler = (e) => {
+      if (e.key !== 'Escape') return
+      if (modalEscapeStack[modalEscapeStack.length - 1] !== token) return
+      if (busy) return
+      e.preventDefault()
+      onClose()
+    }
+    document.addEventListener('keydown', handler)
+    return () => {
+      const i = modalEscapeStack.lastIndexOf(token)
+      if (i >= 0) modalEscapeStack.splice(i, 1)
+      document.removeEventListener('keydown', handler)
+    }
   }, [open, onClose, busy])
 
   if (!open) return null
@@ -33,7 +50,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md', ico
   const widths = { sm: '400px', md: '560px', lg: '720px', xl: '900px' }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+    <div className="modal-overlay" style={zIndex ? { zIndex } : undefined} onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="modal" style={{ maxWidth: widths[size] }}>
         <div className="modal-header">
           {icon && <span style={{ fontSize: 20 }}>{icon}</span>}

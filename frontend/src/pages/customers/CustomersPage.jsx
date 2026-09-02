@@ -1,12 +1,12 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_USERS_URL } from '@/api'
+import { customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
-import { decomposeAddress } from '@/utils/address'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, FormGroup, FormRow, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
-import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
+import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, CUSTOMER_CLASSIFICATION_LABELS } from '@/utils/dropdownOptions'
+import CustomerFormModal from './CustomerFormModal'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
@@ -18,7 +18,6 @@ export default function CustomersPage() {
   const [search, setSearch]     = useState('')
   const [typeF, setTypeF]       = useState('')
   const [customerModalOpen, setCustomerModalOpen] = useState(false)
-  const [customerModalMode, setCustomerModalMode] = useState('add')
   const [editingCustomer, setEditingCustomer] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
   const [importFile, setImportFile] = useState(null)
@@ -40,96 +39,14 @@ export default function CustomersPage() {
   const activeBranch = useAppStore((s) => s.activeBranch)
   const [loading, setLoading]   = useState(true)
   const [listVersion, setListVersion] = useState(0)
-  const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({
-    name: '',
-    phone: '',
-    email: '',
-    gst_in: '',
-    street1: '',
-    street2: '',
-    street3: '',
-    city: '',
-    stateProvince: '',
-    country: '',
-    postalCode: '',
-    branch_id: '',
-    credit_limit: '0',
-    customer_type: 'retail',
-    key_account_manager: '',
-    key_account_manager_name: '',
-    credit_terms: '',
-  })
-
-  const pf = (k,v) => setForm(f=>({...f,[k]:v}))
-
-  const resetCustomerForm = (initial = {}) => {
-    setForm({
-      name: '',
-      phone: '',
-      email: '',
-      gst_in: '',
-      street1: '',
-      street2: '',
-      street3: '',
-      city: '',
-      stateProvince: '',
-      country: '',
-      postalCode: '',
-      branch_id: initial.branch_id || '',
-      credit_limit: initial.credit_limit ?? '0',
-      customer_type: initial.customer_type || 'retail',
-      key_account_manager: initial.key_account_manager || '',
-      key_account_manager_name: initial.key_account_manager_name || '',
-      credit_terms: initial.credit_terms || '',
-      ...initial,
-    })
-  }
 
   const openAddCustomerModal = () => {
-    resetCustomerForm({
-      branch_id: branches[0]?.id || '',
-      credit_limit: '0',
-      customer_type: 'retail',
-      key_account_manager: '',
-      key_account_manager_name: '',
-      credit_terms: '',
-    })
     setEditingCustomer(null)
-    setCustomerModalMode('add')
     setCustomerModalOpen(true)
   }
 
   const openEditCustomerModal = (customer) => {
-    const structured = {
-      street1: customer.street1 || '',
-      street2: customer.street2 || '',
-      street3: customer.street3 || '',
-      city: customer.city || '',
-      stateProvince: customer.state_province || '',
-      country: customer.country || '',
-      postalCode: customer.postal_code || '',
-    }
-    const hasStructured = Boolean(
-      structured.street1 || structured.street2 || structured.street3 ||
-      structured.city || structured.stateProvince || structured.country || structured.postalCode
-    )
-    const addressParts = hasStructured ? structured : decomposeAddress(customer.address)
-    resetCustomerForm({
-      name: customer.name || '',
-      phone: customer.phone || '',
-      email: customer.email || '',
-      gst_in: customer.gst_in || customer.gstin || '',
-      ...addressParts,
-      branch_id: customer.branch_id || '',
-      credit_limit: customer.credit_limit != null ? String(customer.credit_limit) : '0',
-      customer_type: customer.customer_type || customer.type || 'retail',
-      key_account_manager: customer.keyAccountManagerId || customer.key_account_manager || '',
-      key_account_manager_name: customer.keyAccountManager || customer.key_account_manager_name || '',
-      credit_terms: customer.credit_terms || customer.creditTerms || '',
-    })
     setEditingCustomer(customer)
-    setCustomerModalMode('edit')
     setCustomerModalOpen(true)
   }
 
@@ -137,12 +54,6 @@ export default function CustomersPage() {
     setCustomerModalOpen(false)
     setEditingCustomer(null)
   }
-
-  useEffect(() => {
-    if (branches.length > 0 && !form.branch_id) {
-      setForm((f) => ({ ...f, branch_id: branches[0].id }))
-    }
-  }, [branches, form.branch_id])
 
   useEffect(() => {
     setCustSkip(0)
@@ -174,6 +85,7 @@ export default function CustomersPage() {
         const mapped = (items || []).map((c) => ({
           ...c,
           type: c.customer_type || c.type,
+          classification: c.classification === 'internal' ? 'internal' : 'external',
           gstIn: c.gst_in || c.gstin,
           branchId: c.branch_id,
           creditLimit: c.credit_limit,
@@ -222,77 +134,6 @@ export default function CustomersPage() {
     overdue:     custSummary?.withBalanceCount ?? 0,
     topBuyer:    customers.length > 0 ? customers.reduce((a, c) => (c.totalPurchases || 0) > (a.totalPurchases || 0) ? c : a, customers[0]) : null,
   }), [custTotal, custSummary, customers])
-
-  const validateEmail = (email) => {
-    if (!email) return true
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  }
-
-  const saveCustomer = async () => {
-    if (saving) return
-    if (!form.name?.trim()) { toast.error('Customer name required'); return }
-    if (!form.branch_id) { toast.error('Select a branch'); return }
-    if (!branches.find((b) => b.id === form.branch_id)) { toast.error('Select a valid branch'); return }
-    if (!form.street1?.trim()) { toast.error('Street 1 is required'); return }
-    if (!form.city?.trim()) { toast.error('City is required'); return }
-    if (!form.country?.trim()) { toast.error('Country is required'); return }
-    if (!validateEmail(form.email?.trim())) { toast.error('Enter a valid email address'); return }
-
-    const token = localStorage.getItem('retailos_token')
-    if (!token) { toast.error('Not authenticated'); return }
-
-    setSaving(true)
-    try {
-      const payload = {
-        name: form.name.trim(),
-        phone: form.phone?.trim() || undefined,
-        email: form.email?.trim() || undefined,
-        address: '',
-        gst_in: form.gst_in?.trim() || undefined,
-        branch_id: form.branch_id,
-        credit_limit: form.customer_type === 'retail' ? 0 : (Number(form.credit_limit) || 0),
-        customer_type: form.customer_type,
-        key_account_manager: form.key_account_manager?.trim() || null,
-        credit_terms: form.customer_type === 'retail' ? null : (form.credit_terms === '' ? null : Number(form.credit_terms)),
-        street1: form.street1?.trim(),
-        street2: form.street2?.trim() || undefined,
-        street3: form.street3?.trim() || undefined,
-        city: form.city?.trim(),
-        state_province: form.stateProvince?.trim() || undefined,
-        country: form.country?.trim(),
-        postal_code: form.postalCode?.trim() || undefined,
-      }
-
-      if (customerModalMode === 'add') {
-        await customersAPI.create(payload)
-        toast.success('Customer added successfully')
-      } else if (customerModalMode === 'edit' && editingCustomer) {
-        await customersAPI.update(editingCustomer.id, payload)
-        toast.success('Customer updated successfully')
-      } else {
-        toast.error('Unable to save customer')
-        return
-      }
-
-      setListVersion((v) => v + 1)
-      setCustomerModalOpen(false)
-      setEditingCustomer(null)
-    } catch (err) {
-      console.error('Failed to save customer:', err)
-      const detail = err?.response?.data?.detail
-      const message =
-        typeof detail === 'string'
-          ? detail
-          : detail?.message || err?.message || 'Failed to save customer'
-      if (err?.response?.status === 401) {
-        toast.error('Session expired, please log in again')
-      } else {
-        toast.error(message)
-      }
-    } finally {
-      setSaving(false)
-    }
-  }
 
   if (loading) {
     return (
@@ -349,6 +190,7 @@ export default function CustomersPage() {
               Address: c.address || '—',
               'GST Reg No': c.gstIn || '—',
               Type: formatLabel(c.type || 'Retail'),
+              'Customer type': CUSTOMER_CLASSIFICATION_LABELS[c.classification] || 'External',
               'Account Limit (MVR)': c.creditLimit || 0,
               'Outstanding (MVR)': c.outstanding || 0,
               'Total Purchases (MVR)': c.totalPurchases || 0,
@@ -495,6 +337,18 @@ export default function CustomersPage() {
                       />
                     )
                   }
+                  if (id === 'classification') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Customer type"
+                        sortKey="classification"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                      />
+                    )
+                  }
                   if (id === 'kam') return <th key={id}>KAM</th>
                   if (id === 'branch') return <th key={id}>Branch</th>
                   if (id === 'credit_terms') return <th key={id}>Credit Terms</th>
@@ -585,6 +439,15 @@ export default function CustomersPage() {
                           <td key={id}>
                             <Tag color={c.type==='wholesale' ? 'var(--purple)' : c.type === 'staff' ? 'var(--accent)' : undefined}>
                               {CUSTOMER_TYPE_LABELS[c.type] || 'Retail'}
+                            </Tag>
+                          </td>
+                        )
+                      }
+                      if (id === 'classification') {
+                        return (
+                          <td key={id}>
+                            <Tag color={c.classification === 'internal' ? 'var(--accent)' : undefined}>
+                              {CUSTOMER_CLASSIFICATION_LABELS[c.classification] || 'External'}
                             </Tag>
                           </td>
                         )
@@ -693,138 +556,13 @@ export default function CustomersPage() {
         onSave={columnPrefs.savePrefs}
       />
 
-      {/* Add / Edit Customer */}
-      <Modal
+      <CustomerFormModal
         open={customerModalOpen}
         onClose={closeCustomerModal}
-        title={customerModalMode === 'edit' ? 'Edit Customer' : 'Add Customer'}
-        icon="👤"
-        size="md"
-        busy={saving}
-        footer={<>
-          <button className="btn btn-secondary" onClick={closeCustomerModal} disabled={saving}>Cancel</button>
-          <button className="btn btn-primary" onClick={saveCustomer} disabled={saving}>{saving ? 'Saving…' : customerModalMode === 'edit' ? 'Save Changes' : 'Save Customer'}</button>
-        </>}
-      >
-        <FormRow>
-          <FormGroup label="Name" required>
-            <input className="form-input" value={form.name} onChange={e => pf('name', e.target.value)} placeholder="Full name or company" />
-          </FormGroup>
-          <FormGroup label="Phone">
-            <input className="form-input" value={form.phone} onChange={e => pf('phone', e.target.value)} placeholder="10-digit mobile" />
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Email">
-            <input className="form-input" type="email" value={form.email} onChange={e => pf('email', e.target.value)} />
-          </FormGroup>
-          <FormGroup label="GST Reg No">
-            <input className="form-input" value={form.gst_in} onChange={e => pf('gst_in', e.target.value)} placeholder="For business customers" />
-          </FormGroup>
-        </FormRow>
-        <FormGroup label="Street 1" required>
-          <input className="form-input" maxLength={30} value={form.street1} onChange={e => pf('street1', e.target.value)} placeholder="Street address line 1" />
-        </FormGroup>
-        <FormRow>
-          <FormGroup label="Street 2">
-            <input className="form-input" maxLength={30} value={form.street2} onChange={e => pf('street2', e.target.value)} placeholder="Street address line 2" />
-          </FormGroup>
-          <FormGroup label="Street 3">
-            <input className="form-input" maxLength={30} value={form.street3} onChange={e => pf('street3', e.target.value)} placeholder="Street address line 3" />
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="City" required>
-            <input className="form-input" value={form.city} onChange={e => pf('city', e.target.value)} placeholder="City" />
-          </FormGroup>
-          <FormGroup label="State / Province">
-            <input className="form-input" value={form.stateProvince} onChange={e => pf('stateProvince', e.target.value)} placeholder="State or province" />
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Country" required>
-            <input className="form-input" value={form.country} onChange={e => pf('country', e.target.value)} placeholder="Country" />
-          </FormGroup>
-          <FormGroup label="Postal Code / Zipcode">
-            <input className="form-input" value={form.postalCode} onChange={e => pf('postalCode', e.target.value)} placeholder="Postal code or zipcode" />
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Primary Branch" required>
-            <AutocompleteDropdown
-              value={form.branch_id}
-              onChange={(v) => pf('branch_id', v)}
-              fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-              fetchParams={{ retail_only: true }}
-              prependOptions={[
-                { id: '', label: 'Select branch…' },
-              ]}
-              isSearchFieldRequired={false}
-              selectedLabel={form.branch_id && branches.find((b) => b.id === form.branch_id)?.name || undefined}
-              placeholder="Select branch…"
-            />
-          </FormGroup>
-          <FormGroup label="Pricing category" required>
-            <AutocompleteDropdown
-              value={form.customer_type}
-              onChange={(v) => {
-                pf('customer_type', v)
-                if (v === 'retail') pf('credit_limit', '0')
-              }}
-              options={CUSTOMER_TYPE_OPTIONS}
-              isSearchFieldRequired={false}
-            />
-          </FormGroup>
-        </FormRow>
-        <FormRow>
-          <FormGroup label="Key Account Manager">
-            <AutocompleteDropdown
-              value={form.key_account_manager}
-              onSelectOption={(opt) => {
-                if (!opt) {
-                  pf('key_account_manager', '')
-                  pf('key_account_manager_name', '')
-                  return
-                }
-                pf('key_account_manager', opt.id)
-                pf('key_account_manager_name', opt.label)
-              }}
-              fetchUrl={AUTOCOMPLETE_BRANCH_USERS_URL}
-              fetchParams={{ branch_id: form.branch_id }}
-              prependOptions={[{ id: '', label: 'None' }]}
-              isSearchFieldRequired
-              selectedLabel={form.key_account_manager_name || undefined}
-              clearable
-              onClear={() => {
-                pf('key_account_manager', '')
-                pf('key_account_manager_name', '')
-              }}
-              placeholder="Select user…"
-              searchPlaceholder="Search users…"
-              emptyLabel="No users found"
-            />
-          </FormGroup>
-          {form.customer_type !== 'retail' && (
-            <FormGroup label="Account limit (MVR)">
-              <input className="form-input" type="number" value={form.credit_limit} onChange={e => pf('credit_limit', e.target.value)} />
-            </FormGroup>
-          )}
-        </FormRow>
-        {form.customer_type !== 'retail' && (
-          <FormGroup label="Credit terms">
-            <input
-              className="form-input"
-              type="number"
-              min="0"
-              step="1"
-              inputMode="numeric"
-              value={form.credit_terms}
-              onChange={e => pf('credit_terms', e.target.value.replace(/\D/g, ''))}
-              placeholder="Numbers of days"
-            />
-          </FormGroup>
-        )}
-      </Modal>
+        customer={editingCustomer}
+        defaultBranchId={activeBranch?.id || branches[0]?.id}
+        onSaved={() => setListVersion((v) => v + 1)}
+      />
 
       <CustomerDetailPanel
         open={!!showDetail}

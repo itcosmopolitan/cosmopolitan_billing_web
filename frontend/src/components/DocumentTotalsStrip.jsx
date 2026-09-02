@@ -9,6 +9,7 @@ import {
   discountToggleBtnStyle,
 } from '@/utils/documentFormTotals'
 import { documentMargin } from '@/utils/marginCalc'
+import { internalGstReverseSummary } from '@/utils/pricingDiscounts'
 
 /**
  * Discount + totals footer for sales/purchase document forms.
@@ -64,6 +65,7 @@ export default function DocumentTotalsStrip({
       : null)
 
   const showTax = totals.taxTotal > 0
+  const gstReverse = internalGstReverseSummary(items)
   const creditApplied = Math.max(0, Number(accountCreditApplied) || 0)
   const amountDue = Math.round(Math.max(0, totals.total - creditApplied) * 100) / 100
   const showCredit = creditApplied > 0.001
@@ -112,9 +114,13 @@ export default function DocumentTotalsStrip({
 
   const summaryCard = (
     <div className="document-summary-card">
-      {items.length > 0 && (
-        <div className="document-summary-card__hint">Item amounts include tax. Discounts apply before tax.</div>
-      )}
+        {items.length > 0 && (
+          <div className="document-summary-card__hint">
+            {gstReverse.gstReversed > 0
+              ? 'GST is subtracted from item amounts for this internal customer.'
+              : 'Item amounts include tax. Discounts apply before tax.'}
+          </div>
+        )}
 
       {!readOnly && onEntityDiscountChange && (
         <div className="document-summary-row document-summary-row--discount">
@@ -144,6 +150,26 @@ export default function DocumentTotalsStrip({
             −{fmt(totals.lineDiscount)}
           </span>
         </div>
+      )}
+
+      {gstReverse.gstReversed > 0 && (
+        <>
+          <div className="document-summary-row">
+            <span className="document-summary-row__label">GST reversed</span>
+            <span className="document-summary-row__spacer" />
+            <span className="document-summary-row__value mono document-summary-row__value--discount">
+              −{fmt(gstReverse.gstReversed)}
+            </span>
+          </div>
+          <div className="document-summary-card__mode-hint">
+            {fmt(gstReverse.inclusive)} incl.
+            {' − '}
+            {fmt(gstReverse.gstReversed)} GST
+            {gstReverse.rate != null ? ` (${gstReverse.rate}%)` : ''}
+            {' = '}
+            {fmt(gstReverse.exclusive)}
+          </div>
+        </>
       )}
 
       <div className="document-summary-row">

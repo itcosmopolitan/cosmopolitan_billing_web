@@ -11,6 +11,7 @@ import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI, itemsAPI } from '@/api'
+import { useQuickVendor } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
@@ -38,6 +39,12 @@ export default function VendorReturnFormPage() {
   const [editSeedQtys, setEditSeedQtys] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [locked, setLocked] = useState(isEdit)
+  const { footerAction: addVendorAction, modal: addVendorModal } = useQuickVendor({
+    enabled: !isEdit,
+    onCreated: (v) => {
+      setVendor({ id: v.id, name: v.name })
+    },
+  })
 
   useEffect(() => {
     if (!can('purchases.create')) {
@@ -314,6 +321,7 @@ export default function VendorReturnFormPage() {
   }
 
   return (
+    <>
     <DocumentFormShell
       title={isEdit ? `Edit Vendor Return — ${editingNumber || ''}` : 'Create Vendor Return'}
       subtitle="Returns"
@@ -354,7 +362,8 @@ export default function VendorReturnFormPage() {
             selectedLabel={vendor?.name}
             placeholder="Search vendors…"
             searchPlaceholder="Search vendors…"
-            emptyLabel="No vendors found. Add via the Vendors page."
+            emptyLabel="No vendors found"
+            footerAction={addVendorAction}
             style={{ width: '100%', maxWidth: 420 }}
             disabled={locked}
           />
@@ -510,6 +519,8 @@ export default function VendorReturnFormPage() {
         )}
       </div>
     </DocumentFormShell>
+    {addVendorModal}
+    </>
   )
 }
 
