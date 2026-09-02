@@ -225,6 +225,47 @@ async def _validate_unpaid_account_limit(
         )
 
 
+def _exclusive_unit_price(price, tax_rate) -> float:
+    """GST-exclusive unit amount from a catalog-inclusive price."""
+    return line_taxable_amount(float(price or 0), float(tax_rate or 0))
+
+
+def _is_internal_classification(value) -> bool:
+    return str(value or "external").strip().lower() == "internal"
+
+
+async def _customer_is_internal(db: AsyncSession, customer_id: Optional[str]) -> bool:
+    if not customer_id:
+        return False
+    customer = (
+        await db.execute(select(Customer).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+    return bool(customer) and _is_internal_classification(
+        getattr(customer, "classification", None)
+    )
+
+
+def _strip_gst_from_inclusive_items(items) -> None:
+    """Subtract GST from inclusive unit prices, then charge 0%."""
+    for item in items or []:
+        rate = float(item.tax_rate or 0)
+        if rate > 0:
+            item.price = _exclusive_unit_price(item.price, rate)
+        item.tax_rate = 0
+
+
+async def _apply_internal_customer_gst(
+    db: AsyncSession,
+    customer_id: Optional[str],
+    items,
+) -> None:
+    """Internal customers pay excl. GST: strip tax from the item amount, then 0%."""
+    if not items:
+        return
+    if await _customer_is_internal(db, customer_id):
+        _strip_gst_from_inclusive_items(items)
+
+
 def _log_sales_invoice_history(
     db: AsyncSession,
     *,
@@ -773,6 +814,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     # source of conversion (it offers a %/MVR toggle and converts MVR → %
     # before POST). See OrderFormModal / QuoteFormModal.
     # Line discount first, then document discount, then GST extract.
+    await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows = []  # list[(item, line_net, line_tax)]
     inclusives = []
     rates = []
@@ -881,6 +923,7 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     # (matches the invoice/sales convention); QuotationLineItem stores
     # discount as a number too — we mirror what's already done in
     # create_quotation.
+    await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows = []
     inclusives = []
     rates = []
@@ -1124,6 +1167,12 @@ async def update_invoice(
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
 
+    next_customer_id = inv.customer_id
+    if data.customer_id:
+        next_customer_id = data.customer_id
+    elif data.customer_name is not None:
+        next_customer_id = None
+    await _apply_internal_customer_gst(db, next_customer_id, data.items)
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
 
     prev_customer_id = inv.customer_id
@@ -1257,6 +1306,7 @@ async def create_invoice(
         direct = await can_direct_commit(user, db, "invoices.approve")
     # Line amount after line discount; document discount is applied next,
     # then GST is extracted from the remaining inclusive amount.
+    await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
     is_paid_at_create = data.payment_mode is not None or float(data.store_credit_amount or 0) > 0
     if direct:
@@ -3483,6 +3533,7 @@ def _quote_dict(quote, items=None):
         "customerId": quote.customer_id,
         "customerCode": customer_code,
         "customerName": quote.customer_name or "Walk-in",
+        "classification": (getattr(customer, "classification", None) if customer else None) or "external",
         "customerAddress": customer.address if customer else None,
         "customer_address": customer.address if customer else None,
         "customerStreet1": customer.street1 if customer else None,
@@ -3564,6 +3615,7 @@ def _inv_dict(inv, items=None, sales_order_number=None):
         "customerName": inv.customer_name or "Walk-in",
         "customerType": (getattr(customer, "type", None) if customer else None) or "retail",
         "customer_type": (getattr(customer, "type", None) if customer else None) or "retail",
+        "classification": (getattr(customer, "classification", None) if customer else None) or "external",
         "customerAddress": customer.address if customer else None,
         "customer_address": customer.address if customer else None,
         "customerStreet1": customer.street1 if customer else None,
@@ -3776,11 +3828,12 @@ class SalesReturnCreate(BaseModel):
 
 
 # ─── Sales Order helpers ─────────────────────────────────────────────────────
-def _so_dict(so, items=None):
+def _so_dict(so, items=None, classification=None):
     d = {
         "id": so.id, "number": so.number,
         "customerId": so.customer_id,
         "customerName": so.customer_name or "Walk-in",
+        "classification": classification or "external",
         "branchId": so.branch_id,
         "branchName": so.branch_name,
         "createdBy": so.created_by,
@@ -4436,7 +4489,14 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
     if not so:
         raise HTTPException(404, "Sales order not found")
     await _resolve_branch_scope(user, db, so.branch_id)
-    return _so_dict(so, so.line_items)
+    classification = "external"
+    if so.customer_id:
+        cust = (
+            await db.execute(select(Customer).where(Customer.id == so.customer_id))
+        ).scalar_one_or_none()
+        if cust is not None:
+            classification = getattr(cust, "classification", None) or "external"
+    return _so_dict(so, so.line_items, classification=classification)
 
 
 # ─── Sales Order: CREATE ─────────────────────────────────────────────────────
@@ -4447,6 +4507,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
 
     direct = await can_direct_commit(user, db, "invoices.approve")
     tax_mode = await _get_org_tax_mode(db)
+    await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -4572,6 +4633,7 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
 
     # Replace fields (status preserved). Recompute totals from new items.
     tax_mode = await _get_org_tax_mode(db)
+    await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
 
@@ -4891,6 +4953,7 @@ async def convert_order_to_invoice(
 
     allow_oversell = await get_allow_overselling(db)
     tax_mode = await _get_org_tax_mode(db)
+    internal_customer = await _customer_is_internal(db, so.customer_id)
     orig_inclusive = 0.0
     for li in so.line_items:
         orig_inclusive += _inclusive_after_line_discount(
@@ -4903,6 +4966,12 @@ async def convert_order_to_invoice(
             convert_qty, float(so_line.price or 0), float(so_line.discount or 0),
         ))
         convert_rates.append(float(so_line.tax_rate or 0))
+    if internal_customer:
+        convert_inclusives[:] = [
+            line_taxable_amount(amount, rate)
+            for amount, rate in zip(convert_inclusives, convert_rates)
+        ]
+        convert_rates[:] = [0.0] * len(convert_rates)
     inv_inclusive = round(sum(convert_inclusives), 2)
     inv_discount = 0.0
     if orig_inclusive > 0 and float(so.discount or 0) > 0:
@@ -4950,8 +5019,9 @@ async def convert_order_to_invoice(
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=so_line.item_id, name=so_line.name,
-            qty=convert_qty, price=so_line.price,
-            tax_rate=so_line.tax_rate,
+            qty=convert_qty,
+            price=_exclusive_unit_price(so_line.price, so_line.tax_rate) if internal_customer else so_line.price,
+            tax_rate=0 if internal_customer else so_line.tax_rate,
             discount=so_line.discount or 0,
             line_total=after,
             **_snapshot_item_metadata(item_obj),
@@ -5259,13 +5329,30 @@ async def convert_quote_to_invoice(
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
 
+    internal_customer = await _customer_is_internal(db, quote.customer_id)
+    inv_subtotal = quote.subtotal
+    inv_tax_total = quote.tax_total
+    inv_total = quote.total
+    quote_taxed = None
+    if internal_customer:
+        exclusives = [
+            line_taxable_amount(
+                _inclusive_after_line_discount(l.qty, l.price, l.discount or 0),
+                l.tax_rate or 0,
+            )
+            for l in (quote.line_items or [])
+        ]
+        quote_taxed, inv_subtotal, inv_tax_total, inv_total = rollup_inclusive_lines(
+            exclusives, [0.0] * len(exclusives), quote.discount or 0,
+        )
+
     if not data.payment_received:
-        await _validate_unpaid_account_limit(db, quote.customer_id, float(quote.total or 0))
+        await _validate_unpaid_account_limit(db, quote.customer_id, float(inv_total or 0))
 
     today = datetime.now().strftime("%Y-%m-%d")
     inv_num = await allocate_number(db, "sales_invoice", branch_id=quote.branch_id)
-    paid = quote.total if data.payment_received else 0.0
-    status = "paid" if paid >= quote.total else "pending"
+    paid = inv_total if data.payment_received else 0.0
+    status = "paid" if paid >= inv_total else "pending"
     payment_mode = data.payment_mode if data.payment_received else None
     due_date = None
     if status in ("pending", "partial"):
@@ -5279,10 +5366,10 @@ async def convert_quote_to_invoice(
         branch_name=quote.branch_name,
         cashier=(user.name if user is not None else quote.created_by) or "Staff",
         date=today,
-        subtotal=quote.subtotal,
-        tax_total=quote.tax_total,
+        subtotal=inv_subtotal,
+        tax_total=inv_tax_total,
         discount=quote.discount,
-        total=quote.total,
+        total=inv_total,
         paid_amount=round(paid, 2),
         payment_mode=payment_mode,
         status=status,
@@ -5299,15 +5386,23 @@ async def convert_quote_to_invoice(
         for a in data.line_allocations:
             alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
 
-    for line in quote.line_items:
+    for idx, line in enumerate(quote.line_items or []):
         item_obj = item_map.get(line.item_id) if line.item_id else None
+        if internal_customer:
+            unit_price = _exclusive_unit_price(line.price, line.tax_rate)
+            line_total = quote_taxed[idx][0] if quote_taxed else line.line_total
+            tax_rate = 0
+        else:
+            unit_price = line.price
+            line_total = line.line_total
+            tax_rate = line.tax_rate
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=line.item_id, name=line.name,
-            qty=line.qty, price=line.price,
-            tax_rate=line.tax_rate,
+            qty=line.qty, price=unit_price,
+            tax_rate=tax_rate,
             discount=line.discount or 0,
-            line_total=line.line_total,
+            line_total=line_total,
             **_snapshot_item_metadata(item_obj),
         )
         db.add(li)

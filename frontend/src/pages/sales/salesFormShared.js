@@ -1,8 +1,17 @@
 /** Shared helpers for sales document form pages. */
 
+import { customerPricingType, customerClassification } from '@/utils/pricingDiscounts'
+
 export {
   suggestedDiscountForCustomer,
   customerPricingType,
+  customerClassification,
+  isInternalCustomer,
+  taxRateForCustomer,
+  linePricingForCustomer,
+  applyInternalGstToSaleLines,
+  applyCustomerPricingToSaleLines,
+  internalGstReverseSummary,
   discountPatternFromItem,
   applySuggestedDiscountsToSaleLines,
   resolveCategoryLinePricing,
@@ -27,6 +36,9 @@ export const emptySaleLine = () => ({
   price: 0,
   costPrice: 0,
   taxRate: 0,
+  catalogTaxRate: 0,
+  catalogInclusivePrice: 0,
+  gstReversed: 0,
   lineDiscount: 0,
   lineDiscountType: '%',
   wholesale_discount_pct: 0,
@@ -70,6 +82,7 @@ export const emptyQuoteForm = (branchId) => ({
   customerName: '',
   customerId: '',
   customerType: 'retail',
+  customerClassification: 'external',
   branchId,
   number: '',
   items: [emptySaleLine()],
@@ -88,6 +101,7 @@ export const emptyOrderForm = (branchId) => ({
   customerName: '',
   customerId: '',
   customerType: 'retail',
+  customerClassification: 'external',
   branchId,
   number: '',
   items: [emptySaleLine()],
@@ -101,6 +115,7 @@ export const emptyInvoiceForm = (branchId) => ({
   customerName: '',
   customerId: '',
   customerType: 'retail',
+  customerClassification: 'external',
   customerCreditBalance: 0,
   branchId,
   number: '',
@@ -120,6 +135,7 @@ export function quoteFromRow(q, branchId) {
   return {
     customerName: q.customerName || '',
     customerId: q.customerId || '',
+    customerClassification: customerClassification(q),
     branchId: q.branchId || branchId,
     items: mapSaleLines(q.items),
     discount: q.discount || 0,
@@ -138,6 +154,7 @@ export function orderFromRow(so, branchId) {
   return {
     customerName: so.customerName || '',
     customerId: so.customerId || '',
+    customerClassification: customerClassification(so),
     branchId: so.branchId || branchId,
     items: mapSaleLines(so.items),
     discount: so.discount || 0,
@@ -163,6 +180,7 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) 
     paymentMethod: doc.paymentMode || null,
     paymentRef: doc.paymentRef || '',
     customerType: customerPricingType(doc.customerType || doc.customer_type || 'retail'),
+    customerClassification: customerClassification(doc),
     customerCreditBalance: Number(doc.creditBalance ?? doc.credit_balance ?? 0) || 0,
     notes: doc.notes || '',
   }

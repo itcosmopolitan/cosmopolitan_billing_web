@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_USERS_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { Modal, FormGroup, FormRow, AutocompleteDropdown } from '@/components/ui'
-import { CUSTOMER_TYPE_OPTIONS } from '@/utils/dropdownOptions'
+import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_CLASSIFICATION_OPTIONS } from '@/utils/dropdownOptions'
 import { decomposeAddress } from '@/utils/address'
 
 const emptyForm = (branchId) => ({
@@ -22,6 +22,7 @@ const emptyForm = (branchId) => ({
   branch_id: branchId || '',
   credit_limit: '0',
   customer_type: 'retail',
+  classification: 'external',
   key_account_manager: '',
   key_account_manager_name: '',
   credit_terms: '',
@@ -52,6 +53,7 @@ function formFromCustomer(customer) {
     branch_id: customer.branch_id || '',
     credit_limit: customer.credit_limit != null ? String(customer.credit_limit) : '0',
     customer_type: customer.customer_type || customer.type || 'retail',
+    classification: customer.classification === 'internal' ? 'internal' : 'external',
     key_account_manager: customer.keyAccountManagerId || customer.key_account_manager || '',
     key_account_manager_name: customer.keyAccountManager || customer.key_account_manager_name || '',
     credit_terms: customer.credit_terms || customer.creditTerms || '',
@@ -111,6 +113,7 @@ export default function CustomerFormModal({
       branch_id: form.branch_id,
       credit_limit: form.customer_type === 'retail' ? 0 : (Number(form.credit_limit) || 0),
       customer_type: form.customer_type,
+      classification: form.classification === 'internal' ? 'internal' : 'external',
       key_account_manager: form.key_account_manager?.trim() || null,
       credit_terms: form.customer_type === 'retail' ? null : (form.credit_terms === '' ? null : Number(form.credit_terms)),
       street1: form.street1?.trim(),
@@ -144,6 +147,7 @@ export default function CustomerFormModal({
           email: form.email?.trim() || '',
           customer_type: form.customer_type,
           type: form.customer_type,
+          classification: form.classification === 'internal' ? 'internal' : 'external',
           credit_balance: 0,
           branch_id: form.branch_id,
         }
@@ -250,6 +254,21 @@ export default function CustomerFormModal({
             placeholder="Select branch…"
           />
         </FormGroup>
+        <FormGroup label="Customer type" required>
+          <AutocompleteDropdown
+            value={form.classification}
+            onChange={(v) => pf('classification', v || 'external')}
+            options={CUSTOMER_CLASSIFICATION_OPTIONS}
+            isSearchFieldRequired={false}
+          />
+          {form.classification === 'internal' && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+              GST is subtracted from item amounts (GST 0% billed).
+            </div>
+          )}
+        </FormGroup>
+      </FormRow>
+      <FormRow>
         <FormGroup label="Pricing category" required>
           <AutocompleteDropdown
             value={form.customer_type}

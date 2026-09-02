@@ -24,6 +24,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("customer", "Customer", locked=True),
         _col("contact", "Contact"),
         _col("pricing", "Pricing"),
+        _col("classification", "Customer type"),
         _col("kam", "KAM"),
         _col("branch", "Branch"),
         _col("credit_terms", "Credit Terms"),

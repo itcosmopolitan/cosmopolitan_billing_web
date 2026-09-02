@@ -324,6 +324,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
     ("customers", "key_account_manager", "VARCHAR"),
     ("customers", "credit_terms", "VARCHAR"),
+    ("customers", "classification", "VARCHAR DEFAULT 'external'"),
     ("items", "wholesale_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "staff_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "wholesale_pricing_mode", "VARCHAR DEFAULT 'pct'"),

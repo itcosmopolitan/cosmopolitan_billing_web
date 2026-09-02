@@ -1,5 +1,8 @@
 /** Item discount / fixed-price pattern × customer pricing category helpers. */
 
+import { priceTaxBreakdown } from '@/utils/taxCalc'
+import { roundAmount } from '@/utils/decimalPrecision'
+
 export function customerPricingType(customerOrType) {
   if (customerOrType == null) return 'retail'
   if (typeof customerOrType === 'string') return customerOrType.trim().toLowerCase() || 'retail'
@@ -9,6 +12,93 @@ export function customerPricingType(customerOrType) {
     || customerOrType.type
     || 'retail'
   ).toString().trim().toLowerCase() || 'retail'
+}
+
+export function customerClassification(customerOrValue) {
+  if (customerOrValue == null) return 'external'
+  if (typeof customerOrValue === 'string') {
+    const v = customerOrValue.trim().toLowerCase()
+    return v === 'internal' ? 'internal' : 'external'
+  }
+  const v = (
+    customerOrValue.classification
+    || customerOrValue.customerClassification
+    || ''
+  ).toString().trim().toLowerCase()
+  return v === 'internal' ? 'internal' : 'external'
+}
+
+export function isInternalCustomer(customerOrValue) {
+  return customerClassification(customerOrValue) === 'internal'
+}
+
+/**
+ * Charge GST-exclusive unit price for internal customers.
+ * Catalog amounts stay inclusive; GST is subtracted from the line amount.
+ */
+export function linePricingForCustomer(inclusivePrice, taxRate, customerOrValue) {
+  const inclusive = Math.max(0, Number(inclusivePrice) || 0)
+  const catalogRate = Number(taxRate) || 0
+  if (!isInternalCustomer(customerOrValue) || catalogRate <= 0 || inclusive <= 0) {
+    return {
+      price: inclusive,
+      taxRate: catalogRate,
+      catalogTaxRate: catalogRate,
+      catalogInclusivePrice: inclusive,
+      gstReversed: 0,
+    }
+  }
+  const { exclusive, tax } = priceTaxBreakdown(inclusive, 'inclusive', catalogRate)
+  return {
+    price: exclusive,
+    taxRate: 0,
+    catalogTaxRate: catalogRate,
+    catalogInclusivePrice: inclusive,
+    gstReversed: tax,
+  }
+}
+
+export function taxRateForCustomer(rate, customerOrValue) {
+  if (isInternalCustomer(customerOrValue)) return 0
+  const n = Number(rate)
+  return Number.isFinite(n) ? n : 0
+}
+
+export function applyInternalGstToSaleLines(items, customerOrValue) {
+  return (items || []).map((it) => {
+    if (!it?.item_id && !it?.itemId) return it
+    const rate = Number(it.catalogTaxRate ?? it.taxRate) || 0
+    const inclusive = Number(it.price) || 0
+    return { ...it, ...linePricingForCustomer(inclusive, rate, customerOrValue) }
+  })
+}
+
+/** Document-level GST reverse: catalog incl. − GST = amount charged. */
+export function internalGstReverseSummary(items) {
+  let gstReversed = 0
+  let inclusive = 0
+  let exclusive = 0
+  const rates = new Set()
+  for (const it of items || []) {
+    const qty = Number(it.qty) || 0
+    const rate = Number(it.catalogTaxRate) || 0
+    const unitGst = Number(it.gstReversed) || 0
+    const inclUnit = Number(it.catalogInclusivePrice) || 0
+    const exclUnit = Number(it.price) || 0
+    if (!(qty > 0 && rate > 0 && (unitGst > 0 || (inclUnit > exclUnit)))) continue
+    const gst = unitGst > 0 ? unitGst : roundAmount(inclUnit - exclUnit)
+    const incl = inclUnit > 0 ? inclUnit : roundAmount(exclUnit + gst)
+    inclusive += incl * qty
+    exclusive += exclUnit * qty
+    gstReversed += gst * qty
+    rates.add(rate)
+  }
+  return {
+    gstReversed: roundAmount(gstReversed),
+    inclusive: roundAmount(inclusive),
+    exclusive: roundAmount(exclusive),
+    rate: rates.size === 1 ? [...rates][0] : null,
+  }
 }
 
 export function normalizeCategoryPricingMode(mode) {
@@ -91,4 +181,12 @@ export function applySuggestedDiscountsToSaleLines(items, customerOrType) {
       lineDiscountType: '%',
     }
   })
+}
+
+/** Pricing-category discounts plus internal-customer GST reverse. */
+export function applyCustomerPricingToSaleLines(items, customer) {
+  return applyInternalGstToSaleLines(
+    applySuggestedDiscountsToSaleLines(items, customer),
+    customer,
+  )
 }

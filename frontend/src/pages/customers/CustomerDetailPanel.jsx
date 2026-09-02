@@ -4,13 +4,14 @@ import { useAppStore } from '@/store'
 import { fmt } from '@/utils/helpers'
 import { Chip, AlertBar, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
-import { CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
+import { CUSTOMER_TYPE_LABELS, CUSTOMER_CLASSIFICATION_LABELS } from '@/utils/dropdownOptions'
 
 function mapCustomer(c) {
   if (!c) return null
   return {
     ...c,
     type: c.customer_type || c.type,
+    classification: c.classification === 'internal' ? 'internal' : 'external',
     gstIn: c.gst_in || c.gstin || c.gstIn,
     branchId: c.branch_id || c.branchId,
     creditLimit: c.credit_limit ?? c.creditLimit,
@@ -80,7 +81,11 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
       onClose={onClose}
       icon="👤"
       title={detail?.name || 'Customer'}
-      subtitle={[detail?.customerCode, CUSTOMER_TYPE_LABELS[detail?.type] || 'Retail'].filter(Boolean).join(' · ')}
+      subtitle={[
+        detail?.customerCode,
+        CUSTOMER_CLASSIFICATION_LABELS[detail?.classification] || 'External',
+        CUSTOMER_TYPE_LABELS[detail?.type] || 'Retail',
+      ].filter(Boolean).join(' · ')}
       size="lg"
       summary={summary}
       tabs={[
@@ -134,6 +139,14 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
         <>
           <DetailSection title="Pricing & terms">
             <DetailFields fields={[
+              {
+                label: 'Customer type',
+                value: (
+                  <Tag color={detail?.classification === 'internal' ? 'var(--accent)' : undefined}>
+                    {CUSTOMER_CLASSIFICATION_LABELS[detail?.classification] || 'External'}
+                  </Tag>
+                ),
+              },
               {
                 label: 'Pricing category',
                 value: (

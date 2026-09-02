@@ -12,6 +12,7 @@ import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/di
 import { unwrapPaged } from '@/utils/pagination'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
+import { isInternalCustomer, internalGstReverseSummary } from '@/utils/pricingDiscounts'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
 import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
@@ -754,6 +755,7 @@ export default function POSPage() {
     total,
     mode: taxMode,
   } = cartTotals
+  const gstReverse = internalGstReverseSummary(cart)
   const hasLineLevelDiscount = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
   const hasBillLevelDiscount = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
   const hasAnyDiscount = hasLineLevelDiscount || hasBillLevelDiscount
@@ -1233,6 +1235,22 @@ export default function POSPage() {
               searchPlaceholder="Customer…"
               style={{ width: 148, maxWidth: '36vw' }}
             />
+            {customer && isInternalCustomer(customer) && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  padding: '3px 8px',
+                  borderRadius: 10,
+                  background: 'rgba(46,184,92,0.12)',
+                  color: 'var(--green)',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+                title="Internal customer — GST is subtracted from item amounts"
+              >
+                GST reversed
+              </span>
+            )}
             {customer?.id && Number(customer.credit_balance || 0) > 0 && (
               <span
                 style={{
@@ -1585,6 +1603,27 @@ export default function POSPage() {
                       <span>Disc</span>
                       <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
                     </div>
+                  )}
+                  {gstReverse.gstReversed > 0 && (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 16,
+                          fontSize: 11.5,
+                          color: 'var(--green)',
+                          marginBottom: 3,
+                        }}
+                      >
+                        <span>GST reversed</span>
+                        <span style={{ fontFamily: 'DM Mono' }}>-{fmt(gstReverse.gstReversed)}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, lineHeight: 1.35 }}>
+                        {fmt(gstReverse.inclusive)} incl. − {fmt(gstReverse.gstReversed)} GST
+                        {gstReverse.rate != null ? ` (${gstReverse.rate}%)` : ''} = {fmt(gstReverse.exclusive)}
+                      </div>
+                    </>
                   )}
                   <div
                     style={{

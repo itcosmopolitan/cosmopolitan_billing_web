@@ -20,6 +20,7 @@ from src.models import User
 router = APIRouter()
 
 _VALID_CUSTOMER_TYPES = frozenset({"retail", "wholesale", "staff"})
+_VALID_CLASSIFICATIONS = frozenset({"external", "internal"})
 
 
 class CustomerCreate(BaseModel):
@@ -31,6 +32,7 @@ class CustomerCreate(BaseModel):
     branch_id: str
     credit_limit: float = 0
     customer_type: str = "retail"
+    classification: str = "external"
     key_account_manager: Optional[str] = None
     credit_terms: Optional[StrictInt] = Field(default=None, ge=0)
     street1: str
@@ -62,6 +64,7 @@ class CustomerUpdate(BaseModel):
     branch_id: Optional[str] = None
     credit_limit: Optional[float] = None
     customer_type: Optional[str] = None
+    classification: Optional[str] = None
     key_account_manager: Optional[str] = None
     credit_terms: Optional[StrictInt] = Field(default=None, ge=0)
     street1: Optional[str] = None
@@ -81,6 +84,16 @@ def _normalize_customer_type(customer_type: Optional[str]) -> str:
         raise HTTPException(
             400,
             f"Invalid customer_type '{customer_type}'. Expected one of: retail, wholesale, staff",
+        )
+    return value
+
+
+def _normalize_classification(classification: Optional[str]) -> str:
+    value = (classification or "external").strip().lower()
+    if value not in _VALID_CLASSIFICATIONS:
+        raise HTTPException(
+            400,
+            f"Invalid classification '{classification}'. Expected one of: external, internal",
         )
     return value
 
@@ -162,6 +175,7 @@ async def list_customers(
             "phone": Customer.phone,
             "email": Customer.email,
             "customer_type": Customer.type,
+            "classification": Customer.classification,
             "credit_limit": Customer.credit_limit,
             "outstanding": Customer.outstanding,
             "total_purchases": Customer.total_purchases,
@@ -325,6 +339,7 @@ async def import_customers(
         "state/province": "state_province", "state province": "state_province",
         "country": "country", "postal code": "postal_code", "postal_code": "postal_code",
         "credit limit": "credit_limit", "customer type": "customer_type",
+        "classification": "classification", "internal/external": "classification",
         "key account manager": "key_account_manager", "credit terms": "credit_terms",
     }
 
@@ -354,6 +369,7 @@ async def import_customers(
                 raise ValueError(f"Required field(s) missing: {', '.join(missing)}")
 
             customer_type = _normalize_customer_type(as_text(data.get("customer_type")) or "retail")
+            classification = _normalize_classification(as_text(data.get("classification")) or "external")
             raw_limit = data.get("credit_limit")
             if customer_type == "retail":
                 credit_limit = 0.0
@@ -371,6 +387,7 @@ async def import_customers(
                 branch_id=branch_id,
                 credit_limit=credit_limit,
                 type=customer_type,
+                classification=classification,
                 key_account_manager=as_text(data.get("key_account_manager")) or None,
                 credit_terms=credit_terms,
                 street1=required["street1"],
@@ -404,7 +421,7 @@ async def download_customer_import_template():
     ws.append([
         "Customer Name", "Phone", "Email", "GST Reg No", "Street 1", "Street 2", "Street 3",
         "City", "State/Province", "Country", "Postal Code",
-        "Credit Limit", "Customer Type", "Key Account Manager", "Credit Terms",
+        "Credit Limit", "Customer Type", "Classification", "Key Account Manager", "Credit Terms",
     ])
     bio = BytesIO()
     wb.save(bio)
@@ -421,6 +438,7 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)
     customer_type = _normalize_customer_type(data.customer_type)
+    classification = _normalize_classification(data.classification)
     # Retail has no account credit facility — force limit/terms off.
     credit_limit = 0.0 if customer_type == "retail" else float(data.credit_limit or 0)
     credit_terms = None if customer_type == "retail" else (
@@ -433,6 +451,7 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
                  email=data.email, address=address, customer_code=customer_code,
                  gstin=data.gst_in, branch_id=data.branch_id,
                  credit_limit=credit_limit, type=customer_type,
+                 classification=classification,
                  key_account_manager=(data.key_account_manager or None),
                  credit_terms=credit_terms,
                  street1=data.street1, street2=data.street2, street3=data.street3,
@@ -454,6 +473,8 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
         await enforce_branch_access(items["branch_id"], user=user, db=db)
     if "customer_type" in items:
         items["customer_type"] = _normalize_customer_type(items["customer_type"])
+    if "classification" in items:
+        items["classification"] = _normalize_classification(items["classification"])
     if "credit_terms" in items and items["credit_terms"] is not None:
         items["credit_terms"] = str(items["credit_terms"])
 

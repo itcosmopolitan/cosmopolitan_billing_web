@@ -44,6 +44,7 @@ async def autocomplete_customer(
         "id": c.id,
         "text": c.name,
         "customer_type": c.type,
+        "classification": getattr(c, "classification", None) or "external",
         "credit_terms": getattr(c, "credit_terms", None),
         "key_account_manager": getattr(c, "key_account_manager", None),
     } for c in rows]

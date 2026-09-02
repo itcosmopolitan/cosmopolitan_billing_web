@@ -5,7 +5,7 @@ import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
 import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
-import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS } from '@/utils/dropdownOptions'
+import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, CUSTOMER_CLASSIFICATION_LABELS } from '@/utils/dropdownOptions'
 import CustomerFormModal from './CustomerFormModal'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
@@ -85,6 +85,7 @@ export default function CustomersPage() {
         const mapped = (items || []).map((c) => ({
           ...c,
           type: c.customer_type || c.type,
+          classification: c.classification === 'internal' ? 'internal' : 'external',
           gstIn: c.gst_in || c.gstin,
           branchId: c.branch_id,
           creditLimit: c.credit_limit,
@@ -189,6 +190,7 @@ export default function CustomersPage() {
               Address: c.address || '—',
               'GST Reg No': c.gstIn || '—',
               Type: formatLabel(c.type || 'Retail'),
+              'Customer type': CUSTOMER_CLASSIFICATION_LABELS[c.classification] || 'External',
               'Account Limit (MVR)': c.creditLimit || 0,
               'Outstanding (MVR)': c.outstanding || 0,
               'Total Purchases (MVR)': c.totalPurchases || 0,
@@ -335,6 +337,18 @@ export default function CustomersPage() {
                       />
                     )
                   }
+                  if (id === 'classification') {
+                    return (
+                      <SortableHeader
+                        key={id}
+                        label="Customer type"
+                        sortKey="classification"
+                        sortBy={custSortBy}
+                        sortOrder={custSortOrder}
+                        onSort={onSort}
+                      />
+                    )
+                  }
                   if (id === 'kam') return <th key={id}>KAM</th>
                   if (id === 'branch') return <th key={id}>Branch</th>
                   if (id === 'credit_terms') return <th key={id}>Credit Terms</th>
@@ -425,6 +439,15 @@ export default function CustomersPage() {
                           <td key={id}>
                             <Tag color={c.type==='wholesale' ? 'var(--purple)' : c.type === 'staff' ? 'var(--accent)' : undefined}>
                               {CUSTOMER_TYPE_LABELS[c.type] || 'Retail'}
+                            </Tag>
+                          </td>
+                        )
+                      }
+                      if (id === 'classification') {
+                        return (
+                          <td key={id}>
+                            <Tag color={c.classification === 'internal' ? 'var(--accent)' : undefined}>
+                              {CUSTOMER_CLASSIFICATION_LABELS[c.classification] || 'External'}
                             </Tag>
                           </td>
                         )
