@@ -351,7 +351,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 <table className="totals">
                   <tr>
                     <td colSpan={6}></td>
-                    <td className="tlabel">Total MRF Excl. GST</td>
+                    <td className="tlabel">Total MVR Excl. GST</td>
                     <td className="tval">{formatNumber(invoice.totalExclGst)}</td>
                   </tr>
                   {invoice.discountAmount ? (
@@ -368,7 +368,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   </tr>
                   <tr className="grand">
                     <td colSpan={6}></td>
-                    <td className="tlabel grand">Total MRF Incl. GST</td>
+                    <td className="tlabel grand">Total MVR Incl. GST</td>
                     <td className="tval grand">{formatNumber(invoice.totalInclGst)}</td>
                   </tr>
                 </table>

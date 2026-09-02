@@ -253,7 +253,7 @@ export function Receipt({ sale, branch }) {
           </tr>
           ` : ''}
           <tr>
-            <td>Total MRF Excl. GST</td>
+            <td>Total MVR Excl. GST</td>
               <td class="right">${formatNumber(sale.subtotal || sale.items?.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0) || 0)}</td>
           </tr>
           ${`

@@ -604,10 +604,10 @@
 
         ${pageIndex === totalPages - 1 ? `
         <table class="totals">
-          <tr><td colspan="8"></td><td class="tlabel">Total MRF Excl. GST</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
+          <tr><td colspan="8"></td><td class="tlabel">Total MVR Excl. GST</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
           <tr><td colspan="8"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
           <tr><td colspan="8"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>
-          <tr class="grand"><td colspan="8"></td><td class="tlabel">Total MRF Incl. GST</td><td class="tval">${formatNumber(totals.total)}</td></tr>
+          <tr class="grand"><td colspan="8"></td><td class="tlabel">Total MVR Incl. GST</td><td class="tval">${formatNumber(totals.total)}</td></tr>
         </table>
         <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
         <div class="quote-terms-box">
