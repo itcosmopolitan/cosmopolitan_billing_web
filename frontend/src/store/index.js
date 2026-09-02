@@ -274,6 +274,7 @@ export const usePOSStore = create((set, get) => ({
             ? applyLineCalc({
                 ...i,
                 ...pattern,
+                name: i.name,
                 retailPrice: i.retailPrice ?? retailPrice,
                 qty: i.qty + 1,
                 batchAllocationCustom: false,
@@ -355,6 +356,14 @@ export const usePOSStore = create((set, get) => ({
       cart: s.cart.map((i) => (
         i.id === id ? applyLineCalc({ ...i, price: Math.max(0, Number(price) || 0) }) : i
       )),
+    }))
+  },
+
+  // Transaction-only label. Does not write back to the item master; the
+  // sale payload already snapshots `name` onto the invoice line.
+  setLineName: (id, name) => {
+    set((s) => ({
+      cart: s.cart.map((i) => (i.id === id ? { ...i, name } : i)),
     }))
   },
 

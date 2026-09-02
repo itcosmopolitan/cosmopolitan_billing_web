@@ -532,6 +532,11 @@ export default function POSPage() {
       }
     }
 
+    if (cart.some((line) => !String(line.name || '').trim())) {
+      toast.error('Each item must have a name')
+      return
+    }
+
     if (!allowOverselling && !editingInvoice) {
       for (const line of cart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
@@ -563,7 +568,7 @@ export default function POSPage() {
           const effPct = gross > 0 ? Math.min(100, Math.max(0, (1 - i.lineTotal / gross) * 100)) : 0
           return {
             item_id: i.id,
-            name: i.name,
+            name: String(i.name || '').trim(),
             qty: i.qty,
             price: i.price,
             tax_rate: i.taxRate || 0,
@@ -1360,6 +1365,7 @@ export default function POSPage() {
                         store.updateQty(item.id, qty)
                       }}
                       onPriceChange={(price) => store.setLinePrice(item.id, price)}
+                      onNameChange={(name) => store.setLineName(item.id, name)}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
