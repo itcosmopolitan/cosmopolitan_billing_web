@@ -12,6 +12,7 @@ import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI } from '@/api'
+import { useQuickVendor } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
@@ -36,6 +37,16 @@ export default function VendorPaymentFormPage() {
   const [paymentRef, setPaymentRef] = useState('')
   const [notes, setNotes] = useState('')
   const [editAllocByBill, setEditAllocByBill] = useState({})
+  const { footerAction: addVendorAction, modal: addVendorModal } = useQuickVendor({
+    enabled: !isEdit,
+    onCreated: (v) => {
+      setVendor({
+        id: v.id,
+        name: v.name,
+        credit: Number(v.credit_balance || v.creditBalance || 0),
+      })
+    },
+  })
 
   useEffect(() => {
     if (!can('purchases.edit')) {
@@ -269,6 +280,7 @@ export default function VendorPaymentFormPage() {
   }
 
   return (
+    <>
     <DocumentFormShell
       title={isEdit ? `Edit Payment — ${editingNumber || ''}` : 'Create Vendor Payment'}
       subtitle="Payments"
@@ -313,7 +325,8 @@ export default function VendorPaymentFormPage() {
               selectedLabel={vendor?.name}
               placeholder="Search vendors…"
               searchPlaceholder="Search vendors…"
-              emptyLabel="No vendors found. Add via the Vendors page."
+              emptyLabel="No vendors found"
+              footerAction={addVendorAction}
               style={{ width: '100%', maxWidth: 420 }}
             />
           )}
@@ -497,6 +510,8 @@ export default function VendorPaymentFormPage() {
         )}
       </div>
     </DocumentFormShell>
+    {addVendorModal}
+    </>
   )
 }
 

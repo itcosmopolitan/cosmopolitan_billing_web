@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker, AlertBar } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -43,6 +44,17 @@ export default function InvoiceFormModal({
       : 'Create Invoice'
   const pickedIds = invoiceForm.items.map((it) => it.item_id).filter(Boolean)
   const [allocEditor, setAllocEditor] = useState(null)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: invoiceForm.branchId,
+    onCreated: (c) => {
+      const type = customerPricingType(c.customer_type || c.type || 'retail')
+      pif('customerId', c.id)
+      pif('customerName', c.name)
+      pif('customerType', type)
+      pif('customerCreditBalance', Number(c.credit_balance || 0))
+      pif('items', applySuggestedDiscountsToSaleLines(invoiceForm.items, type))
+    },
+  })
 
   const patchLine = (i, patch) => {
     const next = [...invoiceForm.items]
@@ -176,7 +188,8 @@ export default function InvoiceFormModal({
               selectedLabel={invoiceForm.customerName || undefined}
               placeholder="Search customers…"
               searchPlaceholder="Search customers…"
-              emptyLabel="No customers found. Add via the Customers page."
+              emptyLabel="No customers found"
+              footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />
           </FormGroup>
@@ -453,9 +466,17 @@ export default function InvoiceFormModal({
     </div>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addCustomerModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -474,6 +495,8 @@ export default function InvoiceFormModal({
     >
       {formBody}
     </Modal>
+    {addCustomerModal}
+    </>
   )
 }
 

@@ -21,6 +21,7 @@
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
@@ -64,6 +65,17 @@ export default function OrderFormModal({
   // IDs of items already on other rows — passed to each picker so the
   // operator can't accidentally double-pick the same SKU.
   const pickedIds = orderForm.items.map((it) => it.item_id).filter(Boolean)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: orderForm.branchId,
+    enabled: !readOnly,
+    onCreated: (c) => {
+      const type = customerPricingType(c.customer_type || c.type || 'retail')
+      pof('customerId', c.id)
+      pof('customerName', c.name)
+      pof('customerType', type)
+      pof('items', applySuggestedDiscountsToSaleLines(orderForm.items, type))
+    },
+  })
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
@@ -168,7 +180,8 @@ export default function OrderFormModal({
               selectedLabel={orderForm.customerName || undefined}
               placeholder="Search customers…"
               searchPlaceholder="Search customers…"
-              emptyLabel="No customers found. Add via the Customers page."
+              emptyLabel="No customers found"
+              footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />
           </FormGroup>
@@ -322,9 +335,17 @@ export default function OrderFormModal({
     </div>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addCustomerModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -347,6 +368,8 @@ export default function OrderFormModal({
     >
       {formBody}
     </Modal>
+    {addCustomerModal}
+    </>
   )
 }
 

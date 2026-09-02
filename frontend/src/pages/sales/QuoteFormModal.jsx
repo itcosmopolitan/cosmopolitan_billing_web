@@ -18,6 +18,7 @@
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
@@ -51,6 +52,17 @@ export default function QuoteFormModal({
     : (isEdit ? 'Save Changes' : 'Create')
 
   const pickedIds = quoteForm.items.map((it) => it.item_id).filter(Boolean)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: quoteForm.branchId,
+    enabled: !readOnly,
+    onCreated: (c) => {
+      const type = customerPricingType(c.customer_type || c.type || 'retail')
+      pqf('customerId', c.id)
+      pqf('customerName', c.name)
+      pqf('customerType', type)
+      pqf('items', applySuggestedDiscountsToSaleLines(quoteForm.items, type))
+    },
+  })
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
@@ -149,7 +161,8 @@ export default function QuoteFormModal({
             selectedLabel={quoteForm.customerName || undefined}
             placeholder="Search customers…"
             searchPlaceholder="Search customers…"
-            emptyLabel="No customers found. Add via the Customers page."
+            emptyLabel="No customers found"
+            footerAction={addCustomerAction}
             style={{ width: '100%' }}
           />
         </FormGroup>
@@ -290,9 +303,17 @@ export default function QuoteFormModal({
     </>
   )
 
-  if (embedded) return formBody
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {addCustomerModal}
+      </>
+    )
+  }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -314,6 +335,8 @@ export default function QuoteFormModal({
     >
       {formBody}
     </Modal>
+    {addCustomerModal}
+    </>
   )
 }
 

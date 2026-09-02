@@ -44,6 +44,7 @@ export default function AutocompleteDropdown({
   disabled = false,
   clearable = false,
   onClear,
+  footerAction = null,
   style,
   className = 'form-input',
 }) {
@@ -101,7 +102,9 @@ export default function AutocompleteDropdown({
     ))
 
     const listHeight = Math.min(
-      Math.max(filteredOptions.length, listLoading ? 1 : 0) * ROW_H + (isSearchFieldRequired ? 44 : 8),
+      Math.max(filteredOptions.length, listLoading ? 1 : 0) * ROW_H
+        + (isSearchFieldRequired ? 44 : 8)
+        + (footerAction ? 40 : 0),
       maxHeight,
     )
 
@@ -109,14 +112,20 @@ export default function AutocompleteDropdown({
       ? Math.max(VIEWPORT_PAD, rect.top - listHeight - GAP)
       : rect.bottom + GAP
 
+    const width = Math.max(rect.width, footerAction ? 220 : 0)
+    const left = Math.min(
+      Math.max(VIEWPORT_PAD, rect.left),
+      Math.max(VIEWPORT_PAD, window.innerWidth - width - VIEWPORT_PAD),
+    )
+
     setCoords({
       top,
-      left: rect.left,
-      width: rect.width,
+      left,
+      width,
       maxHeight,
       flipUp,
     })
-  }, [direction, filteredOptions.length, isSearchFieldRequired, listLoading])
+  }, [direction, filteredOptions.length, isSearchFieldRequired, listLoading, footerAction])
 
   useLayoutEffect(() => {
     if (open) reposition()
@@ -166,14 +175,19 @@ export default function AutocompleteDropdown({
       const inPopover = popoverRef.current?.contains(e.target)
       if (!inTrigger && !inPopover) setOpen(false)
     }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     window.addEventListener('resize', reposition)
     window.addEventListener('scroll', reposition, true)
     return () => {
       document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
       window.removeEventListener('resize', reposition)
       window.removeEventListener('scroll', reposition, true)
     }
@@ -287,6 +301,36 @@ export default function AutocompleteDropdown({
             {o.label}
           </button>
         ))
+      )}
+      {footerAction?.label && footerAction?.onClick && (
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false)
+            footerAction.onClick()
+          }}
+          style={{
+            position: 'sticky',
+            bottom: -4,
+            display: 'block',
+            width: '100%',
+            height: 36,
+            marginTop: 2,
+            padding: '0 10px',
+            border: 'none',
+            borderTop: '1px solid var(--border-subtle)',
+            borderRadius: 0,
+            textAlign: 'left',
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: '36px',
+            cursor: 'pointer',
+            color: 'var(--accent)',
+            background: 'var(--bg-surface)',
+          }}
+        >
+          {footerAction.label}
+        </button>
       )}
     </div>,
     document.body,

@@ -416,7 +416,7 @@ async def download_customer_import_template():
     )
 
 
-@router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create"))])
+@router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create", "pos.use"))])
 async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)

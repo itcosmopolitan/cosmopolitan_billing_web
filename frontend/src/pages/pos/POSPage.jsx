@@ -15,6 +15,7 @@ import { calcCartTotals } from '@/utils/taxCalc'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
 import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
+import { useQuickCustomer } from '@/components/useQuickParty'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
 import CashTenderFields from '@/components/CashTenderFields'
@@ -214,6 +215,10 @@ export default function POSPage() {
 
   const store = usePOSStore()
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const { footerAction: addCustomerAction, modal: addCustomerModal } = useQuickCustomer({
+    defaultBranchId: activeBranch?.id,
+    onCreated: (c) => store.setCustomer(c),
+  })
   const setActiveBranch = useAppStore((s) => s.setActiveBranch)
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
@@ -1222,6 +1227,7 @@ export default function POSPage() {
               fetchParams={{ branch_id: activeBranch?.id }}
               isSearchFieldRequired
               prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
+              footerAction={addCustomerAction}
               selectedLabel={customer?.name}
               placeholder="Walk-in Customer"
               searchPlaceholder="Customer…"
@@ -1816,6 +1822,8 @@ export default function POSPage() {
           />
         </FormGroup>
       </Modal>
+
+      {addCustomerModal}
 
     </div>
   )

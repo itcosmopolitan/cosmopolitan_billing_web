@@ -45,7 +45,7 @@ SYSTEM_ROLES: list[tuple[str, str, str, str, str, list[str]]] = [
          "pos.open_till", "pos.close_till",
          "invoices.create", "invoices.view",
          "cash.view", "cash.entry", "cash.close",
-         "customers.view"]),
+         "customers.view", "customers.create"]),
 ]
 
 # Legacy system roles removed on boot (users migrated to branch_supervisor first).

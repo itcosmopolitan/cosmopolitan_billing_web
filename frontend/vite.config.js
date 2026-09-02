@@ -1,11 +1,30 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'fs'
 import path from 'path'
+
+function workspacePkg(name, file = '') {
+  const roots = [
+    path.resolve(__dirname, 'node_modules', name),
+    path.resolve(__dirname, '../node_modules', name),
+  ]
+  const root = roots.find((dir) => fs.existsSync(path.join(dir, 'package.json'))) || roots[0]
+  return file ? path.join(root, file) : root
+}
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      // npm workspaces hoist these to the repo root. Point Vite at the ES
+      // build so `import { jsPDF } from 'jspdf'` resolves after a root install.
+      jspdf: workspacePkg('jspdf', 'dist/jspdf.es.min.js'),
+      html2canvas: workspacePkg('html2canvas'),
+    },
+  },
+  optimizeDeps: {
+    include: ['jspdf', 'html2canvas'],
   },
   server: {
     port: 3000,
