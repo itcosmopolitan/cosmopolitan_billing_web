@@ -15,7 +15,7 @@ import { calcCartTotals } from '@/utils/taxCalc'
 import { isInternalCustomer, internalGstReverseSummary } from '@/utils/pricingDiscounts'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
-import { Modal, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
+import { Modal, ConfirmDialog, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 import { Receipt } from '@/components/Receipt'
@@ -175,6 +175,7 @@ export default function POSPage() {
   const [activeCat, setActiveCat] = useState([])
   const [showHeld, setShowHeld] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
+  const [showCreditWarning, setShowCreditWarning] = useState(false)
   const [lastSale, setLastSale] = useState(null)
   const [products, setProducts] = useState([])
   const [productPageNo, setProductPageNo] = useState(1)
@@ -490,23 +491,38 @@ export default function POSPage() {
 
   const filtered = products
 
-  const handleComplete = async () => {
+  const handleComplete = async (allowCreditOverLimit = false) => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
     const submitTotals = calcCartTotals(cart, { discountPct, discountAmt })
     const submitTotal = submitTotals.total
-    const creditAppliedNow = storeCreditApplyAmount(
-      customer?.credit_balance,
-      submitTotal,
-      !!customer?.id,
-    )
+    const creditAppliedNow = paymentMethod === 'credit'
+      ? 0
+      : storeCreditApplyAmount(customer?.credit_balance, submitTotal, !!customer?.id)
     const remainingDue = remainingAfterStoreCredit(submitTotal, creditAppliedNow)
     const settling = paymentReceived || creditAppliedNow > 0
+    const accountCreditRemaining = Math.max(
+      0,
+      Number(customer?.credit_limit || 0) - Number(customer?.outstanding || 0),
+    )
+    if (
+      paymentMethod === 'credit'
+      && !allowCreditOverLimit
+      && submitTotal > accountCreditRemaining + 0.001
+    ) {
+      setShowCreditWarning(true)
+      return
+    }
     const hasBillDiscountForSubmit = Number(discountPct || 0) > 0 || Number(discountAmt || 0) > 0
     const hasLineDiscountForSubmit = cart.some((i) => Number(i.lineDiscountValue ?? i.lineDiscountPct ?? i.lineDiscountFlat ?? 0) > 0)
     const hasDiscountForSubmit = hasBillDiscountForSubmit || hasLineDiscountForSubmit
     if (hasDiscountForSubmit && !discountReason) {
       toast.error('Pick a discount reason')
+      return
+    }
+
+    if (!paymentMethod) {
+      toast.error('Pick a payment method to complete the sale')
       return
     }
 
@@ -589,6 +605,7 @@ export default function POSPage() {
         origin: 'pos',
         notes: notes || null,
         payment_ref: settling && remainingDue > 0.001 ? paymentRef || '' : undefined,
+        allow_credit_over_limit: allowCreditOverLimit,
       }
       // Credit-only settlement: backend accepts store_credit_amount without tender mode.
       if (settling && remainingDue > 0.001) {
@@ -767,11 +784,15 @@ export default function POSPage() {
   const creditAvail = customer?.id ? Number(customer.credit_balance || 0) : 0
   const creditAppliedPreview = storeCreditApplyAmount(creditAvail, total, !!customer?.id)
   const remainingDuePreview = remainingAfterStoreCredit(total, creditAppliedPreview)
+  const customerType = String(customer?.customer_type || customer?.customerType || customer?.type || 'retail').toLowerCase()
+  const canUseCredit = Boolean(customer?.id) && ['wholesale', 'staff'].includes(customerType)
+  const accountCreditRemaining = Math.max(0, Number(customer?.credit_limit || 0) - Number(customer?.outstanding || 0))
   const paymentMethodOptions = [
     { id: 'cash', label: '💵 Cash' },
     { id: 'card', label: '💳 Card' },
     { id: 'upi', label: '📱 UPI' },
     { id: 'bank_transfer', label: '🏦 Bank Transfer' },
+    ...(canUseCredit ? [{ id: 'credit', label: '💳 Credit' }] : []),
   ]
 
   const { displayCode, regenerate: regenerateDisplayCode } = usePosDisplaySession()
@@ -1525,7 +1546,7 @@ export default function POSPage() {
               >
                 {paymentMethodOptions.map((option) => {
                   const isSelected = paymentMethod === option.id
-                  const isDisabled = remainingDuePreview <= 0.001 && creditAppliedPreview > 0
+                  const isDisabled = Boolean(option.disabled)
 
                   return (
                     <button
@@ -1558,6 +1579,11 @@ export default function POSPage() {
                     </button>
                   )
                 })}
+                {paymentMethod === 'credit' && (
+                  <div style={{ width: '100%', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                    Remaining credit: <strong>{fmt(accountCreditRemaining)}</strong>
+                  </div>
+                )}
                 {paymentMethod && (paymentMethod === 'upi' || paymentMethod === 'bank_transfer') && remainingDuePreview > 0.001 && (
                   <input
                     className="form-input"
@@ -1718,7 +1744,7 @@ export default function POSPage() {
               opacity: completing || !can('pos.use') || editLoading ? 0.6 : 1,
               cursor: completing || !can('pos.use') || editLoading ? 'not-allowed' : 'pointer',
             }}
-            onClick={handleComplete}
+            onClick={() => handleComplete()}
             disabled={completing || !can('pos.use') || editLoading}
             title={!can('pos.use') ? 'POS billing requires pos.use permission' : undefined}
           >
@@ -1807,6 +1833,19 @@ export default function POSPage() {
           setAllocEditor(null)
           toast.success('Batch split saved')
         }}
+      />
+
+      <ConfirmDialog
+        open={showCreditWarning}
+        onClose={() => setShowCreditWarning(false)}
+        onConfirm={async () => {
+          setShowCreditWarning(false)
+          await handleComplete(true)
+        }}
+        title="Credit limit exceeded"
+        message="The customer's available credit is exhausted for this purchase. Do you want to continue and increase the outstanding credit?"
+        confirmLabel="Yes, continue"
+        danger
       />
 
       {/* Sale Complete Modal */}

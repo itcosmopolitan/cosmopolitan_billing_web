@@ -117,6 +117,8 @@ export const emptyInvoiceForm = (branchId) => ({
   customerType: 'retail',
   customerClassification: 'external',
   customerCreditBalance: 0,
+  customerCreditLimit: 0,
+  customerOutstanding: 0,
   branchId,
   number: '',
   items: [emptySaleLine()],

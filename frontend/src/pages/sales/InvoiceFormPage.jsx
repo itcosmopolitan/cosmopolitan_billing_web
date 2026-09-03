@@ -6,6 +6,7 @@ import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
+import { ConfirmDialog } from '@/components/ui'
 import InvoiceFormModal from './InvoiceFormModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import {
@@ -60,6 +61,7 @@ export default function InvoiceFormPage() {
   const [conversionLabel, setConversionLabel] = useState(null)
   const [loading, setLoading] = useState(!!fromQuoteId || !!fromOrderId)
   const [saving, setSaving] = useState(false)
+  const [showCreditWarning, setShowCreditWarning] = useState(false)
 
   const goBack = () => navigate(fromOrderId ? '/sales?tab=orders' : fromQuoteId ? '/sales?tab=quotes' : '/sales?tab=invoices')
 
@@ -100,7 +102,7 @@ export default function InvoiceFormPage() {
     return () => { cancelled = true }
   }, [fromQuoteId, fromOrderId, activeBranchId, navigate])
 
-  const save = async () => {
+  const save = async (allowCreditOverLimit = false) => {
     if (saving) return
     if (!form.customerId) {
       toast.error('Pick a customer (or add one via the Customers page)')
@@ -122,19 +124,46 @@ export default function InvoiceFormPage() {
     }).total
 
     let creditAvail = Number(form.customerCreditBalance || 0)
+    let creditLimit = Number(form.customerCreditLimit || 0)
+    let outstanding = Number(form.customerOutstanding || 0)
     try {
       const cust = await customersAPI.get(form.customerId)
       creditAvail = Number(cust?.credit_balance || 0)
-      if (creditAvail !== Number(form.customerCreditBalance || 0)) {
-        setForm((f) => ({ ...f, customerCreditBalance: creditAvail }))
-      }
+      creditLimit = Number(cust?.credit_limit || 0)
+      outstanding = Number(cust?.outstanding || 0)
+      setForm((f) => ({
+        ...f,
+        customerCreditBalance: creditAvail,
+        customerCreditLimit: Number(cust?.credit_limit || 0),
+        customerOutstanding: Number(cust?.outstanding || 0),
+      }))
     } catch {
       /* keep form balance */
     }
     // Always auto-apply account credit when settling (or when it covers the bill).
     const settling = form.paymentReceived || creditAvail > 0
-    const creditUse = storeCreditApplyAmount(creditAvail, due, settling && !!form.customerId)
+    const creditUse = storeCreditApplyAmount(
+      creditAvail,
+      due,
+      form.paymentMethod !== 'credit' && settling && !!form.customerId,
+    )
     const remaining = remainingAfterStoreCredit(due, creditUse)
+    if (!form.paymentMethod) {
+      toast.error('Pick a payment method to create the invoice')
+      return
+    }
+    const accountCreditRemaining = Math.max(
+      0,
+      creditLimit - outstanding,
+    )
+    if (
+      form.paymentMethod === 'credit'
+      && !allowCreditOverLimit
+      && due > accountCreditRemaining + 0.001
+    ) {
+      setShowCreditWarning(true)
+      return
+    }
 
     if (settling && remaining > 0.001 && !form.paymentMethod) {
       toast.error('Pick a payment method for the remaining amount (Cash / Card / UPI / Bank Transfer)')
@@ -194,6 +223,7 @@ export default function InvoiceFormPage() {
           ? (form.paymentRef || '').trim() || null
           : null,
         notes: form.notes,
+        allow_credit_over_limit: allowCreditOverLimit,
       }
       // Settle when payment selected OR account credit covers (any portion with tender/credit).
       if (creditUse > 0 && remaining <= 0.001) {
@@ -253,7 +283,7 @@ export default function InvoiceFormPage() {
       icon="🧾"
       hideHeader
       onBack={goBack}
-      onSave={save}
+      onSave={() => save()}
       saveLabel="Create Invoice"
       saving={saving}
       summaryCards={summaryCards}
@@ -264,6 +294,18 @@ export default function InvoiceFormPage() {
         invoiceForm={form}
         pif={pif}
         conversionLabel={conversionLabel}
+      />
+      <ConfirmDialog
+        open={showCreditWarning}
+        onClose={() => setShowCreditWarning(false)}
+        onConfirm={async () => {
+          setShowCreditWarning(false)
+          await save(true)
+        }}
+        title="Credit limit exceeded"
+        message="The customer's available credit is exhausted for this purchase. Do you want to continue and increase the outstanding credit?"
+        confirmLabel="Yes, continue"
+        danger
       />
     </DocumentFormShell>
   )

@@ -151,12 +151,10 @@ SalesPage.jsx#VALID_PAYMENT_MODES and POSPage.jsx).
 `None` is also allowed and means "no payment received yet — invoice is
 pending". The `status='pending'` flag already carries that semantic.
 
-2026-05-25: added `'credit'` as a first-class method. Different from
-"legacy credit" (which used to mean "no payment"): the new `'credit'`
-explicitly debits `customer.credit_balance` to settle the invoice.
-Validations: customer_id required (walk-ins can't draw on credit they
-don't have), customer.credit_balance >= invoice.total. Both create_invoice
-and record_payment enforce; both atomically debit + AuditLog.
+2026-05-25: added `'credit'` as a first-class method. Credit is an unpaid
+account sale: it is available only to wholesale/staff customers and consumes
+their remaining account limit. The invoice remains pending until a payment is
+recorded later.
 """
 PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
 TENDER_PAYMENT_MODES = frozenset({"cash", "card", "upi", "bank_transfer"})
@@ -451,6 +449,8 @@ class SaleCreate(BaseModel):
     quotation_id: Optional[str] = None
     sales_order_id: Optional[str] = None
     source_order_lines: Optional[List["SourceOrderLineIn"]] = None
+    # POS confirmation allows an authorized operator to exceed the account limit.
+    allow_credit_over_limit: bool = False
 
     @field_validator("payment_mode", mode="before")
     @classmethod
@@ -1308,7 +1308,10 @@ async def create_invoice(
     # then GST is extracted from the remaining inclusive amount.
     await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
-    is_paid_at_create = data.payment_mode is not None or float(data.store_credit_amount or 0) > 0
+    is_credit_sale = data.payment_mode == "credit"
+    is_paid_at_create = (
+        data.payment_mode is not None and not is_credit_sale
+    ) or float(data.store_credit_amount or 0) > 0
     if direct:
         paid   = total if is_paid_at_create else 0.0
         status = "paid" if paid >= total else "pending"
@@ -1321,6 +1324,9 @@ async def create_invoice(
     due_date = None
     if status in ("pending", "partial"):
         due_date = compute_due_date(data.date or today, None)
+
+    if is_credit_sale and not data.allow_credit_over_limit:
+        await _validate_unpaid_account_limit(db, data.customer_id, total)
 
     # Resolve store-credit + tender split early so we can set paid/status.
     # Direct invoices always auto-apply available account credit (POS parity),
@@ -1337,7 +1343,9 @@ async def create_invoice(
             customer_id=data.customer_id,
             requested=data.store_credit_amount,
             due=total,
-            legacy_full_credit=(data.payment_mode == "credit"),
+            # Credit is an unpaid account sale; it must not consume the
+            # customer's return/overpayment balance.
+            legacy_full_credit=False,
             auto_apply=(
                 data.payment_mode != "credit"
                 and float(data.store_credit_amount or 0) <= 0
@@ -1372,7 +1380,7 @@ async def create_invoice(
             status = "paid"
 
         remaining_due = round(max(0.0, total - paid), 2)
-        if remaining_due > 0.001:
+        if remaining_due > 0.001 and not (is_credit_sale and data.allow_credit_over_limit):
             await _validate_unpaid_account_limit(db, data.customer_id, remaining_due)
 
     await _resolve_branch_scope(user, db, data.branch_id)

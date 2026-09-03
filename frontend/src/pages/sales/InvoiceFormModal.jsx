@@ -53,6 +53,8 @@ export default function InvoiceFormModal({
       pif('customerType', type)
       pif('customerClassification', customerClassification(c))
       pif('customerCreditBalance', Number(c.credit_balance || 0))
+      pif('customerCreditLimit', Number(c.credit_limit || 0))
+      pif('customerOutstanding', Number(c.outstanding || 0))
       pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
     },
   })
@@ -134,10 +136,19 @@ export default function InvoiceFormModal({
   const creditAppliedPreview = storeCreditApplyAmount(
     creditAvail,
     rollup.total,
-    Boolean(invoiceForm.customerId) && creditAvail > 0,
+    invoiceForm.paymentMethod !== 'credit' && Boolean(invoiceForm.customerId) && creditAvail > 0,
   )
   const remainingDuePreview = remainingAfterStoreCredit(rollup.total, creditAppliedPreview)
-  const creditCoversBill = creditAppliedPreview > 0 && remainingDuePreview <= 0.001
+  const customerType = String(invoiceForm.customerType || 'retail').toLowerCase()
+  const canUseCredit = Boolean(invoiceForm.customerId) && ['wholesale', 'staff'].includes(customerType)
+  const accountCreditRemaining = Math.max(
+    0,
+    Number(invoiceForm.customerCreditLimit || 0) - Number(invoiceForm.customerOutstanding || 0),
+  )
+  const paymentMethodOptions = [
+    ...PAYMENT_METHOD_OPTIONS,
+    ...(canUseCredit ? [{ id: 'credit', label: '💳 Credit' }] : []),
+  ]
   const discShares = rollup.discountMode === 'entity'
     ? entityDiscountShares(invoiceForm.items, rollup.entityDiscount)
     : invoiceForm.items.map(() => 0)
@@ -171,6 +182,8 @@ export default function InvoiceFormModal({
                   pif('customerType', 'retail')
                   pif('customerClassification', 'external')
                   pif('customerCreditBalance', 0)
+                  pif('customerCreditLimit', 0)
+                  pif('customerOutstanding', 0)
                   pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail'))
                   return
                 }
@@ -184,11 +197,15 @@ export default function InvoiceFormModal({
                 try {
                   const c = await customersAPI.get(opt.id)
                   pif('customerCreditBalance', Number(c?.credit_balance || 0))
+                  pif('customerCreditLimit', Number(c?.credit_limit || 0))
+                  pif('customerOutstanding', Number(c?.outstanding || 0))
                   pif('customerType', customerPricingType(c.customer_type || c.type || type))
                   pif('customerClassification', customerClassification(c))
                   pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
                 } catch {
                   pif('customerCreditBalance', Number(opt.raw?.credit_balance || 0))
+                  pif('customerCreditLimit', Number(opt.raw?.credit_limit || 0))
+                  pif('customerOutstanding', Number(opt.raw?.outstanding || 0))
                 }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
@@ -226,9 +243,9 @@ export default function InvoiceFormModal({
               </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: 520 }}>
-              {PAYMENT_METHOD_OPTIONS.map((option) => {
+              {paymentMethodOptions.map((option) => {
                 const selected = invoiceForm.paymentMethod === option.id
-                const disabled = Boolean(option.disabled) || creditCoversBill
+                const disabled = Boolean(option.disabled)
 
                 return (
                   <button
@@ -262,6 +279,11 @@ export default function InvoiceFormModal({
                   </button>
                 )
               })}
+              {invoiceForm.paymentMethod === 'credit' && (
+                <div style={{ width: '100%', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                  Remaining credit: <strong>{fmt(accountCreditRemaining)}</strong>
+                </div>
+              )}
               {invoiceForm.paymentMethod === 'cash' && !editMode && remainingDuePreview > 0.001 && (
                 <div style={{ width: '100%', maxWidth: 300 }}>
                   <CashTenderFields
