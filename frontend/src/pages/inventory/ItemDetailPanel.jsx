@@ -5,7 +5,7 @@ import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, fmtQty, stockStatus, formatLabel } from '@/utils/helpers'
 import { exclusiveFromInclusive } from '@/utils/taxCalc'
-import { Chip, Tag, EmptyState } from '@/components/ui'
+import { Chip, EmptyState } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import { unwrapPaged } from '@/utils/pagination'
 
@@ -236,50 +236,66 @@ export default function ItemDetailPanel({
 
       {tab === 'branches' && (
         <DetailSection title="Per-branch listing & pricing">
-          {branches.length === 0 ? (
-            <EmptyState icon="🏪" title="No branch data" />
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Branch</th>
-                    <th>Listed</th>
-                    <th className="text-right">Stock</th>
-                    <th className="text-right">Cost</th>
-                    <th className="text-right">Selling</th>
-                    <th className="text-right">Reorder</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {branches.map((b) => (
-                    <tr key={b.branch_id}>
-                      <td>
-                        <div style={{ fontWeight: 500 }}>{b.branch_name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{b.branch_code}</div>
-                      </td>
-                      <td>{b.is_available ? <Tag color="var(--green)">Yes</Tag> : <span style={{ color: 'var(--text-muted)' }}>No</span>}</td>
-                      <td className="text-right mono">{fmtQty(b.available_stock ?? 0)}</td>
-                      <td className="text-right mono">
-                        {fmt(b.effective_cost_price)}
-                        {b.cost_price != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
-                      </td>
-                      <td className="text-right mono">
-                        {fmt(b.effective_selling_price)}
-                        {b.selling_price != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
-                      </td>
-                      <td className="text-right mono">{b.effective_reorder_level != null ? fmtQty(b.effective_reorder_level) : '—'}</td>
+          {(() => {
+            const listed = branches.filter((b) => b.is_available)
+            if (listed.length === 0) {
+              return <EmptyState icon="🏪" title="No branches listed" desc="This item is not listed on any branch yet." />
+            }
+            return (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Branch</th>
+                      <th className="text-right">Stock</th>
+                      <th className="text-right">Cost</th>
+                      <th className="text-right">Selling</th>
+                      <th className="text-right">Wholesale</th>
+                      <th className="text-right">Staff</th>
+                      <th className="text-right">Reorder</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {branchMeta && (
-                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
-                  Catalog defaults — cost {fmt(branchMeta.default_cost_price)}, sell {fmt(branchMeta.default_selling_price)}, reorder {fmtQty(branchMeta.default_reorder_level)}
-                </div>
-              )}
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {listed.map((b) => (
+                      <tr key={b.branch_id}>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{b.branch_name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{b.branch_code}</div>
+                        </td>
+                        <td className="text-right mono">{fmtQty(b.available_stock ?? 0)}</td>
+                        <td className="text-right mono">
+                          {fmt(b.effective_cost_price)}
+                          {b.cost_price != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
+                        </td>
+                        <td className="text-right mono">
+                          {fmt(b.effective_selling_price)}
+                          {b.selling_price != null && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
+                        </td>
+                        <td className="text-right mono">
+                          {b.effective_wholesale_pricing_mode === 'price'
+                            ? fmt(b.effective_wholesale_price)
+                            : `${Number(b.effective_wholesale_discount_pct || 0)}% off`}
+                          {b.wholesale_pricing_mode && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
+                        </td>
+                        <td className="text-right mono">
+                          {b.effective_staff_pricing_mode === 'price'
+                            ? fmt(b.effective_staff_price)
+                            : `${Number(b.effective_staff_discount_pct || 0)}% off`}
+                          {b.staff_pricing_mode && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
+                        </td>
+                        <td className="text-right mono">{b.effective_reorder_level != null ? fmtQty(b.effective_reorder_level) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {branchMeta && (
+                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
+                    Catalog defaults — cost {fmt(branchMeta.default_cost_price)}, sell {fmt(branchMeta.default_selling_price)}, reorder {fmtQty(branchMeta.default_reorder_level)}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </DetailSection>
       )}
 

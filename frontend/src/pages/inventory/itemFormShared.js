@@ -1,5 +1,13 @@
 import { catalogInclusiveAmount } from '@/utils/taxCalc'
 
+/** Normalize GST rate for form/dropdown ids (``8`` not ``8.0``). */
+export function normalizeTaxRateValue(rate, fallback = '8') {
+  if (rate === null || rate === undefined || rate === '') return fallback
+  const n = Number(rate)
+  if (!Number.isFinite(n)) return String(rate)
+  return Number.isInteger(n) ? String(n) : String(n)
+}
+
 export const EMPTY_ITEM = {
   name: '', sku: '', barcode: '', country_of_origin: '', categoryId: '', categoryName: '', brand: '',
   unit: '', cost_price: '', selling_price: '',
@@ -18,6 +26,14 @@ let rowSeq = 0
 export const retailBranches = (branches) =>
   (branches || []).filter((b) => b.code !== 'WH')
 
+/** GP% from inclusive cost/sell; null when not computable. */
+export function profitPercentage(cost, price) {
+  const c = Number(cost)
+  const p = Number(price)
+  if (!Number.isFinite(c) || !Number.isFinite(p) || c === 0) return null
+  return ((p - c) / c) * 100
+}
+
 /** One editable branch row on create / edit pages. */
 export const createBranchRow = (branch = null, overrides = {}) => {
   rowSeq += 1
@@ -31,22 +47,45 @@ export const createBranchRow = (branch = null, overrides = {}) => {
     opening_stock: '',
     reorder_level: '',
     available_stock: 0,
+    // Empty mode → inherit catalog wholesale/staff.
+    wholesale_pricing_mode: '',
+    wholesale_discount_pct: '',
+    wholesale_price: '',
+    staff_pricing_mode: '',
+    staff_discount_pct: '',
+    staff_price: '',
+    categoryPricingMode: 'pct',
     ...overrides,
   }
 }
 
 /** Map GET /items/{id}/branches row → form row (edit, listed only). */
-export const branchRowFromApi = (br) => createBranchRow(
-  { id: br.branch_id, name: br.branch_name },
-  {
-    is_available: true,
-    cost_price: br.cost_price ?? '',
-    selling_price: br.selling_price ?? '',
-    opening_stock: '',
-    reorder_level: br.reorder_level ?? '',
-    available_stock: br.available_stock ?? 0,
-  },
-)
+export const branchRowFromApi = (br) => {
+  const wholesaleMode = br.wholesale_pricing_mode || ''
+  const staffMode = br.staff_pricing_mode || ''
+  const categoryMode =
+    wholesaleMode === 'price' || staffMode === 'price'
+      ? 'price'
+      : 'pct'
+  return createBranchRow(
+    { id: br.branch_id, name: br.branch_name },
+    {
+      is_available: true,
+      cost_price: br.cost_price ?? '',
+      selling_price: br.selling_price ?? '',
+      opening_stock: '',
+      reorder_level: br.reorder_level ?? '',
+      available_stock: br.available_stock ?? 0,
+      wholesale_pricing_mode: wholesaleMode,
+      wholesale_discount_pct: br.wholesale_discount_pct ?? '',
+      wholesale_price: br.wholesale_price ?? '',
+      staff_pricing_mode: staffMode,
+      staff_discount_pct: br.staff_discount_pct ?? '',
+      staff_price: br.staff_price ?? '',
+      categoryPricingMode: categoryMode,
+    },
+  )
+}
 
 export function formFromItem(item) {
   return {
@@ -68,7 +107,7 @@ export function formFromItem(item) {
     wholesale_price: item.wholesale_price ?? '',
     staff_discount_pct: item.staff_discount_pct ?? '',
     staff_price: item.staff_price ?? '',
-    tax_rate: item.tax_rate ?? '8',
+    tax_rate: normalizeTaxRateValue(item.tax_rate),
     priceTaxMode: 'inclusive',
     hsn_code: item.hsn_code || '',
     reorder_level: item.default_reorder_level ?? item.reorder_level ?? '10',
@@ -122,7 +161,62 @@ export function validateItemForm(form, branchConfigs) {
     return { ok: false, error: 'Each branch can only be added once' }
   }
 
+  for (const bc of listed) {
+    if (bc.wholesale_pricing_mode) {
+      const mode = bc.wholesale_pricing_mode === 'price' ? 'price' : 'pct'
+      if (mode === 'pct') {
+        const d = Number(bc.wholesale_discount_pct || 0)
+        if (d < 0 || d > 100) return { ok: false, error: 'Branch wholesale discount must be between 0 and 100%' }
+      } else if (Number(bc.wholesale_price || 0) < 0) {
+        return { ok: false, error: 'Branch wholesale price cannot be negative' }
+      }
+    }
+    if (bc.staff_pricing_mode) {
+      const mode = bc.staff_pricing_mode === 'price' ? 'price' : 'pct'
+      if (mode === 'pct') {
+        const d = Number(bc.staff_discount_pct || 0)
+        if (d < 0 || d > 100) return { ok: false, error: 'Branch staff discount must be between 0 and 100%' }
+      } else if (Number(bc.staff_price || 0) < 0) {
+        return { ok: false, error: 'Branch staff price cannot be negative' }
+      }
+    }
+  }
+
   return { ok: true }
+}
+
+function branchCategoryPayload(bc, { taxRate, priceTaxMode } = {}) {
+  const wholesaleMode = bc.wholesale_pricing_mode
+  const staffMode = bc.staff_pricing_mode
+  const out = {
+    wholesale_pricing_mode: null,
+    wholesale_discount_pct: null,
+    wholesale_price: null,
+    staff_pricing_mode: null,
+    staff_discount_pct: null,
+    staff_price: null,
+  }
+  if (wholesaleMode === 'pct' || wholesaleMode === 'price') {
+    out.wholesale_pricing_mode = wholesaleMode
+    if (wholesaleMode === 'price') {
+      out.wholesale_price = catalogInclusiveAmount(bc.wholesale_price || 0, priceTaxMode, taxRate)
+      out.wholesale_discount_pct = 0
+    } else {
+      out.wholesale_discount_pct = Number(bc.wholesale_discount_pct || 0)
+      out.wholesale_price = 0
+    }
+  }
+  if (staffMode === 'pct' || staffMode === 'price') {
+    out.staff_pricing_mode = staffMode
+    if (staffMode === 'price') {
+      out.staff_price = catalogInclusiveAmount(bc.staff_price || 0, priceTaxMode, taxRate)
+      out.staff_discount_pct = 0
+    } else {
+      out.staff_discount_pct = Number(bc.staff_discount_pct || 0)
+      out.staff_price = 0
+    }
+  }
+  return out
 }
 
 function branchConfigFields(bc, { includeOpeningStock = false, taxRate, priceTaxMode } = {}) {
@@ -132,6 +226,7 @@ function branchConfigFields(bc, { includeOpeningStock = false, taxRate, priceTax
     cost_price: catalogInclusiveAmount(bc.cost_price, priceTaxMode, taxRate),
     selling_price: catalogInclusiveAmount(bc.selling_price, priceTaxMode, taxRate),
     reorder_level: bc.reorder_level === '' || bc.reorder_level == null ? null : Number(bc.reorder_level),
+    ...branchCategoryPayload(bc, { taxRate, priceTaxMode }),
   }
   if (includeOpeningStock) {
     out.opening_stock = bc.opening_stock === '' || bc.opening_stock == null
@@ -217,9 +312,26 @@ export function buildBranchUpdatePayload(branchConfigs, previouslyListedIds = []
         cost_price: null,
         selling_price: null,
         reorder_level: null,
+        wholesale_pricing_mode: null,
+        wholesale_discount_pct: null,
+        wholesale_price: null,
+        staff_pricing_mode: null,
+        staff_discount_pct: null,
+        staff_price: null,
       })
     }
   }
 
   return { branches }
+}
+
+/** Format wholesale/staff for summary chips. */
+export function formatCategoryPriceLabel(mode, pct, price, fmtFn) {
+  if (mode === 'price') {
+    const n = Number(price)
+    return Number.isFinite(n) && n > 0 ? fmtFn(n) : '—'
+  }
+  const d = Number(pct)
+  if (!Number.isFinite(d) || d === 0) return '0% off'
+  return `${d}% off`
 }

@@ -51,6 +51,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("category", "Category"),
         _col("cost", "Cost"),
         _col("price", "Price"),
+        _col("wholesale", "Wholesale", default_hidden=True),
+        _col("staff", "Staff", default_hidden=True),
         _col("gst", "GST"),
         _col("stock", "Stock"),
         _col("status", "Status", locked=True),
@@ -61,6 +63,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("category", "Category"),
         _col("cost", "Default Cost"),
         _col("price", "Default Price"),
+        _col("wholesale", "Wholesale", default_hidden=True),
+        _col("staff", "Staff", default_hidden=True),
         _col("branches", "Branches"),
         _col("gst", "GST"),
     ],
@@ -99,6 +103,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("valid_until", "Valid Till"),
         _col("amount", "Amount"),
         _col("status", "Status", locked=True),
+        _col("linked", "Linked"),
     ],
     "sales.orders": [
         _col("number", "Order #", locked=True),
@@ -107,6 +112,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("expected", "Expected"),
         _col("amount", "Amount"),
         _col("status", "Status", locked=True),
+        _col("linked", "Linked"),
     ],
     "sales.returns": [
         _col("number", "Credit Note #", locked=True),
@@ -148,6 +154,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("expected", "Expected"),
         _col("total", "Total"),
         _col("status", "Status", locked=True),
+        _col("linked", "Linked"),
     ],
     "purchases.grns": [
         _col("number", "GRN #", locked=True),
@@ -156,7 +163,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("date", "Date"),
         _col("total", "Total"),
         _col("status", "Status", locked=True),
-        _col("bill", "Bill"),
+        _col("bill", "Bill #"),
     ],
     "purchases.returns": [
         _col("number", "Return #", locked=True),

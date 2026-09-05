@@ -86,12 +86,14 @@ export function poFromRow(po, branchId) {
   }
 }
 
-export function billFromRow(doc, branchId) {
+export function billFromRow(doc, branchId, { keepNumber = false } = {}) {
   return {
     ...emptyBillForm(doc.branchId || branchId),
     vendorId: doc.vendorId || '',
     vendorName: doc.vendorName || '',
-    number: doc.number || '',
+    // Conversion must leave number blank so DocumentNumberField / server
+    // auto-allocate the next bill #. Keep only when editing an existing bill.
+    number: keepNumber ? (doc.number || '') : '',
     billDate: doc.date || new Date().toISOString().split('T')[0],
     dueDate: doc.dueDate || '',
     items: mapPurchaseLines(doc.items),

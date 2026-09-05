@@ -650,7 +650,16 @@ async def list_bills(
     total = int(count_r.scalar() or 0)
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     bills = result.unique().scalars().all()
-    out = [_bill_dict(b, b.line_items) for b in bills]
+    out = []
+    for b in bills:
+        linked = await _resolve_bill_linked_docs(db, b)
+        out.append(_bill_dict(
+            b,
+            b.line_items,
+            purchase_order_id=linked["purchase_order_id"],
+            purchase_order_number=linked["purchase_order_number"],
+            grn_number=linked["grn_number"],
+        ))
     return paged(out, total, sk, lim)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
@@ -662,7 +671,14 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User 
         raise HTTPException(404, "Bill not found")
     await enforce_branch_access(b.branch_id, user=user, db=db)
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
-    return _bill_dict(b, li_res.scalars().all())
+    linked = await _resolve_bill_linked_docs(db, b)
+    return _bill_dict(
+        b,
+        li_res.scalars().all(),
+        purchase_order_id=linked["purchase_order_id"],
+        purchase_order_number=linked["purchase_order_number"],
+        grn_number=linked["grn_number"],
+    )
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
@@ -1560,7 +1576,14 @@ async def update_bill(
             metadata={"bill_id": bill.id, "discount": round(float(data.discount or 0), 2), "above_threshold": float(data.discount or 0) > 1000},
         )
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
-    return _bill_dict(bill, li_res.scalars().all())
+    linked = await _resolve_bill_linked_docs(db, bill)
+    return _bill_dict(
+        bill,
+        li_res.scalars().all(),
+        purchase_order_id=linked["purchase_order_id"],
+        purchase_order_number=linked["purchase_order_number"],
+        grn_number=linked["grn_number"],
+    )
 
 
 @router.post("/{bill_id}/delete-payments", dependencies=[Depends(require_perm("purchases.edit", "purchases.delete", "purchases.create"))])
@@ -2941,7 +2964,53 @@ def _return_dict(r, items=None):
     return d
 
 # ─── SERIALIZERS ──────────────────────────────────────────────────────────────
-def _bill_dict(b, items=None):
+
+async def _resolve_bill_linked_docs(db: AsyncSession, bill) -> dict:
+    """Resolve linked PO / GRN numbers for a purchase bill."""
+    grn_id = getattr(bill, "grn_id", None) or None
+    grn_number = None
+    po_id = None
+    po_number = None
+
+    if grn_id:
+        row = (
+            await db.execute(
+                select(
+                    GoodsReceiptNote.id,
+                    GoodsReceiptNote.number,
+                    GoodsReceiptNote.purchase_order_id,
+                    GoodsReceiptNote.po_number,
+                ).where(GoodsReceiptNote.id == grn_id)
+            )
+        ).one_or_none()
+        if row:
+            grn_id, grn_number, po_id, po_number = row[0], row[1], row[2], row[3]
+
+    if not po_id:
+        row = (
+            await db.execute(
+                select(PurchaseOrder.id, PurchaseOrder.number).where(
+                    PurchaseOrder.converted_bill_id == bill.id
+                )
+            )
+        ).one_or_none()
+        if row:
+            po_id, po_number = row[0], row[1]
+
+    if po_id and not po_number:
+        po_number = (
+            await db.execute(select(PurchaseOrder.number).where(PurchaseOrder.id == po_id))
+        ).scalar_one_or_none()
+
+    return {
+        "purchase_order_id": po_id,
+        "purchase_order_number": po_number,
+        "grn_id": grn_id,
+        "grn_number": grn_number,
+    }
+
+
+def _bill_dict(b, items=None, *, purchase_order_id=None, purchase_order_number=None, grn_number=None):
     d = {
         "id": b.id, "number": b.number,
         "vendorId": b.vendor_id, "vendorName": b.vendor_name,
@@ -2956,6 +3025,9 @@ def _bill_dict(b, items=None):
         "creditedAmount": float(getattr(b, "credited_amount", 0) or 0),
         "returnStatus": getattr(b, "return_status", None) or "none",
         "grnId": getattr(b, "grn_id", None),
+        "grnNumber": grn_number,
+        "purchaseOrderId": purchase_order_id,
+        "purchaseOrderNumber": purchase_order_number,
         "notes": b.notes,
     }
     if items is not None:
@@ -3040,7 +3112,17 @@ class ConvertPOToBillIn(BaseModel):
         return _coerce_payment_mode_value(v)
 
 
-def _po_dict(po, items=None):
+
+async def _purchase_doc_number_map(db: AsyncSession, model, ids) -> dict:
+    """Map document ids → human-readable numbers (batch)."""
+    clean = {i for i in (ids or set()) if i}
+    if not clean:
+        return {}
+    rows = (await db.execute(select(model.id, model.number).where(model.id.in_(clean)))).all()
+    return {rid: num for rid, num in rows if rid}
+
+
+def _po_dict(po, items=None, *, converted_bill_number=None):
     d = {
         "id": po.id, "number": po.number,
         "vendorId": po.vendor_id, "vendorName": po.vendor_name,
@@ -3052,6 +3134,7 @@ def _po_dict(po, items=None):
         "discount": po.discount, "total": po.total,
         "status": str(po.status.value) if hasattr(po.status, "value") else str(po.status),
         "convertedBillId": po.converted_bill_id,
+        "convertedBillNumber": converted_bill_number,
         "notes": po.notes,
     }
     if items is not None:
@@ -3336,7 +3419,7 @@ async def _create_bill_for_grn(
     return bill
 
 
-def _grn_dict(g, items=None):
+def _grn_dict(g, items=None, *, converted_bill_number=None):
     d = {
         "id": g.id,
         "number": g.number,
@@ -3353,6 +3436,7 @@ def _grn_dict(g, items=None):
         "total": g.total,
         "status": str(g.status.value) if hasattr(g.status, "value") else str(g.status),
         "convertedBillId": g.converted_bill_id,
+        "convertedBillNumber": converted_bill_number,
         "notes": g.notes,
     }
     if items is not None:
@@ -3438,7 +3522,17 @@ async def list_orders(
         .limit(lim)
     )
     rows = (await db.execute(q)).scalars().all()
-    out = [_po_dict(po, po.line_items) for po in rows]
+    bill_nums = await _purchase_doc_number_map(
+        db, PurchaseBill, {po.converted_bill_id for po in rows if po.converted_bill_id},
+    )
+    out = [
+        _po_dict(
+            po,
+            po.line_items,
+            converted_bill_number=bill_nums.get(po.converted_bill_id),
+        )
+        for po in rows
+    ]
     return paged(out, total, sk, lim)
 
 
@@ -3454,7 +3548,14 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
     if not po:
         raise HTTPException(404, "Purchase order not found")
     await enforce_branch_access(po.branch_id, user=user, db=db)
-    return _po_dict(po, po.line_items)
+    bill_nums = await _purchase_doc_number_map(
+        db, PurchaseBill, {po.converted_bill_id} if po.converted_bill_id else set(),
+    )
+    return _po_dict(
+        po,
+        po.line_items,
+        converted_bill_number=bill_nums.get(po.converted_bill_id),
+    )
 
 
 # ─── PO: CREATE ───────────────────────────────────────────────────────────────
@@ -4061,7 +4162,13 @@ async def list_grns(
     rows = (await db.execute(
         select(GoodsReceiptNote).where(where).order_by(sort_expr).offset(sk).limit(lim)
     )).scalars().all()
-    return paged([_grn_dict(g) for g in rows], total, sk, lim)
+    bill_nums = await _purchase_doc_number_map(
+        db, PurchaseBill, {g.converted_bill_id for g in rows if g.converted_bill_id},
+    )
+    return paged([
+        _grn_dict(g, converted_bill_number=bill_nums.get(g.converted_bill_id))
+        for g in rows
+    ], total, sk, lim)
 
 
 @router.get("/grns/{grn_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
@@ -4074,7 +4181,14 @@ async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = 
     li = (await db.execute(
         select(GRNLineItem).where(GRNLineItem.grn_id == grn_id)
     )).scalars().all()
-    return _grn_dict(grn, li)
+    bill_nums = await _purchase_doc_number_map(
+        db, PurchaseBill, {grn.converted_bill_id} if grn.converted_bill_id else set(),
+    )
+    return _grn_dict(
+        grn,
+        li,
+        converted_bill_number=bill_nums.get(grn.converted_bill_id),
+    )
 
 
 @router.post("/grns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
@@ -4665,7 +4779,14 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User 
         raise HTTPException(404, "Bill not found")
     await enforce_branch_access(b.branch_id, user=user, db=db)
     li_res = await db.execute(select(PurchaseLineItem).where(PurchaseLineItem.bill_id == bill_id))
-    return _bill_dict(b, li_res.scalars().all())
+    linked = await _resolve_bill_linked_docs(db, b)
+    return _bill_dict(
+        b,
+        li_res.scalars().all(),
+        purchase_order_id=linked["purchase_order_id"],
+        purchase_order_number=linked["purchase_order_number"],
+        grn_number=linked["grn_number"],
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -4886,19 +5007,39 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
                     stock_removed += int(li.qty)
                 except ValueError:
                     pass  # missing stock row — no-op
-        # Orphan the parent PO (if this bill was spawned from one). We clear
-        # the dangling bill pointer so the "View bill" link doesn't 404 and
-        # the PO delete guard (which checks for a LIVE bill) lets the PO be
-        # removed. We deliberately do NOT revert status to `confirmed`:
-        # 2026-05-31 rule — a PO that was ever converted must stay locked
-        # from editing / re-converting even after its bill is deleted. The
-        # status stays `converted`, so _po_terminal() keeps blocking edits
-        # and the UI keeps showing View (not Edit / Convert).
+        # Reopen parent PO for convert-again when its spawned bill is deleted.
+        # PO lines are not consumed on convert (unlike sales orders), so only
+        # status + pointer need resetting.
         parent_po = (await db.execute(
             select(PurchaseOrder).where(PurchaseOrder.converted_bill_id == bill.id)
         )).scalar_one_or_none()
         if parent_po is not None:
+            prev = (
+                parent_po.status.value
+                if hasattr(parent_po.status, "value")
+                else str(parent_po.status)
+            )
             parent_po.converted_bill_id = None
+            if parent_po.status == PurchaseOrderStatus.converted:
+                parent_po.status = PurchaseOrderStatus.confirmed
+                _log_purchase_order_history(
+                    db,
+                    user=user,
+                    order_id=parent_po.id,
+                    order_number=parent_po.number,
+                    event_type="status_changed",
+                    action="reopen_purchase_order",
+                    detail=(
+                        f"Purchase order {parent_po.number} reopened "
+                        f"({prev} → confirmed) after bill {bill.number} was deleted"
+                    ),
+                    metadata={
+                        "from": prev,
+                        "to": "confirmed",
+                        "deleted_bill_id": bill.id,
+                        "deleted_bill_number": bill.number,
+                    },
+                )
         if getattr(bill, "grn_id", None):
             linked_grn = (await db.execute(
                 select(GoodsReceiptNote).where(GoodsReceiptNote.id == bill.grn_id)

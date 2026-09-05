@@ -3,6 +3,8 @@ import { AUTOCOMPLETE_CATEGORY_URL, AUTOCOMPLETE_UNIT_URL, AUTOCOMPLETE_TAX_RATE
 import BranchPricingSection from './BranchPricingSection'
 import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './TaxedPriceInput'
 import { qtyInputStep } from '@/utils/decimalPrecision'
+import { catalogInclusiveAmount } from '@/utils/taxCalc'
+import { profitPercentage } from './itemFormShared'
 
 function SegmentedControl({ value, options, onChange, ariaLabel }) {
   return (
@@ -46,6 +48,27 @@ export default function ItemFormFields({
   const dropdownStyle = { flex: 1, width: '100%', minWidth: 0 }
   const priceTaxMode = normalizeTaxMode(form.priceTaxMode)
   const categoryMode = form.categoryPricingMode === 'price' ? 'price' : 'pct'
+  const costIncl = catalogInclusiveAmount(form.cost_price, priceTaxMode, form.tax_rate)
+  const sellIncl = catalogInclusiveAmount(form.selling_price, priceTaxMode, form.tax_rate)
+  const retailGp = profitPercentage(costIncl, sellIncl)
+  const wholesaleFilled = categoryMode === 'price'
+    ? form.wholesale_price !== '' && form.wholesale_price != null
+    : form.wholesale_discount_pct !== '' && form.wholesale_discount_pct != null
+  const staffFilled = categoryMode === 'price'
+    ? form.staff_price !== '' && form.staff_price != null
+    : form.staff_discount_pct !== '' && form.staff_discount_pct != null
+  const wholesaleAmount = wholesaleFilled
+    ? (categoryMode === 'price'
+      ? catalogInclusiveAmount(form.wholesale_price || 0, priceTaxMode, form.tax_rate)
+      : sellIncl * (1 - Number(form.wholesale_discount_pct || 0) / 100))
+    : null
+  const staffAmount = staffFilled
+    ? (categoryMode === 'price'
+      ? catalogInclusiveAmount(form.staff_price || 0, priceTaxMode, form.tax_rate)
+      : sellIncl * (1 - Number(form.staff_discount_pct || 0) / 100))
+    : null
+  const wholesaleGp = wholesaleFilled ? profitPercentage(costIncl, wholesaleAmount) : null
+  const staffGp = staffFilled ? profitPercentage(costIncl, staffAmount) : null
 
   const setPriceTaxMode = (next) => {
     const normalized = normalizeTaxMode(next)
@@ -169,7 +192,7 @@ export default function ItemFormFields({
             <FormGroup label="GST rate">
               <AutocompleteDropdown
                 value={form.tax_rate != null && form.tax_rate !== '' ? String(form.tax_rate) : ''}
-                onSelectOption={(opt) => patchForm('tax_rate', opt?.id ?? '')}
+                onSelectOption={(opt) => patchForm('tax_rate', opt?.id != null && opt.id !== '' ? String(opt.id) : '8')}
                 fetchUrl={AUTOCOMPLETE_TAX_RATE_URL}
                 fetchParams={{ include_rate: form.tax_rate }}
                 isSearchFieldRequired={false}
@@ -211,12 +234,20 @@ export default function ItemFormFields({
         <section className="item-form-section">
           <div className="item-form-section__head">
             <h3>Pricing</h3>
-            <SegmentedControl
-              ariaLabel="Price entry mode"
-              value={priceTaxMode}
-              onChange={setPriceTaxMode}
-              options={GST_TAX_MODE_OPTIONS}
-            />
+            <div className="item-form-section__head-right">
+              <span className="branch-price-modal__gp-label">
+                GP%
+                <span className={`branch-price-table__gp${retailGp != null && retailGp < 0 ? ' is-neg' : ''}`}>
+                  {retailGp == null ? '—' : `${retailGp.toFixed(1)}%`}
+                </span>
+              </span>
+              <SegmentedControl
+                ariaLabel="Price entry mode"
+                value={priceTaxMode}
+                onChange={setPriceTaxMode}
+                options={GST_TAX_MODE_OPTIONS}
+              />
+            </div>
           </div>
           <div className="item-form-grid">
             <TaxedPriceInput
@@ -247,59 +278,107 @@ export default function ItemFormFields({
                 value={categoryMode}
                 onChange={(v) => patchForm('categoryPricingMode', v)}
                 options={[
-                  { value: 'pct', label: 'Discount %' },
                   { value: 'price', label: 'Fixed price' },
+                  { value: 'pct', label: 'Discount %' }
                 ]}
               />
             </div>
             <div className="item-form-grid">
               {categoryMode === 'price' ? (
                 <>
-                  <TaxedPriceInput
-                    label="Wholesale price"
-                    value={form.wholesale_price}
-                    mode={priceTaxMode}
-                    taxRate={form.tax_rate}
-                    onValueChange={(v) => patchForm('wholesale_price', v)}
-                    placeholder="0.00"
-                    dense
-                  />
-                  <TaxedPriceInput
-                    label="Staff price"
-                    value={form.staff_price}
-                    mode={priceTaxMode}
-                    taxRate={form.tax_rate}
-                    onValueChange={(v) => patchForm('staff_price', v)}
-                    placeholder="0.00"
-                    dense
-                  />
+                  <div>
+                    <TaxedPriceInput
+                      label="Wholesale price"
+                      value={form.wholesale_price}
+                      mode={priceTaxMode}
+                      taxRate={form.tax_rate}
+                      onValueChange={(v) => patchForm('wholesale_price', v)}
+                      placeholder="0.00"
+                      dense
+                    />
+                    <div className="branch-price-modal__field-gp">
+                      {wholesaleFilled ? (
+                        <>
+                          GP%
+                          <span className={`branch-price-table__gp${wholesaleGp != null && wholesaleGp < 0 ? ' is-neg' : ''}`}>
+                            {wholesaleGp == null ? '—' : `${wholesaleGp.toFixed(1)}%`}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div>
+                    <TaxedPriceInput
+                      label="Staff price"
+                      value={form.staff_price}
+                      mode={priceTaxMode}
+                      taxRate={form.tax_rate}
+                      onValueChange={(v) => patchForm('staff_price', v)}
+                      placeholder="0.00"
+                      dense
+                    />
+                    <div className="branch-price-modal__field-gp">
+                      {staffFilled ? (
+                        <>
+                          GP%
+                          <span className={`branch-price-table__gp${staffGp != null && staffGp < 0 ? ' is-neg' : ''}`}>
+                            {staffGp == null ? '—' : `${staffGp.toFixed(1)}%`}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
                 </>
               ) : (
                 <>
-                  <FormGroup label="Wholesale discount %">
-                    <input
-                      className="form-input"
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      value={form.wholesale_discount_pct}
-                      onChange={(e) => patchForm('wholesale_discount_pct', e.target.value)}
-                      placeholder="0"
-                    />
-                  </FormGroup>
-                  <FormGroup label="Staff discount %">
-                    <input
-                      className="form-input"
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      value={form.staff_discount_pct}
-                      onChange={(e) => patchForm('staff_discount_pct', e.target.value)}
-                      placeholder="0"
-                    />
-                  </FormGroup>
+                  <div>
+                    <FormGroup label="Wholesale discount %">
+                      <input
+                        className="form-input"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={form.wholesale_discount_pct}
+                        onChange={(e) => patchForm('wholesale_discount_pct', e.target.value)}
+                        placeholder="0"
+                      />
+                    </FormGroup>
+                    <div className="branch-price-modal__field-gp">
+                      {wholesaleFilled ? (
+                        <>
+                          GP%
+                          <span className={`branch-price-table__gp${wholesaleGp != null && wholesaleGp < 0 ? ' is-neg' : ''}`}>
+                            {wholesaleGp == null ? '—' : `${wholesaleGp.toFixed(1)}%`}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div>
+                    <FormGroup label="Staff discount %">
+                      <input
+                        className="form-input"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={form.staff_discount_pct}
+                        onChange={(e) => patchForm('staff_discount_pct', e.target.value)}
+                        placeholder="0"
+                      />
+                    </FormGroup>
+                    <div className="branch-price-modal__field-gp">
+                      {staffFilled ? (
+                        <>
+                          GP%
+                          <span className={`branch-price-table__gp${staffGp != null && staffGp < 0 ? ' is-neg' : ''}`}>
+                            {staffGp == null ? '—' : `${staffGp.toFixed(1)}%`}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
                 </>
               )}
             </div>
@@ -377,6 +456,11 @@ export default function ItemFormFields({
           defaultPrice={form.selling_price}
           priceTaxMode={priceTaxMode}
           defaultReorder={form.reorder_level}
+          defaultCategoryMode={categoryMode}
+          defaultWholesalePct={form.wholesale_discount_pct}
+          defaultWholesalePrice={form.wholesale_price}
+          defaultStaffPct={form.staff_discount_pct}
+          defaultStaffPrice={form.staff_price}
           taxRate={form.tax_rate}
           batchTracking={Boolean(form.batch_tracking)}
           onChange={onBranchConfigsChange}

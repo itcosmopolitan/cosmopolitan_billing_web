@@ -1,15 +1,19 @@
 import { useState } from 'react'
 import { itemsAPI } from '@/api'
-import { EmptyState, AutocompleteDropdown, Modal } from '@/components/ui'
-import { createBranchRow, retailBranches } from './itemFormShared'
-import TaxedPriceInput from './TaxedPriceInput'
-import { qtyInputStep } from '@/utils/decimalPrecision'
+import { EmptyState, Modal } from '@/components/ui'
+import {
+  createBranchRow,
+  formatCategoryPriceLabel,
+  profitPercentage,
+  retailBranches,
+} from './itemFormShared'
+import BranchPricingModal from './BranchPricingModal'
 import { catalogInclusiveAmount } from '@/utils/taxCalc'
-import { fmtQty } from '@/utils/helpers'
+import { fmt, fmtQty } from '@/utils/helpers'
 
 /**
- * Branch listing and price overrides on Item Master create/edit.
- * Stock and batches are added per branch from Items & Stock.
+ * Branch listing on Item Master create/edit.
+ * Add / edit opens a top-aligned modal with full branch pricing (incl. wholesale & staff + GP%).
  */
 export default function BranchPricingSection({
   mode = 'create',
@@ -20,6 +24,11 @@ export default function BranchPricingSection({
   defaultPrice,
   priceTaxMode = 'inclusive',
   defaultReorder,
+  defaultCategoryMode = 'pct',
+  defaultWholesalePct = '',
+  defaultWholesalePrice = '',
+  defaultStaffPct = '',
+  defaultStaffPrice = '',
   taxRate,
   batchTracking = false,
   onChange,
@@ -35,29 +44,38 @@ export default function BranchPricingSection({
   const [checkingBatches, setCheckingBatches] = useState(false)
   const [batchWarningData, setBatchWarningData] = useState(null)
   const [pendingRemoveRowId, setPendingRemoveRowId] = useState(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editingRow, setEditingRow] = useState(null)
 
   const usedBranchIds = new Set(
     branchConfigs.map((r) => r.branch_id).filter(Boolean),
   )
 
-  const patchRow = (rowId, field, value) => {
-    const patch = typeof field === 'object' && field !== null && value === undefined
-      ? field
-      : { [field]: value }
-    onChange(branchConfigs.map((r) => {
-      if (r._rowId !== rowId) return r
-      if (patch.branch_id !== undefined) {
-        const br = options.find((b) => b.id === patch.branch_id)
-        return { ...r, ...patch, branch_name: br?.name || r.branch_name }
-      }
-      return { ...r, ...patch }
-    }))
+  const openAdd = () => {
+    setEditingRow(null)
+    setModalOpen(true)
   }
 
-  const addRow = () => {
-    const taken = new Set(branchConfigs.map((r) => r.branch_id).filter(Boolean))
-    const next = options.find((b) => !taken.has(b.id))
-    onChange([...branchConfigs, createBranchRow(next || null)])
+  const openEdit = (row) => {
+    setEditingRow(row)
+    setModalOpen(true)
+  }
+
+  const handleModalSave = (saved) => {
+    if (editingRow) {
+      onChange(branchConfigs.map((r) => (
+        r._rowId === editingRow._rowId ? { ...r, ...saved, _rowId: r._rowId } : r
+      )))
+      return
+    }
+    const { _rowId: _ignored, ...fields } = saved
+    onChange([
+      ...branchConfigs,
+      createBranchRow(
+        { id: fields.branch_id, name: fields.branch_name },
+        fields,
+      ),
+    ])
   }
 
   const removeRow = (rowId) => {
@@ -110,11 +128,8 @@ export default function BranchPricingSection({
   }
 
   const canAddMore = branchConfigs.length < options.length
-  const costPlaceholder = `Default ${defaultCost || 0}`
-  const pricePlaceholder = `Default ${defaultPrice || 0}`
-  const reorderPlaceholder = String(defaultReorder || 10)
 
-  const getProfitPercentage = (row) => {
+  const resolveAmounts = (row) => {
     const cost = catalogInclusiveAmount(
       row.cost_price === '' || row.cost_price == null ? defaultCost : row.cost_price,
       priceTaxMode,
@@ -125,12 +140,29 @@ export default function BranchPricingSection({
       priceTaxMode,
       taxRate,
     )
+    return { cost, price, gp: profitPercentage(cost, price) }
+  }
 
-    if (!Number.isFinite(cost) || !Number.isFinite(price) || cost === 0) {
-      return null
-    }
-
-    return ((price - cost) / cost) * 100
+  const categorySummary = (row) => {
+    const wMode = row.wholesale_pricing_mode || defaultCategoryMode
+    const sMode = row.staff_pricing_mode || defaultCategoryMode
+    const wholesale = row.wholesale_pricing_mode
+      ? formatCategoryPriceLabel(wMode, row.wholesale_discount_pct, row.wholesale_price, fmt)
+      : formatCategoryPriceLabel(
+        defaultCategoryMode,
+        defaultWholesalePct,
+        defaultWholesalePrice,
+        fmt,
+      )
+    const staff = row.staff_pricing_mode
+      ? formatCategoryPriceLabel(sMode, row.staff_discount_pct, row.staff_price, fmt)
+      : formatCategoryPriceLabel(
+        defaultCategoryMode,
+        defaultStaffPct,
+        defaultStaffPrice,
+        fmt,
+      )
+    return { wholesale, staff, wholesaleOverride: Boolean(row.wholesale_pricing_mode), staffOverride: Boolean(row.staff_pricing_mode) }
   }
 
   const removalSummary = (() => {
@@ -149,13 +181,13 @@ export default function BranchPricingSection({
         <div>
           <h3>Branches</h3>
           <p className="item-form-section__hint item-form-section__hint--inline">
-            List where this item is sold. Blank cost/sell uses catalog defaults.
+            List where this item is sold. Add each branch to set cost, sell, wholesale &amp; staff.
           </p>
         </div>
         <button
           type="button"
           className="btn btn-secondary btn-sm"
-          onClick={addRow}
+          onClick={openAdd}
           disabled={!canAddMore}
           title={canAddMore ? undefined : 'All branches have been added'}
         >
@@ -173,7 +205,7 @@ export default function BranchPricingSection({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={addRow}
+                onClick={openAdd}
                 disabled={!canAddMore}
               >
                 + Add branch
@@ -182,129 +214,100 @@ export default function BranchPricingSection({
           />
         </div>
       ) : (
-        <div className="branch-price-table-wrap">
-          <table className="data-table branch-price-table">
-            <thead>
-              <tr>
-                <th>Branch</th>
-                <th className="text-right">Cost</th>
-                <th className="text-right">Selling</th>
-                <th className="text-right">GP %</th>
-                {showOpeningStock && <th className="text-right">Opening</th>}
-                <th className="text-right">Reorder</th>
-                {isEdit && <th className="text-right">Stock</th>}
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {branchConfigs.map((r) => {
-                const canEditOpeningInEdit = isEdit && r.branch_id && !initiallyListed.has(r.branch_id)
-                const profit = getProfitPercentage(r)
-                const removing = checkingBatches && pendingRemoveRowId === r._rowId
-                return (
-                  <tr key={r._rowId}>
-                    <td className="branch-price-table__branch">
-                      <AutocompleteDropdown
-                        value={r.branch_id || ''}
-                        onSelectOption={(opt) => patchRow(r._rowId, 'branch_id', opt?.id || '')}
-                        options={options.map((b) => ({
-                          id: b.id,
-                          label: b.name,
-                          disabled: usedBranchIds.has(b.id) && b.id !== r.branch_id,
-                        }))}
-                        isSearchFieldRequired={false}
-                        selectedLabel={r.branch_name || undefined}
-                        placeholder="Select branch…"
-                        searchPlaceholder="Search branches…"
-                        emptyLabel="No branches found"
-                      />
-                    </td>
-                    <td className="text-right branch-price-table__price">
-                      <TaxedPriceInput
-                        dense
-                        disabled={!r.branch_id}
-                        value={r.cost_price ?? ''}
-                        mode={priceTaxMode}
-                        taxRate={taxRate}
-                        placeholder={costPlaceholder}
-                        onValueChange={(v) => patchRow(r._rowId, 'cost_price', v)}
-                      />
-                    </td>
-                    <td className="text-right branch-price-table__price">
-                      <TaxedPriceInput
-                        dense
-                        disabled={!r.branch_id}
-                        value={r.selling_price ?? ''}
-                        mode={priceTaxMode}
-                        taxRate={taxRate}
-                        placeholder={pricePlaceholder}
-                        onValueChange={(v) => patchRow(r._rowId, 'selling_price', v)}
-                      />
-                    </td>
-                    <td className="text-right">
-                      <span className={`branch-price-table__gp${profit != null && profit < 0 ? ' is-neg' : ''}`}>
-                        {profit == null ? '—' : `${profit.toFixed(1)}%`}
-                      </span>
-                    </td>
-                    {showOpeningStock && (
-                      <td className="text-right">
-                        {isEdit && !canEditOpeningInEdit ? (
-                          <input
-                            className="form-input branch-price-table__num"
-                            type="number"
-                            disabled
-                            value={r.available_stock ?? 0}
-                            title="Opening qty can be set only for newly added branches"
-                          />
-                        ) : (
-                          <input
-                            className="form-input branch-price-table__num"
-                            type="number"
-                            min="0"
-                            step={qtyInputStep()}
-                            disabled={!r.branch_id}
-                            placeholder="0"
-                            value={r.opening_stock ?? ''}
-                            onChange={(e) => patchRow(r._rowId, 'opening_stock', e.target.value)}
-                          />
-                        )}
-                      </td>
-                    )}
-                    <td className="text-right">
-                      <input
-                        className="form-input branch-price-table__num"
-                        type="number"
-                        min="0"
-                        step={qtyInputStep()}
-                        disabled={!r.branch_id}
-                        placeholder={reorderPlaceholder}
-                        value={r.reorder_level ?? ''}
-                        onChange={(e) => patchRow(r._rowId, 'reorder_level', e.target.value)}
-                      />
-                    </td>
+        <ul className="branch-price-cards">
+          {branchConfigs.map((r) => {
+            const { cost, price, gp } = resolveAmounts(r)
+            const cat = categorySummary(r)
+            const removing = checkingBatches && pendingRemoveRowId === r._rowId
+            const canEditOpeningInEdit = isEdit && r.branch_id && !initiallyListed.has(r.branch_id)
+            return (
+              <li key={r._rowId} className="branch-price-card">
+                <div className="branch-price-card__top">
+                  <div>
+                    <div className="branch-price-card__name">{r.branch_name || 'Select branch…'}</div>
                     {isEdit && (
-                      <td className="text-right">
-                        <span className="branch-price-table__stock">{fmtQty(r.available_stock ?? 0)}</span>
-                      </td>
+                      <div className="branch-price-card__meta">
+                        Stock {fmtQty(r.available_stock ?? 0)}
+                        {showOpeningStock && canEditOpeningInEdit && r.opening_stock
+                          ? ` · Opening ${fmtQty(r.opening_stock)}`
+                          : ''}
+                      </div>
                     )}
-                    <td className="branch-price-table__actions">
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-xs branch-price-table__remove"
-                        onClick={() => handleRemoveBranchClick(r._rowId)}
-                        disabled={removing}
-                        title={removing ? 'Checking…' : 'Remove branch'}
-                        aria-label="Remove branch"
-                      >
-                        {removing ? '…' : '✕'}
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                  <div className="branch-price-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => openEdit(r)}
+                      title="Edit branch pricing"
+                      aria-label="Edit branch pricing"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs branch-price-table__remove"
+                      onClick={() => handleRemoveBranchClick(r._rowId)}
+                      disabled={removing}
+                      title={removing ? 'Checking…' : 'Remove branch'}
+                      aria-label="Remove branch"
+                    >
+                      {removing ? '…' : '✕'}
+                    </button>
+                  </div>
+                </div>
+                <dl className="branch-price-card__grid">
+                  <div>
+                    <dt>Cost</dt>
+                    <dd className="mono">{fmt(cost)}{r.cost_price === '' || r.cost_price == null ? <span className="branch-price-card__inherit"> default</span> : null}</dd>
+                  </div>
+                  <div>
+                    <dt>Selling</dt>
+                    <dd className="mono">{fmt(price)}{r.selling_price === '' || r.selling_price == null ? <span className="branch-price-card__inherit"> default</span> : null}</dd>
+                  </div>
+                  <div>
+                    <dt>GP%</dt>
+                    <dd>
+                      <span className={`branch-price-table__gp${gp != null && gp < 0 ? ' is-neg' : ''}`}>
+                        {gp == null ? '—' : `${gp.toFixed(1)}%`}
+                      </span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Wholesale</dt>
+                    <dd>
+                      {cat.wholesale}
+                      {!cat.wholesaleOverride && <span className="branch-price-card__inherit"> default</span>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Staff</dt>
+                    <dd>
+                      {cat.staff}
+                      {!cat.staffOverride && <span className="branch-price-card__inherit"> default</span>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Reorder</dt>
+                    <dd className="mono">
+                      {r.reorder_level === '' || r.reorder_level == null
+                        ? <>{defaultReorder || 10}<span className="branch-price-card__inherit"> default</span></>
+                        : fmtQty(r.reorder_level)}
+                    </dd>
+                  </div>
+                  {showOpeningStock && !isEdit && (
+                    <div>
+                      <dt>Opening</dt>
+                      <dd className="mono">{fmtQty(r.opening_stock || 0)}</dd>
+                    </div>
+                  )}
+                </dl>
+              </li>
+            )
+          })}
+        </ul>
       )}
 
       {!isEdit && (
@@ -312,6 +315,33 @@ export default function BranchPricingSection({
           Default reorder: {defaultReorder || 10}. Blank branch reorder uses this default.
         </p>
       )}
+
+      <BranchPricingModal
+        open={modalOpen}
+        onClose={() => { setModalOpen(false); setEditingRow(null) }}
+        onSave={handleModalSave}
+        editingRow={editingRow}
+        branches={branches}
+        usedBranchIds={usedBranchIds}
+        defaultCost={defaultCost}
+        defaultPrice={defaultPrice}
+        defaultReorder={defaultReorder}
+        defaultCategoryMode={defaultCategoryMode}
+        defaultWholesalePct={defaultWholesalePct}
+        defaultWholesalePrice={defaultWholesalePrice}
+        defaultStaffPct={defaultStaffPct}
+        defaultStaffPrice={defaultStaffPrice}
+        priceTaxMode={priceTaxMode}
+        taxRate={taxRate}
+        showOpeningStock={showOpeningStock}
+        canEditOpening={
+          !isEdit
+          || (editingRow
+            && editingRow.branch_id
+            && !initiallyListed.has(editingRow.branch_id))
+          || !editingRow
+        }
+      />
 
       <Modal
         open={Boolean(batchWarningData)}

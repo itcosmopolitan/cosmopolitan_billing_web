@@ -304,6 +304,13 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("invoice_template_settings", "footer_msg", "TEXT DEFAULT ''"),
     ("invoice_template_settings", "footer_note", "TEXT DEFAULT ''"),
     ("item_branch_config", "cost_price", "FLOAT"),
+    # Branch-level wholesale / staff overrides (NULL = inherit catalog).
+    ("item_branch_config", "wholesale_pricing_mode", "VARCHAR"),
+    ("item_branch_config", "wholesale_discount_pct", "FLOAT"),
+    ("item_branch_config", "wholesale_price", "FLOAT"),
+    ("item_branch_config", "staff_pricing_mode", "VARCHAR"),
+    ("item_branch_config", "staff_discount_pct", "FLOAT"),
+    ("item_branch_config", "staff_price", "FLOAT"),
     ("stock_adjustments", "request_id", "VARCHAR"),
     # Customer structured address fields added after the original customers
     # table definition. We must bootstrap them for older databases without

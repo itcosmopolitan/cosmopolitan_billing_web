@@ -390,6 +390,12 @@ export default function ItemsPage({ mode = 'branch' }) {
       Unit: item.unit,
       'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
       'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
+      Wholesale: item.wholesale_pricing_mode === 'price'
+        ? (item.wholesale_price ?? 0)
+        : `${Number(item.wholesale_discount_pct || 0)}% off`,
+      Staff: item.staff_pricing_mode === 'price'
+        ? (item.staff_price ?? 0)
+        : `${Number(item.staff_discount_pct || 0)}% off`,
       'GST (%)': item.tax_rate,
       ...(isMaster
         ? { 'Active Branches': item.available_branch_count ?? 0 }
@@ -580,6 +586,8 @@ export default function ItemsPage({ mode = 'branch' }) {
                         />
                       )
                     }
+                    if (id === 'wholesale') return <th key={id} className="text-right">Wholesale</th>
+                    if (id === 'staff') return <th key={id} className="text-right">Staff</th>
                     if (id === 'branches') return <th key={id}>{branchesColumnLabel}</th>
                     if (id === 'gst') return <th key={id}>GST</th>
                     if (id === 'stock') {
@@ -671,6 +679,32 @@ export default function ItemsPage({ mode = 'branch' }) {
                             <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                               {fmt(isMaster ? (p.default_selling_price ?? p.selling_price) : p.selling_price)}
                               {!isMaster && p.branch_price_override != null && (
+                                <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
+                              )}
+                            </td>
+                          )
+                        }
+                        if (id === 'wholesale') {
+                          const label = p.wholesale_pricing_mode === 'price'
+                            ? fmt(p.wholesale_price)
+                            : `${Number(p.wholesale_discount_pct || 0)}% off`
+                          return (
+                            <td key={id} className="text-right mono">
+                              {label}
+                              {!isMaster && p.branch_wholesale_override && (
+                                <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
+                              )}
+                            </td>
+                          )
+                        }
+                        if (id === 'staff') {
+                          const label = p.staff_pricing_mode === 'price'
+                            ? fmt(p.staff_price)
+                            : `${Number(p.staff_discount_pct || 0)}% off`
+                          return (
+                            <td key={id} className="text-right mono">
+                              {label}
+                              {!isMaster && p.branch_staff_override && (
                                 <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>branch override</div>
                               )}
                             </td>
