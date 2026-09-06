@@ -394,6 +394,14 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # child ledger reconciliation. Existing DBs created before this field was
     # added must be upgraded at startup.
     ("sale_invoices", "payment_ref", "VARCHAR"),
+    # Payment-proof metadata is selected whenever SaleInvoice rows are loaded.
+    # Keep older PostgreSQL databases compatible with the ORM model at boot.
+    ("sale_invoices", "payment_proof_key", "VARCHAR"),
+    ("sale_invoices", "payment_proof_filename", "VARCHAR"),
+    ("sale_invoices", "payment_proof_content_type", "VARCHAR"),
+    ("sale_invoices", "payment_proof_size", "INTEGER"),
+    ("sale_invoices", "payment_proof_uploaded_at", "TIMESTAMP"),
+    ("sale_invoices", "payment_proof_uploaded_by", "VARCHAR"),
     # 2026-06-09: soft void for payments (audit trail vs hard delete).
     ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("customer_payments", "voided_at", "VARCHAR"),
