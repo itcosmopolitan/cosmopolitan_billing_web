@@ -31,6 +31,7 @@ from src.models import (
     StockMovement,
     StockTransfer,
     TransferLineItem,
+    User,
     Vendor,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
@@ -98,6 +99,11 @@ def _sale_filters(
     date_from: Optional,
     date_to: Optional,
     allowed_branch_ids: Optional[list[str]] = None,
+    payment_mode: Optional[str] = None,
+    cashier_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    category_id: Optional[str] = None,
 ):
     conds = []
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, allowed_branch_ids)
@@ -112,6 +118,50 @@ def _sale_filters(
             SaleInvoice.number.ilike(f"%{search}%")
             | SaleInvoice.customer_name.ilike(f"%{search}%")
         )
+    if payment_mode is not None and str(payment_mode).strip() != "":
+        raw = str(payment_mode).strip()
+        if raw.lower() in ("unrecorded", "__none__"):
+            conds.append(SaleInvoice.payment_mode.is_(None))
+        else:
+            conds.append(func.lower(SaleInvoice.payment_mode) == raw.lower())
+    if cashier_id is not None and str(cashier_id).strip() != "":
+        raw_cashier = str(cashier_id).strip()
+        if raw_cashier in ("__none__",):
+            conds.append(SaleInvoice.cashier.is_(None) | (SaleInvoice.cashier == ""))
+        else:
+            # Invoices store cashier display name; resolve unique user id → name.
+            conds.append(
+                SaleInvoice.cashier.in_(select(User.name).where(User.id == raw_cashier))
+            )
+    if customer_id is not None and str(customer_id).strip() != "":
+        raw_customer = str(customer_id).strip()
+        if raw_customer in ("__none__",):
+            conds.append(SaleInvoice.customer_id.is_(None))
+        else:
+            conds.append(SaleInvoice.customer_id == raw_customer)
+    if item_id:
+        conds.append(
+            SaleInvoice.id.in_(
+                select(SaleLineItem.invoice_id).where(SaleLineItem.item_id == item_id)
+            )
+        )
+    if category_id:
+        if category_id in ("__none__", "__uncategorized__"):
+            conds.append(
+                SaleInvoice.id.in_(
+                    select(SaleLineItem.invoice_id)
+                    .outerjoin(Item, Item.id == SaleLineItem.item_id)
+                    .where(Item.category_id.is_(None))
+                )
+            )
+        else:
+            conds.append(
+                SaleInvoice.id.in_(
+                    select(SaleLineItem.invoice_id)
+                    .join(Item, Item.id == SaleLineItem.item_id)
+                    .where(Item.category_id == category_id)
+                )
+            )
     return conds
 
 
@@ -122,6 +172,7 @@ def _purchase_filters(
     date_from: Optional[str],
     date_to: Optional[str],
     allowed_branch_ids: Optional[list[str]] = None,
+    item_id: Optional[str] = None,
 ):
     conds = []
     branch_cond = _branch_condition(PurchaseBill.branch_id, branch_id, allowed_branch_ids)
@@ -137,6 +188,12 @@ def _purchase_filters(
         conds.append(
             PurchaseBill.number.ilike(f"%{search}%")
             | PurchaseBill.vendor_name.ilike(f"%{search}%")
+        )
+    if item_id:
+        conds.append(
+            PurchaseBill.id.in_(
+                select(PurchaseLineItem.bill_id).where(PurchaseLineItem.item_id == item_id)
+            )
         )
     return conds
 
@@ -430,6 +487,11 @@ async def sales_register(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    cashier_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    category_id: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -439,7 +501,18 @@ async def sales_register(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _sale_filters(branch_id, search, start, end, allowed_branch_ids=branch_scope)
+    conds = _sale_filters(
+        branch_id,
+        search,
+        start,
+        end,
+        allowed_branch_ids=branch_scope,
+        payment_mode=payment_mode,
+        cashier_id=cashier_id,
+        customer_id=customer_id,
+        item_id=item_id,
+        category_id=category_id,
+    )
     query = select(
         SaleInvoice.id.label("invoice_id"),
         SaleInvoice.number.label("invoice_number"),
@@ -504,47 +577,71 @@ async def daily_sales(
     if search:
         si_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
 
-    sort_map = {
-        "date": date_expr,
-        "invoice_count": func.count(SaleInvoice.id),
-        "quantity_sold": func.coalesce(func.sum(SaleLineItem.qty), 0),
-        "gross_sales": func.coalesce(func.sum(SaleInvoice.total), 0),
-        "discounts": func.coalesce(func.sum(SaleInvoice.discount), 0),
-        "tax": func.coalesce(func.sum(SaleInvoice.tax_total), 0),
-        "net_sales": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
-    }
-
-    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    base_q = (
+    # Aggregate line qty per invoice first so invoice-level totals are not
+    # multiplied by the number of line items (which inflated invoice_count /
+    # gross_sales / tax when drilling into sales-register).
+    per_invoice = (
         select(
-            date_expr.label("date"),
-            func.count(SaleInvoice.id).label("invoice_count"),
+            date_expr.label("sale_date"),
+            SaleInvoice.id.label("invoice_id"),
+            SaleInvoice.total.label("total"),
+            SaleInvoice.discount.label("discount"),
+            SaleInvoice.tax_total.label("tax_total"),
+            SaleInvoice.paid_amount.label("paid_amount"),
             func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("gross_sales"),
-            func.coalesce(func.sum(SaleInvoice.discount), 0).label("discounts"),
-            func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax"),
-            func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("net_sales"),
         )
         .select_from(SaleInvoice)
         .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
         .where(and_(*si_conds))
-        .group_by(date_expr)
+        .group_by(
+            date_expr,
+            SaleInvoice.id,
+            SaleInvoice.total,
+            SaleInvoice.discount,
+            SaleInvoice.tax_total,
+            SaleInvoice.paid_amount,
+        )
+    ).subquery()
+
+    base_q = (
+        select(
+            per_invoice.c.sale_date.label("date"),
+            func.count(per_invoice.c.invoice_id).label("invoice_count"),
+            func.coalesce(func.sum(per_invoice.c.quantity_sold), 0).label("quantity_sold"),
+            func.coalesce(func.sum(per_invoice.c.total), 0).label("gross_sales"),
+            func.coalesce(func.sum(per_invoice.c.discount), 0).label("discounts"),
+            func.coalesce(func.sum(per_invoice.c.tax_total), 0).label("tax"),
+            func.coalesce(func.sum(per_invoice.c.paid_amount), 0).label("net_sales"),
+        )
+        .select_from(per_invoice)
+        .group_by(per_invoice.c.sale_date)
     )
+
+    sort_map = {
+        "date": per_invoice.c.sale_date,
+        "invoice_count": func.count(per_invoice.c.invoice_id),
+        "quantity_sold": func.coalesce(func.sum(per_invoice.c.quantity_sold), 0),
+        "gross_sales": func.coalesce(func.sum(per_invoice.c.total), 0),
+        "discounts": func.coalesce(func.sum(per_invoice.c.discount), 0),
+        "tax": func.coalesce(func.sum(per_invoice.c.tax_total), 0),
+        "net_sales": func.coalesce(func.sum(per_invoice.c.paid_amount), 0),
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
 
     total = int(
         (
             await db.execute(
-                select(func.count(func.distinct(date_expr))).where(and_(*si_conds))
+                select(func.count(func.distinct(date_expr))).select_from(SaleInvoice).where(and_(*si_conds))
             )
         ).scalar()
         or 0
     )
     result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [
-        {**dict(r._mapping), "date": r.date.isoformat() if r.date else None}
+        {**dict(r._mapping), "date": r.date.isoformat() if hasattr(r.date, "isoformat") and r.date else r.date}
         for r in result.fetchall()
     ]
     return paged(rows, total, sk, lim)
@@ -593,6 +690,7 @@ async def product_sales(
         total = int((await db.execute(total_q)).scalar() or 0)
         result = await db.execute(
             select(
+                ProductSalesSummary.item_id.label("item_id"),
                 func.coalesce(Item.sku, ProductSalesSummary.item_id).label("product_code"),
                 ProductSalesSummary.product_name.label("product_name"),
                 func.coalesce(Category.name, "Uncategorized").label("category"),
@@ -604,7 +702,7 @@ async def product_sales(
             .outerjoin(Item, Item.id == ProductSalesSummary.item_id)
             .outerjoin(Category, Category.id == Item.category_id)
             .where(and_(*conds))
-            .group_by(Item.sku, ProductSalesSummary.item_id, ProductSalesSummary.product_name, Category.name, ProductSalesSummary.quantity_sold, ProductSalesSummary.revenue, ProductSalesSummary.profit)
+            .group_by(ProductSalesSummary.item_id, Item.sku, ProductSalesSummary.product_name, Category.name, ProductSalesSummary.quantity_sold, ProductSalesSummary.revenue, ProductSalesSummary.profit)
             .order_by(order_by_expr)
             .offset(sk)
             .limit(lim)
@@ -620,6 +718,7 @@ async def product_sales(
 
         base = (
             select(
+                SaleLineItem.item_id.label("item_id"),
                 func.coalesce(Item.sku, SaleLineItem.item_id).label("product_code"),
                 SaleLineItem.name.label("product_name"),
                 func.coalesce(Category.name, "Uncategorized").label("category"),
@@ -632,7 +731,7 @@ async def product_sales(
             .outerjoin(Item, SaleLineItem.item_id == Item.id)
             .outerjoin(Category, Item.category_id == Category.id)
             .where(and_(*conds))
-            .group_by(Item.sku, SaleLineItem.item_id, SaleLineItem.name, Category.name)
+            .group_by(SaleLineItem.item_id, Item.sku, SaleLineItem.name, Category.name)
         )
         total_q = select(func.count()).select_from(base.subquery())
         total = int((await db.execute(total_q)).scalar() or 0)
@@ -1121,7 +1220,7 @@ async def payment_sales(
 
     base = (
         select(
-            func.coalesce(SaleInvoice.payment_mode, "cash").label("payment_method"),
+            SaleInvoice.payment_mode.label("payment_mode"),
             func.count(SaleInvoice.id).label("invoice_count"),
             func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
             func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax_amount"),
@@ -1144,7 +1243,8 @@ async def payment_sales(
         'credit': 'Credit',
     }
     for r in rows:
-        raw = r.get('payment_method')
+        raw = r.get('payment_mode')
+        r['payment_mode'] = raw if raw is not None else '__none__'
         if raw is None:
             r['payment_method'] = 'Unrecorded'
         else:
@@ -1188,11 +1288,12 @@ async def category_sales(
             conds.append(Category.name.ilike(f"%{search}%"))
 
         base = select(
-            Category.name.label("category"),
+            Category.id.label("category_id"),
+            func.coalesce(Category.name, "Uncategorized").label("category"),
             func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("quantity_sold"),
             func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("sales_value"),
             func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
-        ).select_from(ProductSalesSummary).join(Category, Category.id == ProductSalesSummary.category_id, isouter=True).where(and_(*conds)).group_by(Category.name)
+        ).select_from(ProductSalesSummary).join(Category, Category.id == ProductSalesSummary.category_id, isouter=True).where(and_(*conds)).group_by(Category.id, Category.name)
     else:
         conds = [SaleInvoice.date >= (start.isoformat() if hasattr(start, 'isoformat') else start), SaleInvoice.date <= (end.isoformat() if hasattr(end, 'isoformat') else end)]
         if branch_id:
@@ -1202,6 +1303,7 @@ async def category_sales(
 
         base = (
             select(
+                Category.id.label("category_id"),
                 func.coalesce(Category.name, "Uncategorized").label("category"),
                 func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
                 func.coalesce(func.sum(SaleLineItem.line_total), 0).label("sales_value"),
@@ -1212,7 +1314,7 @@ async def category_sales(
             .outerjoin(Item, SaleLineItem.item_id == Item.id)
             .outerjoin(Category, Item.category_id == Category.id)
             .where(and_(*conds))
-            .group_by(Category.name)
+            .group_by(Category.id, Category.name)
         )
 
     total_q = select(func.count()).select_from(base.subquery())
@@ -1247,6 +1349,7 @@ async def branch_sales(
     lim = normalize_limit(limit)
     base = (
         select(
+            SaleInvoice.branch_id.label("branch_id"),
             SaleInvoice.branch_name.label("branch"),
             func.count(SaleInvoice.id).label("invoice_count"),
             func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
@@ -1255,7 +1358,7 @@ async def branch_sales(
             func.coalesce(func.sum(SaleInvoice.total), 0).label("net_sales"),
         )
         .where(and_(*conds))
-        .group_by(SaleInvoice.branch_name)
+        .group_by(SaleInvoice.branch_id, SaleInvoice.branch_name)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -1288,19 +1391,27 @@ async def cashier_sales(
     lim = normalize_limit(limit)
     base = (
         select(
+            User.id.label("cashier_id"),
             SaleInvoice.cashier.label("cashier"),
             func.count(SaleInvoice.id).label("invoice_count"),
             func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
             func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax_amount"),
             func.coalesce(func.sum(SaleInvoice.discount), 0).label("discount_amount"),
         )
+        .select_from(SaleInvoice)
+        .outerjoin(User, User.name == SaleInvoice.cashier)
         .where(and_(*conds))
-        .group_by(SaleInvoice.cashier)
+        .group_by(User.id, SaleInvoice.cashier)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
+    for r in rows:
+        if not r.get("cashier_id"):
+            r["cashier_id"] = "__none__"
+        if not r.get("cashier"):
+            r["cashier"] = "Unassigned"
     return paged(rows, total, sk, lim)
 
 
@@ -1308,6 +1419,8 @@ async def cashier_sales(
 async def purchase_register(
     branch_id: Optional[str] = None,
     search: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    item_id: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -1315,9 +1428,19 @@ async def purchase_register(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
 ):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _purchase_filters(branch_id, None, search, start, end)
+    conds = _purchase_filters(
+        branch_id,
+        vendor_id,
+        search,
+        start,
+        end,
+        allowed_branch_ids=branch_scope,
+        item_id=item_id,
+    )
     query = select(
         PurchaseBill.id.label("bill_id"),
         PurchaseBill.number.label("bill_number"),
@@ -1387,6 +1510,7 @@ async def vendor_purchases(
     lim = normalize_limit(limit)
     base = (
         select(
+            PurchaseBill.vendor_id.label("vendor_id"),
             PurchaseBill.vendor_name.label("vendor"),
             func.count(PurchaseBill.id).label("purchase_count"),
             func.coalesce(func.sum(PurchaseBill.total), 0).label("purchase_amount"),
@@ -1394,7 +1518,7 @@ async def vendor_purchases(
             func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0).label("outstanding_amount"),
         )
         .where(and_(*conds))
-        .group_by(PurchaseBill.vendor_name)
+        .group_by(PurchaseBill.vendor_id, PurchaseBill.vendor_name)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -1433,6 +1557,7 @@ async def product_purchases(
     lim = normalize_limit(limit)
     base = (
         select(
+            PurchaseLineItem.item_id.label("item_id"),
             PurchaseLineItem.name.label("product"),
             func.coalesce(func.sum(PurchaseLineItem.qty), 0).label("quantity_purchased"),
             func.coalesce(func.sum(PurchaseLineItem.line_total), 0).label("purchase_cost"),
@@ -1440,12 +1565,17 @@ async def product_purchases(
         .select_from(PurchaseLineItem)
         .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
         .where(and_(*conds))
-        .group_by(PurchaseLineItem.name)
+        .group_by(PurchaseLineItem.item_id, PurchaseLineItem.name)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
+    # average_cost for frontend column
+    for r in rows:
+        qty = float(r.get("quantity_purchased") or 0)
+        cost = float(r.get("purchase_cost") or 0)
+        r["average_cost"] = (cost / qty) if qty else 0
     return paged(rows, total, sk, lim)
 
 
@@ -2169,12 +2299,13 @@ async def top_customers(
     lim = normalize_limit(limit)
     base = (
         select(
+            SaleInvoice.customer_id.label("customer_id"),
             SaleInvoice.customer_name.label("customer"),
             func.count(SaleInvoice.id).label("invoice_count"),
             func.coalesce(func.sum(SaleInvoice.total), 0).label("purchase_amount"),
             func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0).label("outstanding_amount"),
         )
-        .group_by(SaleInvoice.customer_name)
+        .group_by(SaleInvoice.customer_id, SaleInvoice.customer_name)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -2203,23 +2334,6 @@ async def margin_analysis(db: AsyncSession = Depends(get_db)):
             {"name": "Colgate MaxFresh", "margin_pct": 20.7, "revenue": 6400},
         ],
     }
-    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "purchase_amount", "desc")
-    sk = normalize_skip(skip)
-    lim = normalize_limit(limit)
-    base = (
-        select(
-            SaleInvoice.customer_name.label("customer"),
-            func.count(SaleInvoice.id).label("invoice_count"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("purchase_amount"),
-            func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0).label("outstanding_amount"),
-        )
-        .group_by(SaleInvoice.customer_name)
-    )
-    total_q = select(func.count()).select_from(base.subquery())
-    total = int((await db.execute(total_q)).scalar() or 0)
-    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
-    rows = [dict(r._mapping) for r in result.fetchall()]
-    return paged(rows, total, sk, lim)
 
 
 @router.get("/vendor-outstanding", dependencies=[Depends(require_perm("reports.view"))])
@@ -2241,12 +2355,13 @@ async def vendor_outstanding(
     lim = normalize_limit(limit)
     base = (
         select(
+            PurchaseBill.vendor_id.label("vendor_id"),
             PurchaseBill.vendor_name.label("vendor"),
             func.count(PurchaseBill.id).label("purchase_count"),
             func.coalesce(func.sum(PurchaseBill.total), 0).label("purchase_amount"),
             func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0).label("outstanding_amount"),
         )
-        .group_by(PurchaseBill.vendor_name)
+        .group_by(PurchaseBill.vendor_id, PurchaseBill.vendor_name)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
