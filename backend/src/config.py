@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     notification_scan_interval_hours: int = 24
     notification_internal_token: str = ""
 
+    # ─── AWS S3 Storage ────────────────────────────────────────────────────
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_region: str = "eu-north-1"
+    aws_default_region: str = "eu-north-1"
+    s3_bucket_name: str = ""
+    s3_image_prefix: str = "receipts-images/"
+    s3_pdf_prefix: str = "receipts-pdf/"
+    s3_payment_proof_prefix: str = "payment-proofs/"
+
 # ─── Global Config Instance ────────────────────────────────────────────────
 _settings: Settings = None
 

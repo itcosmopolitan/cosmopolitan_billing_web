@@ -275,6 +275,19 @@ export const salesAPI = {
   get:     (id)     => api.get(`/sales/${id}`),
   create:  (data)   => api.post('/sales/', data, { timeout: 30_000 }),
   update:  (id, data) => api.put(`/sales/${id}`, data),
+  presignPaymentProof: (id, data) => api.post(`/sales/${id}/payment-proof/presign`, data),
+  completePaymentProof: (id, data) => api.post(`/sales/${id}/payment-proof/complete`, data),
+  getPaymentProof: (id, proofId) => api.get(`/sales/${id}/payment-proof`, { params: proofId ? { proof_id: proofId } : undefined }),
+  uploadPaymentProof: (id, file, paymentRef = '', paymentId = '') => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('payment_ref', paymentRef)
+    form.append('payment_id', paymentId)
+    return api.post(`/sales/${id}/payment-proof`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120_000,
+    })
+  },
   payment: (id, data) => api.post(`/sales/${id}/payment`, data),
   deletePayments: (id) => api.post(`/sales/${id}/delete-payments`),
   deleteReturns: (id) => api.post(`/sales/${id}/delete-returns`),

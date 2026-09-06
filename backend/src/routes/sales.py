@@ -1,14 +1,19 @@
+import asyncio
 import json
+import os
 import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src import config
 from src.database import get_db
 from src.document_numbering import allocate_customer_payment_number, allocate_number, resolve_number
 from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
@@ -18,6 +23,7 @@ from src.models import (
     CustomerPayment,
     CustomerPaymentAllocation,
     InvoiceStatus,
+    InvoicePaymentProof,
     Organisation,
     ItemBatch,
     Item,
@@ -158,6 +164,26 @@ recorded later.
 """
 PaymentMode = Literal["cash", "card", "upi", "bank_transfer", "credit"]
 TENDER_PAYMENT_MODES = frozenset({"cash", "card", "upi", "bank_transfer"})
+PAYMENT_PROOF_CONTENT_TYPES = {"image/png": ".png", "application/pdf": ".pdf"}
+PAYMENT_PROOF_MAX_BYTES = {
+    "image/png": 1 * 1024 * 1024,
+    "application/pdf": 2 * 1024 * 1024,
+}
+
+
+class PaymentProofPresignIn(BaseModel):
+    filename: str
+    content_type: str
+    size: int
+
+
+class PaymentProofCompleteIn(BaseModel):
+    filename: str
+    content_type: str
+    size: int
+    object_key: str
+    payment_ref: Optional[str] = None
+    payment_id: Optional[str] = None
 
 
 def _coerce_payment_mode_value(v):
@@ -1108,6 +1134,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
         quotation_number=linked["quotation_number"],
     )
     d["payments"] = await _payments_for_invoice(db, inv.id)
+    d["paymentProofs"] = await _payment_proofs_for_invoice(db, inv)
     credit_spent = 0.0
     tender_paid = 0.0
     for p in d["payments"] or []:
@@ -1591,6 +1618,281 @@ async def create_invoice(
     await db.refresh(inv)
     return {"id": inv.id, "number": inv_num, "total": round(total, 2), "status": status}
 
+
+def _payment_proof_s3_client(settings):
+    client_kwargs = {"region_name": settings.aws_region}
+    if settings.aws_access_key_id and settings.aws_secret_access_key:
+        client_kwargs.update(
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+        )
+    return boto3.client("s3", **client_kwargs)
+
+
+async def _get_payment_proof_invoice(invoice_id: str, db: AsyncSession, user: User):
+    result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await enforce_branch_access(inv.branch_id, user=user, db=db)
+    if inv.payment_mode not in {"card", "upi", "bank_transfer"}:
+        raise HTTPException(400, "Payment proof is only required for card, UPI, or bank transfer payments")
+    return inv
+
+
+def _payment_proof_dict(proof):
+    return {
+        "id": proof.id,
+        "payment_ref": proof.payment_ref,
+        "payment_id": proof.payment_id,
+        "filename": proof.filename,
+        "content_type": proof.content_type,
+        "size": proof.size,
+        "uploaded_at": proof.uploaded_at,
+        "uploaded_by": proof.uploaded_by,
+        "object_key": proof.object_key,
+    }
+
+
+async def _payment_proofs_for_invoice(db: AsyncSession, invoice: SaleInvoice):
+    result = await db.execute(
+        select(InvoicePaymentProof)
+        .where(InvoicePaymentProof.invoice_id == invoice.id)
+        .order_by(InvoicePaymentProof.uploaded_at.asc())
+    )
+    proofs = [_payment_proof_dict(proof) for proof in result.scalars()]
+    if invoice.payment_proof_key and not any(p["object_key"] == invoice.payment_proof_key for p in proofs):
+        proofs.insert(0, {
+            "id": f"legacy-{invoice.id}",
+            "payment_ref": invoice.payment_ref,
+            "payment_id": None,
+            "filename": invoice.payment_proof_filename,
+            "content_type": invoice.payment_proof_content_type,
+            "size": invoice.payment_proof_size,
+            "uploaded_at": invoice.payment_proof_uploaded_at,
+            "uploaded_by": invoice.payment_proof_uploaded_by,
+            "object_key": invoice.payment_proof_key,
+        })
+    return proofs
+
+
+def _stored_payment_proof_filename(invoice: SaleInvoice, extension: str) -> str:
+    invoice_number = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in invoice.number)
+    return f"{invoice_number}-payment-proof-{uuid.uuid4().hex[:10]}{extension}"
+
+
+async def _payment_for_invoice(db: AsyncSession, invoice_id: str, payment_id: Optional[str]):
+    if not payment_id:
+        return None
+    result = await db.execute(
+        select(CustomerPayment.id)
+        .join(CustomerPaymentAllocation, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
+        .where(CustomerPayment.id == payment_id, CustomerPaymentAllocation.invoice_id == invoice_id)
+    )
+    return result.scalar_one_or_none()
+
+
+@router.post("/{invoice_id}/payment-proof/presign", dependencies=[Depends(require_perm("pos.use", "invoices.edit"))])
+async def presign_payment_proof(
+    invoice_id: str,
+    data: PaymentProofPresignIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Issue a short-lived direct-to-S3 upload URL for a payment proof."""
+    inv = await _get_payment_proof_invoice(invoice_id, db, user)
+    content_type = data.content_type.lower().strip()
+    extension = PAYMENT_PROOF_CONTENT_TYPES.get(content_type)
+    if not extension:
+        raise HTTPException(400, "Only PNG and PDF files are allowed")
+    max_bytes = PAYMENT_PROOF_MAX_BYTES[content_type]
+    if data.size <= 0 or data.size > max_bytes:
+        raise HTTPException(413, "PNG files must be 1 MB or smaller; PDF files must be 2 MB or smaller")
+    settings = config.get()
+    if not settings.s3_bucket_name:
+        raise HTTPException(503, "Payment proof storage is not configured")
+    object_key = f"{settings.s3_payment_proof_prefix.rstrip('/')}/{inv.id}/{uuid.uuid4()}{extension}"
+    try:
+        upload_url = await asyncio.to_thread(
+            _payment_proof_s3_client(settings).generate_presigned_url,
+            "put_object",
+            Params={
+                "Bucket": settings.s3_bucket_name,
+                "Key": object_key,
+                "ContentType": content_type,
+                "ServerSideEncryption": "AES256",
+            },
+            ExpiresIn=300,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(502, "Could not prepare payment proof storage") from exc
+    return {"upload_url": upload_url, "object_key": object_key, "content_type": content_type}
+
+
+@router.post("/{invoice_id}/payment-proof/complete", dependencies=[Depends(require_perm("pos.use", "invoices.edit"))])
+async def complete_payment_proof(
+    invoice_id: str,
+    data: PaymentProofCompleteIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Confirm a direct S3 upload and persist its invoice metadata."""
+    inv = await _get_payment_proof_invoice(invoice_id, db, user)
+    content_type = data.content_type.lower().strip()
+    extension = PAYMENT_PROOF_CONTENT_TYPES.get(content_type)
+    max_bytes = PAYMENT_PROOF_MAX_BYTES.get(content_type, 0)
+    expected_prefix = f"{config.get().s3_payment_proof_prefix.rstrip('/')}/{inv.id}/"
+    if not extension or not data.object_key.startswith(expected_prefix) or not data.object_key.endswith(extension) or data.size <= 0 or data.size > max_bytes:
+        raise HTTPException(400, "Invalid payment proof details")
+    settings = config.get()
+    try:
+        head = await asyncio.to_thread(
+            _payment_proof_s3_client(settings).head_object,
+            Bucket=settings.s3_bucket_name,
+            Key=data.object_key,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(400, "Payment proof upload was not found in storage") from exc
+    if int(head.get("ContentLength", 0)) != data.size:
+        raise HTTPException(400, "Payment proof size does not match the uploaded file")
+    payment_id = await _payment_for_invoice(db, inv.id, data.payment_id)
+    if data.payment_id and not payment_id:
+        raise HTTPException(400, "Payment does not belong to this invoice")
+    stored_filename = _stored_payment_proof_filename(inv, extension)
+
+    db.add(InvoicePaymentProof(
+        id=str(uuid.uuid4()),
+        invoice_id=inv.id,
+        payment_id=payment_id,
+        payment_ref=data.payment_ref.strip() or None if data.payment_ref else None,
+        object_key=data.object_key,
+        filename=stored_filename,
+        content_type=content_type,
+        size=data.size,
+        uploaded_at=datetime.utcnow(),
+        uploaded_by=user.name,
+    ))
+    if data.payment_ref is not None:
+        payment_ref = data.payment_ref.strip() or None
+        inv.payment_ref = payment_ref
+        if payment_id:
+            payment = await db.get(CustomerPayment, payment_id)
+            if payment:
+                payment.payment_ref = payment_ref
+    await db.commit()
+    return {"invoice_id": inv.id, "filename": stored_filename, "size": data.size}
+
+
+@router.get("/{invoice_id}/payment-proof", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+async def get_payment_proof(
+    invoice_id: str,
+    proof_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Return proof metadata and a short-lived private download URL."""
+    result = await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    await _resolve_branch_scope(user, db, inv.branch_id)
+    proofs = await _payment_proofs_for_invoice(db, inv)
+    proof = next((item for item in proofs if item["id"] == proof_id), None) if proof_id else (proofs[0] if proofs else None)
+    if not proof:
+        raise HTTPException(404, "No payment proof attached to this invoice")
+    settings = config.get()
+    try:
+        download_url = await asyncio.to_thread(
+            _payment_proof_s3_client(settings).generate_presigned_url,
+            "get_object",
+            Params={"Bucket": settings.s3_bucket_name, "Key": proof["object_key"]},
+            ExpiresIn=300,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(502, "Could not prepare payment proof download") from exc
+    return {
+        "id": proof["id"],
+        "payment_ref": proof["payment_ref"],
+        "filename": proof["filename"],
+        "content_type": proof["content_type"],
+        "size": proof["size"],
+        "uploaded_at": proof["uploaded_at"],
+        "download_url": download_url,
+    }
+
+
+@router.post("/{invoice_id}/payment-proof", dependencies=[Depends(require_perm("pos.use", "invoices.edit"))])
+async def upload_payment_proof(
+    invoice_id: str,
+    file: UploadFile = File(...),
+    payment_ref: Optional[str] = Form(None),
+    payment_id: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Store one private PNG/PDF proof for a non-cash invoice payment."""
+    inv = await _get_payment_proof_invoice(invoice_id, db, user)
+
+    content_type = (file.content_type or "").lower()
+    extension = PAYMENT_PROOF_CONTENT_TYPES.get(content_type)
+    if not extension:
+        raise HTTPException(400, "Only PNG and PDF files are allowed")
+    max_bytes = PAYMENT_PROOF_MAX_BYTES[content_type]
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(413, "PNG files must be 1 MB or smaller; PDF files must be 2 MB or smaller")
+    if extension == ".png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(400, "The uploaded file is not a valid PNG")
+    if extension == ".pdf" and not content.startswith(b"%PDF-"):
+        raise HTTPException(400, "The uploaded file is not a valid PDF")
+
+    settings = config.get()
+    if not settings.s3_bucket_name:
+        raise HTTPException(503, "Payment proof storage is not configured")
+    safe_name = os.path.basename(file.filename or f"payment-proof{extension}")
+    object_key = f"{settings.s3_payment_proof_prefix.rstrip('/')}/{inv.id}/{uuid.uuid4()}{extension}"
+    s3 = _payment_proof_s3_client(settings)
+    try:
+        await asyncio.to_thread(
+            s3.put_object,
+            Bucket=settings.s3_bucket_name,
+            Key=object_key,
+            Body=content,
+            ContentType=content_type,
+            ServerSideEncryption="AES256",
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(502, "Could not upload payment proof to storage") from exc
+
+    payment_id = await _payment_for_invoice(db, inv.id, payment_id)
+    stored_filename = _stored_payment_proof_filename(inv, extension)
+    db.add(InvoicePaymentProof(
+        id=str(uuid.uuid4()),
+        invoice_id=inv.id,
+        payment_id=payment_id,
+        payment_ref=payment_ref.strip() or None if payment_ref else None,
+        object_key=object_key,
+        filename=stored_filename,
+        content_type=content_type,
+        size=len(content),
+        uploaded_at=datetime.utcnow(),
+        uploaded_by=user.name,
+    ))
+    if payment_ref is not None:
+        normalized_payment_ref = payment_ref.strip() or None
+        inv.payment_ref = normalized_payment_ref
+        if payment_id:
+            payment = await db.get(CustomerPayment, payment_id)
+            if payment:
+                payment.payment_ref = normalized_payment_ref
+    await db.commit()
+    return {
+        "invoice_id": inv.id,
+        "filename": stored_filename,
+        "content_type": content_type,
+        "size": len(content),
+    }
+
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
 @router.post("/{invoice_id}/payment", dependencies=[Depends(require_perm("invoices.edit"))])
 async def record_payment(
@@ -1796,6 +2098,8 @@ async def record_payment(
         "store_credit_applied": credit_use,
         "tender_amount": tender_amount,
         "customer_credit_balance": customer_credit_after,
+        "payment_id": getattr(pay, "id", None),
+        "payment_number": getattr(pay, "number", None),
     }
 
 
@@ -3753,6 +4057,10 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "paidAmount": inv.paid_amount,
         "paymentMode": inv.payment_mode,
         "paymentRef": getattr(inv, "payment_ref", None),
+        "paymentProofFilename": getattr(inv, "payment_proof_filename", None),
+        "paymentProofContentType": getattr(inv, "payment_proof_content_type", None),
+        "paymentProofSize": getattr(inv, "payment_proof_size", None),
+        "paymentProofUploadedAt": getattr(inv, "payment_proof_uploaded_at", None),
         "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status),
         "dueDate": getattr(inv, "due_date", None),
         "creditedAmount": float(getattr(inv, "credited_amount", 0) or 0),

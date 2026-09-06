@@ -54,6 +54,13 @@ function formatDiscPct(item) {
   return `${rounded}%`
 }
 
+function formatFileSize(bytes) {
+  const size = Number(bytes || 0)
+  if (!size) return '—'
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
 const META = {
   invoice: { icon: '🧾', label: 'Invoice', fetch: (id) => salesAPI.get(id) },
   quote: { icon: '📄', label: 'Quotation', fetch: (id) => salesAPI.quotations.get(id) },
@@ -108,6 +115,9 @@ export default function SalesTxnDetailPanel({
   const lineCount = detail?.items?.length || 0
   const payments = kind === 'invoice' ? (detail?.payments || []) : []
   const paymentCount = payments.length
+  const paymentProof = kind === 'invoice'
+    ? (detail?.paymentProofs || [])
+    : []
   const balDue = kind === 'invoice'
     ? Math.round(((detail?.total || 0) - (detail?.paidAmount || 0) - (detail?.creditedAmount || 0)) * 100) / 100
     : 0
@@ -463,7 +473,54 @@ export default function SalesTxnDetailPanel({
       )}
 
       {tab === 'payments' && kind === 'invoice' && (
-        <DetailSection title="Payment history">
+        <>
+          <DetailSection title="Payment proofs">
+            {paymentProof.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No payment proof uploaded.</div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>File</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Uploaded</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentProof.map((proof) => (
+                    <tr key={proof.id || proof.filename}>
+                      <td className="mono" style={{ fontSize: 12 }}>{proof.filename}</td>
+                      <td>{(proof.content_type || proof.contentType) === 'application/pdf' ? 'PDF' : 'PNG'}</td>
+                      <td>{formatFileSize(proof.size)}</td>
+                      <td>{(proof.uploaded_at || proof.uploadedAt) ? new Date(proof.uploaded_at || proof.uploadedAt).toLocaleString() : '—'}</td>
+                      <td><Chip status="paid" label="Uploaded" /></td>
+                      <td className="text-right">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={async () => {
+                            try {
+                              const result = await salesAPI.getPaymentProof(detail.id, proof.id)
+                              window.open(result.download_url, '_blank', 'noopener,noreferrer')
+                            } catch (error) {
+                              console.error('Failed to open payment proof:', error)
+                            }
+                          }}
+                        >
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </DetailSection>
+
+          <DetailSection title="Payment history">
           {paymentCount === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
               No payments recorded against this invoice yet.
@@ -510,7 +567,8 @@ export default function SalesTxnDetailPanel({
               </tbody>
             </table>
           )}
-        </DetailSection>
+          </DetailSection>
+        </>
       )}
     </RecordDetailDrawer>
   )

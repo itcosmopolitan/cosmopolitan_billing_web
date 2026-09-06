@@ -124,6 +124,8 @@ export default function SalesPage() {
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
   const [payRef, setPayRef]     = useState('')
+  const [paymentProofFile, setPaymentProofFile] = useState(null)
+  const [paymentProofUploading, setPaymentProofUploading] = useState(false)
   const [activityTarget, setActivityTarget] = useState(null)
   // 2026-05-30: customer's available credit balance, fetched when the
   // Record Payment modal opens for a customer invoice. The invoice row
@@ -417,6 +419,7 @@ export default function SalesPage() {
     const balance = (showPayment.total || 0) - (showPayment.paidAmount || 0)
     setPayAmt(String(Math.max(0, balance)))
     setPayRef('')
+    setPaymentProofFile(null)
     // Reset the method on every open so a stale 'credit' selection from a
     // prior invoice can't carry over (the credit option may not even
     // render for the new invoice if it's a walk-in).
@@ -643,9 +646,11 @@ export default function SalesPage() {
     const creditUse = storeCreditApplyAmount(avail, balance, !isWalkin)
     const remaining = remainingAfterStoreCredit(balance, creditUse)
     const tender = remaining > 0.001 ? Number(payAmt) : 0
+    const needsProof = tender > 0.001 && ['card', 'upi', 'bank_transfer'].includes(payMode)
     if (remaining > 0.001 && (!payAmt || tender <= 0)) { toast.error('Enter a valid amount for the remaining balance'); return }
     if (remaining > 0.001 && !payMode) { toast.error('Pick a payment method for the remaining amount'); return }
     if (creditUse <= 0 && tender <= 0) { toast.error('Enter a payment amount'); return }
+    if (needsProof && !paymentProofFile) { toast.error('Attach a PNG or PDF payment proof'); return }
     if (isWalkin && tender > balance) {
       toast.error(`Walk-in invoice — reduce amount to ${fmt(balance)} or assign a customer first`)
       return
@@ -672,11 +677,56 @@ export default function SalesPage() {
       } else {
         toast.success(`Payment of ${fmt(tender || balance)} recorded`)
       }
-      setShowPayment(null)
+      if (needsProof) {
+        setShowPayment(null)
+        await uploadPaymentProof(showPayment.id, paymentProofFile, payRef, res?.payment_id)
+        toast.success('Payment proof uploaded')
+      } else {
+        setShowPayment(null)
+      }
     } catch (err) {
       console.error('Failed to record payment:', err)
     } finally {
       setPaySaving(false)
+    }
+  }
+
+  const uploadPaymentProof = async (invoiceId, file, paymentRef, paymentId) => {
+    setPaymentProofUploading(true)
+    try {
+      try {
+        const presigned = await salesAPI.presignPaymentProof(invoiceId, {
+          filename: file.name,
+          content_type: file.type,
+          size: file.size,
+        })
+        const response = await fetch(presigned.upload_url, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': file.type,
+            'x-amz-server-side-encryption': 'AES256',
+          },
+          body: file,
+        })
+        if (!response.ok) throw new Error(`S3 upload failed (${response.status})`)
+        await salesAPI.completePaymentProof(invoiceId, {
+          filename: file.name,
+          content_type: file.type,
+          size: file.size,
+          object_key: presigned.object_key,
+          payment_ref: paymentRef,
+          payment_id: paymentId,
+        })
+      } catch (directUploadError) {
+        console.warn('Direct S3 payment-proof upload failed; using backend fallback', directUploadError)
+        await salesAPI.uploadPaymentProof(invoiceId, file, paymentRef, paymentId)
+      }
+    } catch (err) {
+      console.error('Failed to upload payment proof:', err)
+      toast.error(err?.response?.data?.detail || err?.message || 'Failed to upload payment proof')
+      throw err
+    } finally {
+      setPaymentProofUploading(false)
     }
   }
 
@@ -2038,11 +2088,11 @@ export default function SalesPage() {
         branchLookup={(inv) => branches.find((b) => b.id === inv?.branchId)}
       />
       {/* Payment Modal */}
-      <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm" busy={paySaving}
+      <Modal open={!!showPayment} onClose={() => setShowPayment(null)} title="Record Payment" icon="💳" size="sm" busy={paySaving || paymentProofUploading}
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setShowPayment(null)} disabled={paySaving}>Cancel</button>
-          <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving}>
-            {paySaving ? 'Recording…' : 'Record Payment'}
+          <button className="btn btn-secondary" onClick={() => setShowPayment(null)} disabled={paySaving || paymentProofUploading}>Cancel</button>
+          <button className="btn btn-primary" onClick={recordPayment} disabled={paySaving || paymentProofUploading}>
+            {paymentProofUploading ? 'Uploading proof…' : paySaving ? 'Recording…' : 'Record Payment'}
           </button>
         </>}>
         {showPayment && (() => {
@@ -2102,6 +2152,33 @@ export default function SalesPage() {
               {remaining > 0.001 && (
                 <FormGroup label="Reference / Transaction ID">
                   <input className="form-input" value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="UTR / transaction reference" />
+                </FormGroup>
+              )}
+              {remaining > 0.001 && ['card', 'upi', 'bank_transfer'].includes(payMode) && (
+                <FormGroup label="Payment proof" required>
+                  <input
+                    className="form-input"
+                    type="file"
+                    accept=".png,application/pdf"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null
+                      if (file && !['image/png', 'application/pdf'].includes(file.type)) {
+                        toast.error('Only PNG and PDF files are allowed')
+                        event.target.value = ''
+                        setPaymentProofFile(null)
+                        return
+                      }
+                      const maxSize = file?.type === 'image/png' ? 1 * 1024 * 1024 : 2 * 1024 * 1024
+                      if (file && file.size > maxSize) {
+                        toast.error(file.type === 'image/png' ? 'PNG files must be 1 MB or smaller' : 'PDF files must be 2 MB or smaller')
+                        event.target.value = ''
+                        setPaymentProofFile(null)
+                        return
+                      }
+                      setPaymentProofFile(file)
+                    }}
+                  />
+                  <div style={{ color: 'var(--text-muted)', fontSize: 11.5, marginTop: 5 }}>PNG up to 1 MB; PDF up to 2 MB.</div>
                 </FormGroup>
               )}
             </>

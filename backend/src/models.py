@@ -502,6 +502,12 @@ class SaleInvoice(Base):
     # explicit `None` values during INSERT, masking the unpaid state.
     payment_mode  = Column(String, nullable=True)
     payment_ref   = Column(String, nullable=True)
+    payment_proof_key = Column(String, nullable=True)
+    payment_proof_filename = Column(String, nullable=True)
+    payment_proof_content_type = Column(String, nullable=True)
+    payment_proof_size = Column(Integer, nullable=True)
+    payment_proof_uploaded_at = Column(DateTime, nullable=True)
+    payment_proof_uploaded_by = Column(String, nullable=True)
     status        = Column(SAEnum(InvoiceStatus), default=InvoiceStatus.paid)
     due_date      = Column(String)   # credit-term due; drives overdue flag
     # Phase 0: cumulative return value + derived flag (see recalc_invoice_after_cn).
@@ -518,6 +524,27 @@ class SaleInvoice(Base):
 
     customer  = relationship("Customer", back_populates="invoices")
     line_items = relationship("SaleLineItem", back_populates="invoice", cascade="all, delete-orphan")
+    payment_proofs = relationship("InvoicePaymentProof", back_populates="invoice", cascade="all, delete-orphan")
+
+
+class InvoicePaymentProof(Base):
+    __tablename__ = "invoice_payment_proofs"
+    __table_args__ = (
+        Index("ix_invoice_payment_proofs_invoice_id", "invoice_id"),
+    )
+    id = Column(String, primary_key=True)
+    invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
+    payment_id = Column(String, ForeignKey("customer_payments.id"), nullable=True)
+    payment_ref = Column(String, nullable=True)
+    object_key = Column(String, nullable=False, unique=True)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)
+    size = Column(Integer, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    uploaded_by = Column(String, nullable=True)
+
+    invoice = relationship("SaleInvoice", back_populates="payment_proofs")
+    payment = relationship("CustomerPayment")
 
 
 class SaleLineItem(Base):
