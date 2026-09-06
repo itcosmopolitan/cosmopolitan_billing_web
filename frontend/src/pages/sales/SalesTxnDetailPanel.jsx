@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtQty, formatLabel } from '@/utils/helpers'
+import { fmt, fmtQty, formatLabel, conversionStatusDisplay } from '@/utils/helpers'
 import { Chip, CopyableId, ReturnStatusChip, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import {
@@ -122,6 +122,9 @@ export default function SalesTxnDetailPanel({
     detail?.customerPostalCode || detail?.customer_postal_code || detail?.postal_code,
   ].filter((line) => typeof line === 'string' && line.trim()).map((line) => line.trim())
 
+  const conversionKind = kind === 'quote' ? 'quote' : kind === 'order' ? 'order' : null
+  const conversionDisplay = conversionKind ? conversionStatusDisplay(conversionKind, detail) : null
+
   const summary = kind === 'invoice' ? [
     { label: 'Total', value: fmt(detail?.total) },
     { label: 'Paid', value: fmt(detail?.paidAmount || 0), tone: 'var(--green)' },
@@ -136,7 +139,15 @@ export default function SalesTxnDetailPanel({
     { label: 'Total', value: fmt(detail?.total) },
     { label: 'Lines', value: lineCount },
     { label: kind === 'quote' ? 'Valid until' : 'Expected', value: detail?.validUntil || detail?.expectedDate || '—' },
-    { label: 'Status', value: <Chip status={detail?.status} label={formatLabel(detail?.status)} /> },
+    {
+      label: 'Status',
+      value: (
+        <Chip
+          status={conversionDisplay?.chip || detail?.status}
+          label={conversionDisplay?.label || formatLabel(detail?.status)}
+        />
+      ),
+    },
   ]
 
   const footer = (
@@ -300,21 +311,48 @@ export default function SalesTxnDetailPanel({
                 { label: 'Payment ref', value: detail?.paymentRef || '—' },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
                 { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
-                { label: 'Sales order', value: detail?.salesOrderNumber || '—' },
+                ...(detail?.salesOrderNumber ? [{
+                  label: 'Sales order',
+                  value: <CopyableId value={detail.salesOrderNumber} label={detail.salesOrderNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                }] : []),
+                ...(detail?.quotationNumber ? [{
+                  label: 'Quotation',
+                  value: <CopyableId value={detail.quotationNumber} label={detail.quotationNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                }] : []),
               ] : []),
               ...(kind === 'quote' ? [
                 { label: 'Valid until', value: detail?.validUntil || '—' },
                 { label: 'Created by', value: detail?.createdBy || '—' },
-                { label: 'Linked SO', value: detail?.convertedOrderId ? <Tag color="var(--accent)">Linked</Tag> : '—' },
-                { label: 'Linked invoice', value: detail?.convertedInvoiceId ? <Tag color="var(--green)">Invoiced</Tag> : '—' },
+                {
+                  label: 'Linked SO',
+                  value: detail?.convertedOrderNumber
+                    ? <CopyableId value={detail.convertedOrderNumber} label={detail.convertedOrderNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
+                {
+                  label: 'Linked invoice',
+                  value: detail?.convertedInvoiceNumber
+                    ? <CopyableId value={detail.convertedInvoiceNumber} label={detail.convertedInvoiceNumber} style={{ color: 'var(--green)', fontSize: 12 }} />
+                    : '—',
+                },
               ] : []),
               ...(kind === 'order' ? [
                 { label: 'Expected date', value: detail?.expectedDate || '—' },
                 { label: 'Created by', value: detail?.createdBy || '—' },
-                { label: 'Converted invoice', value: detail?.convertedInvoiceId || '—' },
+                {
+                  label: 'Converted invoice',
+                  value: detail?.convertedInvoiceNumber
+                    ? <CopyableId value={detail.convertedInvoiceNumber} label={detail.convertedInvoiceNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
               ] : []),
               ...(kind === 'return' ? [
-                { label: 'Against invoice', value: detail?.invoiceNumber || '—' },
+                {
+                  label: 'Against invoice',
+                  value: detail?.invoiceNumber
+                    ? <CopyableId value={detail.invoiceNumber} label={detail.invoiceNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
                 { label: 'Reason', value: detail?.reason || '—' },
                 {
                   label: 'Refund method',
@@ -327,7 +365,15 @@ export default function SalesTxnDetailPanel({
                 { label: 'Created by', value: detail?.createdBy || '—' },
               ] : []),
               { label: 'Date', value: detail?.date || '—' },
-              { label: 'Status', value: <Chip status={detail?.status} label={formatLabel(detail?.status)} /> },
+              {
+                label: 'Status',
+                value: (
+                  <Chip
+                    status={conversionDisplay?.chip || detail?.status}
+                    label={conversionDisplay?.label || formatLabel(detail?.status)}
+                  />
+                ),
+              },
             ]}
             />
           </DetailSection>

@@ -74,7 +74,7 @@ export default function InvoiceEditPage() {
           navigate(invoiceEditPath(inv, can), { replace: true })
           return
         }
-        const base = invoiceFromRow(inv, inv.branchId)
+        const base = invoiceFromRow(inv, inv.branchId, { keepNumber: true })
         const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
         if (cancelled) return
         setForm({ ...base, items })

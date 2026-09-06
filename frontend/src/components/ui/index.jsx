@@ -25,7 +25,7 @@ function mapSelectOptions(options = []) {
 const modalEscapeStack = []
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false, hideHeaderClose = false, zIndex }) {
+export function Modal({ open, onClose, title, children, footer, size = 'md', icon, busy = false, hideHeaderClose = false, zIndex, align = 'center' }) {
   useEffect(() => {
     if (!open) return undefined
     const token = {}
@@ -48,9 +48,10 @@ export function Modal({ open, onClose, title, children, footer, size = 'md', ico
   if (!open) return null
 
   const widths = { sm: '400px', md: '560px', lg: '720px', xl: '900px' }
+  const overlayClass = align === 'top' ? 'modal-overlay modal-overlay--top' : 'modal-overlay'
 
   return (
-    <div className="modal-overlay" style={zIndex ? { zIndex } : undefined} onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
+    <div className={overlayClass} style={zIndex ? { zIndex } : undefined} onClick={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="modal" style={{ maxWidth: widths[size] }}>
         <div className="modal-header">
           {icon && <span style={{ fontSize: 20 }}>{icon}</span>}

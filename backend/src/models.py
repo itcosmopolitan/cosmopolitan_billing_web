@@ -66,9 +66,9 @@ class QuotationStatus(str, enum.Enum):
 
 class SalesOrderStatus(str, enum.Enum):
     """Sales Order lifecycle. Mirrors QuotationStatus shape so the convert
-    flows feel consistent. `converted` is terminal — once an SO has spawned
-    an invoice, its line items / totals are locked and the SO can't be
-    edited or re-converted."""
+    flows feel consistent. `converted` means a live invoice currently covers
+    the order; deleting that invoice restores lines and reopens the SO
+    (typically back to `confirmed`) so it can be converted again."""
     draft              = "draft"
     pending_approval   = "pending_approval"
     confirmed          = "confirmed"
@@ -296,7 +296,7 @@ class Item(Base):
     staff_pricing_mode     = Column(String, default="pct")  # pct | price
     staff_discount_pct     = Column(Float, default=0)
     staff_price            = Column(Float, default=0)
-    tax_rate        = Column(Float, default=18)
+    tax_rate        = Column(Float, default=8)
     hsn_code        = Column(String)
     reorder_level   = Column(Integer, default=10)
     is_packaging    = Column(Boolean, default=False)
@@ -347,6 +347,13 @@ class ItemBranchConfig(Base):
     cost_price     = Column(Float, nullable=True)
     selling_price  = Column(Float, nullable=True)
     reorder_level  = Column(Integer, nullable=True)
+    # NULL mode → inherit catalog wholesale/staff; otherwise pct | price.
+    wholesale_pricing_mode = Column(String, nullable=True)
+    wholesale_discount_pct = Column(Float, nullable=True)
+    wholesale_price        = Column(Float, nullable=True)
+    staff_pricing_mode     = Column(String, nullable=True)
+    staff_discount_pct     = Column(Float, nullable=True)
+    staff_price            = Column(Float, nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

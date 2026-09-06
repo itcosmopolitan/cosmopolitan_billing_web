@@ -55,7 +55,7 @@ export default function BillEditPage() {
           navigate('/purchases?tab=bills', { replace: true })
           return
         }
-        const base = billFromRow(bill, bill.branchId)
+        const base = billFromRow(bill, bill.branchId, { keepNumber: true })
         const items = await enrichPurchaseLinesWithSellPrice(base.items)
         if (cancelled) return
         setForm({ ...base, items })

@@ -169,6 +169,43 @@ export const statusLabel = (status) => {
   return map[status] || humanizeValue(status)
 }
 
+/**
+ * Unified conversion status label for sales/purchase lists & details.
+ * Prefer specific conversion outcome over bare "Converted".
+ * kind: 'quote' | 'order' | 'po'
+ */
+export const conversionStatusDisplay = (kind, doc) => {
+  const status = doc?.status
+  if (kind === 'quote') {
+    if (status === 'converted') {
+      if (doc.convertedInvoiceId) return { chip: 'success', label: 'Invoiced' }
+      if (doc.convertedOrderId) return { chip: 'active', label: 'Converted to SO' }
+      return { chip: 'draft', label: 'Converted' }
+    }
+    if (status === 'sent') return { chip: 'active', label: formatLabel(status) }
+    if (status === 'accepted') return { chip: 'success', label: formatLabel(status) }
+    return { chip: 'draft', label: formatLabel(status) }
+  }
+  if (kind === 'order') {
+    if (status === 'converted') return { chip: status, label: 'Invoiced' }
+    if (status === 'partially_invoiced') return { chip: status, label: formatLabel(status) }
+    return { chip: status, label: formatLabel(status) }
+  }
+  if (kind === 'po') {
+    if (status === 'converted') return { chip: status, label: 'Billed' }
+    return { chip: status, label: formatLabel(status) }
+  }
+  return { chip: status, label: formatLabel(status) }
+}
+
+/** Prefer invoice/bill number, then SO number, for the Linked column. */
+export const linkedDocNumber = (doc) => (
+  doc?.convertedInvoiceNumber
+  || doc?.convertedBillNumber
+  || doc?.convertedOrderNumber
+  || null
+)
+
 // ─── Stock status ─────────────────────────────────────────────────────────────
 export const stockStatus = (qty, reorder) => {
   if (qty === 0)        return { status: 'out',    label: 'Out of Stock', cls: 'chip-out' }

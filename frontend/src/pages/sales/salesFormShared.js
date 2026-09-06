@@ -166,10 +166,12 @@ export function orderFromRow(so, branchId) {
   }
 }
 
-export function invoiceFromRow(doc, branchId, { withOrderLineId = false } = {}) {
+export function invoiceFromRow(doc, branchId, { withOrderLineId = false, keepNumber = false } = {}) {
   return {
     ...emptyInvoiceForm(doc.branchId || branchId),
-    number: doc.number || '',
+    // Conversion must leave number blank so DocumentNumberField / server
+    // auto-allocate the next invoice #. Keep only when editing an existing invoice.
+    number: keepNumber ? (doc.number || '') : '',
     customerName: doc.customerName || '',
     customerId: doc.customerId || '',
     branchId: doc.branchId || branchId,

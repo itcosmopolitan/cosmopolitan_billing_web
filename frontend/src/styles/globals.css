@@ -719,12 +719,149 @@ h4 { font-size: 14px; font-weight: 600; }
   padding-top: 18px;
 }
 
+.item-form-section__head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .item-form-section__hint--inline {
   margin: 4px 0 0;
 }
 
 .branch-price-empty {
   padding: 8px 0 4px;
+}
+
+.branch-price-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.branch-price-card {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 12px 14px;
+}
+
+.branch-price-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.branch-price-card__name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.branch-price-card__meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.branch-price-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.branch-price-card__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .branch-price-card__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.branch-price-card__grid dt {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin: 0 0 2px;
+}
+
+.branch-price-card__grid dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.branch-price-card__inherit {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.branch-price-modal {
+  display: grid;
+  gap: 18px;
+}
+
+.branch-price-modal__block h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.branch-price-modal__block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.branch-price-modal__block-head h4 {
+  margin: 0;
+}
+
+.branch-price-modal__gp-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.2;
+}
+
+.branch-price-modal__field-gp {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.2;
+  min-height: 1.2em;
+}
+
+.branch-price-modal__gp-label .branch-price-table__gp,
+.branch-price-modal__field-gp .branch-price-table__gp,
+.branch-price-card__grid .branch-price-table__gp {
+  margin-top: 0;
+  min-width: 0;
+  font-size: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
 }
 
 .branch-price-table-wrap {
@@ -2147,6 +2284,11 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   z-index: 1000;
   animation: fadeInPage 0.15s ease;
 }
+.modal-overlay--top {
+  align-items: flex-start;
+  padding-top: 0;
+  overflow-y: auto;
+}
 .modal {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
@@ -2156,6 +2298,11 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
+}
+.modal-overlay--top .modal {
+  max-height: 100vh;
+  margin-bottom: 0;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
 }
 .modal-header {
   padding: 20px 24px 16px;

@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, statusLabel, exportToCSV, formatLabel } from '@/utils/helpers'
+import { fmt, statusLabel, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
 import { SectionHeader, Card, Chip, Modal, FormGroup, Tag, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -1271,6 +1271,7 @@ export default function SalesPage() {
                       if (id === 'valid_until') return <SortableHeader key={id} label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                      if (id === 'linked') return <th key={id}>Linked</th>
                       return null
                     })}
                     <th></th>
@@ -1294,17 +1295,27 @@ export default function SalesPage() {
                         />
                       </td>
                       {quoteColumnPrefs.visibleIds.map((id) => {
+                        const conv = conversionStatusDisplay('quote', q)
+                        const linked = linkedDocNumber(q)
                         if (id === 'number') return <td key={id}><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
                         if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono">{fmt(q.total)}</td>
-                        if (id === 'status') return <td key={id}><Chip status={q.status === 'sent' ? 'active' : q.status === 'accepted' ? 'success' : 'draft'} label={formatLabel(q.status)} /></td>
+                        if (id === 'status') return <td key={id}><Chip status={conv.chip} label={conv.label} /></td>
+                        if (id === 'linked') {
+                          return (
+                            <td key={id}>
+                              {linked
+                                ? <CopyableId value={linked} label={linked} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                            </td>
+                          )
+                        }
                         return null
                       })}
-                      <td>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <RowActionsMenu
+                      <td data-no-row-click>
+                        <RowActionsMenu
                             busy={!!actionBusy}
                             ariaLabel={`Actions for ${q.number}`}
                             actions={[
@@ -1371,13 +1382,6 @@ export default function SalesPage() {
                               },
                             ]}
                           />
-                          {q.convertedOrderId && (
-                            <Tag color="var(--accent)">SO linked</Tag>
-                          )}
-                          {q.convertedInvoiceId && (
-                            <Tag color="var(--green)">Invoiced</Tag>
-                          )}
-                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1870,6 +1874,7 @@ export default function SalesPage() {
                       if (id === 'expected') return <SortableHeader key={id} label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                      if (id === 'linked') return <th key={id}>Linked</th>
                       return null
                     })}
                     <th></th>
@@ -1882,6 +1887,8 @@ export default function SalesPage() {
                     const isDraft = o.status === 'draft'
                     const isPendingApproval = o.status === 'pending_approval'
                     const isConfirmed = o.status === 'confirmed'
+                    const conv = conversionStatusDisplay('order', o)
+                    const linked = linkedDocNumber(o)
                     return (
                       <tr
                         key={o.id}
@@ -1904,11 +1911,19 @@ export default function SalesPage() {
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                           if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                           if (id === 'amount') return <td key={id} className="text-right mono">{fmt(o.total)}</td>
-                          if (id === 'status') return <td key={id}><Chip status={o.status} label={formatLabel(o.status)} /></td>
+                          if (id === 'status') return <td key={id}><Chip status={conv.chip} label={conv.label} /></td>
+                          if (id === 'linked') {
+                            return (
+                              <td key={id}>
+                                {linked
+                                  ? <CopyableId value={linked} label={linked} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                                  : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                              </td>
+                            )
+                          }
                           return null
                         })}
-                        <td>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <td data-no-row-click>
                             <RowActionsMenu
                               busy={!!actionBusy}
                               ariaLabel={`Actions for ${o.number}`}
@@ -1981,10 +1996,6 @@ export default function SalesPage() {
                                 },
                               ]}
                             />
-                            {isConverted && !o.convertedInvoiceId && (
-                              <Tag color="var(--amber)">Invoice removed</Tag>
-                            )}
-                          </div>
                         </td>
                       </tr>
                     )

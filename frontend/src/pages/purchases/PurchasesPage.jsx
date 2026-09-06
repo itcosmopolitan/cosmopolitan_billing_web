@@ -24,9 +24,9 @@ import toast from 'react-hot-toast'
 import { purchasesAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
+import { fmt, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
-import { SectionHeader, Card, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, Tag, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { SectionHeader, Card, Chip, Modal, FormGroup, AlertBar, PaginationBar, SortableHeader, CopyableId, ReturnStatusChip, RowActionsMenu, TablePanel, AutocompleteDropdown, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { PAYMENT_MODE_LABEL_OPTIONS, PAYMENT_STATUS_FILTER_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
@@ -1141,6 +1141,7 @@ export default function PurchasesPage() {
                       if (id === 'expected') return <SortableHeader key={id} label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                       if (id === 'total') return <SortableHeader key={id} label="Total" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                      if (id === 'linked') return <th key={id}>Linked</th>
                       return null
                     })}
                     <th></th>
@@ -1157,6 +1158,8 @@ export default function PurchasesPage() {
                     const canCreateGrn = canReceiveOrConvert && can('purchases.create')
                     // Bill form creates a draft bill (no stock) for create-only; approvers post stock on bill approve.
                     const canConvertToBill = canReceiveOrConvert && can('purchases.create')
+                    const conv = conversionStatusDisplay('po', o)
+                    const linked = linkedDocNumber(o)
                     return (
                       <tr
                         key={o.id}
@@ -1179,11 +1182,19 @@ export default function PurchasesPage() {
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                           if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600 }}>{fmt(o.total || 0)}</td>
-                          if (id === 'status') return <td key={id}><Chip status={o.status} /></td>
+                          if (id === 'status') return <td key={id}><Chip status={conv.chip} label={conv.label} /></td>
+                          if (id === 'linked') {
+                            return (
+                              <td key={id}>
+                                {linked
+                                  ? <CopyableId value={linked} label={linked} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                                  : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                              </td>
+                            )
+                          }
                           return null
                         })}
-                        <td>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <td data-no-row-click>
                             <RowActionsMenu
                               busy={!!actionBusy}
                               ariaLabel={`Actions for ${o.number}`}
@@ -1269,13 +1280,6 @@ export default function PurchasesPage() {
                                 },
                               ]}
                             />
-                            {isPartiallyReceived && (
-                              <Tag color="var(--amber)">Bill GRN →</Tag>
-                            )}
-                            {isConverted && !o.convertedBillId && (
-                              <Tag color="var(--amber)">Bill removed</Tag>
-                            )}
-                          </div>
                         </td>
                       </tr>
                     )
@@ -1341,7 +1345,7 @@ export default function PurchasesPage() {
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} />
                       if (id === 'total') return <SortableHeader key={id} label="Total" sortKey="total" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={grnSortBy} sortOrder={grnSortOrder} onSort={(k) => toggleSort(grnSortBy, grnSortOrder, setGrnSortBy, setGrnSortOrder, setGrnSkip, k)} />
-                      if (id === 'bill') return <th key={id}>Bill</th>
+                      if (id === 'bill') return <th key={id}>Bill #</th>
                       return null
                     })}
                     <th></th>
@@ -1350,6 +1354,7 @@ export default function PurchasesPage() {
                 <tbody>
                   {grns.map((g) => {
                     const hasBill = !!g.convertedBillId
+                    const billNumber = g.convertedBillNumber
                     const isDraft = g.status === 'draft'
                     const isPendingApproval = g.status === 'pending_approval'
                     const isReceived = g.status === 'received'
@@ -1366,10 +1371,18 @@ export default function PurchasesPage() {
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.date}</td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600 }}>{fmt(g.total || 0)}</td>
                           if (id === 'status') return <td key={id}><Chip status={g.status} /></td>
-                          if (id === 'bill') return <td key={id} style={{ fontSize: 12 }}>{hasBill ? 'Linked' : '—'}</td>
+                          if (id === 'bill') {
+                            return (
+                              <td key={id}>
+                                {billNumber
+                                  ? <CopyableId value={billNumber} label={billNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                                  : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                              </td>
+                            )
+                          }
                           return null
                         })}
-                        <td className="text-right">
+                        <td className="text-right" data-no-row-click>
                           <RowActionsMenu
                             busy={!!actionBusy}
                             ariaLabel={`Actions for ${g.number}`}

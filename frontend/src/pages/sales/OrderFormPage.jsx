@@ -89,7 +89,7 @@ export default function OrderFormPage({ mode = 'create' }) {
           const base = quoteFromRow(q, activeBranchId)
           const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
           if (cancelled) return
-          setForm({ ...base, items })
+          setForm({ ...emptyOrderForm(base.branchId || activeBranchId), ...base, items, number: '' })
           setConversionLabel(q.number)
         } catch {
           toast.error('Quotation not found')

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { purchasesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtQty, formatLabel } from '@/utils/helpers'
-import { Chip, ReturnStatusChip } from '@/components/ui'
+import { fmt, fmtQty, formatLabel, conversionStatusDisplay } from '@/utils/helpers'
+import { Chip, CopyableId, ReturnStatusChip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import {
   canShowBillEdit,
@@ -68,6 +68,7 @@ export default function PurchaseTxnDetailPanel({
   const balDue = kind === 'bill'
     ? Math.round(((detail?.total || 0) - (detail?.paidAmount || 0)) * 100) / 100
     : 0
+  const poStatus = kind === 'order' ? conversionStatusDisplay('po', detail) : null
 
   const summary = kind === 'bill' ? [
     { label: 'Total', value: fmt(detail?.total) },
@@ -88,7 +89,7 @@ export default function PurchaseTxnDetailPanel({
     { label: 'Total', value: fmt(detail?.total) },
     { label: 'Lines', value: lineCount },
     { label: 'Expected', value: detail?.expectedDate || '—' },
-    { label: 'Status', value: <Chip status={detail?.status} /> },
+    { label: 'Status', value: <Chip status={poStatus?.chip || detail?.status} label={poStatus?.label} /> },
   ]
 
   const footer = (
@@ -200,21 +201,54 @@ export default function PurchaseTxnDetailPanel({
                 { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode) },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
                 { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                ...(detail?.purchaseOrderNumber ? [{
+                  label: 'Purchase order',
+                  value: <CopyableId value={detail.purchaseOrderNumber} label={detail.purchaseOrderNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                }] : []),
+                ...(detail?.grnNumber ? [{
+                  label: 'GRN',
+                  value: <CopyableId value={detail.grnNumber} label={detail.grnNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                }] : []),
               ] : []),
               ...(kind === 'order' ? [
                 { label: 'Expected date', value: detail?.expectedDate || '—' },
                 { label: 'Created by', value: detail?.createdBy || '—' },
-                { label: 'Converted bill', value: detail?.convertedBillId || '—' },
+                {
+                  label: 'Converted bill',
+                  value: detail?.convertedBillNumber
+                    ? <CopyableId value={detail.convertedBillNumber} label={detail.convertedBillNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
               ] : []),
               ...(kind === 'grn' ? [
-                { label: 'PO #', value: detail?.poNumber || '—' },
-                { label: 'Converted bill', value: detail?.convertedBillId || '—' },
+                {
+                  label: 'PO #',
+                  value: detail?.poNumber
+                    ? <CopyableId value={detail.poNumber} label={detail.poNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
+                {
+                  label: 'Converted bill',
+                  value: detail?.convertedBillNumber
+                    ? <CopyableId value={detail.convertedBillNumber} label={detail.convertedBillNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
               ] : []),
               ...(kind === 'return' ? [
-                { label: 'Against bill', value: detail?.billNumber || '—' },
+                {
+                  label: 'Against bill',
+                  value: detail?.billNumber
+                    ? <CopyableId value={detail.billNumber} label={detail.billNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    : '—',
+                },
                 { label: 'Reason', value: detail?.reason || '—' },
               ] : []),
-              { label: 'Status', value: <Chip status={detail?.status} /> },
+              { label: 'Status', value: (
+                <Chip
+                  status={poStatus?.chip || detail?.status}
+                  label={poStatus?.label || formatLabel(detail?.status)}
+                />
+              ) },
             ]}
             />
           </DetailSection>

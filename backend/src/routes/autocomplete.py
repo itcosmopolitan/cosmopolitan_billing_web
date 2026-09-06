@@ -130,6 +130,17 @@ async def autocomplete_unit(
     return [{"id": u, "text": u} for u in units]
 
 
+def _tax_rate_option_id(rate) -> str:
+    """Stable dropdown id — whole rates as ``8`` not ``8.0``."""
+    try:
+        value = float(rate)
+    except (TypeError, ValueError):
+        return str(rate)
+    if value == int(value):
+        return str(int(value))
+    return str(value)
+
+
 @router.get("/tax-rate", dependencies=[Depends(require_perm("items.view", "items.create", "items.edit"))])
 async def autocomplete_tax_rate(
     search_text: Optional[str] = None,
@@ -146,16 +157,16 @@ async def autocomplete_tax_rate(
         await db.execute(q.order_by(TaxRate.rate.asc()).limit(limit))
     ).scalars().all()
 
-    items = [{"id": str(t.rate), "text": f"{t.rate}%"} for t in rows]
+    items = [{"id": _tax_rate_option_id(t.rate), "text": f"{_tax_rate_option_id(t.rate)}%"} for t in rows]
     if include_rate is not None:
-        rate_key = str(include_rate)
+        rate_key = _tax_rate_option_id(include_rate)
         if not any(i["id"] == rate_key for i in items):
             extra = (
                 await db.execute(select(TaxRate).where(TaxRate.rate == include_rate).limit(1))
             ).scalar_one_or_none()
-            label = f"{include_rate}%"
+            label = f"{rate_key}%"
             if extra and not extra.active:
-                label = f"{include_rate}% (inactive)"
+                label = f"{rate_key}% (inactive)"
             items = [{"id": rate_key, "text": label}, *items]
     return items[:limit]
 

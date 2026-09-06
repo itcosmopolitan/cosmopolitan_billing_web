@@ -672,16 +672,15 @@ async def list_invoices(
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     out = []
     for inv in invoices:
-        sales_order_number = None
-        if getattr(inv, "pending_order_id", None):
-            so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
-            sales_order_number = so_res.scalar_one_or_none()
-        elif getattr(inv, "origin", None) == "sales_order":
-            sales_order_number = inv.number
-        else:
-            so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
-            sales_order_number = so_res.scalar_one_or_none()
-        d = _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
+        linked = await _resolve_invoice_linked_docs(db, inv)
+        d = _inv_dict(
+            inv,
+            inv.line_items,
+            sales_order_number=linked["sales_order_number"],
+            sales_order_id=linked["sales_order_id"],
+            quotation_id=linked["quotation_id"],
+            quotation_number=linked["quotation_number"],
+        )
         if org_row:
             d.setdefault('organisation', {})
             d['organisation']['id'] = org_row.id
@@ -759,7 +758,25 @@ async def list_quotations(
     total = int((await db.execute(q_count)).scalar() or 0)
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
-    items_out = [_quote_dict(qt, qt.line_items) for qt in quotations]
+    order_nums = await _sales_doc_number_map(
+        db, SalesOrder, {qt.converted_order_id for qt in quotations if qt.converted_order_id},
+    )
+    inv_nums = await _sales_doc_number_map(
+        db, SaleInvoice, {
+            getattr(qt, "converted_invoice_id", None)
+            for qt in quotations
+            if getattr(qt, "converted_invoice_id", None)
+        },
+    )
+    items_out = [
+        _quote_dict(
+            qt,
+            qt.line_items,
+            converted_order_number=order_nums.get(qt.converted_order_id),
+            converted_invoice_number=inv_nums.get(getattr(qt, "converted_invoice_id", None)),
+        )
+        for qt in quotations
+    ]
     return paged(items_out, total, sk, lim)
 
 @router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
@@ -777,7 +794,15 @@ async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user:
     if not quote:
         raise HTTPException(404, "Quotation not found")
     await enforce_branch_access(quote.branch_id, user=user, db=db)
-    return _quote_dict(quote, quote.line_items)
+    order_nums = await _sales_doc_number_map(db, SalesOrder, {quote.converted_order_id} if quote.converted_order_id else set())
+    inv_id = getattr(quote, "converted_invoice_id", None)
+    inv_nums = await _sales_doc_number_map(db, SaleInvoice, {inv_id} if inv_id else set())
+    return _quote_dict(
+        quote,
+        quote.line_items,
+        converted_order_number=order_nums.get(quote.converted_order_id),
+        converted_invoice_number=inv_nums.get(inv_id),
+    )
 
 @router.post("/quotations/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
 async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
@@ -1073,16 +1098,15 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
     if not inv:
         raise HTTPException(404, "Invoice not found")
     await _resolve_branch_scope(user, db, inv.branch_id)
-    sales_order_number = None
-    if getattr(inv, "pending_order_id", None):
-        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
-        sales_order_number = so_res.scalar_one_or_none()
-    elif getattr(inv, "origin", None) == "sales_order":
-        sales_order_number = inv.number
-    else:
-        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
-        sales_order_number = so_res.scalar_one_or_none()
-    d = _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
+    linked = await _resolve_invoice_linked_docs(db, inv)
+    d = _inv_dict(
+        inv,
+        inv.line_items,
+        sales_order_number=linked["sales_order_number"],
+        sales_order_id=linked["sales_order_id"],
+        quotation_id=linked["quotation_id"],
+        quotation_number=linked["quotation_number"],
+    )
     d["payments"] = await _payments_for_invoice(db, inv.id)
     credit_spent = 0.0
     tender_paid = 0.0
@@ -1260,16 +1284,15 @@ async def update_invoice(
         .where(SaleInvoice.id == invoice_id)
     )
     inv = result.scalar_one()
-    sales_order_number = None
-    if getattr(inv, "pending_order_id", None):
-        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.id == inv.pending_order_id))
-        sales_order_number = so_res.scalar_one_or_none()
-    elif getattr(inv, "origin", None) == "sales_order":
-        sales_order_number = inv.number
-    else:
-        so_res = await db.execute(select(SalesOrder.number).where(SalesOrder.converted_invoice_id == inv.id))
-        sales_order_number = so_res.scalar_one_or_none()
-    return _inv_dict(inv, inv.line_items, sales_order_number=sales_order_number)
+    linked = await _resolve_invoice_linked_docs(db, inv)
+    return _inv_dict(
+        inv,
+        inv.line_items,
+        sales_order_number=linked["sales_order_number"],
+        sales_order_id=linked["sales_order_id"],
+        quotation_id=linked["quotation_id"],
+        quotation_number=linked["quotation_number"],
+    )
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
@@ -3525,7 +3548,17 @@ def _loaded_rel(obj, name):
     return getattr(obj, name, None)
 
 
-def _quote_dict(quote, items=None):
+
+async def _sales_doc_number_map(db: AsyncSession, model, ids) -> dict:
+    """Map document ids → human-readable numbers (batch)."""
+    clean = {i for i in (ids or set()) if i}
+    if not clean:
+        return {}
+    rows = (await db.execute(select(model.id, model.number).where(model.id.in_(clean)))).all()
+    return {rid: num for rid, num in rows if rid}
+
+
+def _quote_dict(quote, items=None, *, converted_order_number=None, converted_invoice_number=None):
     customer = _loaded_rel(quote, "customer")
     customer_code = None
     if customer is not None:
@@ -3576,7 +3609,9 @@ def _quote_dict(quote, items=None):
         "total": quote.total,
         "status": str(quote.status.value) if hasattr(quote.status, "value") else str(quote.status),
         "convertedOrderId": quote.converted_order_id,
+        "convertedOrderNumber": converted_order_number,
         "convertedInvoiceId": getattr(quote, "converted_invoice_id", None),
+        "convertedInvoiceNumber": converted_invoice_number,
         "notes": quote.notes,
     }
     if items is not None:
@@ -3605,7 +3640,69 @@ def _quote_dict(quote, items=None):
         } for i in items]
     return d
 
-def _inv_dict(inv, items=None, sales_order_number=None):
+
+async def _resolve_invoice_linked_docs(db: AsyncSession, inv) -> dict:
+    """Resolve linked sales-order / quotation ids + numbers for an invoice.
+
+    Never fall back to ``inv.number`` — that incorrectly showed the invoice
+    number as the sales-order number when origin was ``sales_order``.
+    """
+    so_id = getattr(inv, "pending_order_id", None) or None
+    so_number = None
+    quote_id = getattr(inv, "pending_quote_id", None) or None
+    quote_number = None
+
+    if so_id:
+        row = (
+            await db.execute(
+                select(SalesOrder.id, SalesOrder.number).where(SalesOrder.id == so_id)
+            )
+        ).one_or_none()
+        if row:
+            so_id, so_number = row[0], row[1]
+        else:
+            so_id = None
+    else:
+        row = (
+            await db.execute(
+                select(SalesOrder.id, SalesOrder.number).where(
+                    SalesOrder.converted_invoice_id == inv.id
+                )
+            )
+        ).one_or_none()
+        if row:
+            so_id, so_number = row[0], row[1]
+
+    if quote_id:
+        row = (
+            await db.execute(
+                select(Quotation.id, Quotation.number).where(Quotation.id == quote_id)
+            )
+        ).one_or_none()
+        if row:
+            quote_id, quote_number = row[0], row[1]
+        else:
+            quote_id = None
+    else:
+        row = (
+            await db.execute(
+                select(Quotation.id, Quotation.number).where(
+                    Quotation.converted_invoice_id == inv.id
+                )
+            )
+        ).one_or_none()
+        if row:
+            quote_id, quote_number = row[0], row[1]
+
+    return {
+        "sales_order_id": so_id,
+        "sales_order_number": so_number,
+        "quotation_id": quote_id,
+        "quotation_number": quote_number,
+    }
+
+
+def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, quotation_id=None, quotation_number=None):
     customer = _loaded_rel(inv, "customer")
     customer_code = None
     if customer is not None:
@@ -3662,8 +3759,10 @@ def _inv_dict(inv, items=None, sales_order_number=None):
         "returnStatus": getattr(inv, "return_status", None) or "none",
         "origin": getattr(inv, "origin", None) or "invoice",
         "notes": inv.notes,
-        "salesOrderId": getattr(inv, "pending_order_id", None) or None,
+        "salesOrderId": sales_order_id or getattr(inv, "pending_order_id", None) or None,
         "salesOrderNumber": sales_order_number or None,
+        "quotationId": quotation_id or getattr(inv, "pending_quote_id", None) or None,
+        "quotationNumber": quotation_number or None,
     }
     if items is not None:
         out_lines = []
@@ -3836,7 +3935,7 @@ class SalesReturnCreate(BaseModel):
 
 
 # ─── Sales Order helpers ─────────────────────────────────────────────────────
-def _so_dict(so, items=None, classification=None):
+def _so_dict(so, items=None, classification=None, *, converted_invoice_number=None):
     d = {
         "id": so.id, "number": so.number,
         "customerId": so.customer_id,
@@ -3853,6 +3952,7 @@ def _so_dict(so, items=None, classification=None):
         "total": so.total,
         "status": so.status.value if hasattr(so.status, "value") else str(so.status),
         "convertedInvoiceId": so.converted_invoice_id,
+        "convertedInvoiceNumber": converted_invoice_number,
         "notes": so.notes,
         "createdAt": so.created_at.isoformat() if so.created_at else None,
     }
@@ -4480,7 +4580,17 @@ async def list_orders(
         q_count = q_count.where(and_(*conds))
     total = int((await db.execute(q_count)).scalar() or 0)
     rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
-    out = [_so_dict(so, so.line_items) for so in rows]
+    inv_nums = await _sales_doc_number_map(
+        db, SaleInvoice, {so.converted_invoice_id for so in rows if so.converted_invoice_id},
+    )
+    out = [
+        _so_dict(
+            so,
+            so.line_items,
+            converted_invoice_number=inv_nums.get(so.converted_invoice_id),
+        )
+        for so in rows
+    ]
     return paged(out, total, sk, lim)
 
 
@@ -4504,7 +4614,15 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
         ).scalar_one_or_none()
         if cust is not None:
             classification = getattr(cust, "classification", None) or "external"
-    return _so_dict(so, so.line_items, classification=classification)
+    inv_nums = await _sales_doc_number_map(
+        db, SaleInvoice, {so.converted_invoice_id} if so.converted_invoice_id else set(),
+    )
+    return _so_dict(
+        so,
+        so.line_items,
+        classification=classification,
+        converted_invoice_number=inv_nums.get(so.converted_invoice_id),
+    )
 
 
 # ─── Sales Order: CREATE ─────────────────────────────────────────────────────
@@ -5976,7 +6094,15 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
         raise HTTPException(404, "Invoice not found")
     await _resolve_branch_scope(user, db, inv.branch_id)
     li_res = await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id))
-    d = _inv_dict(inv, li_res.scalars().all())
+    linked = await _resolve_invoice_linked_docs(db, inv)
+    d = _inv_dict(
+        inv,
+        li_res.scalars().all(),
+        sales_order_number=linked["sales_order_number"],
+        sales_order_id=linked["sales_order_id"],
+        quotation_id=linked["quotation_id"],
+        quotation_number=linked["quotation_number"],
+    )
     d["payments"] = await _payments_for_invoice(db, inv.id)
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if org_row:
@@ -6701,6 +6827,168 @@ def _audit_delete(db: AsyncSession, *, action: str, ref: str, snapshot: dict, us
     ))
 
 
+def _quotation_reopen_status(quote: Quotation) -> QuotationStatus:
+    """Status to restore after a converted quote's child doc is deleted."""
+    # Prefer accepted when the quote had progressed that far; otherwise sent.
+    # Both allow convert-again. Draft would re-open editing but lose "sent" intent.
+    return QuotationStatus.sent
+
+
+async def _reopen_quotation_after_child_removed(
+    db: AsyncSession,
+    *,
+    quote: Quotation,
+    clear_order: bool = False,
+    clear_invoice: bool = False,
+    user: Optional[User] = None,
+) -> None:
+    """Clear dead conversion pointers and reopen a quote for convert-again."""
+    if clear_order:
+        quote.converted_order_id = None
+    if clear_invoice:
+        quote.converted_invoice_id = None
+    still_linked = bool(quote.converted_order_id or quote.converted_invoice_id)
+    if still_linked:
+        return
+    if quote.status != QuotationStatus.converted:
+        return
+    prev = quote.status.value
+    quote.status = _quotation_reopen_status(quote)
+    _log_quotation_history(
+        db,
+        user=user,
+        quote_id=quote.id,
+        quote_number=quote.number,
+        event_type="status_changed",
+        action="reopen_quotation",
+        detail=f"Quotation {quote.number} reopened ({prev} → {quote.status.value}) after linked document was deleted",
+        metadata={"from": prev, "to": quote.status.value},
+    )
+
+
+async def _restore_sales_order_from_invoice(
+    db: AsyncSession,
+    *,
+    so: SalesOrder,
+    inv: SaleInvoice,
+    user: Optional[User] = None,
+) -> None:
+    """Put invoiced qty back on the SO and reopen it for convert-again.
+
+    Invoice lines do not store ``order_line_id``, so we match remaining SO
+    lines by ``item_id`` (then name) and append new lines when needed.
+    """
+    tax_mode = await _get_org_tax_mode(db)
+    prev_status = so.status.value if hasattr(so.status, "value") else str(so.status)
+
+    # Index existing SO lines: prefer item_id, fall back to name for free-text rows.
+    so_by_item: dict[str, SalesOrderLineItem] = {}
+    so_by_name: dict[str, SalesOrderLineItem] = {}
+    for li in list(so.line_items or []):
+        if li.item_id and li.item_id not in so_by_item:
+            so_by_item[li.item_id] = li
+        name_key = (li.name or "").strip().lower()
+        if name_key and name_key not in so_by_name:
+            so_by_name[name_key] = li
+
+    for inv_li in inv.line_items or []:
+        qty = int(inv_li.qty or 0)
+        if qty <= 0:
+            continue
+        so_line = None
+        if inv_li.item_id and inv_li.item_id in so_by_item:
+            so_line = so_by_item[inv_li.item_id]
+        else:
+            name_key = (inv_li.name or "").strip().lower()
+            so_line = so_by_name.get(name_key)
+
+        if so_line is not None:
+            new_qty = int(so_line.qty or 0) + qty
+            so_line.qty = new_qty
+            _, _, so_line.line_total = _line_amounts(
+                new_qty,
+                float(so_line.price or 0),
+                float(so_line.discount or 0),
+                float(so_line.tax_rate or 0),
+                tax_mode,
+            )
+        else:
+            so_line = SalesOrderLineItem(
+                id=str(uuid.uuid4()),
+                order_id=so.id,
+                item_id=inv_li.item_id,
+                name=inv_li.name,
+                qty=qty,
+                price=float(inv_li.price or 0),
+                tax_rate=float(inv_li.tax_rate or 0),
+                discount=float(inv_li.discount or 0),
+                line_total=0,
+            )
+            _, _, so_line.line_total = _line_amounts(
+                qty,
+                float(so_line.price or 0),
+                float(so_line.discount or 0),
+                float(so_line.tax_rate or 0),
+                tax_mode,
+            )
+            db.add(so_line)
+            if so_line.item_id:
+                so_by_item[so_line.item_id] = so_line
+            name_key = (so_line.name or "").strip().lower()
+            if name_key:
+                so_by_name[name_key] = so_line
+
+    # Restore document discount that was allocated onto this invoice.
+    so.discount = round(float(so.discount or 0) + float(inv.discount or 0), 2)
+
+    await db.flush()
+    remaining_res = await db.execute(
+        select(SalesOrderLineItem).where(
+            SalesOrderLineItem.order_id == so.id,
+            SalesOrderLineItem.qty > 0,
+        )
+    )
+    remaining_lines = remaining_res.scalars().all()
+    _recalc_so_header(so, remaining_lines, tax_mode)
+
+    # After restoring the pointed invoice: fully converted → confirmed so
+    # convert-again is available; partial stays partial (other invoices may
+    # still exist for earlier slices).
+    if prev_status == SalesOrderStatus.converted.value:
+        so.status = SalesOrderStatus.confirmed
+    elif prev_status == SalesOrderStatus.partially_invoiced.value:
+        so.status = SalesOrderStatus.partially_invoiced
+    else:
+        so.status = SalesOrderStatus.confirmed
+
+    so.converted_invoice_id = None
+
+    if remaining_lines:
+        await refresh_so_reservations(
+            db, order_id=so.id, branch_id=so.branch_id, lines=remaining_lines,
+        )
+
+    next_status = so.status.value if hasattr(so.status, "value") else str(so.status)
+    _log_sales_order_history(
+        db,
+        user=user,
+        order_id=so.id,
+        order_number=so.number,
+        event_type="status_changed",
+        action="reopen_sales_order",
+        detail=(
+            f"Sales order {so.number} reopened ({prev_status} → {next_status}) "
+            f"after invoice {inv.number} was deleted"
+        ),
+        metadata={
+            "from": prev_status,
+            "to": next_status,
+            "deleted_invoice_id": inv.id,
+            "deleted_invoice_number": inv.number,
+        },
+    )
+
+
 # ─── BULK DELETE: QUOTATIONS ─────────────────────────────────────────────────
 @router.post("/quotations/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
 async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
@@ -6821,16 +7109,14 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
             risk="medium",
         )
         _audit_delete(db, action="delete_sales_order", ref=o.number, snapshot=snapshot, user=user)
-        # Orphan the parent quote: clear its dangling back-pointer so it
-        # becomes deletable + no "View SO" link 404s. Do NOT revert status
-        # — a quote that was ever converted stays locked from editing /
-        # re-converting even after its SO is deleted (2026-05-31 rule,
-        # mirrors PO→bill). Status stays `converted`.
+        # Reopen parent quote for convert-again when this SO was its conversion target.
         parent_quote = (await db.execute(
             select(Quotation).where(Quotation.converted_order_id == o.id)
         )).scalar_one_or_none()
         if parent_quote is not None:
-            parent_quote.converted_order_id = None
+            await _reopen_quotation_after_child_removed(
+                db, quote=parent_quote, clear_order=True, user=user,
+            )
         await db.delete(o)
         deleted.append({"id": o.id, "number": o.number})
     await db.commit()
@@ -6897,17 +7183,22 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
             if li.item_id and li.qty:
                 restored = await _restock_invoice_lines(db, inv, [li])
                 stock_restored += restored
-        # Orphan the parent SO (if this invoice was spawned from one): clear
-        # its dangling pointer so it becomes deletable + no "View invoice"
-        # link 404s. Do NOT revert status — an SO that was ever converted
-        # stays locked from editing / re-converting even after its invoice
-        # is deleted (2026-05-31 rule, mirrors PO→bill). Status stays
-        # `converted` (which _is_ the edit-blocking terminal state).
+        # Reopen parent SO (restore lines + status) and any quote that pointed at this invoice.
         parent_so = (await db.execute(
-            select(SalesOrder).where(SalesOrder.converted_invoice_id == inv.id)
-        )).scalar_one_or_none()
+            select(SalesOrder)
+            .options(selectinload(SalesOrder.line_items))
+            .where(SalesOrder.converted_invoice_id == inv.id)
+        )).unique().scalar_one_or_none()
         if parent_so is not None:
-            parent_so.converted_invoice_id = None
+            await _restore_sales_order_from_invoice(db, so=parent_so, inv=inv, user=user)
+
+        parent_quote = (await db.execute(
+            select(Quotation).where(Quotation.converted_invoice_id == inv.id)
+        )).scalar_one_or_none()
+        if parent_quote is not None:
+            await _reopen_quotation_after_child_removed(
+                db, quote=parent_quote, clear_invoice=True, user=user,
+            )
         _log_sales_invoice_history(db, user=user,
             invoice_id=inv.id,
             invoice_number=inv.number,

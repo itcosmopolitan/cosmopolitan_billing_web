@@ -12,7 +12,12 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
-from src.item_branch import effective_cost_price, effective_reorder_level, effective_selling_price
+from src.item_branch import (
+    effective_category_pricing,
+    effective_cost_price,
+    effective_reorder_level,
+    effective_selling_price,
+)
 from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemStock, User, AuditLog
 from src.models import (
     AdjustmentRequest,
@@ -247,6 +252,56 @@ async def _available_branch_counts(
     return {item_id: int(cnt or 0) for item_id, cnt in res.all()}
 
 
+def _branch_category_pricing_from_payload(bc) -> dict:
+    """Normalize optional branch wholesale/staff overrides from a config payload.
+
+    ``None`` mode means inherit catalog. When mode is set, only the active
+    side (pct or fixed price) is kept — same rules as catalog pricing.
+    """
+    get = bc.get if isinstance(bc, dict) else lambda k, d=None: getattr(bc, k, d)
+    wholesale_raw = get("wholesale_pricing_mode", None)
+    staff_raw = get("staff_pricing_mode", None)
+    out = {
+        "wholesale_pricing_mode": None,
+        "wholesale_discount_pct": None,
+        "wholesale_price": None,
+        "staff_pricing_mode": None,
+        "staff_discount_pct": None,
+        "staff_price": None,
+    }
+    if wholesale_raw not in (None, ""):
+        mode = _normalize_category_pricing_mode(wholesale_raw)
+        pct = float(get("wholesale_discount_pct", 0) or 0)
+        price = float(get("wholesale_price", 0) or 0)
+        if pct < 0 or pct > 100:
+            raise HTTPException(400, "Wholesale discount must be between 0 and 100%")
+        if price < 0:
+            raise HTTPException(400, "Wholesale price cannot be negative")
+        out["wholesale_pricing_mode"] = mode
+        if mode == "price":
+            out["wholesale_price"] = price
+            out["wholesale_discount_pct"] = 0.0
+        else:
+            out["wholesale_discount_pct"] = pct
+            out["wholesale_price"] = 0.0
+    if staff_raw not in (None, ""):
+        mode = _normalize_category_pricing_mode(staff_raw)
+        pct = float(get("staff_discount_pct", 0) or 0)
+        price = float(get("staff_price", 0) or 0)
+        if pct < 0 or pct > 100:
+            raise HTTPException(400, "Staff discount must be between 0 and 100%")
+        if price < 0:
+            raise HTTPException(400, "Staff price cannot be negative")
+        out["staff_pricing_mode"] = mode
+        if mode == "price":
+            out["staff_price"] = price
+            out["staff_discount_pct"] = 0.0
+        else:
+            out["staff_discount_pct"] = pct
+            out["staff_price"] = 0.0
+    return out
+
+
 async def _upsert_branch_config(
     db: AsyncSession,
     *,
@@ -256,6 +311,12 @@ async def _upsert_branch_config(
     cost_price: Optional[float] = None,
     selling_price: Optional[float] = None,
     reorder_level: Optional[int] = None,
+    wholesale_pricing_mode: Optional[str] = None,
+    wholesale_discount_pct: Optional[float] = None,
+    wholesale_price: Optional[float] = None,
+    staff_pricing_mode: Optional[str] = None,
+    staff_discount_pct: Optional[float] = None,
+    staff_price: Optional[float] = None,
 ) -> ItemBranchConfig:
     res = await db.execute(
         select(ItemBranchConfig).where(
@@ -264,11 +325,21 @@ async def _upsert_branch_config(
         )
     )
     cfg = res.scalar_one_or_none()
+    category_fields = {
+        "wholesale_pricing_mode": wholesale_pricing_mode,
+        "wholesale_discount_pct": wholesale_discount_pct,
+        "wholesale_price": wholesale_price,
+        "staff_pricing_mode": staff_pricing_mode,
+        "staff_discount_pct": staff_discount_pct,
+        "staff_price": staff_price,
+    }
     if cfg:
         cfg.is_available = is_available
         cfg.cost_price = cost_price
         cfg.selling_price = selling_price
         cfg.reorder_level = reorder_level
+        for key, value in category_fields.items():
+            setattr(cfg, key, value)
         return cfg
     cfg = ItemBranchConfig(
         id=str(uuid.uuid4()),
@@ -278,6 +349,7 @@ async def _upsert_branch_config(
         cost_price=cost_price,
         selling_price=selling_price,
         reorder_level=reorder_level,
+        **category_fields,
     )
     db.add(cfg)
     return cfg
@@ -635,7 +707,7 @@ class ItemCreate(BaseModel):
     staff_pricing_mode: str = "pct"
     staff_discount_pct: float = 0
     staff_price: float = 0
-    tax_rate: float = 18
+    tax_rate: float = 8
     hsn_code: Optional[str] = None
     reorder_level: int = 10
     emoji: str = "📦"
@@ -660,6 +732,13 @@ class BranchConfigIn(BaseModel):
     cost_price: Optional[float] = None
     selling_price: Optional[float] = None
     reorder_level: Optional[int] = None
+    # NULL / omitted mode → inherit catalog wholesale/staff.
+    wholesale_pricing_mode: Optional[str] = None
+    wholesale_discount_pct: Optional[float] = None
+    wholesale_price: Optional[float] = None
+    staff_pricing_mode: Optional[str] = None
+    staff_discount_pct: Optional[float] = None
+    staff_price: Optional[float] = None
     opening_stock: int = 0
     opening_batch_number: Optional[str] = None
     opening_mfg_date: Optional[str] = None
@@ -953,6 +1032,11 @@ async def list_items(
         eff_price = effective_selling_price(item.selling_price, cfg.selling_price if cfg else None)
         eff_cost = effective_cost_price(item.cost_price, cfg.cost_price if cfg else None)
         eff_reorder = effective_reorder_level(item.reorder_level, cfg.reorder_level if cfg else None)
+        category_pricing = (
+            _item_category_pricing_dict(item)
+            if master_mode
+            else effective_category_pricing(item, cfg)
+        )
         resolved_status = _resolve_item_status_value(item)
         row = {
             "id": item.id,
@@ -967,7 +1051,7 @@ async def list_items(
             "cost_price": item.cost_price if master_mode else eff_cost,
             "default_selling_price": item.selling_price,
             "selling_price": eff_price,
-            **_item_category_pricing_dict(item),
+            **category_pricing,
             "tax_rate": item.tax_rate,
             "hsn_code": item.hsn_code,
             "reorder_level": eff_reorder,
@@ -983,6 +1067,8 @@ async def list_items(
             "is_available": bool(cfg.is_available) if cfg else False,
             "branch_cost_override": cfg.cost_price if cfg else None,
             "branch_price_override": cfg.selling_price if cfg else None,
+            "branch_wholesale_override": bool(cfg and cfg.wholesale_pricing_mode) if cfg else False,
+            "branch_staff_override": bool(cfg and cfg.staff_pricing_mode) if cfg else False,
             "active": bool(item.active),
             "status": resolved_status,
             "approval_status": resolved_status,
@@ -1076,6 +1162,7 @@ async def create_item(
                 cost_price=bc.cost_price,
                 selling_price=bc.selling_price,
                 reorder_level=bc.reorder_level,
+                **_branch_category_pricing_from_payload(bc),
             )
             if bc.is_available:
                 await _ensure_stock_row(db, item_id=item.id, branch_id=bc.branch_id)
@@ -1788,6 +1875,7 @@ async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
     out = []
     for br in branches:
         cfg = cfg_map.get(br.id)
+        eff_cat = effective_category_pricing(item, cfg)
         out.append({
             "branch_id": br.id,
             "branch_name": br.name,
@@ -1796,6 +1884,12 @@ async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
             "cost_price": cfg.cost_price if cfg else None,
             "selling_price": cfg.selling_price if cfg else None,
             "reorder_level": cfg.reorder_level if cfg else None,
+            "wholesale_pricing_mode": cfg.wholesale_pricing_mode if cfg else None,
+            "wholesale_discount_pct": cfg.wholesale_discount_pct if cfg else None,
+            "wholesale_price": cfg.wholesale_price if cfg else None,
+            "staff_pricing_mode": cfg.staff_pricing_mode if cfg else None,
+            "staff_discount_pct": cfg.staff_discount_pct if cfg else None,
+            "staff_price": cfg.staff_price if cfg else None,
             "effective_cost_price": effective_cost_price(
                 item.cost_price,
                 cfg.cost_price if cfg else None,
@@ -1808,6 +1902,12 @@ async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
                 item.reorder_level,
                 cfg.reorder_level if cfg else None,
             ),
+            "effective_wholesale_pricing_mode": eff_cat["wholesale_pricing_mode"],
+            "effective_wholesale_discount_pct": eff_cat["wholesale_discount_pct"],
+            "effective_wholesale_price": eff_cat["wholesale_price"],
+            "effective_staff_pricing_mode": eff_cat["staff_pricing_mode"],
+            "effective_staff_discount_pct": eff_cat["staff_discount_pct"],
+            "effective_staff_price": eff_cat["staff_price"],
             "available_stock": stock_map.get(br.id, 0),
         })
     return {
@@ -1815,6 +1915,7 @@ async def get_item_branches(item_id: str, db: AsyncSession = Depends(get_db)):
         "default_cost_price": item.cost_price,
         "default_selling_price": item.selling_price,
         "default_reorder_level": item.reorder_level,
+        **_item_category_pricing_dict(item),
         "branches": out,
     }
 
@@ -1856,6 +1957,7 @@ async def update_item_branches(
         prev_cost = existing_cfg.cost_price if existing_cfg else None
         prev_sell = existing_cfg.selling_price if existing_cfg else None
         prev_reorder = existing_cfg.reorder_level if existing_cfg else None
+        category_pricing = _branch_category_pricing_from_payload(bc)
 
         branch_changed = (
             existing_cfg is None
@@ -1863,6 +1965,18 @@ async def update_item_branches(
             or prev_cost != bc.cost_price
             or prev_sell != bc.selling_price
             or prev_reorder != bc.reorder_level
+            or (existing_cfg.wholesale_pricing_mode if existing_cfg else None)
+            != category_pricing["wholesale_pricing_mode"]
+            or (existing_cfg.wholesale_discount_pct if existing_cfg else None)
+            != category_pricing["wholesale_discount_pct"]
+            or (existing_cfg.wholesale_price if existing_cfg else None)
+            != category_pricing["wholesale_price"]
+            or (existing_cfg.staff_pricing_mode if existing_cfg else None)
+            != category_pricing["staff_pricing_mode"]
+            or (existing_cfg.staff_discount_pct if existing_cfg else None)
+            != category_pricing["staff_discount_pct"]
+            or (existing_cfg.staff_price if existing_cfg else None)
+            != category_pricing["staff_price"]
         )
 
         await _upsert_branch_config(
@@ -1873,6 +1987,7 @@ async def update_item_branches(
             cost_price=bc.cost_price,
             selling_price=bc.selling_price,
             reorder_level=bc.reorder_level,
+            **category_pricing,
         )
         if bc.is_available:
             await _ensure_stock_row(db, item_id=item_id, branch_id=bc.branch_id)
