@@ -4,7 +4,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, fmtQty, exportToExcel } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions } from '@/components/ui'
+import {
+  SectionHeader, Card, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown,
+  DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
+  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
+} from '@/components/ui'
+import useColumnPrefs from '@/hooks/useColumnPrefs'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value))
@@ -473,7 +478,7 @@ export default function ReportsPage() {
     )
   }
 
-  return <ReportDetailPage report={selectedReport} onBack={() => navigate(listPath)} />
+  return <ReportDetailPage key={selectedReport.id} report={selectedReport} onBack={() => navigate(listPath)} />
 }
 
 function NavigateToReportsList() {
@@ -615,6 +620,7 @@ function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
 
 function ReportDetailPage({ report, onBack }) {
   const navigate = useNavigate()
+  const columnPrefs = useColumnPrefs(`reports.${report.id}`)
   const today = new Date().toISOString().slice(0, 10)
   const defaultFrom = useMemo(() => {
     const from = new Date()
@@ -633,6 +639,19 @@ function ReportDetailPage({ report, onBack }) {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [runKey, setRunKey] = useState(Date.now())
+
+  const columnByKey = useMemo(() => {
+    const map = new Map()
+    report.columns.forEach((col) => map.set(col.key, col))
+    return map
+  }, [report.columns])
+
+  const visibleColumns = useMemo(() => {
+    if (!columnPrefs.ready) return report.columns
+    return columnPrefs.visibleIds.map((id) => columnByKey.get(id)).filter(Boolean)
+  }, [columnPrefs.ready, columnPrefs.visibleIds, columnByKey, report.columns])
+
+  const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 
   useEffect(() => {
     setSortBy(report.defaultSort || report.columns[0]?.key)
@@ -691,7 +710,7 @@ function ReportDetailPage({ report, onBack }) {
     }
     const exportData = rows.map((row) => {
       const entry = {}
-      report.columns.forEach((col) => {
+      visibleColumns.forEach((col) => {
         const value = row[col.key]
         entry[col.label] = value === null || value === undefined ? '' : value
       })
@@ -750,7 +769,10 @@ function ReportDetailPage({ report, onBack }) {
           <table className="data-table" style={{ minWidth: 920 }}>
             <thead>
               <tr>
-                {report.columns.map((column) => (
+                {columnPrefs.ready && (
+                  <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+                )}
+                {visibleColumns.map((column) => (
                   column.sortable === false ? (
                     <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{column.label}</th>
                   ) : (
@@ -770,13 +792,13 @@ function ReportDetailPage({ report, onBack }) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={report.columns.length} style={{ padding: 0 }}>
+                  <td colSpan={tableColSpan} style={{ padding: 0 }}>
                     <TableLoadingPanel label="Loading report data…" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={report.columns.length} style={{ textAlign: 'center', padding: 28 }}>No records match the selected filters.</td>
+                  <td colSpan={tableColSpan} style={{ textAlign: 'center', padding: 28 }}>No records match the selected filters.</td>
                 </tr>
               ) : (
                 rows.map((row, index) => {
@@ -797,7 +819,8 @@ function ReportDetailPage({ report, onBack }) {
                       style={rowStyle}
                       onClick={detailPath ? () => navigate(detailPath) : undefined}
                     >
-                      {report.columns.map((column) => {
+                      {columnPrefs.ready && <ColumnPrefsSpacer />}
+                      {visibleColumns.map((column) => {
                         const value = row[column.key]
                         const rendered = column.formatter ? column.formatter(value, row) : value
                         const alignClass =
@@ -840,6 +863,14 @@ function ReportDetailPage({ report, onBack }) {
           disabled={loading}
         />
       </div>
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
     </div>
   )
 }
