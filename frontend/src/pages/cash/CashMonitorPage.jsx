@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { SectionHeader, EmptyState, DatePicker, PageActionsMenu, buildListPageMenuActions, TableLoadingPanel } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
 
@@ -106,6 +107,7 @@ function BranchCard({ item, onClick }) {
 
 export default function CashMonitorPage() {
   const navigate = useNavigate()
+  const setActiveBranch = useAppStore((s) => s.setActiveBranch)
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -177,7 +179,13 @@ export default function CashMonitorPage() {
             <BranchCard
               key={item.branch_id}
               item={item}
-              onClick={() => navigate(`/cash?branch=${item.branch_id}&date=${date}`)}
+              onClick={() => {
+                setActiveBranch(item.branch_id)
+                const params = new URLSearchParams()
+                if (date) params.set('date', date)
+                const qs = params.toString()
+                navigate(qs ? `/cash?${qs}` : '/cash')
+              }}
             />
           ))}
         </div>

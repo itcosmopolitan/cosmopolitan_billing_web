@@ -7,6 +7,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
+from pydantic import BaseModel, ConfigDict, Field
 from src import config
 from src.database import get_db
 from src.date_utils import MAX_REPORT_DATE_RANGE_DAYS, parse_date_range
@@ -32,13 +34,59 @@ from src.models import (
     StockTransfer,
     TransferLineItem,
     User,
+    UserReportFavorites,
     Vendor,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.report_catalog import build_catalog_payload, normalize_favorite_ids
 from src.security import current_user, get_allowed_branch_ids, require_perm
 
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.reports")
+
+
+class ReportCatalogUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    favorites: list[str] = Field(default_factory=list)
+
+
+@router.get("/catalog", dependencies=[Depends(require_perm("reports.view"))])
+async def get_report_catalog(
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reports Center categories + the current user's favorite report ids.
+
+    Org-level catalog — not scoped by branch.
+    """
+    row = (
+        await db.execute(select(UserReportFavorites).where(UserReportFavorites.user_id == user.id))
+    ).scalar_one_or_none()
+    favorite_ids = row.report_ids if row and isinstance(row.report_ids, list) else []
+    return build_catalog_payload(favorite_ids)
+
+
+@router.put("/catalog", dependencies=[Depends(require_perm("reports.view"))])
+async def put_report_catalog(
+    body: ReportCatalogUpdate,
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the current user's favorite report list; returns full catalog payload."""
+    favorite_ids = normalize_favorite_ids(body.favorites)
+    row = (
+        await db.execute(select(UserReportFavorites).where(UserReportFavorites.user_id == user.id))
+    ).scalar_one_or_none()
+    if row is None:
+        row = UserReportFavorites(user_id=user.id, report_ids=[])
+        db.add(row)
+    row.report_ids = favorite_ids
+    flag_modified(row, "report_ids")
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return build_catalog_payload(row.report_ids)
 
 
 async def _resolve_branch_scope(user, db: AsyncSession, branch_id: Optional[str]) -> Optional[list[str]]:

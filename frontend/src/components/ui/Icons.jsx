@@ -135,6 +135,20 @@ export const SlidersHorizontal = make(
   </>
 )
 
+/** Favorite / bookmark star. Pass `filled` for solid amber state. */
+export function Star({ size = 18, strokeWidth = 1.75, filled = false, style, className }) {
+  return (
+    <svg
+      {...base(size, strokeWidth)}
+      fill={filled ? 'currentColor' : 'none'}
+      style={style}
+      className={className}
+    >
+      <path d="M12 3.2l2.55 5.17 5.7.83-4.12 4.02.97 5.68L12 16.2l-5.1 2.7.97-5.68L3.75 9.2l5.7-.83L12 3.2z" />
+    </svg>
+  )
+}
+
 export const Lock = make(
   <>
     <rect x="5" y="11" width="14" height="10" rx="2" />
