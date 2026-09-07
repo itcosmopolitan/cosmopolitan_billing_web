@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { cashAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
-import { useAppStore } from '@/store'
+import { cashAPI } from '@/api'
+import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
-import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, AutocompleteDropdown, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
@@ -15,13 +16,13 @@ const TABS = ['Entries', 'Breakdown', 'Day History']
 
 export default function CashPage() {
   const can = useCan()
+  const [searchParams] = useSearchParams()
   const columnPrefs = useColumnPrefs('cash.entries')
-  const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const currentUser = useAppStore((s) => s.user)
+  const branchId = activeBranch?.id || ''
 
-  const [branchId, setBranchId] = useState(() => activeBranch?.id || '')
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(() => searchParams.get('date') || new Date().toISOString().slice(0, 10))
   const [tab, setTab] = useState('Entries')
   const [version, setVersion] = useState(0)
 
@@ -40,13 +41,14 @@ export default function CashPage() {
   const [entryBusy, setEntryBusy] = useState(false)
   const [voidSaving, setVoidSaving] = useState(false)
 
-  useEffect(() => {
-    if (!branchId && activeBranch?.id) setBranchId(activeBranch.id)
-  }, [activeBranch, branchId])
-
   // Fetch categories once
   useEffect(() => {
     cashAPI.categories.list().then((cats) => setCategories(cats || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const unsub = subscribeToBranchChanged(() => setVersion((v) => v + 1))
+    return () => unsub()
   }, [])
 
   useEffect(() => {
@@ -111,8 +113,6 @@ export default function CashPage() {
     }
   }
 
-  const selectedBranch = useMemo(() => branches.find((b) => b.id === branchId), [branches, branchId])
-
   const variance = summary.variance ?? 0
   const threshold = 500
   const breakdownIn = summary.breakdown_in || []
@@ -123,17 +123,8 @@ export default function CashPage() {
       {/* ── Header ── */}
       <SectionHeader
         title="Cash Control"
-        subtitle="Daily petty cash register, entries, and day-close reconciliation"
+        subtitle={`Daily petty cash register — ${activeBranch?.name || 'select a branch'}`}
       >
-        <AutocompleteDropdown
-          value={branchId}
-          onChange={setBranchId}
-          fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-          fetchParams={{ retail_only: true }}
-          isSearchFieldRequired={false}
-          style={{ width: 160 }}
-        />
-
         <DatePicker
           value={date}
           onChange={setDate}
@@ -156,12 +147,12 @@ export default function CashPage() {
           {isLocked ? '🔒 CLOSED' : '✅ OPEN'}
         </span>
 
-        {can('cash.entry') && !isLocked && (
+        {can('cash.entry') && !isLocked && branchId && (
           <button className="btn btn-secondary btn-sm" onClick={() => { setEditEntry(null); setShowEntry(true) }}>
             + Cash Entry
           </button>
         )}
-        {can('cash.close') && !isLocked && (
+        {can('cash.close') && !isLocked && branchId && (
           <button className="btn btn-primary btn-sm" onClick={() => setShowClose(true)}>
             Close Day
           </button>
@@ -175,6 +166,10 @@ export default function CashPage() {
         })} />
       </SectionHeader>
 
+      {!branchId ? (
+        <EmptyState icon="🏪" title="Select a branch" desc="Use the branch switcher in the top bar to view cash control." />
+      ) : (
+        <>
       {/* ── Variance alert ── */}
       {!isLocked && variance !== 0 && (
         <AlertBar
@@ -223,7 +218,7 @@ export default function CashPage() {
       {/* ─── Tab: Entries ─── */}
       {tab === 'Entries' && (
         <Card
-          title={`Entries — ${selectedBranch?.name || '—'} / ${date}`}
+          title={`Entries — ${activeBranch?.name || '—'} / ${date}`}
           bodyPadding={false}
         >
           {loading ? (
@@ -337,14 +332,6 @@ export default function CashPage() {
         </Card>
       )}
 
-      <CustomizeColumnsModal
-        open={columnPrefs.customizeOpen}
-        onClose={columnPrefs.closeCustomize}
-        defs={columnPrefs.defs}
-        value={columnPrefs.prefs}
-        onSave={columnPrefs.savePrefs}
-      />
-
       {/* ─── Tab: Breakdown ─── */}
       {tab === 'Breakdown' && (
         <div className="grid-2">
@@ -428,6 +415,16 @@ export default function CashPage() {
           )}
         </Card>
       )}
+        </>
+      )}
+
+      <CustomizeColumnsModal
+        open={columnPrefs.customizeOpen}
+        onClose={columnPrefs.closeCustomize}
+        defs={columnPrefs.defs}
+        value={columnPrefs.prefs}
+        onSave={columnPrefs.savePrefs}
+      />
 
       {/* ── Modals ── */}
       <CashEntryModal

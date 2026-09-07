@@ -1586,3 +1586,16 @@ class UserColumnPrefs(Base):
     user_id    = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     prefs      = Column(JSON, nullable=False, default=dict)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UserReportFavorites(Base):
+    """Per-user favorite report ids for Reports Center.
+
+    `report_ids` is an ordered JSON list of catalog report ids
+    (e.g. ["sales-register", "daily-sales"]). Created on first save.
+    """
+    __tablename__ = "user_report_favorites"
+
+    user_id    = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    report_ids = Column(JSON, nullable=False, default=list)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

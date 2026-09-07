@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
@@ -9,12 +9,17 @@ import {
   DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
   CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
+import * as Icon from '@/components/ui/Icons'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
+import { useAppStore } from '@/store'
+
+const FAVORITES_GROUP_ID = 'favorites'
 
 const formatDate = (value) => (value ? fmtDate(value) : '—')
 const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value))
 const formatNumber = (value) => (value === null || value === undefined ? '—' : fmtNum(value))
 const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
+const formatCurrencyBlank = (value) => (value === null || value === undefined ? '' : formatCurrency(value))
 
 const DRILLDOWN_PARAM_KEYS = [
   'date_from',
@@ -52,538 +57,197 @@ function drilldownChipLabel(filters) {
   return 'Filtered view'
 }
 
-const REPORT_CATEGORIES = [
-  {
-    id: 'sales',
-    label: 'Sales',
-    reports: [
-      {
-        id: 'sales-register',
-        label: 'Sales Register',
-        api: 'salesRegister',
-        defaultSort: 'invoice_date',
-        getDetailPath: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
-        columns: [
-          { key: 'invoice_number', label: 'Invoice Number', sortable: true },
-          { key: 'invoice_date', label: 'Invoice Date', sortable: true, formatter: formatDate },
-          { key: 'customer', label: 'Customer', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'cashier', label: 'Cashier', sortable: true },
-          { key: 'taxable_amount', label: 'Taxable Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'discount', label: 'Discount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'net_amount', label: 'Net Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'payment_mode', label: 'Payment Mode', sortable: true },
-          { key: 'status', label: 'Status', sortable: true },
-        ],
-      },
-      {
-        id: 'daily-sales',
-        label: 'Daily Sales',
-        api: 'dailySales',
-        defaultSort: 'date',
-        getDrilldown: (row, ctx) => (row.date ? {
-          reportId: 'sales-register',
-          filters: {
-            date_from: row.date,
-            date_to: row.date,
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: formatDate(row.date),
-        } : null),
-        columns: [
-          { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
-          { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'gross_sales', label: 'Gross Sales', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'discounts', label: 'Discounts', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax', label: 'Tax', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'net_sales', label: 'Net Sales', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'product-sales',
-        label: 'Product-wise Sales',
-        api: 'productSales',
-        defaultSort: 'sales_value',
-        getDrilldown: (row, ctx) => (row.item_id ? {
-          reportId: 'sales-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            item_id: row.item_id,
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.product_name || row.product_code,
-        } : null),
-        columns: [
-          { key: 'product_code', label: 'Product Code', sortable: true },
-          { key: 'product_name', label: 'Product Name', sortable: true },
-          { key: 'category', label: 'Category', sortable: true },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'sales_value', label: 'Sales Value', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'cost_value', label: 'Cost Value', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'profit', label: 'Profit', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'payment-sales',
-        label: 'Payment Method Sales',
-        api: 'paymentSales',
-        defaultSort: 'sales_amount',
-        getDrilldown: (row, ctx) => ({
-          reportId: 'sales-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            payment_mode: row.payment_mode ?? '__none__',
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.payment_method || 'Payment',
-        }),
-        columns: [
-          { key: 'payment_method', label: 'Payment Method', sortable: true },
-          { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'sales_amount', label: 'Sales Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'net_sales', label: 'Net Sales', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'category-sales',
-        label: 'Category-wise Sales',
-        api: 'categorySales',
-        defaultSort: 'sales_value',
-        getDrilldown: (row, ctx) => ({
-          reportId: 'sales-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            category_id: row.category_id || '__uncategorized__',
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.category || 'Uncategorized',
-        }),
-        columns: [
-          { key: 'category', label: 'Category', sortable: true },
-          { key: 'quantity_sold', label: 'Quantity Sold', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'sales_value', label: 'Sales Value', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'cost_value', label: 'Cost Value', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'profit', label: 'Profit', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'branch-sales',
-        label: 'Branch-wise Sales',
-        api: 'branchSales',
-        defaultSort: 'sales_amount',
-        getDrilldown: (row, ctx) => (row.branch_id ? {
-          reportId: 'sales-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            branch_id: row.branch_id,
-          },
-          label: row.branch,
-        } : null),
-        columns: [
-          { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'sales_amount', label: 'Sales Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'discount_amount', label: 'Discount Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'net_sales', label: 'Net Sales', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'cashier-sales',
-        label: 'Cashier-wise Sales',
-        api: 'cashierSales',
-        defaultSort: 'sales_amount',
-        getDrilldown: (row, ctx) => (row.cashier_id ? {
-          reportId: 'sales-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            cashier_id: row.cashier_id,
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.cashier,
-        } : null),
-        columns: [
-          { key: 'cashier', label: 'Cashier', sortable: true },
-          { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'sales_amount', label: 'Sales Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'discount_amount', label: 'Discount Amount', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'purchase',
-    label: 'Purchase',
-    reports: [
-      {
-        id: 'purchase-register',
-        label: 'Purchase Register',
-        api: 'purchaseRegister',
-        defaultSort: 'bill_date',
-        getDetailPath: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
-        columns: [
-          { key: 'bill_number', label: 'Bill Number', sortable: true },
-          { key: 'bill_date', label: 'Bill Date', sortable: true, formatter: formatDate },
-          { key: 'vendor', label: 'Vendor', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'subtotal', label: 'Subtotal', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'tax', label: 'Tax', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'total', label: 'Total', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'paid', label: 'Paid', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'balance', label: 'Balance', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'status', label: 'Status', sortable: true },
-        ],
-      },
-      {
-        id: 'vendor-purchases',
-        label: 'Vendor-wise Purchase',
-        api: 'vendorPurchases',
-        defaultSort: 'purchase_amount',
-        getDrilldown: (row, ctx) => (row.vendor_id ? {
-          reportId: 'purchase-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            vendor_id: row.vendor_id,
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.vendor,
-        } : null),
-        columns: [
-          { key: 'vendor', label: 'Vendor', sortable: true },
-          { key: 'purchase_count', label: 'Purchase Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'purchase_amount', label: 'Purchase Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'paid_amount', label: 'Paid Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'outstanding_amount', label: 'Outstanding Amount', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'product-purchases',
-        label: 'Product-wise Purchase',
-        api: 'productPurchases',
-        defaultSort: 'quantity_purchased',
-        getDrilldown: (row, ctx) => (row.item_id ? {
-          reportId: 'purchase-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            item_id: row.item_id,
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.product,
-        } : null),
-        columns: [
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'quantity_purchased', label: 'Quantity Purchased', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'purchase_cost', label: 'Purchase Cost', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'average_cost', label: 'Average Cost', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'inventory',
-    label: 'Inventory',
-    reports: [
-      {
-        id: 'current-stock',
-        label: 'Current Stock',
-        api: 'currentStock',
-        defaultSort: 'product_code',
-        columns: [
-          { key: 'product_code', label: 'Product Code', sortable: true },
-          { key: 'product_name', label: 'Product Name', sortable: true },
-          { key: 'category', label: 'Category', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'available_stock', label: 'Available Stock', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'reserved_stock', label: 'Reserved Stock', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'stock_value', label: 'Stock Value', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'stock-movement',
-        label: 'Stock Movement',
-        api: 'stockMovement',
-        defaultSort: 'date',
-        columns: [
-          { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'movement_type', label: 'Movement Type', sortable: true },
-          { key: 'quantity', label: 'Quantity', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'reference_number', label: 'Reference Number', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-        ],
-      },
-      {
-        id: 'low-stock',
-        label: 'Low Stock',
-        api: 'lowStock',
-        defaultSort: 'product_name',
-        columns: [
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'available_quantity', label: 'Available Quantity', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'reorder_level', label: 'Reorder Level', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'branch', label: 'Branch', sortable: true },
-        ],
-      },
-      {
-        id: 'out-of-stock',
-        label: 'Out of Stock',
-        api: 'outOfStock',
-        defaultSort: 'product',
-        columns: [
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'category', label: 'Category', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-        ],
-      },
-      {
-        id: 'stock-transfers',
-        label: 'Stock Transfer',
-        api: 'stockTransfers',
-        defaultSort: 'transfer_date',
-        getDetailPath: (row) => (row.transfer_id ? `/transfers/${encodeURIComponent(row.transfer_id)}/edit` : null),
-        columns: [
-          { key: 'transfer_number', label: 'Transfer Number', sortable: true },
-          { key: 'from_branch', label: 'From Branch', sortable: true },
-          { key: 'to_branch', label: 'To Branch', sortable: true },
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'quantity', label: 'Quantity', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'transfer_date', label: 'Transfer Date', sortable: true, formatter: formatDate },
-        ],
-      },
-      {
-        id: 'spoilage-damage',
-        label: 'Spoilage / Damage',
-        api: 'spoilageDamage',
-        defaultSort: 'date',
-        columns: [
-          { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
-          { key: 'reference_number', label: 'Reference', sortable: true },
-          { key: 'product_code', label: 'Product Code', sortable: true },
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'before_qty', label: 'Before Qty', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'after_qty', label: 'After Qty', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'quantity_lost', label: 'Qty Lost', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'reason', label: 'Reason', sortable: true },
-          { key: 'notes', label: 'Notes', sortable: false },
-          { key: 'adjusted_by', label: 'Adjusted By', sortable: true },
-        ],
-      },
-      {
-        id: 'expiry-batches',
-        label: 'Expired / Near Expiry',
-        api: 'expiryBatches',
-        defaultSort: 'expiry_date',
-        columns: [
-          { key: 'product_code', label: 'Product Code', sortable: true },
-          { key: 'product', label: 'Product', sortable: true },
-          { key: 'batch_number', label: 'Batch', sortable: true },
-          { key: 'branch', label: 'Branch', sortable: true },
-          { key: 'mfg_date', label: 'Mfg Date', sortable: true, formatter: formatDate },
-          { key: 'expiry_date', label: 'Expiry Date', sortable: true, formatter: formatDate },
-          { key: 'days_to_expiry', label: 'Days Left', align: 'right', sortable: false, formatter: formatNumber },
-          { key: 'status', label: 'Status', sortable: true },
-          { key: 'quantity', label: 'Qty On Hand', align: 'right', sortable: true, formatter: formatQty },
-          { key: 'stock_value', label: 'Stock Value', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-    ],
-  },
-  // {
-  //   id: 'tax',
-  //   label: 'Tax',
-  //   reports: [
-  //     {
-  //       id: 'daily-tax',
-  //       label: 'Daily Tax',
-  //       api: 'dailyTax',
-  //       defaultSort: 'date',
-  //       columns: [
-  //         { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
-  //         { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
-  //       ],
-  //     },
-  //     {
-  //       id: 'monthly-tax',
-  //       label: 'Monthly Tax',
-  //       api: 'monthlyTax',
-  //       defaultSort: 'month',
-  //       columns: [
-  //         { key: 'month', label: 'Month', sortable: true },
-  //         { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
-  //       ],
-  //     },
-  //     {
-  //       id: 'quarterly-tax',
-  //       label: 'Quarterly Tax',
-  //       api: 'quarterlyTax',
-  //       defaultSort: 'quarter',
-  //       columns: [
-  //         { key: 'quarter', label: 'Quarter', sortable: true },
-  //         { key: 'taxable_sales', label: 'Taxable Sales', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'tax_amount', label: 'Tax Amount', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'exempt_sales', label: 'Exempt Sales', align: 'right', sortable: true, formatter: formatCurrency },
-  //       ],
-  //     },
-  //     {
-  //       id: 'gst-summary',
-  //       label: 'GST Summary',
-  //       api: 'gstSummary',
-  //       defaultSort: 'tax_type',
-  //       columns: [
-  //         { key: 'tax_type', label: 'Tax Type', sortable: true },
-  //         { key: 'taxable_amount', label: 'Taxable Amount', align: 'right', sortable: true, formatter: formatCurrency },
-  //         { key: 'tax_collected', label: 'Tax Collected', align: 'right', sortable: true, formatter: formatCurrency },
-  //       ],
-  //     },
-  //   ],
-  // },
-  {
-    id: 'financial',
-    label: 'Financial',
-    reports: [
-      {
-        id: 'outstanding-receivables',
-        label: 'Outstanding Receivables',
-        api: 'outstandingReceivables',
-        defaultSort: 'due_date',
-        getDetailPath: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
-        columns: [
-          { key: 'customer', label: 'Customer', sortable: true },
-          { key: 'invoice_number', label: 'Invoice Number', sortable: true },
-          { key: 'invoice_date', label: 'Invoice Date', sortable: true, formatter: formatDate },
-          { key: 'due_date', label: 'Due Date', sortable: true, formatter: formatDate },
-          { key: 'outstanding_amount', label: 'Outstanding Amount', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'outstanding-payables',
-        label: 'Outstanding Payables',
-        api: 'outstandingPayables',
-        defaultSort: 'due_date',
-        getDetailPath: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
-        columns: [
-          { key: 'vendor', label: 'Vendor', sortable: true },
-          { key: 'bill_number', label: 'Bill Number', sortable: true },
-          { key: 'bill_date', label: 'Bill Date', sortable: true, formatter: formatDate },
-          { key: 'due_date', label: 'Due Date', sortable: true, formatter: formatDate },
-          { key: 'outstanding_amount', label: 'Outstanding Amount', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-      {
-        id: 'profit-loss',
-        label: 'Profit & Loss',
-        api: 'profitLoss',
-        defaultSort: 'sort_order',
-        columns: [
-          { key: 'account', label: 'ACCOUNT', sortable: false },
-          {
-            key: 'total',
-            label: 'TOTAL',
-            align: 'right',
-            sortable: false,
-            formatter: (value) => (value === null || value === undefined ? '' : formatCurrency(value)),
-          },
-        ],
-      },
-      {
-        id: 'petty-cash',
-        label: 'Petty Cash',
-        api: 'pettyCash',
-        defaultSort: 'date',
-        columns: [
-          { key: 'date', label: 'Date', sortable: true, formatter: formatDate },
-          { key: 'expense_category', label: 'Expense Category', sortable: true },
-          { key: 'description', label: 'Description', sortable: true },
-          { key: 'amount', label: 'Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'branch', label: 'Branch', sortable: true },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'customers',
-    label: 'Customers',
-    reports: [
-      {
-        id: 'top-customers',
-        label: 'Top Customers',
-        api: 'topCustomers',
-        defaultSort: 'purchase_amount',
-        getDrilldown: (row, ctx) => ({
-          reportId: 'sales-register',
-          filters: {
-            date_from: ctx.dateFrom,
-            date_to: ctx.dateTo,
-            customer_id: row.customer_id || '__none__',
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.customer || 'Walk-in',
-        }),
-        columns: [
-          { key: 'customer', label: 'Customer', sortable: true },
-          { key: 'invoice_count', label: 'Invoice Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'purchase_amount', label: 'Purchase Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'outstanding_amount', label: 'Outstanding Amount', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'vendors',
-    label: 'Vendors',
-    reports: [
-      {
-        id: 'vendor-outstanding',
-        label: 'Vendor Outstanding',
-        api: 'vendorOutstanding',
-        defaultSort: 'outstanding_amount',
-        getDrilldown: (row, ctx) => (row.vendor_id ? {
-          reportId: 'purchase-register',
-          filters: {
-            vendor_id: row.vendor_id,
-            ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
-          },
-          label: row.vendor,
-        } : null),
-        columns: [
-          { key: 'vendor', label: 'Vendor', sortable: true },
-          { key: 'purchase_count', label: 'Purchase Count', align: 'right', sortable: true, formatter: formatNumber },
-          { key: 'purchase_amount', label: 'Purchase Amount', align: 'right', sortable: true, formatter: formatCurrency },
-          { key: 'outstanding_amount', label: 'Outstanding Amount', align: 'right', sortable: true, formatter: formatCurrency },
-        ],
-      },
-    ],
-  },
-]
+const COLUMN_FORMATTERS = {
+  date: formatDate,
+  currency: formatCurrency,
+  currency_blank: formatCurrencyBlank,
+  number: formatNumber,
+  qty: formatQty,
+}
 
-const REPORT_MAP = REPORT_CATEGORIES.reduce((map, category) => {
-  category.reports.forEach((report) => {
-    map[report.id] = { ...report, categoryId: category.id, categoryLabel: category.label }
+const DETAIL_PATH_BUILDERS = {
+  invoice: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
+  bill: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
+  transfer: (row) => (row.transfer_id ? `/transfers/${encodeURIComponent(row.transfer_id)}/edit` : null),
+}
+
+/** Client-side drilldown handlers keyed by report id (server catalog has no functions). */
+const DRILLDOWN_HANDLERS = {
+  'daily-sales': (row, ctx) => (row.date ? {
+    reportId: 'sales-register',
+    filters: {
+      date_from: row.date,
+      date_to: row.date,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: formatDate(row.date),
+  } : null),
+  'product-sales': (row, ctx) => (row.item_id ? {
+    reportId: 'sales-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      item_id: row.item_id,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.product_name || row.product_code,
+  } : null),
+  'payment-sales': (row, ctx) => ({
+    reportId: 'sales-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      payment_mode: row.payment_mode ?? '__none__',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.payment_method || 'Payment',
+  }),
+  'category-sales': (row, ctx) => ({
+    reportId: 'sales-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      category_id: row.category_id || '__uncategorized__',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.category || 'Uncategorized',
+  }),
+  'branch-sales': (row, ctx) => (row.branch_id ? {
+    reportId: 'sales-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      branch_id: row.branch_id,
+    },
+    label: row.branch,
+  } : null),
+  'cashier-sales': (row, ctx) => (row.cashier_id ? {
+    reportId: 'sales-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      cashier_id: row.cashier_id,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.cashier,
+  } : null),
+  'vendor-purchases': (row, ctx) => (row.vendor_id ? {
+    reportId: 'purchase-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      vendor_id: row.vendor_id,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.vendor,
+  } : null),
+  'product-purchases': (row, ctx) => (row.item_id ? {
+    reportId: 'purchase-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      item_id: row.item_id,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.product,
+  } : null),
+  'top-customers': (row, ctx) => ({
+    reportId: 'sales-register',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      customer_id: row.customer_id || '__none__',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.customer || 'Walk-in',
+  }),
+  'vendor-outstanding': (row, ctx) => (row.vendor_id ? {
+    reportId: 'purchase-register',
+    filters: {
+      vendor_id: row.vendor_id,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.vendor,
+  } : null),
+}
+
+function hydrateReport(report, category) {
+  const columns = (report.columns || []).map((col) => ({
+    ...col,
+    formatter: col.format ? COLUMN_FORMATTERS[col.format] : undefined,
+  }))
+  const detailBuilder = report.detailType ? DETAIL_PATH_BUILDERS[report.detailType] : null
+  const getDrilldown = DRILLDOWN_HANDLERS[report.id]
+  return {
+    ...report,
+    categoryId: category.id,
+    categoryLabel: category.label,
+    columns,
+    getDetailPath: typeof detailBuilder === 'function' ? detailBuilder : undefined,
+    getDrilldown: typeof getDrilldown === 'function' ? getDrilldown : undefined,
+  }
+}
+
+function hydrateCatalog(payload) {
+  const categories = Array.isArray(payload?.categories) ? payload.categories : []
+  const hydrated = categories.map((category) => ({
+    ...category,
+    reports: (category.reports || []).map((report) => hydrateReport(report, category)),
+  }))
+  const reportMap = {}
+  hydrated.forEach((category) => {
+    category.reports.forEach((report) => {
+      reportMap[report.id] = report
+    })
   })
-  return map
-}, {})
+  const favorites = Array.isArray(payload?.favorites)
+    ? payload.favorites.filter((id) => reportMap[id])
+    : []
+  return { categories: hydrated, reportMap, favorites }
+}
 
-function buildReportPath(reportId, extra = {}) {
+const LEGACY_FAVORITES_PREFIX = 'cosmo.reportFavorites.v1.'
+
+function readLegacyFavoriteIds(user) {
+  const keys = [
+    `${LEGACY_FAVORITES_PREFIX}${user?.id || ''}`,
+    `${LEGACY_FAVORITES_PREFIX}${user?.email || ''}`,
+    `${LEGACY_FAVORITES_PREFIX}anon`,
+  ].filter((key, index, all) => key && all.indexOf(key) === index)
+  const merged = []
+  const seen = new Set()
+  keys.forEach((key) => {
+    try {
+      const raw = localStorage.getItem(key)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return
+      parsed.forEach((id) => {
+        if (typeof id !== 'string' || !id || seen.has(id)) return
+        seen.add(id)
+        merged.push(id)
+      })
+    } catch {
+      /* ignore */
+    }
+  })
+  return merged
+}
+
+function clearLegacyFavoriteIds(user) {
+  ;[
+    `${LEGACY_FAVORITES_PREFIX}${user?.id || ''}`,
+    `${LEGACY_FAVORITES_PREFIX}${user?.email || ''}`,
+    `${LEGACY_FAVORITES_PREFIX}anon`,
+  ].forEach((key) => {
+    try { localStorage.removeItem(key) } catch { /* ignore */ }
+  })
+}
+
+function buildReportPath(reportId, reportMap, extra = {}) {
   const params = new URLSearchParams()
   params.set('report', reportId)
-  const categoryId = extra.report_group || REPORT_MAP[reportId]?.categoryId || ''
+  const categoryId = extra.report_group || reportMap[reportId]?.categoryId || ''
   if (categoryId) params.set('report_group', categoryId)
   Object.entries(extra).forEach(([key, value]) => {
     if (key === 'report_group') return
@@ -598,10 +262,118 @@ export default function ReportsPage() {
   const [searchParams] = useSearchParams()
   const reportId = searchParams.get('report') || ''
   const reportGroup = searchParams.get('report_group') || ''
-  const selectedReport = REPORT_MAP[reportId] || null
+
+  const user = useAppStore((s) => s.user)
+  const [categories, setCategories] = useState([])
+  const [reportMap, setReportMap] = useState({})
+  const [favoriteIds, setFavoriteIds] = useState([])
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [catalogError, setCatalogError] = useState(false)
+  const [favoritesSaving, setFavoritesSaving] = useState(false)
+
+  const applyCatalog = useCallback((payload) => {
+    const next = hydrateCatalog(payload)
+    setCategories(next.categories)
+    setReportMap(next.reportMap)
+    setFavoriteIds(next.favorites)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setCatalogLoading(true)
+      setCatalogError(false)
+      try {
+        let payload = await reportsAPI.catalog()
+        if (cancelled) return
+
+        // One-time migrate browser-local favorites into the server store.
+        const serverFavorites = Array.isArray(payload?.favorites) ? payload.favorites : []
+        if (serverFavorites.length === 0) {
+          const legacy = readLegacyFavoriteIds(user).filter((id) =>
+            (payload?.categories || []).some((cat) =>
+              (cat.reports || []).some((report) => report.id === id),
+            ),
+          )
+          if (legacy.length > 0) {
+            try {
+              payload = await reportsAPI.putCatalog({ favorites: legacy })
+              clearLegacyFavoriteIds(user)
+            } catch (migrateErr) {
+              console.error(migrateErr)
+            }
+          }
+        } else {
+          clearLegacyFavoriteIds(user)
+        }
+
+        if (cancelled) return
+        applyCatalog(payload)
+      } catch (err) {
+        console.error(err)
+        if (!cancelled) {
+          setCatalogError(true)
+          setCategories([])
+          setReportMap({})
+          setFavoriteIds([])
+          toast.error('Could not load reports catalog')
+        }
+      } finally {
+        if (!cancelled) setCatalogLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [applyCatalog, user])
+
+  const isFavorite = useCallback(
+    (id) => favoriteIds.includes(id),
+    [favoriteIds],
+  )
+
+  const toggleFavorite = useCallback(async (id) => {
+    if (!reportMap[id] || favoritesSaving) return
+    const previous = favoriteIds
+    const next = previous.includes(id)
+      ? previous.filter((x) => x !== id)
+      : [...previous, id]
+    setFavoriteIds(next)
+    setFavoritesSaving(true)
+    try {
+      const payload = await reportsAPI.putCatalog({ favorites: next })
+      applyCatalog(payload)
+    } catch (err) {
+      console.error(err)
+      setFavoriteIds(previous)
+      toast.error('Could not update favorites')
+    } finally {
+      setFavoritesSaving(false)
+    }
+  }, [reportMap, favoritesSaving, favoriteIds, applyCatalog])
+
+  const selectedReport = reportId ? (reportMap[reportId] || null) : null
   const listPath = reportGroup
     ? `/reports?report_group=${encodeURIComponent(reportGroup)}`
     : '/reports'
+
+  if (catalogLoading) {
+    return (
+      <div className="page-container">
+        <TableLoadingPanel label="Loading reports…" />
+      </div>
+    )
+  }
+
+  if (catalogError) {
+    return (
+      <div className="page-container">
+        <Card>
+          <div style={{ padding: 28, textAlign: 'center', color: 'var(--text-muted)' }}>
+            Could not load the reports catalog. Refresh the page to try again.
+          </div>
+        </Card>
+      </div>
+    )
+  }
 
   if (reportId && !selectedReport) {
     return <NavigateToReportsList />
@@ -611,19 +383,24 @@ export default function ReportsPage() {
     return (
       <ReportsListPage
         reportGroup={reportGroup}
+        categories={categories}
+        reportMap={reportMap}
+        favoriteIds={favoriteIds}
+        isFavorite={isFavorite}
+        onToggleFavorite={toggleFavorite}
         onSelectGroup={(id) => navigate(`/reports?report_group=${encodeURIComponent(id)}`)}
         onOpen={(id) => {
           const params = new URLSearchParams()
           params.set('report', id)
           if (reportGroup) params.set('report_group', reportGroup)
-          else params.set('report_group', REPORT_MAP[id]?.categoryId || '')
+          else params.set('report_group', reportMap[id]?.categoryId || '')
           navigate(`/reports?${params.toString()}`)
         }}
       />
     )
   }
 
-  return <ReportDetailPage key={selectedReport.id} report={selectedReport} onBack={() => navigate(listPath)} />
+  return <ReportDetailPage key={selectedReport.id} report={selectedReport} reportMap={reportMap} onBack={() => navigate(listPath)} />
 }
 
 function NavigateToReportsList() {
@@ -643,17 +420,56 @@ function FolderIcon() {
   )
 }
 
-function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
+function ReportsListPage({
+  reportGroup,
+  categories,
+  reportMap,
+  favoriteIds,
+  isFavorite,
+  onToggleFavorite,
+  onSelectGroup,
+  onOpen,
+}) {
+  const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
 
-  const activeGroupId = REPORT_CATEGORIES.some((c) => c.id === reportGroup)
-    ? reportGroup
-    : REPORT_CATEGORIES[0].id
-  const activeCategory = REPORT_CATEGORIES.find((c) => c.id === activeGroupId) || REPORT_CATEGORIES[0]
+  const favoriteReports = useMemo(
+    () => favoriteIds.map((id) => reportMap[id]).filter(Boolean),
+    [favoriteIds, reportMap],
+  )
 
-  const visibleReports = (activeCategory.reports || []).filter((report) => (
-    !needle || report.label.toLowerCase().includes(needle) || activeCategory.label.toLowerCase().includes(needle)
+  const firstCategoryId = categories[0]?.id || ''
+
+  const sidebarCategories = useMemo(() => ([
+    { id: FAVORITES_GROUP_ID, label: 'Favorites', reports: favoriteReports, isFavorites: true },
+    ...categories.map((category) => ({ ...category, isFavorites: false })),
+  ]), [favoriteReports, categories])
+
+  const knownGroupIds = useMemo(
+    () => new Set(sidebarCategories.map((c) => c.id)),
+    [sidebarCategories],
+  )
+
+  const defaultGroupId = favoriteReports.length > 0
+    ? FAVORITES_GROUP_ID
+    : firstCategoryId
+
+  // Land on Favorites when available; otherwise the first report category.
+  useEffect(() => {
+    if (!defaultGroupId) return
+    if (reportGroup && knownGroupIds.has(reportGroup)) return
+    navigate(`/reports?report_group=${encodeURIComponent(defaultGroupId)}`, { replace: true })
+  }, [reportGroup, knownGroupIds, defaultGroupId, navigate])
+
+  const activeGroupId = knownGroupIds.has(reportGroup) ? reportGroup : defaultGroupId
+  const activeCategory = sidebarCategories.find((c) => c.id === activeGroupId) || sidebarCategories[0]
+
+  const visibleReports = (activeCategory?.reports || []).filter((report) => (
+    !needle
+    || report.label.toLowerCase().includes(needle)
+    || (activeCategory.label || '').toLowerCase().includes(needle)
+    || (report.categoryLabel || '').toLowerCase().includes(needle)
   ))
 
   return (
@@ -681,7 +497,7 @@ function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
           }}>
             REPORT CATEGORY
           </div>
-          {REPORT_CATEGORIES.map((category) => {
+          {sidebarCategories.map((category) => {
             const active = category.id === activeGroupId
             return (
               <button
@@ -703,8 +519,29 @@ function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
                   textAlign: 'left',
                 }}
               >
-                <span style={{ display: 'inline-flex', opacity: 0.85 }}><FolderIcon /></span>
-                {category.label}
+                <span style={{ display: 'inline-flex', opacity: 0.85 }}>
+                  {category.isFavorites
+                    ? <Icon.Star size={16} filled={favoriteReports.length > 0} />
+                    : <FolderIcon />}
+                </span>
+                <span style={{ flex: 1 }}>{category.label}</span>
+                {category.isFavorites && favoriteReports.length > 0 && (
+                  <span style={{
+                    minWidth: 18,
+                    height: 18,
+                    padding: '0 5px',
+                    borderRadius: 9,
+                    background: active ? 'rgba(255,255,255,0.55)' : 'var(--bg-subtle, rgba(0,0,0,0.05))',
+                    color: active ? 'var(--blue)' : 'var(--text-muted)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    {favoriteReports.length}
+                  </span>
+                )}
               </button>
             )
           })}
@@ -718,7 +555,7 @@ function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
           minHeight: 360,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 18px 12px' }}>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{activeCategory.label}</h2>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{activeCategory?.label || 'Reports'}</h2>
             <span style={{
               minWidth: 22,
               height: 22,
@@ -739,22 +576,53 @@ function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
             <thead>
               <tr>
                 <th>REPORT NAME</th>
+                <th className="report-list-fav-th" aria-label="Favorite" />
               </tr>
             </thead>
             <tbody>
               {visibleReports.length === 0 ? (
                 <tr>
-                  <td style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
-                    No reports match that search.
+                  <td colSpan={2} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                    {activeCategory?.isFavorites && !needle
+                      ? 'No favorite reports yet. Hover a report and click the star to add it here.'
+                      : 'No reports match that search.'}
                   </td>
                 </tr>
-              ) : visibleReports.map((report) => (
-                  <tr key={report.id} style={{ cursor: 'pointer' }} onClick={() => onOpen(report.id)}>
+              ) : visibleReports.map((report) => {
+                const favorited = isFavorite(report.id)
+                return (
+                  <tr
+                    key={report.id}
+                    className="report-list-row"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onOpen(report.id)}
+                  >
                     <td>
                       <span style={{ color: 'var(--blue)', fontWeight: 500 }}>{report.label}</span>
+                      {activeCategory?.isFavorites && report.categoryLabel && (
+                        <span style={{ marginLeft: 8, color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>
+                          {report.categoryLabel}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right', width: 44 }}>
+                      <button
+                        type="button"
+                        className={`report-fav-btn${favorited ? ' is-favorite' : ''}`}
+                        aria-label={favorited ? `Remove ${report.label} from favorites` : `Add ${report.label} to favorites`}
+                        aria-pressed={favorited}
+                        title={favorited ? 'Remove from favorites' : 'Add to favorites'}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onToggleFavorite(report.id)
+                        }}
+                      >
+                        <Icon.Star size={16} filled={favorited} />
+                      </button>
                     </td>
                   </tr>
-                ))}
+                )
+              })}
             </tbody>
           </table>
         </section>
@@ -763,7 +631,7 @@ function ReportsListPage({ reportGroup, onSelectGroup, onOpen }) {
   )
 }
 
-function ReportDetailPage({ report, onBack }) {
+function ReportDetailPage({ report, reportMap, onBack }) {
   const navigate = useNavigate()
   const columnPrefs = useColumnPrefs(`reports.${report.id}`)
   const [searchParams] = useSearchParams()
@@ -816,7 +684,7 @@ function ReportDetailPage({ report, onBack }) {
   }, [urlFilters])
 
   const isDrilldown = Boolean(urlFilters.drill_from || Object.keys(drillFilters).length > 0)
-  const parentReport = urlFilters.drill_from ? REPORT_MAP[urlFilters.drill_from] : null
+  const parentReport = urlFilters.drill_from ? reportMap[urlFilters.drill_from] : null
 
   useEffect(() => {
     setDateFrom(urlFilters.date_from || defaultFrom)
@@ -914,7 +782,7 @@ function ReportDetailPage({ report, onBack }) {
         || ''
       if (!filters.branch_label) delete filters.branch_label
     }
-    navigate(buildReportPath(drill.reportId, {
+    navigate(buildReportPath(drill.reportId, reportMap, {
       ...filters,
       drill_from: report.id,
       drill_label: drill.label || '',
@@ -923,14 +791,14 @@ function ReportDetailPage({ report, onBack }) {
 
   const clearDrilldown = () => {
     if (parentReport) {
-      navigate(buildReportPath(parentReport.id, {
+      navigate(buildReportPath(parentReport.id, reportMap, {
         date_from: dateFrom,
         date_to: dateTo,
         ...(branchId ? { branch_id: branchId, ...(branchLabel ? { branch_label: branchLabel } : {}) } : {}),
       }))
       return
     }
-    navigate(buildReportPath(report.id, {
+    navigate(buildReportPath(report.id, reportMap, {
       date_from: dateFrom,
       date_to: dateTo,
       ...(branchId ? { branch_id: branchId, ...(branchLabel ? { branch_label: branchLabel } : {}) } : {}),

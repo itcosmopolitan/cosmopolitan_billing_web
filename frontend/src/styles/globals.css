@@ -3864,3 +3864,45 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 .page-actions-menu__label {
   flex: 1;
 }
+
+/* Reports Center — favorite star (show on hover; always visible when favorited) */
+.report-list-row .report-fav-btn {
+  opacity: 0;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: -6px 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.report-list-row:hover .report-fav-btn,
+.report-list-row:focus-within .report-fav-btn,
+.report-list-row .report-fav-btn.is-favorite {
+  opacity: 1;
+  pointer-events: auto;
+}
+.report-list-row .report-fav-btn:hover {
+  background: var(--bg-hover);
+  color: var(--amber, #d97706);
+}
+.report-list-row .report-fav-btn.is-favorite {
+  color: var(--amber, #d97706);
+}
+.report-list-row .report-fav-btn:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.report-list-fav-th {
+  width: 44px;
+  text-align: right;
+}

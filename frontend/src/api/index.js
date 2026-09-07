@@ -546,6 +546,8 @@ export const cashAPI = {
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
 export const reportsAPI = {
+  catalog:               () => api.get('/reports/catalog', { noBranchScope: true }),
+  putCatalog:            (data) => api.put('/reports/catalog', data),
   salesSummary:    (params) => api.get('/reports/sales-summary',    { params }),
   purchaseSummary: (params) => api.get('/reports/purchase-summary', { params }),
   taxSummary:      (params) => api.get('/reports/tax-summary',      { params }),
