@@ -78,6 +78,7 @@ export default function SalesTxnDetailPanel({
   document: doc,
   onClose,
   onPrint,
+  onExport,
   onCancelInvoice,
   onRecordPayment,
   onEditInvoice,
@@ -175,6 +176,16 @@ export default function SalesTxnDetailPanel({
             }}
           >
             Print invoice
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onExport?.(detail, branchLookup?.(detail) || null)
+              onClose?.()
+            }}
+          >
+            Export PDF
           </button>
           {detail?.status !== 'cancelled' && !(detail?.paidAmount > 0) && can('invoices.cancel') && (
             <button type="button" className="btn btn-danger" onClick={() => { onCancelInvoice?.(detail); onClose?.() }}>

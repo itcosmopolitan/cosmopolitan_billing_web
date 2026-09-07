@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
@@ -25,7 +25,7 @@ const formatNumber = (value, options = {}) => {
 const formatCurrency = (value) => formatAmountNumber(value)
 
 // ─── Invoice Print Component ────────────────────────────────────────────────
-export function Receipt({ sale, branch }) {
+export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRef) {
   const ref = useRef(null)
   const thermalRef = useRef(null)
   const [invoiceFormat, setInvoiceFormat] = useState('standard') // 'standard' or 'thermal'
@@ -395,17 +395,23 @@ export function Receipt({ sale, branch }) {
     }
   }
 
-  const handleExportPdf = async () => {
-    if (!ref.current) return
+  const exportPdf = async () => {
+    if (!ref.current) return false
     try {
       const customerName = sale.customerName || sale.customer_name || 'Customer'
       const fileName = `${customerName}_${sale.number || 'invoice'}`
       await exportInvoicePdf(ref.current, fileName)
+      return true
     } catch (error) {
       console.error('Failed to export invoice PDF:', error)
       toast.error('Could not export the invoice as PDF.')
+      return false
     }
   }
+
+  useImperativeHandle(forwardedRef, () => ({ exportPdf }), [sale])
+
+  const handleExportPdf = exportPdf
 
   return (
     <div>
@@ -451,4 +457,4 @@ export function Receipt({ sale, branch }) {
 
     </div>
   )
-}
+})

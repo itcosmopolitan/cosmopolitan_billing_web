@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
+import { Receipt } from '@/components/Receipt'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
@@ -127,6 +128,8 @@ export default function SalesPage() {
   const [paymentProofFile, setPaymentProofFile] = useState(null)
   const [paymentProofUploading, setPaymentProofUploading] = useState(false)
   const [proofUploadInvoice, setProofUploadInvoice] = useState(null)
+  const [exportInvoice, setExportInvoice] = useState(null)
+  const exportReceiptRef = useRef(null)
   const [activityTarget, setActivityTarget] = useState(null)
   // 2026-05-30: customer's available credit balance, fetched when the
   // Record Payment modal opens for a customer invoice. The invoice row
@@ -746,6 +749,27 @@ export default function SalesPage() {
     }
   }
 
+  const requestInvoiceExport = async (invoice, branch) => {
+    try {
+      const fullInvoice = invoice?.items?.length ? invoice : await salesAPI.get(invoice.id)
+      setExportInvoice({ sale: fullInvoice, branch })
+    } catch (error) {
+      console.error('Failed to load invoice for export:', error)
+      toast.error('Could not prepare the invoice PDF.')
+    }
+  }
+
+  useEffect(() => {
+    if (!exportInvoice || !exportReceiptRef.current) return
+    let cancelled = false
+    const run = async () => {
+      await exportReceiptRef.current.exportPdf()
+      if (!cancelled) setExportInvoice(null)
+    }
+    run()
+    return () => { cancelled = true }
+  }, [exportInvoice])
+
   const goEditInvoice = (inv) => {
     if (invoiceHasPayment(inv)) {
       toast.error('Delete the payment first, then edit this invoice.')
@@ -1174,6 +1198,11 @@ export default function SalesPage() {
                           ariaLabel={`Actions for ${inv.number}`}
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setSalesDoc({ kind: 'invoice', data: inv }) },
+                            {
+                              label: 'Export PDF',
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => requestInvoiceExport(inv, branches.find((branch) => branch.id === inv.branchId)),
+                            },
                             {
                               label: 'Activity',
                               hidden: !canActivity,
@@ -2095,6 +2124,7 @@ export default function SalesPage() {
           }
         }}
         onPrint={(inv, branch) => openInvoicePrintWindow(inv, branch)}
+        onExport={requestInvoiceExport}
         onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
         onRecordPayment={(inv) => setShowPayment(inv)}
         onEditInvoice={(inv) => { goEditInvoice(inv); setSalesDoc(null) }}
@@ -2307,7 +2337,12 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      
+      {exportInvoice && (
+        <div style={{ position: 'fixed', left: '-10000px', top: 0, width: 920, pointerEvents: 'none' }} aria-hidden="true">
+          <Receipt ref={exportReceiptRef} sale={exportInvoice.sale} branch={exportInvoice.branch} />
+        </div>
+      )}
+
     </div>
   )
 }
