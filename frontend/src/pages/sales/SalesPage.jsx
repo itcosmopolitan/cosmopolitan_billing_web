@@ -126,6 +126,7 @@ export default function SalesPage() {
   const [payRef, setPayRef]     = useState('')
   const [paymentProofFile, setPaymentProofFile] = useState(null)
   const [paymentProofUploading, setPaymentProofUploading] = useState(false)
+  const [proofUploadInvoice, setProofUploadInvoice] = useState(null)
   const [activityTarget, setActivityTarget] = useState(null)
   // 2026-05-30: customer's available credit balance, fetched when the
   // Record Payment modal opens for a customer invoice. The invoice row
@@ -727,6 +728,21 @@ export default function SalesPage() {
       throw err
     } finally {
       setPaymentProofUploading(false)
+    }
+  }
+
+  const uploadProofFromInvoiceMenu = async () => {
+    if (!proofUploadInvoice?.id || !paymentProofFile) {
+      toast.error('Choose a PNG or PDF payment proof first')
+      return
+    }
+    try {
+      await uploadPaymentProof(proofUploadInvoice.id, paymentProofFile, '', null)
+      toast.success('Payment proof uploaded')
+      setProofUploadInvoice(null)
+      setPaymentProofFile(null)
+    } catch {
+      // uploadPaymentProof already displays the server error.
     }
   }
 
@@ -2184,6 +2200,50 @@ export default function SalesPage() {
             </>
           )
         })()}
+      </Modal>
+
+      <Modal
+        open={!!proofUploadInvoice}
+        onClose={() => { if (!paymentProofUploading) setProofUploadInvoice(null) }}
+        title="Upload Payment Proof"
+        icon="📎"
+        size="sm"
+        busy={paymentProofUploading}
+        footer={<>
+          <button className="btn btn-secondary" onClick={() => setProofUploadInvoice(null)} disabled={paymentProofUploading}>Cancel</button>
+          <button className="btn btn-primary" onClick={uploadProofFromInvoiceMenu} disabled={!paymentProofFile || paymentProofUploading}>
+            {paymentProofUploading ? 'Uploading…' : 'Upload Proof'}
+          </button>
+        </>}
+      >
+        <div style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.5, marginBottom: 14 }}>
+          Attach another payment confirmation for <strong>{proofUploadInvoice?.number}</strong>.
+        </div>
+        <FormGroup label="Payment proof" required>
+          <input
+            className="form-input"
+            type="file"
+            accept=".png,application/pdf"
+            onChange={(event) => {
+              const file = event.target.files?.[0] || null
+              if (file && !['image/png', 'application/pdf'].includes(file.type)) {
+                toast.error('Only PNG and PDF files are allowed')
+                event.target.value = ''
+                setPaymentProofFile(null)
+                return
+              }
+              const maxSize = file?.type === 'image/png' ? 1 * 1024 * 1024 : 2 * 1024 * 1024
+              if (file && file.size > maxSize) {
+                toast.error(file.type === 'image/png' ? 'PNG files must be 1 MB or smaller' : 'PDF files must be 2 MB or smaller')
+                event.target.value = ''
+                setPaymentProofFile(null)
+                return
+              }
+              setPaymentProofFile(file)
+            }}
+          />
+        </FormGroup>
+        <div style={{ color: 'var(--text-muted)', fontSize: 11.5, marginTop: 8 }}>PNG up to 1 MB; PDF up to 2 MB.</div>
       </Modal>
 
       {/* Cancel Invoice Confirm */}

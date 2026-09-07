@@ -175,11 +175,8 @@ export default function POSPage() {
   const [activeCat, setActiveCat] = useState([])
   const [showHeld, setShowHeld] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
-  const [showPaymentProof, setShowPaymentProof] = useState(false)
   const [showCreditWarning, setShowCreditWarning] = useState(false)
   const [lastSale, setLastSale] = useState(null)
-  const [paymentProofFile, setPaymentProofFile] = useState(null)
-  const [paymentProofUploading, setPaymentProofUploading] = useState(false)
   const [products, setProducts] = useState([])
   const [productPageNo, setProductPageNo] = useState(1)
   const [productTotal, setProductTotal] = useState(null)
@@ -229,7 +226,6 @@ export default function POSPage() {
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, cashCollected } = store
-    const [paymentProofRef, setPaymentProofRef] = useState('')
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
 
   // Guard route changes when the cart has unsaved lines. We stash the
@@ -495,59 +491,6 @@ export default function POSPage() {
 
   const filtered = products
 
-  const finishPaymentProofStep = () => {
-    setShowPaymentProof(false)
-    setPaymentProofFile(null)
-    setPaymentProofRef('')
-    setShowComplete(true)
-  }
-
-  const handlePaymentProofUpload = async () => {
-    if (!lastSale?.id || !paymentProofFile) {
-      toast.error('Choose a PNG or PDF payment proof first')
-      return
-    }
-    setPaymentProofUploading(true)
-    try {
-      try {
-        const presigned = await salesAPI.presignPaymentProof(lastSale.id, {
-          filename: paymentProofFile.name,
-          content_type: paymentProofFile.type,
-          size: paymentProofFile.size,
-        })
-        const uploadResponse = await fetch(presigned.upload_url, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': paymentProofFile.type,
-            'x-amz-server-side-encryption': 'AES256',
-          },
-          body: paymentProofFile,
-        })
-        if (!uploadResponse.ok) throw new Error(`S3 upload failed (${uploadResponse.status})`)
-        await salesAPI.completePaymentProof(lastSale.id, {
-          filename: paymentProofFile.name,
-          content_type: paymentProofFile.type,
-          size: paymentProofFile.size,
-          object_key: presigned.object_key,
-          payment_ref: paymentProofRef,
-          payment_id: lastSale.paymentId,
-        })
-      } catch (directUploadError) {
-        // A missing bucket CORS rule blocks browser-to-S3 PUTs. Fall back to
-        // the authenticated backend upload until the bucket policy is fixed.
-        console.warn('Direct S3 payment-proof upload failed; using backend fallback', directUploadError)
-        await salesAPI.uploadPaymentProof(lastSale.id, paymentProofFile, paymentProofRef, lastSale.paymentId)
-      }
-      toast.success('Payment proof uploaded')
-      finishPaymentProofStep()
-    } catch (err) {
-      console.error('Failed to upload payment proof:', err)
-      toast.error(err?.response?.data?.detail || err?.message || 'Failed to upload payment proof')
-    } finally {
-      setPaymentProofUploading(false)
-    }
-  }
-
   const handleComplete = async (allowCreditOverLimit = false) => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
@@ -703,7 +646,6 @@ export default function POSPage() {
 
       setLastSale({
         ...fullSale,
-        paymentId: fullSale.payments?.filter((payment) => !payment.voided).at(-1)?.id || null,
         discountReason: hasDiscountForSubmit ? discountReason : '',
         method: settling ? (paymentMethod || (creditAppliedNow > 0 ? 'credit' : null)) : null,
         storeCreditApplied: fullSale.storeCreditApplied ?? creditAppliedNow,
@@ -727,10 +669,7 @@ export default function POSPage() {
       await refreshProductStock()
       queryClient.invalidateQueries({ queryKey: dashboardKeys.root })
       toast.success(editingInvoice ? `Sale ${result.number} updated` : `Sale ${result.number} completed!`)
-      const needsPaymentProof = !editingInvoice && settling && remainingDue > 0.001 && ['card', 'upi', 'bank_transfer'].includes(paymentMethod)
-      // Non-cash POS payments request proof before showing the receipt.
-      if (needsPaymentProof) setShowPaymentProof(true)
-      else setShowComplete(true)
+      setShowComplete(true)
     } catch (err) {
       console.error('Failed to complete sale:', err)
       toast.error(editingInvoice ? 'Failed to update sale. Please try again.' : 'Failed to save sale. Please try again.')
@@ -1897,61 +1836,6 @@ export default function POSPage() {
         confirmLabel="Yes, continue"
         danger
       />
-
-      {/* Payment proof modal */}
-      <Modal
-        open={showPaymentProof}
-        onClose={finishPaymentProofStep}
-        title="Upload Payment Proof"
-        icon="📎"
-        size="sm"
-        busy={paymentProofUploading}
-        footer={(
-          <>
-            <button className="btn btn-ghost" onClick={finishPaymentProofStep} disabled={paymentProofUploading}>Skip</button>
-            <button className="btn btn-primary" onClick={handlePaymentProofUpload} disabled={!paymentProofFile || paymentProofUploading}>
-              {paymentProofUploading ? 'Uploading...' : 'Upload Proof'}
-            </button>
-          </>
-        )}
-      >
-        <div style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.5, marginBottom: 14 }}>
-          Attach the payment confirmation for {lastSale?.number || 'this invoice'}.
-        </div>
-        <FormGroup label="REF number">
-          <input
-            className="form-input"
-            placeholder="Enter payment reference"
-            value={paymentProofRef}
-            onChange={(event) => setPaymentProofRef(event.target.value)}
-          />
-        </FormGroup>
-        <FormGroup label="Payment proof" required>
-          <input
-            className="form-input"
-            type="file"
-            accept=".png,application/pdf"
-            onChange={(event) => {
-              const file = event.target.files?.[0] || null
-              if (file && !['image/png', 'application/pdf'].includes(file.type)) {
-                toast.error('Only PNG and PDF files are allowed')
-                event.target.value = ''
-                setPaymentProofFile(null)
-                return
-              }
-              const maxSize = file?.type === 'image/png' ? 1 * 1024 * 1024 : 2 * 1024 * 1024
-              if (file && file.size > maxSize) {
-                toast.error(file.type === 'image/png' ? 'PNG files must be 1 MB or smaller' : 'PDF files must be 2 MB or smaller')
-                event.target.value = ''
-                setPaymentProofFile(null)
-                return
-              }
-              setPaymentProofFile(file)
-            }}
-          />
-        </FormGroup>
-        <div style={{ color: 'var(--text-muted)', fontSize: 11.5, marginTop: 8 }}>PNG up to 1 MB; PDF up to 2 MB.</div>
-      </Modal>
 
       {/* Sale Complete Modal */}
       <Modal open={showComplete} onClose={() => setShowComplete(false)} title="Sale Completed!" icon="✅" size="xl">
