@@ -32,6 +32,7 @@ def _report(
     default_sort: str,
     columns: list[dict[str, Any]],
     detail_type: str | None = None,
+    list_hidden: bool = False,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": id,
@@ -42,7 +43,94 @@ def _report(
     }
     if detail_type:
         out["detailType"] = detail_type
+    if list_hidden:
+        out["listHidden"] = True
     return out
+
+
+_SALES_INVOICE_COLUMNS = [
+    _col("invoice_number", "Invoice Number"),
+    _col("invoice_date", "Invoice Date", format="date"),
+    _col("customer", "Customer"),
+    _col("branch", "Branch"),
+    _col("cashier", "Cashier"),
+    _col("taxable_amount", "Taxable Amount", align="right", format="currency"),
+    _col("tax_amount", "Tax Amount", align="right", format="currency"),
+    _col("discount", "Discount", align="right", format="currency"),
+    _col("net_amount", "Net Amount", align="right", format="currency"),
+    _col("payment_mode", "Payment Mode"),
+    _col("status", "Status"),
+]
+
+_SALES_LINE_COLUMNS = [
+    _col("invoice_number", "Invoice Number"),
+    _col("invoice_date", "Invoice Date", format="date"),
+    _col("product_code", "Product Code"),
+    _col("product_name", "Product Name"),
+    _col("customer", "Customer"),
+    _col("branch", "Branch"),
+    _col("cashier", "Cashier"),
+    _col("quantity", "Quantity", align="right", format="qty"),
+    _col("unit_price", "Unit Price", align="right", format="currency"),
+    _col("discount", "Discount", align="right", format="currency"),
+    _col("line_total", "Line Total", align="right", format="currency"),
+    _col("payment_mode", "Payment Mode"),
+    _col("status", "Status"),
+]
+
+_PURCHASE_BILL_COLUMNS = [
+    _col("bill_number", "Bill Number"),
+    _col("bill_date", "Bill Date", format="date"),
+    _col("vendor", "Vendor"),
+    _col("branch", "Branch"),
+    _col("subtotal", "Subtotal", align="right", format="currency"),
+    _col("tax", "Tax", align="right", format="currency"),
+    _col("total", "Total", align="right", format="currency"),
+    _col("paid", "Paid", align="right", format="currency"),
+    _col("balance", "Balance", align="right", format="currency"),
+    _col("status", "Status"),
+]
+
+_PURCHASE_LINE_COLUMNS = [
+    _col("bill_number", "Bill Number"),
+    _col("bill_date", "Bill Date", format="date"),
+    _col("product", "Product"),
+    _col("vendor", "Vendor"),
+    _col("branch", "Branch"),
+    _col("quantity", "Quantity", align="right", format="qty"),
+    _col("unit_cost", "Unit Cost", align="right", format="currency"),
+    _col("discount", "Discount", align="right", format="currency"),
+    _col("line_total", "Line Total", align="right", format="currency"),
+    _col("status", "Status"),
+]
+
+
+def _invoice_detail(report_id: str, label: str) -> dict[str, Any]:
+    return _report(
+        report_id, label, api="salesRegister", default_sort="invoice_date",
+        detail_type="invoice", list_hidden=True, columns=list(_SALES_INVOICE_COLUMNS),
+    )
+
+
+def _sales_line_detail(report_id: str, label: str) -> dict[str, Any]:
+    return _report(
+        report_id, label, api="salesLines", default_sort="invoice_date",
+        detail_type="invoice", list_hidden=True, columns=list(_SALES_LINE_COLUMNS),
+    )
+
+
+def _bill_detail(report_id: str, label: str) -> dict[str, Any]:
+    return _report(
+        report_id, label, api="purchaseRegister", default_sort="bill_date",
+        detail_type="bill", list_hidden=True, columns=list(_PURCHASE_BILL_COLUMNS),
+    )
+
+
+def _purchase_line_detail(report_id: str, label: str) -> dict[str, Any]:
+    return _report(
+        report_id, label, api="purchaseLines", default_sort="bill_date",
+        detail_type="bill", list_hidden=True, columns=list(_PURCHASE_LINE_COLUMNS),
+    )
 
 
 # category_id → category definition (ordered)
@@ -86,6 +174,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("net_sales", "Net Sales", align="right", format="currency"),
                 ],
             ),
+            _invoice_detail("daily-sales-detail", "Daily Sales Detail"),
             _report(
                 "product-sales",
                 "Product-wise Sales",
@@ -101,6 +190,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("profit", "Profit", align="right", format="currency"),
                 ],
             ),
+            _sales_line_detail("product-sales-detail", "Product Sales Detail"),
             _report(
                 "payment-sales",
                 "Payment Method Sales",
@@ -115,6 +205,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("net_sales", "Net Sales", align="right", format="currency"),
                 ],
             ),
+            _invoice_detail("payment-sales-detail", "Payment Method Detail"),
             _report(
                 "category-sales",
                 "Category-wise Sales",
@@ -128,6 +219,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("profit", "Profit", align="right", format="currency"),
                 ],
             ),
+            _sales_line_detail("category-sales-detail", "Category Sales Detail"),
             _report(
                 "branch-sales",
                 "Branch-wise Sales",
@@ -142,6 +234,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("net_sales", "Net Sales", align="right", format="currency"),
                 ],
             ),
+            _invoice_detail("branch-sales-detail", "Branch Sales Detail"),
             _report(
                 "cashier-sales",
                 "Cashier-wise Sales",
@@ -155,6 +248,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("discount_amount", "Discount Amount", align="right", format="currency"),
                 ],
             ),
+            _invoice_detail("cashier-sales-detail", "Cashier Sales Detail"),
         ],
     },
     {
@@ -193,6 +287,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
                 ],
             ),
+            _bill_detail("vendor-purchases-detail", "Vendor Purchase Detail"),
             _report(
                 "product-purchases",
                 "Product-wise Purchase",
@@ -205,6 +300,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("average_cost", "Average Cost", align="right", format="currency"),
                 ],
             ),
+            _purchase_line_detail("product-purchases-detail", "Product Purchase Detail"),
         ],
     },
     {
@@ -375,6 +471,39 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "taxes",
+        "label": "Taxes",
+        "reports": [
+            _report(
+                "tax-summary",
+                "Tax Summary",
+                api="taxSummary",
+                default_sort="tax_name",
+                columns=[
+                    _col("tax_name", "Tax Name"),
+                    _col("tax_percentage", "Tax Percentage", align="right", format="number"),
+                    _col("taxable_amount", "Taxable Amount", align="right", format="currency"),
+                    _col("tax_amount", "Tax Amount", align="right", format="currency"),
+                ],
+            ),
+            _report(
+                "tax-summary-detail",
+                "Tax Summary Detail",
+                api="taxSummaryDetail",
+                default_sort="date",
+                detail_type="tax_txn",
+                list_hidden=True,
+                columns=[
+                    _col("date", "Date", format="date"),
+                    _col("entry_number", "Entry#"),
+                    _col("transaction_type", "Transaction Type"),
+                    _col("transaction_amount", "Transaction Amount", align="right", format="currency"),
+                    _col("tax_amount", "Tax Amount", align="right", format="currency"),
+                ],
+            ),
+        ],
+    },
+    {
         "id": "customers",
         "label": "Customers",
         "reports": [
@@ -390,6 +519,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
                 ],
             ),
+            _invoice_detail("top-customers-detail", "Customer Sales Detail"),
         ],
     },
     {
@@ -408,6 +538,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
                 ],
             ),
+            _bill_detail("vendor-outstanding-detail", "Vendor Outstanding Detail"),
         ],
     },
 ]
