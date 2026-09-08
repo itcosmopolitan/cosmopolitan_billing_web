@@ -979,7 +979,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container page-container--list">
       <div className="section-hdr">
         <button
           type="button"
@@ -1039,72 +1039,71 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         </div>
       </div>
 
-      {isDrilldown && (
-        <div style={{
-          marginBottom: 14,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          flexWrap: 'wrap',
-          fontSize: 13,
-          color: 'var(--text-secondary)',
-        }}>
-          {parentReport && (
-            <>
+      <div className="filter-toolbar-stack">
+        {isDrilldown && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexWrap: 'wrap',
+            fontSize: 13,
+            color: 'var(--text-secondary)',
+          }}>
+            {parentReport && (
+              <>
+                <button
+                  type="button"
+                  onClick={clearDrilldown}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--blue)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                >
+                  {parentReport.label}
+                </button>
+                <span aria-hidden>›</span>
+              </>
+            )}
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '4px 10px',
+              borderRadius: 8,
+              background: 'var(--blue-bg)',
+              color: 'var(--blue)',
+              fontWeight: 600,
+            }}>
+              {drilldownChipLabel(urlFilters)}
               <button
                 type="button"
                 onClick={clearDrilldown}
+                aria-label="Clear drilldown filter"
                 style={{
                   border: 'none',
                   background: 'transparent',
-                  color: 'var(--blue)',
-                  fontWeight: 600,
+                  color: 'inherit',
                   cursor: 'pointer',
+                  fontSize: 14,
+                  lineHeight: 1,
                   padding: 0,
                 }}
               >
-                {parentReport.label}
+                ×
               </button>
-              <span aria-hidden>›</span>
-            </>
-          )}
-          <span style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '4px 10px',
-            borderRadius: 8,
-            background: 'var(--blue-bg)',
-            color: 'var(--blue)',
-            fontWeight: 600,
-          }}>
-            {drilldownChipLabel(urlFilters)}
-            <button
-              type="button"
-              onClick={clearDrilldown}
-              aria-label="Clear drilldown filter"
-              style={{
-                border: 'none',
-                background: 'transparent',
-                color: 'inherit',
-                cursor: 'pointer',
-                fontSize: 14,
-                lineHeight: 1,
-                padding: 0,
-              }}
-            >
-              ×
-            </button>
-          </span>
-          <span style={{ color: 'var(--text-muted)' }}>
-            {report.id.endsWith('-detail') && (report.api === 'salesLines' || report.api === 'purchaseLines')
-              ? 'Showing matching line items'
-              : 'Showing matching detail rows'}
-          </span>
-        </div>
-      )}
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>
+              {report.id.endsWith('-detail') && (report.api === 'salesLines' || report.api === 'purchaseLines')
+                ? 'Showing matching line items'
+                : 'Showing matching detail rows'}
+            </span>
+          </div>
+        )}
 
-      <div style={{ marginBottom: 18, display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 220px))', gap: 12, alignItems: 'end' }}>
           <div>
             <label className="form-label">From</label>
@@ -1134,146 +1133,156 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         </div>
       </div>
 
-      <Card title={report.label} bodyPadding={false}>
-        <div style={{ padding: 16, overflowX: 'auto' }}>
-          <table className="data-table" style={{ minWidth: 920 }}>
-            <thead>
-              <tr>
-                {columnPrefs.ready && (
-                  <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+      <div className="list-page-panel">
+        <Card bodyPadding={false}>
+          <div className="list-page-scroll">
+            <table className="data-table" style={{ minWidth: 920 }}>
+              <thead>
+                <tr>
+                  {columnPrefs.ready && (
+                    <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
+                  )}
+                  {visibleColumns.map((column) => (
+                    column.sortable === false ? (
+                      <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{column.label}</th>
+                    ) : (
+                      <SortableHeader
+                        key={column.key}
+                        label={column.label}
+                        sortKey={column.key}
+                        sortBy={sortBy}
+                        sortOrder={sortOrder}
+                        onSort={handleSort}
+                        align={column.align || 'left'}
+                      />
+                    )
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={tableColSpan} style={{ padding: 0 }}>
+                      <TableLoadingPanel label="Loading report data…" />
+                    </td>
+                  </tr>
+                ) : rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={tableColSpan} style={{ textAlign: 'center', padding: 28 }}>No records match the selected filters.</td>
+                  </tr>
+                ) : (
+                  rows.map((row, index) => {
+                    const isPnL = report.id === 'profit-loss'
+                    const emphasis = isPnL && (row.row_type === 'header' || row.row_type === 'section_total' || row.row_type === 'result')
+                    const detailPath = typeof report.getDetailPath === 'function' ? report.getDetailPath(row) : null
+                    const canDrill = typeof report.getDrilldown === 'function'
+                      ? Boolean(report.getDrilldown(row, { dateFrom, dateTo, branchId }))
+                      : false
+                    const clickable = Boolean(detailPath || canDrill)
+                    const rowStyle = isPnL
+                      ? {
+                          fontWeight: emphasis ? 700 : 400,
+                          background: row.row_type === 'result' ? 'var(--bg-subtle, rgba(0,0,0,0.03))' : undefined,
+                        }
+                      : clickable
+                        ? { cursor: 'pointer' }
+                        : undefined
+                    return (
+                      <tr
+                        key={index}
+                        style={rowStyle}
+                        title={canDrill ? 'Click to view detail register' : undefined}
+                        onClick={() => {
+                          if (detailPath) navigate(detailPath)
+                          else if (canDrill) openDrilldown(row)
+                        }}
+                      >
+                        {columnPrefs.ready && <ColumnPrefsSpacer />}
+                        {visibleColumns.map((column) => {
+                          const value = row[column.key]
+                          const rendered = column.formatter ? column.formatter(value, row) : value
+                          const alignClass =
+                            column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
+                          const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+                          return (
+                            <td
+                              key={column.key}
+                              className={alignClass}
+                              style={{
+                                ...(isPnL && column.key === 'account' && row.row_type === 'detail' ? { paddingLeft: 28 } : {}),
+                                ...(clickable && isNameCol ? { color: 'var(--blue)', fontWeight: 500 } : {}),
+                              }}
+                            >
+                              {rendered !== null && rendered !== undefined && rendered !== ''
+                                ? rendered
+                                : (isPnL ? '' : '—')}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })
                 )}
-                {visibleColumns.map((column) => (
-                  column.sortable === false ? (
-                    <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{column.label}</th>
-                  ) : (
-                    <SortableHeader
-                      key={column.key}
-                      label={column.label}
-                      sortKey={column.key}
-                      sortBy={sortBy}
-                      sortOrder={sortOrder}
-                      onSort={handleSort}
-                      align={column.align || 'left'}
-                    />
-                  )
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={tableColSpan} style={{ padding: 0 }}>
-                    <TableLoadingPanel label="Loading report data…" />
-                  </td>
-                </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={tableColSpan} style={{ textAlign: 'center', padding: 28 }}>No records match the selected filters.</td>
-                </tr>
-              ) : (
-                rows.map((row, index) => {
-                  const isPnL = report.id === 'profit-loss'
-                  const emphasis = isPnL && (row.row_type === 'header' || row.row_type === 'section_total' || row.row_type === 'result')
-                  const detailPath = typeof report.getDetailPath === 'function' ? report.getDetailPath(row) : null
-                  const canDrill = typeof report.getDrilldown === 'function'
-                    ? Boolean(report.getDrilldown(row, { dateFrom, dateTo, branchId }))
-                    : false
-                  const clickable = Boolean(detailPath || canDrill)
-                  const rowStyle = isPnL
-                    ? {
-                        fontWeight: emphasis ? 700 : 400,
-                        background: row.row_type === 'result' ? 'var(--bg-subtle, rgba(0,0,0,0.03))' : undefined,
-                      }
-                    : clickable
-                      ? { cursor: 'pointer' }
-                      : undefined
-                  return (
-                    <tr
-                      key={index}
-                      style={rowStyle}
-                      title={canDrill ? 'Click to view detail register' : undefined}
-                      onClick={() => {
-                        if (detailPath) navigate(detailPath)
-                        else if (canDrill) openDrilldown(row)
-                      }}
-                    >
-                      {columnPrefs.ready && <ColumnPrefsSpacer />}
-                      {visibleColumns.map((column) => {
-                        const value = row[column.key]
-                        const rendered = column.formatter ? column.formatter(value, row) : value
-                        const alignClass =
-                          column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
-                        const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+              </tbody>
+              {columnTotals && (
+                <tfoot>
+                  <tr
+                    style={{
+                      background: 'var(--bg-subtle, rgba(0,0,0,0.04))',
+                      borderTop: '1px solid var(--border-default)',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {columnPrefs.ready && <ColumnPrefsSpacer />}
+                    {visibleColumns.map((column) => {
+                      const alignClass =
+                        column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
+                      if (Object.prototype.hasOwnProperty.call(columnTotals, column.key)) {
+                        const value = columnTotals[column.key]
+                        const rendered = column.formatter ? column.formatter(value) : value
                         return (
-                          <td
-                            key={column.key}
-                            className={alignClass}
-                            style={{
-                              ...(isPnL && column.key === 'account' && row.row_type === 'detail' ? { paddingLeft: 28 } : {}),
-                              ...(clickable && isNameCol ? { color: 'var(--blue)', fontWeight: 500 } : {}),
-                            }}
-                          >
-                            {rendered !== null && rendered !== undefined && rendered !== ''
-                              ? rendered
-                              : (isPnL ? '' : '—')}
+                          <td key={column.key} className={alignClass}>
+                            {rendered}
                           </td>
                         )
-                      })}
-                    </tr>
-                  )
-                })
-              )}
-            </tbody>
-            {columnTotals && (
-              <tfoot>
-                <tr
-                  style={{
-                    background: 'var(--bg-subtle, rgba(0,0,0,0.04))',
-                    borderTop: '1px solid var(--border-default)',
-                    fontWeight: 700,
-                  }}
-                >
-                  {columnPrefs.ready && <ColumnPrefsSpacer />}
-                  {visibleColumns.map((column) => {
-                    const alignClass =
-                      column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
-                    if (Object.prototype.hasOwnProperty.call(columnTotals, column.key)) {
-                      const value = columnTotals[column.key]
-                      const rendered = column.formatter ? column.formatter(value) : value
+                      }
                       return (
-                        <td key={column.key} className={alignClass}>
-                          {rendered}
+                        <td key={column.key} className={alignClass} style={{ color: 'var(--text-secondary)' }}>
+                          {column.key === totalsLabelColumnKey ? totalsLabel : ''}
                         </td>
                       )
-                    }
-                    return (
-                      <td key={column.key} className={alignClass} style={{ color: 'var(--text-secondary)' }}>
-                        {column.key === totalsLabelColumnKey ? totalsLabel : ''}
-                      </td>
-                    )
-                  })}
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      </Card>
-
-      <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-          Showing {rows.length} of {total} record{total === 1 ? '' : 's'}.
-          {typeof report.getDrilldown === 'function' && !isDrilldown
-            ? ' Click a row to open its detail report.'
-            : ''}
-        </div>
-        <PaginationBar
-          total={total}
-          skip={skip}
-          limit={limit}
-          onSkipChange={setSkip}
-          onLimitChange={setLimit}
-          disabled={loading}
-        />
+                    })}
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+            padding: '10px 14px',
+            borderTop: '1px solid var(--border-subtle)',
+            flexShrink: 0,
+          }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+              Showing {rows.length} of {total} record{total === 1 ? '' : 's'}.
+              {typeof report.getDrilldown === 'function' && !isDrilldown
+                ? ' Click a row to open its detail report.'
+                : ''}
+            </div>
+            <PaginationBar
+              total={total}
+              skip={skip}
+              limit={limit}
+              onSkipChange={setSkip}
+              onLimitChange={setLimit}
+              disabled={loading}
+            />
+          </div>
+        </Card>
       </div>
 
       <CustomizeColumnsModal
