@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { fmt, fmtDate, fmtNum, fmtQty, exportToExcel } from '@/utils/helpers'
 import {
-  SectionHeader, Card, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown,
+  Card, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown,
   DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
   CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
@@ -21,6 +21,62 @@ const formatNumber = (value) => (value === null || value === undefined ? '—' :
 const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
 const formatCurrencyBlank = (value) => (value === null || value === undefined ? '' : formatCurrency(value))
 
+/** Formats that can be summed in a report totals footer. */
+const SUMMABLE_FORMATS = new Set(['currency', 'currency_blank', 'qty', 'number'])
+
+/** Unit rates / averages — never sum these. */
+const NON_SUMMABLE_KEYS = new Set([
+  'unit_price',
+  'unit_cost',
+  'average_cost',
+  'tax_rate',
+  'days_to_expiry',
+  'reorder_level',
+  'sort_order',
+  'margin_pct',
+])
+
+/** Reports that already encode their own totals / structure. */
+const NO_FOOTER_TOTALS_REPORTS = new Set(['profit-loss'])
+
+/** When set, footer only sums these keys (taxable is duplicated across CGST/SGST). */
+const FOOTER_SUM_KEYS_BY_REPORT = {
+  'tax-summary': new Set(['taxable_amount', 'tax_amount']),
+  'tax-summary-detail': new Set(['transaction_amount', 'tax_amount']),
+}
+
+function isSummableColumn(column, reportId) {
+  if (!column?.format || !SUMMABLE_FORMATS.has(column.format)) return false
+  if (NON_SUMMABLE_KEYS.has(column.key)) return false
+  const allowed = FOOTER_SUM_KEYS_BY_REPORT[reportId]
+  if (allowed && !allowed.has(column.key)) return false
+  return true
+}
+
+function computeColumnTotals(rows, columns, reportId) {
+  if (!rows?.length || !columns?.length) return null
+  const totals = {}
+  let hasAny = false
+  columns.forEach((column) => {
+    if (!isSummableColumn(column, reportId)) return
+    let sum = 0
+    let counted = 0
+    rows.forEach((row) => {
+      const raw = row?.[column.key]
+      if (raw === null || raw === undefined || raw === '') return
+      const num = typeof raw === 'number' ? raw : Number(raw)
+      if (!Number.isFinite(num)) return
+      sum += num
+      counted += 1
+    })
+    if (counted > 0) {
+      totals[column.key] = sum
+      hasAny = true
+    }
+  })
+  return hasAny ? totals : null
+}
+
 const DRILLDOWN_PARAM_KEYS = [
   'date_from',
   'date_to',
@@ -32,21 +88,73 @@ const DRILLDOWN_PARAM_KEYS = [
   'item_id',
   'category_id',
   'vendor_id',
+  'tax_name',
+  'full_rate',
+  'tax_percentage',
+  'sort_by',
+  'sort_order',
+  'skip',
   'drill_from',
   'drill_label',
 ]
 
+/** Parent filter snapshot carried on child URLs so Back restores parent, not child. */
+const PARENT_FILTER_PARAM_KEYS = [
+  'parent_date_from',
+  'parent_date_to',
+  'parent_branch_id',
+  'parent_branch_label',
+  'parent_sort_by',
+  'parent_sort_order',
+  'parent_skip',
+]
+
+const REPORT_URL_FILTER_KEYS = [...DRILLDOWN_PARAM_KEYS, ...PARENT_FILTER_PARAM_KEYS]
+
 function readDrilldownFilters(searchParams) {
   const filters = {}
-  DRILLDOWN_PARAM_KEYS.forEach((key) => {
+  REPORT_URL_FILTER_KEYS.forEach((key) => {
     const value = searchParams.get(key)
     if (value !== null && value !== '') filters[key] = value
   })
   return filters
 }
 
+function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, sortBy, sortOrder, skip }) {
+  return {
+    parent_date_from: dateFrom || '',
+    parent_date_to: dateTo || '',
+    ...(branchId ? { parent_branch_id: branchId } : {}),
+    ...(branchLabel ? { parent_branch_label: branchLabel } : {}),
+    ...(sortBy ? { parent_sort_by: sortBy } : {}),
+    ...(sortOrder ? { parent_sort_order: sortOrder } : {}),
+    ...(skip > 0 ? { parent_skip: String(skip) } : {}),
+  }
+}
+
+function restoreParentFilters(urlFilters, fallbacks = {}) {
+  const skipRaw = urlFilters.parent_skip
+  const skip = skipRaw !== undefined && skipRaw !== '' ? Number(skipRaw) : 0
+  return {
+    date_from: urlFilters.parent_date_from || fallbacks.dateFrom || '',
+    date_to: urlFilters.parent_date_to || fallbacks.dateTo || '',
+    ...(urlFilters.parent_branch_id
+      ? {
+          branch_id: urlFilters.parent_branch_id,
+          ...(urlFilters.parent_branch_label
+            ? { branch_label: urlFilters.parent_branch_label }
+            : {}),
+        }
+      : {}),
+    ...(urlFilters.parent_sort_by ? { sort_by: urlFilters.parent_sort_by } : {}),
+    ...(urlFilters.parent_sort_order ? { sort_order: urlFilters.parent_sort_order } : {}),
+    ...(Number.isFinite(skip) && skip > 0 ? { skip: String(skip) } : {}),
+  }
+}
+
 function drilldownChipLabel(filters) {
   if (filters.drill_label) return filters.drill_label
+  if (filters.tax_name) return filters.tax_name
   if (filters.cashier_id) return 'Selected cashier'
   if (filters.customer_id) return 'Selected customer'
   if (filters.vendor_id) return 'Selected vendor'
@@ -69,12 +177,21 @@ const DETAIL_PATH_BUILDERS = {
   invoice: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
   bill: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
   transfer: (row) => (row.transfer_id ? `/transfers/${encodeURIComponent(row.transfer_id)}/edit` : null),
+  tax_txn: (row) => {
+    const id = row.document_id
+    if (!id) return null
+    if (row.detail_kind === 'invoice') return `/sales?tab=invoices&view=${encodeURIComponent(id)}`
+    if (row.detail_kind === 'bill') return `/purchases?tab=bills&view=${encodeURIComponent(id)}`
+    if (row.detail_kind === 'credit_note') return `/sales/returns/${encodeURIComponent(id)}/edit`
+    if (row.detail_kind === 'debit_note') return `/purchases/returns/${encodeURIComponent(id)}/edit`
+    return null
+  },
 }
 
 /** Client-side drilldown handlers keyed by report id (server catalog has no functions). */
 const DRILLDOWN_HANDLERS = {
   'daily-sales': (row, ctx) => (row.date ? {
-    reportId: 'sales-register',
+    reportId: 'daily-sales-detail',
     filters: {
       date_from: row.date,
       date_to: row.date,
@@ -83,7 +200,7 @@ const DRILLDOWN_HANDLERS = {
     label: formatDate(row.date),
   } : null),
   'product-sales': (row, ctx) => (row.item_id ? {
-    reportId: 'sales-register',
+    reportId: 'product-sales-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -93,7 +210,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.product_name || row.product_code,
   } : null),
   'payment-sales': (row, ctx) => ({
-    reportId: 'sales-register',
+    reportId: 'payment-sales-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -103,7 +220,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.payment_method || 'Payment',
   }),
   'category-sales': (row, ctx) => ({
-    reportId: 'sales-register',
+    reportId: 'category-sales-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -113,7 +230,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.category || 'Uncategorized',
   }),
   'branch-sales': (row, ctx) => (row.branch_id ? {
-    reportId: 'sales-register',
+    reportId: 'branch-sales-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -122,7 +239,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.branch,
   } : null),
   'cashier-sales': (row, ctx) => (row.cashier_id ? {
-    reportId: 'sales-register',
+    reportId: 'cashier-sales-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -132,7 +249,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.cashier,
   } : null),
   'vendor-purchases': (row, ctx) => (row.vendor_id ? {
-    reportId: 'purchase-register',
+    reportId: 'vendor-purchases-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -142,7 +259,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.vendor,
   } : null),
   'product-purchases': (row, ctx) => (row.item_id ? {
-    reportId: 'purchase-register',
+    reportId: 'product-purchases-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -152,7 +269,7 @@ const DRILLDOWN_HANDLERS = {
     label: row.product,
   } : null),
   'top-customers': (row, ctx) => ({
-    reportId: 'sales-register',
+    reportId: 'top-customers-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
@@ -162,12 +279,26 @@ const DRILLDOWN_HANDLERS = {
     label: row.customer || 'Walk-in',
   }),
   'vendor-outstanding': (row, ctx) => (row.vendor_id ? {
-    reportId: 'purchase-register',
+    reportId: 'vendor-outstanding-detail',
     filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
       vendor_id: row.vendor_id,
       ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
     },
     label: row.vendor,
+  } : null),
+  'tax-summary': (row, ctx) => (row.tax_name || row.tax_percentage != null ? {
+    reportId: 'tax-summary-detail',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      tax_name: row.tax_name || '',
+      full_rate: row.full_rate ?? row.tax_percentage ?? '',
+      tax_percentage: row.tax_percentage ?? '',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.tax_name || `GST ${row.tax_percentage}%`,
   } : null),
 }
 
@@ -435,7 +566,7 @@ function ReportsListPage({
   const needle = query.trim().toLowerCase()
 
   const favoriteReports = useMemo(
-    () => favoriteIds.map((id) => reportMap[id]).filter(Boolean),
+    () => favoriteIds.map((id) => reportMap[id]).filter((r) => r && !r.listHidden),
     [favoriteIds, reportMap],
   )
 
@@ -466,10 +597,13 @@ function ReportsListPage({
   const activeCategory = sidebarCategories.find((c) => c.id === activeGroupId) || sidebarCategories[0]
 
   const visibleReports = (activeCategory?.reports || []).filter((report) => (
-    !needle
-    || report.label.toLowerCase().includes(needle)
-    || (activeCategory.label || '').toLowerCase().includes(needle)
-    || (report.categoryLabel || '').toLowerCase().includes(needle)
+    !report.listHidden
+    && (
+      !needle
+      || report.label.toLowerCase().includes(needle)
+      || (activeCategory.label || '').toLowerCase().includes(needle)
+      || (report.categoryLabel || '').toLowerCase().includes(needle)
+    )
   ))
 
   return (
@@ -648,9 +782,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') || today)
   const [branchId, setBranchId] = useState(() => searchParams.get('branch_id') || '')
   const [branchLabel, setBranchLabel] = useState(() => searchParams.get('branch_label') || '')
-  const [sortBy, setSortBy] = useState(report.defaultSort || report.columns[0]?.key)
-  const [sortOrder, setSortOrder] = useState('desc')
-  const [skip, setSkip] = useState(0)
+  const [sortBy, setSortBy] = useState(
+    () => searchParams.get('sort_by') || report.defaultSort || report.columns[0]?.key,
+  )
+  const [sortOrder, setSortOrder] = useState(() => searchParams.get('sort_order') || 'desc')
+  const [skip, setSkip] = useState(() => {
+    const raw = Number(searchParams.get('skip') || 0)
+    return Number.isFinite(raw) && raw > 0 ? raw : 0
+  })
   const [limit, setLimit] = useState(50)
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
@@ -670,6 +809,18 @@ function ReportDetailPage({ report, reportMap, onBack }) {
 
   const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 
+  const columnTotals = useMemo(() => {
+    if (NO_FOOTER_TOTALS_REPORTS.has(report.id) || loading || rows.length === 0) return null
+    return computeColumnTotals(rows, visibleColumns, report.id)
+  }, [report.id, loading, rows, visibleColumns])
+
+  const totalsLabel = rows.length < total ? 'Page total' : 'Total'
+  const totalsLabelColumnKey = useMemo(() => {
+    if (!columnTotals) return null
+    const firstNonSummable = visibleColumns.find((col) => !Object.prototype.hasOwnProperty.call(columnTotals, col.key))
+    return firstNonSummable?.key || visibleColumns[0]?.key || null
+  }, [columnTotals, visibleColumns])
+
   const drillFilters = useMemo(() => {
     const {
       date_from: _df,
@@ -678,6 +829,16 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       branch_label: _bl,
       drill_from: _from,
       drill_label: _label,
+      parent_date_from: _pdf,
+      parent_date_to: _pdt,
+      parent_branch_id: _pbid,
+      parent_branch_label: _pbl,
+      parent_sort_by: _psb,
+      parent_sort_order: _pso,
+      parent_skip: _psk,
+      sort_by: _sb,
+      sort_order: _so,
+      skip: _sk,
       ...rest
     } = urlFilters
     return rest
@@ -687,6 +848,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const parentReport = urlFilters.drill_from ? reportMap[urlFilters.drill_from] : null
 
   useEffect(() => {
+    // Child URLs carry drill row filters in date_from/date_to/branch_*.
+    // Parent URLs (including Back from child) carry only that report's own filters —
+    // never inherit child-only drill dims like item_id / payment_mode.
     setDateFrom(urlFilters.date_from || defaultFrom)
     setDateTo(urlFilters.date_to || today)
     setBranchId(urlFilters.branch_id || '')
@@ -695,9 +859,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       || (urlFilters.branch_id && urlFilters.drill_from === 'branch-sales' ? (urlFilters.drill_label || '') : '')
       || '',
     )
-    setSortBy(report.defaultSort || report.columns[0]?.key)
-    setSortOrder('desc')
-    setSkip(0)
+    setSortBy(urlFilters.sort_by || report.defaultSort || report.columns[0]?.key)
+    setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
+    const nextSkip = Number(urlFilters.skip || 0)
+    setSkip(Number.isFinite(nextSkip) && nextSkip > 0 ? nextSkip : 0)
     setRows([])
     setTotal(0)
     setRunKey(Date.now())
@@ -786,33 +951,83 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       ...filters,
       drill_from: report.id,
       drill_label: drill.label || '',
+      // Keep parent date/branch/sort snapshot separate from child drill filters.
+      ...parentFiltersFromState({
+        dateFrom, dateTo, branchId, branchLabel, sortBy, sortOrder, skip,
+      }),
     }))
   }
 
   const clearDrilldown = () => {
     if (parentReport) {
-      navigate(buildReportPath(parentReport.id, reportMap, {
-        date_from: dateFrom,
-        date_to: dateTo,
-        ...(branchId ? { branch_id: branchId, ...(branchLabel ? { branch_label: branchLabel } : {}) } : {}),
-      }))
+      // Restore the parent report with its own saved filters — do not reuse
+      // the child's narrowed date_from/date_to (e.g. a single daily-sales day).
+      navigate(buildReportPath(parentReport.id, reportMap, restoreParentFilters(urlFilters, {
+        dateFrom: defaultFrom,
+        dateTo: today,
+      })))
       return
     }
     navigate(buildReportPath(report.id, reportMap, {
       date_from: dateFrom,
       date_to: dateTo,
       ...(branchId ? { branch_id: branchId, ...(branchLabel ? { branch_label: branchLabel } : {}) } : {}),
+      ...(sortBy ? { sort_by: sortBy } : {}),
+      ...(sortOrder ? { sort_order: sortOrder } : {}),
+      ...(skip > 0 ? { skip: String(skip) } : {}),
     }))
   }
 
   return (
     <div className="page-container">
-      <SectionHeader
-        title={report.label}
-        subtitle={`${report.categoryLabel} report`}
-      >
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button type="button" className="btn btn-secondary" onClick={onBack}>Back to reports</button>
+      <div className="section-hdr">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back to reports"
+          title="Back to reports"
+          style={{
+            flexShrink: 0,
+            width: 36,
+            height: 36,
+            padding: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 8,
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-raised)',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+          }}
+        >
+          <Icon.ChevronLeft size={20} />
+        </button>
+        <div style={{
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flex: 1,
+          flexWrap: 'wrap',
+        }}>
+          <h2 style={{ margin: 0, minWidth: 0, flex: '0 1 auto' }}>{report.label}</h2>
+          {report.categoryLabel && (
+            <span style={{
+              flexShrink: 0,
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'var(--blue)',
+              background: 'var(--blue-bg)',
+              padding: '4px 10px',
+              borderRadius: 8,
+              whiteSpace: 'nowrap',
+            }}>
+              {report.categoryLabel}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto' }}>
           <PageActionsMenu actions={buildListPageMenuActions({
             onExport: exportExcel,
             onRefresh: () => {
@@ -822,7 +1037,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             },
           })} />
         </div>
-      </SectionHeader>
+      </div>
 
       {isDrilldown && (
         <div style={{
@@ -881,7 +1096,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
               ×
             </button>
           </span>
-          <span style={{ color: 'var(--text-muted)' }}>Showing matching register rows</span>
+          <span style={{ color: 'var(--text-muted)' }}>
+            {report.id.endsWith('-detail') && (report.api === 'salesLines' || report.api === 'purchaseLines')
+              ? 'Showing matching line items'
+              : 'Showing matching detail rows'}
+          </span>
         </div>
       )}
 
@@ -984,7 +1203,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                         const rendered = column.formatter ? column.formatter(value, row) : value
                         const alignClass =
                           column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
-                        const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+                        const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
                         return (
                           <td
                             key={column.key}
@@ -1005,6 +1224,37 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 })
               )}
             </tbody>
+            {columnTotals && (
+              <tfoot>
+                <tr
+                  style={{
+                    background: 'var(--bg-subtle, rgba(0,0,0,0.04))',
+                    borderTop: '1px solid var(--border-default)',
+                    fontWeight: 700,
+                  }}
+                >
+                  {columnPrefs.ready && <ColumnPrefsSpacer />}
+                  {visibleColumns.map((column) => {
+                    const alignClass =
+                      column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
+                    if (Object.prototype.hasOwnProperty.call(columnTotals, column.key)) {
+                      const value = columnTotals[column.key]
+                      const rendered = column.formatter ? column.formatter(value) : value
+                      return (
+                        <td key={column.key} className={alignClass}>
+                          {rendered}
+                        </td>
+                      )
+                    }
+                    return (
+                      <td key={column.key} className={alignClass} style={{ color: 'var(--text-secondary)' }}>
+                        {column.key === totalsLabelColumnKey ? totalsLabel : ''}
+                      </td>
+                    )
+                  })}
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </Card>
@@ -1012,7 +1262,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           Showing {rows.length} of {total} record{total === 1 ? '' : 's'}.
-          {typeof report.getDrilldown === 'function' && !isDrilldown ? ' Click a row to drill into the register.' : ''}
+          {typeof report.getDrilldown === 'function' && !isDrilldown
+            ? ' Click a row to open its detail report.'
+            : ''}
         </div>
         <PaginationBar
           total={total}

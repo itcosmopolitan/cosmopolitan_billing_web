@@ -457,6 +457,11 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("audit_logs", "event_metadata", "TEXT"),
     ("audit_logs", "user_role",      "VARCHAR DEFAULT 'unknown' NOT NULL"),
     ("audit_logs", "reference_id",   "VARCHAR DEFAULT ''"),
+    # Columns added after initial audit_logs creation — keep all three together.
+    ("audit_logs", "ip_address",     "VARCHAR"),
+    ("audit_logs", "device_info",    "VARCHAR"),
+    ("audit_logs", "branch_id",      "VARCHAR"),
+    ("audit_logs", "metadata",       "TEXT"),
     # Approval workflow: item master pending creates.
     ("items", "approval_status", "VARCHAR DEFAULT 'approved' NOT NULL"),
     ("items", "status",          "VARCHAR DEFAULT 'approved' NOT NULL"),
