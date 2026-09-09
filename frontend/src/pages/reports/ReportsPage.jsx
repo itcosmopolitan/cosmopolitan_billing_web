@@ -165,6 +165,25 @@ function drilldownChipLabel(filters) {
   return 'Filtered view'
 }
 
+function drilldownAppliedParamsLabel(filters) {
+  const parts = []
+  const from = filters.date_from || ''
+  const to = filters.date_to || ''
+  // Daily-sales chip is already the single day — skip repeating it.
+  const dateIsDrillChip = Boolean(from && from === to && filters.drill_from === 'daily-sales')
+  if (!dateIsDrillChip && (from || to)) {
+    const fromLabel = from ? formatDate(from) : '…'
+    const toLabel = to ? formatDate(to) : '…'
+    parts.push(fromLabel === toLabel ? fromLabel : `${fromLabel} – ${toLabel}`)
+  }
+  // Branch-sales chip is already the branch — skip repeating it.
+  if (filters.drill_from !== 'branch-sales') {
+    if (filters.branch_label) parts.push(filters.branch_label)
+    else if (filters.branch_id) parts.push('Selected branch')
+  }
+  return parts.join(' · ')
+}
+
 const COLUMN_FORMATTERS = {
   date: formatDate,
   currency: formatCurrency,
@@ -846,6 +865,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
 
   const isDrilldown = Boolean(urlFilters.drill_from || Object.keys(drillFilters).length > 0)
   const parentReport = urlFilters.drill_from ? reportMap[urlFilters.drill_from] : null
+  const appliedDrillParams = isDrilldown ? drilldownAppliedParamsLabel(urlFilters) : ''
 
   useEffect(() => {
     // Child URLs carry drill row filters in date_from/date_to/branch_*.
@@ -1040,7 +1060,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       </div>
 
       <div className="filter-toolbar-stack">
-        {isDrilldown && (
+        {isDrilldown ? (
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -1096,41 +1116,39 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 ×
               </button>
             </span>
-            <span style={{ color: 'var(--text-muted)' }}>
-              {report.id.endsWith('-detail') && (report.api === 'salesLines' || report.api === 'purchaseLines')
-                ? 'Showing matching line items'
-                : 'Showing matching detail rows'}
-            </span>
+            {appliedDrillParams ? (
+              <span style={{ color: 'var(--text-muted)' }}>{appliedDrillParams}</span>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 220px))', gap: 12, alignItems: 'end' }}>
+            <div>
+              <label className="form-label">From</label>
+              <DatePicker value={dateFrom} onChange={setDateFrom} />
+            </div>
+            <div>
+              <label className="form-label">To</label>
+              <DatePicker value={dateTo} onChange={setDateTo} />
+            </div>
+            <div>
+              <label className="form-label">Branch</label>
+              <AutocompleteDropdown
+                value={branchId}
+                selectedLabel={branchLabel || undefined}
+                onChange={(id) => {
+                  setBranchId(id)
+                  if (!id) setBranchLabel('')
+                }}
+                onSelectOption={(opt) => setBranchLabel(opt?.label || '')}
+                fetchUrl={AUTOCOMPLETE_BRANCH_URL}
+                fetchParams={{ retail_only: false }}
+                prependOptions={[{ id: '', label: 'All Branches' }]}
+                isSearchFieldRequired={false}
+                placeholder="All Branches"
+              />
+            </div>
           </div>
         )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 220px))', gap: 12, alignItems: 'end' }}>
-          <div>
-            <label className="form-label">From</label>
-            <DatePicker value={dateFrom} onChange={setDateFrom} />
-          </div>
-          <div>
-            <label className="form-label">To</label>
-            <DatePicker value={dateTo} onChange={setDateTo} />
-          </div>
-          <div>
-            <label className="form-label">Branch</label>
-            <AutocompleteDropdown
-              value={branchId}
-              selectedLabel={branchLabel || undefined}
-              onChange={(id) => {
-                setBranchId(id)
-                if (!id) setBranchLabel('')
-              }}
-              onSelectOption={(opt) => setBranchLabel(opt?.label || '')}
-              fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-              fetchParams={{ retail_only: false }}
-              prependOptions={[{ id: '', label: 'All Branches' }]}
-              isSearchFieldRequired={false}
-              placeholder="All Branches"
-            />
-          </div>
-        </div>
       </div>
 
       <div className="list-page-panel">
