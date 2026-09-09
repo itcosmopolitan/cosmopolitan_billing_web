@@ -1272,6 +1272,12 @@ export default function SalesPage() {
                               onClick: () => setShowPayment(inv),
                             },
                             {
+                              label: 'Upload Payment Proof',
+                              hidden: !can('invoices.edit'),
+                              disabled: isRowBusy(inv.id),
+                              onClick: () => setProofUploadInvoice(inv),
+                            },
+                            {
                               label: 'Cancel invoice',
                               danger: true,
                               hidden: inv.status === 'cancelled'
@@ -2127,6 +2133,7 @@ export default function SalesPage() {
         onExport={requestInvoiceExport}
         onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
         onRecordPayment={(inv) => setShowPayment(inv)}
+        onUploadProof={(inv) => { setProofUploadInvoice(inv); setSalesDoc(null) }}
         onEditInvoice={(inv) => { goEditInvoice(inv); setSalesDoc(null) }}
         onDeletePayment={(inv) => { setShowDeletePayment(inv); setSalesDoc(null) }}
         onDeleteReturn={(inv) => { setShowDeleteReturn(inv); setSalesDoc(null) }}
@@ -2198,33 +2205,6 @@ export default function SalesPage() {
               {remaining > 0.001 && (
                 <FormGroup label="Reference / Transaction ID">
                   <input className="form-input" value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="UTR / transaction reference" />
-                </FormGroup>
-              )}
-              {remaining > 0.001 && ['card', 'upi', 'bank_transfer'].includes(payMode) && (
-                <FormGroup label="Payment proof" required>
-                  <input
-                    className="form-input"
-                    type="file"
-                    accept=".png,application/pdf"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0] || null
-                      if (file && !['image/png', 'application/pdf'].includes(file.type)) {
-                        toast.error('Only PNG and PDF files are allowed')
-                        event.target.value = ''
-                        setPaymentProofFile(null)
-                        return
-                      }
-                      const maxSize = file?.type === 'image/png' ? 1 * 1024 * 1024 : 2 * 1024 * 1024
-                      if (file && file.size > maxSize) {
-                        toast.error(file.type === 'image/png' ? 'PNG files must be 1 MB or smaller' : 'PDF files must be 2 MB or smaller')
-                        event.target.value = ''
-                        setPaymentProofFile(null)
-                        return
-                      }
-                      setPaymentProofFile(file)
-                    }}
-                  />
-                  <div style={{ color: 'var(--text-muted)', fontSize: 11.5, marginTop: 5 }}>PNG up to 1 MB; PDF up to 2 MB.</div>
                 </FormGroup>
               )}
             </>

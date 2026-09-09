@@ -81,6 +81,7 @@ export default function SalesTxnDetailPanel({
   onExport,
   onCancelInvoice,
   onRecordPayment,
+  onUploadProof,
   onEditInvoice,
   onDeletePayment,
   onDeleteReturn,
@@ -195,6 +196,11 @@ export default function SalesTxnDetailPanel({
           {['pending', 'partial', 'overdue'].includes(detail?.status) && (
             <button type="button" className="btn btn-primary" onClick={() => { onRecordPayment?.(detail); onClose?.() }}>
               Record payment
+            </button>
+          )}
+          {can('invoices.edit') && (
+            <button type="button" className="btn btn-secondary" onClick={() => { onUploadProof?.(detail); onClose?.() }}>
+              Upload Payment Proof
             </button>
           )}
           {canShowDeletePayment(detail, can) && (
