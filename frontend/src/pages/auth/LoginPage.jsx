@@ -243,7 +243,6 @@ export default function LoginPage() {
         </section>
 
         <section className="login-panel login-panel--hero">
-          <img className="login-hero-photo" src="/assets/login-hero.jpg" alt="" aria-hidden="true" />
           <div className="login-hero-scrim" />
           <div className="login-hero-grid" />
 

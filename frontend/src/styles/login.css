@@ -24,9 +24,6 @@
   align-items: center;
   justify-content: center;
   padding: 28px 16px;
-  background:
-    linear-gradient(110deg, rgba(4, 15, 28, 0.5) 0%, rgba(4, 15, 28, 0.18) 42%, rgba(255, 255, 255, 0.22) 100%),
-    url('/assets/login-hero.jpg') center / cover no-repeat;
   overflow: hidden;
 }
 
