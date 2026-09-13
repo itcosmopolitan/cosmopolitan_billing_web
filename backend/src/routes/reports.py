@@ -127,11 +127,41 @@ def _normalize_date_range(
     return start, end
 
 
+def _parse_selected_branch_ids(branch_id: Optional[str]) -> list[str]:
+    """Accept a single id or comma-separated multi-select (`id1,id2`)."""
+    if not branch_id:
+        return []
+    return [part.strip() for part in str(branch_id).split(",") if part.strip()]
+
+
+def _eq_or_in(column, branch_id: Optional[str]):
+    selected = _parse_selected_branch_ids(branch_id)
+    if not selected:
+        return None
+    if len(selected) == 1:
+        return column == selected[0]
+    return column.in_(selected)
+
+
+def _transfer_branch_predicate(branch_id: Optional[str]):
+    selected = _parse_selected_branch_ids(branch_id)
+    if not selected:
+        return None
+    if len(selected) == 1:
+        bid = selected[0]
+        return (StockTransfer.from_branch_id == bid) | (StockTransfer.to_branch_id == bid)
+    return StockTransfer.from_branch_id.in_(selected) | StockTransfer.to_branch_id.in_(selected)
+
+
 def _branch_condition(column, branch_id: Optional[str], allowed_branch_ids: Optional[list[str]]):
-    if branch_id:
-        if allowed_branch_ids is not None and branch_id not in allowed_branch_ids:
-            raise HTTPException(403, "Branch is outside your report scope")
-        return column == branch_id
+    selected = _parse_selected_branch_ids(branch_id)
+    if selected:
+        if allowed_branch_ids is not None:
+            if any(bid not in allowed_branch_ids for bid in selected):
+                raise HTTPException(403, "Branch is outside your report scope")
+        if len(selected) == 1:
+            return column == selected[0]
+        return column.in_(selected)
     if allowed_branch_ids is not None:
         if not allowed_branch_ids:
             return column == "__no_branch_access__"
@@ -255,11 +285,9 @@ def _purchase_filters(
 
 def _branch_filter(search: Optional[str], branch_id: Optional[str]):
     conds = []
-    if branch_id:
-        conds.append(
-            (StockTransfer.from_branch_id == branch_id)
-            | (StockTransfer.to_branch_id == branch_id)
-        )
+    transfer_pred = _transfer_branch_predicate(branch_id)
+    if transfer_pred is not None:
+        conds.append(transfer_pred)
     if search:
         conds.append(TransferLineItem.item_name.ilike(f"%{search}%"))
     return conds
@@ -2231,8 +2259,9 @@ async def current_stock(
     db: AsyncSession = Depends(get_db),
 ):
     conds = []
-    if branch_id:
-        conds.append(ItemStock.branch_id == branch_id)
+    stock_branch = _eq_or_in(ItemStock.branch_id, branch_id)
+    if stock_branch is not None:
+        conds.append(stock_branch)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
@@ -2282,8 +2311,9 @@ async def low_stock(
     db: AsyncSession = Depends(get_db),
 ):
     conds = [ItemStock.quantity <= Item.reorder_level]
-    if branch_id:
-        conds.append(ItemStock.branch_id == branch_id)
+    stock_branch = _eq_or_in(ItemStock.branch_id, branch_id)
+    if stock_branch is not None:
+        conds.append(stock_branch)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
@@ -2326,8 +2356,9 @@ async def out_of_stock(
     db: AsyncSession = Depends(get_db),
 ):
     conds = [ItemStock.quantity <= 0]
-    if branch_id:
-        conds.append(ItemStock.branch_id == branch_id)
+    stock_branch = _eq_or_in(ItemStock.branch_id, branch_id)
+    if stock_branch is not None:
+        conds.append(stock_branch)
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
@@ -2376,8 +2407,9 @@ async def stock_transfers(
     start, end = _normalize_date_range(date_from, date_to)
 
     conds = []
-    if branch_id:
-        conds.append((StockTransfer.from_branch_id == branch_id) | (StockTransfer.to_branch_id == branch_id))
+    transfer_branch = _transfer_branch_predicate(branch_id)
+    if transfer_branch is not None:
+        conds.append(transfer_branch)
     if search:
         conds.append(TransferLineItem.item_name.ilike(f"%{search}%"))
     if start:
@@ -2439,8 +2471,9 @@ async def spoilage_damage(
 
     qty_lost = StockAdjustment.before_qty - StockAdjustment.after_qty
     conds = [StockAdjustment.reason.in_(SPOILAGE_REASONS)]
-    if branch_id:
-        conds.append(StockAdjustment.branch_id == branch_id)
+    adj_branch = _eq_or_in(StockAdjustment.branch_id, branch_id)
+    if adj_branch is not None:
+        conds.append(adj_branch)
     if search:
         like = f"%{search}%"
         conds.append(
@@ -2525,8 +2558,9 @@ async def expiry_batches(
         ItemBatch.expiry_date.isnot(None),
         ItemBatch.expiry_date <= horizon_str,
     ]
-    if branch_id:
-        conds.append(ItemBatch.branch_id == branch_id)
+    batch_branch = _eq_or_in(ItemBatch.branch_id, branch_id)
+    if batch_branch is not None:
+        conds.append(batch_branch)
     if search:
         like = f"%{search}%"
         conds.append(
@@ -2603,8 +2637,9 @@ async def daily_tax(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
-    if branch_id:
-        conds.append(SaleInvoice.branch_id == branch_id)
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        conds.append(sale_branch)
     if search:
         conds.append(SaleInvoice.number.ilike(f"%{search}%"))
 
@@ -2649,8 +2684,9 @@ async def monthly_tax(
     start, end = _normalize_date_range(date_from, date_to)
     month_expr = func.substr(SaleInvoice.date, 1, 7)
     conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
-    if branch_id:
-        conds.append(SaleInvoice.branch_id == branch_id)
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        conds.append(sale_branch)
     if search:
         conds.append(SaleInvoice.number.ilike(f"%{search}%"))
 
@@ -2695,8 +2731,9 @@ async def quarterly_tax(
     start, end = _normalize_date_range(date_from, date_to)
     period_expr = func.substr(SaleInvoice.date, 1, 7)
     conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
-    if branch_id:
-        conds.append(SaleInvoice.branch_id == branch_id)
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        conds.append(sale_branch)
     if search:
         conds.append(SaleInvoice.number.ilike(f"%{search}%"))
 
@@ -2740,8 +2777,9 @@ async def gst_summary(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     conds = [SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat()]
-    if branch_id:
-        conds.append(SaleInvoice.branch_id == branch_id)
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        conds.append(sale_branch)
 
     gst_tax = float(
         (await db.execute(select(func.coalesce(func.sum(SaleInvoice.tax_total), 0)).where(and_(*conds)))).scalar() or 0
@@ -2772,8 +2810,9 @@ async def outstanding_receivables(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     conds = [SaleInvoice.total > SaleInvoice.paid_amount]
-    if branch_id:
-        conds.append(SaleInvoice.branch_id == branch_id)
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        conds.append(sale_branch)
     if search:
         conds.append(
             SaleInvoice.number.ilike(f"%{search}%")
@@ -2826,8 +2865,9 @@ async def outstanding_payables(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     conds = [PurchaseBill.total > PurchaseBill.paid_amount]
-    if branch_id:
-        conds.append(PurchaseBill.branch_id == branch_id)
+    purchase_branch = _eq_or_in(PurchaseBill.branch_id, branch_id)
+    if purchase_branch is not None:
+        conds.append(purchase_branch)
     if search:
         conds.append(
             PurchaseBill.number.ilike(f"%{search}%")
@@ -2880,8 +2920,9 @@ async def petty_cash(
 ):
     start, end = _normalize_date_range(date_from, date_to)
     conds = [CashEntry.date >= start.isoformat(), CashEntry.date <= end.isoformat()]
-    if branch_id:
-        conds.append(CashEntry.branch_id == branch_id)
+    cash_branch = _eq_or_in(CashEntry.branch_id, branch_id)
+    if cash_branch is not None:
+        conds.append(cash_branch)
     if search:
         conds.append(CashEntry.description.ilike(f"%{search}%"))
 
@@ -3038,13 +3079,15 @@ async def stock_movement(
     purchase_conds = []
     transfer_conds = []
 
-    if branch_id:
-        sale_conds.append(SaleInvoice.branch_id == branch_id)
-        purchase_conds.append(PurchaseBill.branch_id == branch_id)
-        transfer_conds.append(
-            (StockTransfer.from_branch_id == branch_id)
-            | (StockTransfer.to_branch_id == branch_id)
-        )
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        sale_conds.append(sale_branch)
+    purchase_branch = _eq_or_in(PurchaseBill.branch_id, branch_id)
+    if purchase_branch is not None:
+        purchase_conds.append(purchase_branch)
+    transfer_branch = _transfer_branch_predicate(branch_id)
+    if transfer_branch is not None:
+        transfer_conds.append(transfer_branch)
     if search:
         sale_conds.append(SaleLineItem.name.ilike(f"%{search}%"))
         purchase_conds.append(PurchaseLineItem.name.ilike(f"%{search}%"))

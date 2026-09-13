@@ -636,7 +636,7 @@ const POPOVER_MAX_H = 260
 const POPOVER_GAP   = 4   // px between trigger edge and popover edge
 const VIEWPORT_PAD  = 8   // px from viewport edge so popover never sits flush
 
-export function MultiSelect({ options, value, onChange, placeholder = 'Choose…', disabled = false }) {
+export function MultiSelect({ options, value, onChange, placeholder = 'Choose…', disabled = false, defaultName = 'Select all' }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [coords, setCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: POPOVER_MAX_H })
@@ -758,8 +758,8 @@ export function MultiSelect({ options, value, onChange, placeholder = 'Choose…
   }
 
   const triggerLabel = (value || []).length === 0
-    ? placeholder
-    : `${(value || []).length} of ${options.length} selected`
+    ? placeholder 
+    : ((value || []).length === options.length) && defaultName ? defaultName : `${(value || []).length} of ${options.length} selected`
 
   const popover = open ? createPortal(
     <div
@@ -836,7 +836,7 @@ export function MultiSelect({ options, value, onChange, placeholder = 'Choose…
                   onChange={toggleAll}
                 />
                 <span>
-                  Select all ({filteredOptions.length}
+                  {defaultName} ({filteredOptions.length}
                   {q && filteredOptions.length !== options.length ? ' matching' : ''})
                 </span>
               </label>
