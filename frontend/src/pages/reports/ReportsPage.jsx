@@ -2,10 +2,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { reportsAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
+import { reportsAPI } from '@/api'
 import { fmt, fmtDate, fmtNum, fmtQty, exportToExcel } from '@/utils/helpers'
 import {
-  Card, SearchBar, PaginationBar, SortableHeader, AutocompleteDropdown,
+  Card, SearchBar, PaginationBar, SortableHeader, MultiSelect,
   DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
   CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
@@ -120,6 +120,28 @@ function readDrilldownFilters(searchParams) {
   return filters
 }
 
+function parseBranchIds(value) {
+  if (!value) return []
+  return String(value).split(',').map((part) => part.trim()).filter(Boolean)
+}
+
+function serializeBranchIds(ids) {
+  return (ids || []).filter(Boolean).join(',')
+}
+
+function labelsForBranchIds(ids, branches) {
+  if (!ids?.length) return ''
+  const byId = new Map((branches || []).map((b) => [b.id, b.name || b.label || b.id]))
+  return ids.map((id) => byId.get(id) || id).join(', ')
+}
+
+/** All selected (or empty) means no branch filter — same as legacy "All Branches". */
+function branchParamForApi(branchIds, branchOptions) {
+  if (!branchIds?.length) return ''
+  if (branchOptions?.length && branchIds.length >= branchOptions.length) return ''
+  return serializeBranchIds(branchIds)
+}
+
 function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, sortBy, sortOrder, skip }) {
   return {
     parent_date_from: dateFrom || '',
@@ -179,7 +201,10 @@ function drilldownAppliedParamsLabel(filters) {
   // Branch-sales chip is already the branch — skip repeating it.
   if (filters.drill_from !== 'branch-sales') {
     if (filters.branch_label) parts.push(filters.branch_label)
-    else if (filters.branch_id) parts.push('Selected branch')
+    else if (filters.branch_id) {
+      const count = parseBranchIds(filters.branch_id).length
+      parts.push(count > 1 ? `${count} branches` : 'Selected branch')
+    }
   }
   return parts.join(' · ')
 }
@@ -787,6 +812,7 @@ function ReportsListPage({
 function ReportDetailPage({ report, reportMap, onBack }) {
   const navigate = useNavigate()
   const columnPrefs = useColumnPrefs(`reports.${report.id}`)
+  const storeBranches = useAppStore((s) => s.branches)
   const [searchParams] = useSearchParams()
   const urlFilterKey = searchParams.toString()
   const urlFilters = useMemo(() => readDrilldownFilters(searchParams), [searchParams, urlFilterKey])
@@ -797,10 +823,23 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     return from.toISOString().slice(0, 10)
   }, [])
 
+  const branchOptions = useMemo(
+    () => (storeBranches || []).map((b) => ({ id: b.id, label: b.name || b.code || b.id })),
+    [storeBranches],
+  )
+  const allBranchIds = useMemo(() => branchOptions.map((b) => b.id), [branchOptions])
+
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('date_from') || defaultFrom)
   const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') || today)
-  const [branchId, setBranchId] = useState(() => searchParams.get('branch_id') || '')
-  const [branchLabel, setBranchLabel] = useState(() => searchParams.get('branch_label') || '')
+  const [branchIds, setBranchIds] = useState(() => {
+    const fromUrl = parseBranchIds(searchParams.get('branch_id'))
+    return fromUrl
+  })
+  const [appliedFilters, setAppliedFilters] = useState(() => ({
+    dateFrom: searchParams.get('date_from') || defaultFrom,
+    dateTo: searchParams.get('date_to') || today,
+    branchIds: parseBranchIds(searchParams.get('branch_id')),
+  }))
   const [sortBy, setSortBy] = useState(
     () => searchParams.get('sort_by') || report.defaultSort || report.columns[0]?.key,
   )
@@ -867,18 +906,41 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const parentReport = urlFilters.drill_from ? reportMap[urlFilters.drill_from] : null
   const appliedDrillParams = isDrilldown ? drilldownAppliedParamsLabel(urlFilters) : ''
 
+  const appliedBranchIdParam = branchParamForApi(appliedFilters.branchIds, branchOptions)
+  const appliedBranchLabel = useMemo(
+    () => labelsForBranchIds(appliedFilters.branchIds, storeBranches) || urlFilters.branch_label || '',
+    [appliedFilters.branchIds, storeBranches, urlFilters.branch_label],
+  )
+
+  // Default: all branches selected when URL has no branch filter.
+  useEffect(() => {
+    if (!allBranchIds.length) return
+    const urlBranchIds = parseBranchIds(urlFilters.branch_id)
+    if (urlBranchIds.length) return
+    setBranchIds((prev) => (prev.length ? prev : allBranchIds))
+    setAppliedFilters((prev) => (
+      prev.branchIds.length ? prev : { ...prev, branchIds: allBranchIds }
+    ))
+  }, [allBranchIds, urlFilters.branch_id])
+
   useEffect(() => {
     // Child URLs carry drill row filters in date_from/date_to/branch_*.
     // Parent URLs (including Back from child) carry only that report's own filters —
     // never inherit child-only drill dims like item_id / payment_mode.
-    setDateFrom(urlFilters.date_from || defaultFrom)
-    setDateTo(urlFilters.date_to || today)
-    setBranchId(urlFilters.branch_id || '')
-    setBranchLabel(
-      urlFilters.branch_label
-      || (urlFilters.branch_id && urlFilters.drill_from === 'branch-sales' ? (urlFilters.drill_label || '') : '')
-      || '',
-    )
+    const nextFrom = urlFilters.date_from || defaultFrom
+    const nextTo = urlFilters.date_to || today
+    const urlBranchIds = parseBranchIds(urlFilters.branch_id)
+    const nextBranches = urlBranchIds.length
+      ? urlBranchIds
+      : (allBranchIds.length ? allBranchIds : [])
+    setDateFrom(nextFrom)
+    setDateTo(nextTo)
+    setBranchIds(nextBranches)
+    setAppliedFilters({
+      dateFrom: nextFrom,
+      dateTo: nextTo,
+      branchIds: nextBranches,
+    })
     setSortBy(urlFilters.sort_by || report.defaultSort || report.columns[0]?.key)
     setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
     const nextSkip = Number(urlFilters.skip || 0)
@@ -886,6 +948,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setRows([])
     setTotal(0)
     setRunKey(Date.now())
+    // allBranchIds intentionally omitted: late branch hydration is handled below
+    // so we don't wipe in-progress draft filter edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync from URL/report only
   }, [report.id, report.defaultSort, urlFilterKey, defaultFrom, today])
 
   useEffect(() => {
@@ -893,13 +958,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     const fetchData = async () => {
       setLoading(true)
       try {
-        // Prefer local Branch filter state; fall back to URL so drill-down
-        // branch selection is never dropped before state sync completes.
-        const appliedBranchId = branchId || urlFilters.branch_id || ''
+        // Prefer applied branch selection; fall back to URL for drill-down
+        // before draft/applied sync completes.
+        const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
         const params = {
           branch_id: appliedBranchId ? appliedBranchId : null,
-          date_from: dateFrom,
-          date_to: dateTo,
+          date_from: appliedFilters.dateFrom,
+          date_to: appliedFilters.dateTo,
           sort_by: sortBy,
           sort_order: sortOrder,
           skip,
@@ -924,7 +989,35 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     }
     fetchData()
     return () => { cancelled = true }
-  }, [report, branchId, dateFrom, dateTo, sortBy, sortOrder, skip, limit, runKey, drillFilters, urlFilters.branch_id])
+  }, [
+    report,
+    appliedBranchIdParam,
+    appliedFilters.dateFrom,
+    appliedFilters.dateTo,
+    sortBy,
+    sortOrder,
+    skip,
+    limit,
+    runKey,
+    drillFilters,
+    urlFilters.branch_id,
+  ])
+
+  const applyFilters = () => {
+    setSkip(0)
+    setAppliedFilters({
+      dateFrom,
+      dateTo,
+      branchIds: [...branchIds],
+    })
+  }
+
+  const filtersDirty = useMemo(() => {
+    const sameDates = dateFrom === appliedFilters.dateFrom && dateTo === appliedFilters.dateTo
+    const draftKey = [...branchIds].sort().join(',')
+    const appliedKey = [...(appliedFilters.branchIds || [])].sort().join(',')
+    return !(sameDates && draftKey === appliedKey)
+  }, [dateFrom, dateTo, branchIds, appliedFilters])
 
   const handleSort = (key) => {
     const nextOrder = sortBy === key && sortOrder === 'asc' ? 'desc' : 'asc'
@@ -946,23 +1039,32 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       })
       return entry
     })
-    exportToExcel(exportData, `${report.label.replace(/\s+/g, '_')}_${dateFrom}_to_${dateTo}.xlsx`)
+    exportToExcel(
+      exportData,
+      `${report.label.replace(/\s+/g, '_')}_${appliedFilters.dateFrom}_to_${appliedFilters.dateTo}.xlsx`,
+    )
     toast.success('Excel export ready')
   }
 
   const openDrilldown = (row) => {
     if (typeof report.getDrilldown !== 'function') return
-    const drill = report.getDrilldown(row, { dateFrom, dateTo, branchId })
+    const drill = report.getDrilldown(row, {
+      dateFrom: appliedFilters.dateFrom,
+      dateTo: appliedFilters.dateTo,
+      branchId: appliedBranchIdParam,
+    })
     if (!drill?.reportId) return
     const filters = { ...(drill.filters || {}) }
     // Always carry the selected Branch filter into the drill-down register.
     // Row-level branch (branch-wise sales) wins when already present.
-    if (branchId && !filters.branch_id) {
-      filters.branch_id = branchId
+    if (appliedBranchIdParam && !filters.branch_id) {
+      filters.branch_id = appliedBranchIdParam
     }
     if (filters.branch_id) {
-      filters.branch_label = branchLabel
+      const filterBranchIds = parseBranchIds(filters.branch_id)
+      filters.branch_label = labelsForBranchIds(filterBranchIds, storeBranches)
         || (report.id === 'branch-sales' ? (drill.label || '') : '')
+        || appliedBranchLabel
         || filters.branch_label
         || ''
       if (!filters.branch_label) delete filters.branch_label
@@ -973,7 +1075,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       drill_label: drill.label || '',
       // Keep parent date/branch/sort snapshot separate from child drill filters.
       ...parentFiltersFromState({
-        dateFrom, dateTo, branchId, branchLabel, sortBy, sortOrder, skip,
+        dateFrom: appliedFilters.dateFrom,
+        dateTo: appliedFilters.dateTo,
+        branchId: appliedBranchIdParam,
+        branchLabel: appliedBranchLabel,
+        sortBy,
+        sortOrder,
+        skip,
       }),
     }))
   }
@@ -989,9 +1097,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       return
     }
     navigate(buildReportPath(report.id, reportMap, {
-      date_from: dateFrom,
-      date_to: dateTo,
-      ...(branchId ? { branch_id: branchId, ...(branchLabel ? { branch_label: branchLabel } : {}) } : {}),
+      date_from: appliedFilters.dateFrom,
+      date_to: appliedFilters.dateTo,
+      ...(appliedBranchIdParam
+        ? {
+            branch_id: appliedBranchIdParam,
+            ...(appliedBranchLabel ? { branch_label: appliedBranchLabel } : {}),
+          }
+        : {}),
       ...(sortBy ? { sort_by: sortBy } : {}),
       ...(sortOrder ? { sort_order: sortOrder } : {}),
       ...(skip > 0 ? { skip: String(skip) } : {}),
@@ -1121,32 +1234,39 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             ) : null}
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 220px))', gap: 12, alignItems: 'end' }}>
-            <div>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 12,
+            alignItems: 'end',
+          }}>
+            <div style={{ width: 220, maxWidth: '100%' }}>
               <label className="form-label">From</label>
               <DatePicker value={dateFrom} onChange={setDateFrom} />
             </div>
-            <div>
+            <div style={{ width: 220, maxWidth: '100%' }}>
               <label className="form-label">To</label>
               <DatePicker value={dateTo} onChange={setDateTo} />
             </div>
-            <div>
+            <div style={{ width: 220, maxWidth: '100%' }}>
               <label className="form-label">Branch</label>
-              <AutocompleteDropdown
-                value={branchId}
-                selectedLabel={branchLabel || undefined}
-                onChange={(id) => {
-                  setBranchId(id)
-                  if (!id) setBranchLabel('')
-                }}
-                onSelectOption={(opt) => setBranchLabel(opt?.label || '')}
-                fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-                fetchParams={{ retail_only: false }}
-                prependOptions={[{ id: '', label: 'All Branches' }]}
-                isSearchFieldRequired={false}
+              <MultiSelect
+                options={branchOptions}
+                value={branchIds}
+                defaultName="All Branches"
+                onChange={setBranchIds}
                 placeholder="All Branches"
               />
             </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={applyFilters}
+              disabled={loading || !filtersDirty}
+              style={{ height: 36, width: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap' }}
+            >
+              Apply filters
+            </button>
           </div>
         )}
       </div>
@@ -1194,7 +1314,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                     const emphasis = isPnL && (row.row_type === 'header' || row.row_type === 'section_total' || row.row_type === 'result')
                     const detailPath = typeof report.getDetailPath === 'function' ? report.getDetailPath(row) : null
                     const canDrill = typeof report.getDrilldown === 'function'
-                      ? Boolean(report.getDrilldown(row, { dateFrom, dateTo, branchId }))
+                      ? Boolean(report.getDrilldown(row, {
+                        dateFrom: appliedFilters.dateFrom,
+                        dateTo: appliedFilters.dateTo,
+                        branchId: appliedBranchIdParam,
+                      }))
                       : false
                     const clickable = Boolean(detailPath || canDrill)
                     const rowStyle = isPnL
