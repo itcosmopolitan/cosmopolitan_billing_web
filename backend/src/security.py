@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
 from src.database import get_db
-from src.models import Organisation, Role, User
+from src.models import Organisation, Role, User, UserRole
 from src.decimal_precision import org_precision
 from src.permissions import expand
 
@@ -215,9 +215,18 @@ def require_perm(*needed: str):
     return _dep
 
 
+def _has_global_branch_access(user: User) -> bool:
+    """Support both role-based and legacy global branch access markers."""
+    return bool(
+        getattr(user, "all_branches", False)
+        or getattr(user, "role", None) == UserRole.super_admin
+        or getattr(user, "role_id", None) == "role-super-admin"
+    )
+
+
 async def get_allowed_branch_ids(user: User, db: AsyncSession) -> list[str]:
     """Return the list of branches the user may access."""
-    if getattr(user, "all_branches", False):
+    if _has_global_branch_access(user):
         return []
     from src.routes._serializers import get_user_branch_ids
 
@@ -242,7 +251,7 @@ async def _ensure_branch_access_allowed(
     if not getattr(user, "id", None) and not getattr(user, "role", None) and not getattr(user, "role_id", None):
         return branch_id
 
-    if getattr(user, "all_branches", False):
+    if _has_global_branch_access(user):
         return branch_id
 
     branch_ids = await get_allowed_branch_ids(user, db)

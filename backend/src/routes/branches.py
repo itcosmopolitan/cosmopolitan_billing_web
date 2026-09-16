@@ -4,17 +4,26 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, ItemStock, User, UserBranch
+from src.models import Branch, ItemStock, User, UserBranch, UserRole
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import get_user_branch_ids, serialize_branch
 from src.security import current_user, enforce_branch_access, require_perm
 from src.services.audit_service import add_audit_log
 
 router = APIRouter()
+
+
+def _has_global_branch_access(user: User) -> bool:
+    """Support both the role-based and legacy global-access markers."""
+    return bool(
+        getattr(user, "all_branches", False)
+        or getattr(user, "role", None) == UserRole.super_admin
+        or getattr(user, "role_id", None) == "role-super-admin"
+    )
 
 
 def _normalize_branch_code(value: str) -> str:
@@ -103,7 +112,7 @@ async def list_branches(
         lim = normalize_limit(limit)
 
     accessible = None
-    if not getattr(user, "all_branches", False):
+    if not _has_global_branch_access(user):
         accessible = await get_user_branch_ids(db, user.id)
         if not accessible:
             return paged_list([], 0, sk, lim)
@@ -159,7 +168,17 @@ async def create_branch(
     db.add(b)
     await db.flush()
 
-    super_admins = (await db.execute(select(User).where(User.all_branches.is_(True)))).scalars().all()
+    super_admins = (
+        await db.execute(
+            select(User).where(
+                or_(
+                    User.all_branches.is_(True),
+                    User.role == UserRole.super_admin,
+                    User.role_id == "role-super-admin",
+                )
+            )
+        )
+    ).scalars().all()
     for super_admin in super_admins:
         db.add(UserBranch(user_id=super_admin.id, branch_id=b.id))
 
