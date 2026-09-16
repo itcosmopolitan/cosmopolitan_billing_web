@@ -107,7 +107,14 @@ async def worker_loop(initialize_schema: bool = True) -> None:
         await init_schema()
     logger.info("Item import worker started")
     while True:
-        job = await claim_job()
+        try:
+            job = await claim_job()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Item import worker failed while claiming a job; retrying")
+            await asyncio.sleep(5)
+            continue
         if not job:
             await asyncio.sleep(2)
             continue

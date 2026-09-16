@@ -1593,10 +1593,30 @@ async def process_item_import(
             # If a DB error (e.g. IntegrityError) occurred during flush/insert,
             # the session transaction will be in rollback state. Roll back to
             # clear the session so we can continue processing remaining rows.
-            try:
-                await db.rollback()
-            except Exception:
-                pass
+            if not isinstance(e, ValueError):
+                try:
+                    await db.rollback()
+                    await db.refresh(user)
+                    for cached in list({id(value): value for value in category_by_key.values()}.values()):
+                        try:
+                            await db.refresh(cached)
+                        except Exception:
+                            category_by_key = {
+                                key: value
+                                for key, value in category_by_key.items()
+                                if value is not cached
+                            }
+                    for cached in list({id(value): value for value in branch_by_key.values()}.values()):
+                        try:
+                            await db.refresh(cached)
+                        except Exception:
+                            branch_by_key = {
+                                key: value
+                                for key, value in branch_by_key.items()
+                                if value is not cached
+                            }
+                except Exception:
+                    pass
 
             # Provide a concise, user-friendly message for duplicate-SKU errors
             from sqlalchemy.exc import IntegrityError as SAIntegrityError
