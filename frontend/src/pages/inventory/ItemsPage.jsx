@@ -1120,18 +1120,34 @@ export default function ItemsPage({ mode = 'branch' }) {
       )}
       <Modal
         open={importOpen}
-        onClose={() => !importBusy && setImportOpen(false)}
+        onClose={() => setImportOpen(false)}
         title="Import Items"
         icon="⬆️"
         size="lg"
         footer={<>
-          <button className="btn btn-secondary" onClick={() => setImportOpen(false)} disabled={importBusy}>Close</button>
+          <button className="btn btn-secondary" onClick={() => setImportOpen(false)}>Close</button>
           <button className="btn btn-primary" onClick={async () => {
             if (!importFile) { toast.error('Select a file to upload'); return }
             setImportBusy(true)
             try {
-              const res = await itemsAPI.import(importFile)
+              const idempotencyKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+              let res = await itemsAPI.import(importFile, undefined, idempotencyKey)
               setImportResult(res)
+              const pollingStartedAt = Date.now()
+              const maxPollingMs = 15 * 60 * 1000
+              while (res.status === 'queued' || res.status === 'processing') {
+                if (Date.now() - pollingStartedAt >= maxPollingMs) {
+                  throw new Error('Item import timed out. Check the backend worker logs and try again.')
+                }
+                await new Promise((resolve) => setTimeout(resolve, 1500))
+                res = await itemsAPI.importStatus(res.job_id)
+                setImportResult(res)
+              }
+              if (res.status === 'failed') {
+                throw new Error(res.error_message || 'Item import failed')
+              }
               toast.success(`${res.created || 0} items imported`)
               await fetchItems()
             } catch (err) {
@@ -1140,7 +1156,7 @@ export default function ItemsPage({ mode = 'branch' }) {
             } finally {
               setImportBusy(false)
             }
-          }} disabled={importBusy}>{importBusy ? 'Uploading…' : 'Upload'}</button>
+          }} disabled={importBusy}>{importBusy ? 'Processing…' : 'Upload'}</button>
         </>}
       >
         <div style={{ display: 'grid', gap: 10 }}>
@@ -1178,6 +1194,20 @@ export default function ItemsPage({ mode = 'branch' }) {
               }
             }}>Download template</button>
           </div>
+          {importResult && (
+            <div style={{ padding: 10, background: 'var(--bg-raised)', borderRadius: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                Import status: {importResult.status}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {importResult.processed_rows || 0} of {importResult.total_rows || '...'} rows processed
+                {' · '}{importResult.created || 0} created
+              </div>
+              {importResult.error_message && (
+                <div style={{ color: 'var(--danger)', marginTop: 4 }}>{importResult.error_message}</div>
+              )}
+            </div>
+          )}
           {importResult && importResult.errors && importResult.errors.length > 0 && (
             <div style={{ maxHeight: 200, overflowY: 'auto', padding: 8, background: 'var(--bg-raised)', borderRadius: 6 }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Errors</div>

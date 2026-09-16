@@ -1,5 +1,13 @@
 # Cosmopolitan Pro
 
+## Asynchronous item imports
+
+Item Master Excel imports are durable background jobs processed inside the web
+service. The API returns a job ID immediately; the frontend polls the job
+status while the FastAPI process handles the queued job. The PostgreSQL job
+table, row progress, stale-job recovery, and idempotency key prevent a retry
+from creating a duplicate import.
+
 **Multi-branch retail billing, POS, inventory, and management platform**
 
 ---

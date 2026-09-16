@@ -1,9 +1,12 @@
+import asyncio
+import hashlib
 import json
+import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import String, and_, asc, cast, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -18,7 +21,7 @@ from src.item_branch import (
     effective_reorder_level,
     effective_selling_price,
 )
-from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemStock, User, AuditLog
+from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemImportJob, ItemStock, User, AuditLog
 from src.models import (
     AdjustmentRequest,
     AdjustmentStatus,
@@ -81,6 +84,7 @@ from src.security import (
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+MAX_ITEM_IMPORT_BYTES = 20 * 1024 * 1024
 
 
 async def _write_post_commit_audit(
@@ -1262,33 +1266,127 @@ async def create_item(
     }
 
 
-@router.post("/import", dependencies=[Depends(require_perm("item_master.create"))])
+@router.post("/import", status_code=202, dependencies=[Depends(require_perm("item_master.create"))])
 async def import_items(
     file: UploadFile = File(...),
-    request: Request = None,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Bulk import items from an Excel file. Returns a report with successes and row-level errors."""
+    """Store an item workbook and enqueue it for the dedicated import worker."""
+    if idempotency_key and len(idempotency_key) > 200:
+        raise HTTPException(400, detail="Invalid Idempotency-Key header")
     try:
         content = await file.read()
     except Exception as e:
         raise HTTPException(400, detail=str(e))
+    if not content:
+        raise HTTPException(400, detail="The uploaded file is empty")
+    if len(content) > MAX_ITEM_IMPORT_BYTES:
+        raise HTTPException(
+            413,
+            detail="The item import file is too large. Please upload a workbook smaller than 20 MB.",
+        )
 
+    # The workbook itself is the idempotency identity. A new browser request
+    # or client-generated key must not import the same file twice.
+    content_key = f"item-import:{hashlib.sha256(content).hexdigest()}"
+    existing = await db.execute(
+        select(ItemImportJob).where(ItemImportJob.idempotency_key == content_key)
+    )
+    job = existing.scalar_one_or_none()
+    if job:
+        stale_before = datetime.utcnow() - timedelta(minutes=10)
+        if job.status == "failed" or (job.status == "processing" and (
+            job.started_at is None or job.started_at < stale_before
+        )):
+            job.status = "queued"
+            job.started_at = None
+            job.completed_at = None
+            job.error_message = None
+            await db.commit()
+        return _import_job_response(job)
+
+    job = ItemImportJob(
+        id=str(uuid.uuid4()),
+        idempotency_key=content_key,
+        status="queued",
+        filename=file.filename or "item-import.xlsx",
+        file_data=content,
+        user_id=user.id,
+    )
+    db.add(job)
     try:
-        from io import BytesIO
-        import openpyxl
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await db.execute(
+            select(ItemImportJob).where(ItemImportJob.idempotency_key == content_key)
+        )
+        job = existing.scalar_one()
+    return _import_job_response(job)
 
-        wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
-        ws = wb.active
+
+def _import_job_response(job: ItemImportJob) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "filename": job.filename,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "created": job.created_count,
+        "errors": job.errors or [],
+        "error_message": job.error_message,
+    }
+
+
+def _import_sku_key(value) -> str:
+    """Return the duplicate-detection key used for imported SKUs."""
+    return str(value or '').strip().casefold()
+
+
+async def process_item_import(
+    content: bytes,
+    db: AsyncSession,
+    user: User,
+    progress_callback=None,
+) -> dict:
+    """Process a stored workbook. Called by the separate import worker."""
+    try:
+        rows = await asyncio.to_thread(_read_import_rows, content)
     except Exception as e:
         raise HTTPException(400, detail=f"Failed to read Excel file: {e}")
 
     # Read header row and map column names to indices
-    rows = list(ws.iter_rows(values_only=True))
     if not rows or len(rows) < 2:
         raise HTTPException(400, detail="Spreadsheet must have a header row and at least one data row")
     headers = [str(h).strip().lower() if h is not None else None for h in rows[0]]
+    total_rows = len(rows) - 1
+    if progress_callback:
+        await progress_callback(processed_rows=0, total_rows=total_rows, created=0, errors=[])
+
+    # These values are invariant for the whole upload. Resolve them once so a
+    # large workbook does not turn into thousands of sequential lookups.
+    direct = await can_direct_commit(user, db, 'item_master.approve')
+    category_result = await db.execute(select(Category))
+    category_by_key = {}
+    for category in category_result.scalars().all():
+        category_by_key.setdefault(str(category.id).lower(), category)
+        category_by_key.setdefault(str(category.name).strip().lower(), category)
+    branch_result = await db.execute(select(Branch))
+    branch_by_key = {}
+    for branch in branch_result.scalars().all():
+        branch_by_key.setdefault(str(branch.id).lower(), branch)
+        branch_by_key.setdefault(str(branch.name).strip().lower(), branch)
+    allowed_branch_ids = None if getattr(user, 'all_branches', False) else set(
+        await get_allowed_branch_ids(user, db)
+    )
+    existing_skus_result = await db.execute(select(Item.sku).where(Item.sku.is_not(None)))
+    imported_sku_keys = {
+        _import_sku_key(sku)
+        for (sku,) in existing_skus_result.all()
+        if _import_sku_key(sku)
+    }
 
     # Simple mapping from common header names to model fields
     map_keys = {
@@ -1355,18 +1453,17 @@ async def import_items(
             if 'name' not in data or not data['name']:
                 raise ValueError('Name is required')
 
+            sku = str(data.get('sku') or f"SKU-{uuid.uuid4().hex[:6].upper()}").strip()
+            sku_key = _import_sku_key(sku)
+            if sku_key in imported_sku_keys:
+                raise ValueError(f"SKU already exists - {sku}")
+
             # Resolve category value -> id if provided. Try id first, then name.
             category_id = None
             if data.get('category_id'):
                 cat_val = str(data.get('category_id')).strip()
                 if cat_val:
-                    # Try matching by id first
-                    res = await db.execute(select(Category).where(Category.id == cat_val))
-                    cat = res.scalar_one_or_none()
-                    if not cat:
-                        # Fallback to case-insensitive name match
-                        res = await db.execute(select(Category).where(func.lower(Category.name) == cat_val.lower()))
-                        cat = res.scalar_one_or_none()
+                    cat = category_by_key.get(cat_val.lower())
                     if cat:
                         category_id = cat.id
                     else:
@@ -1375,14 +1472,13 @@ async def import_items(
                         db.add(new_cat)
                         await db.flush()
                         category_id = new_cat.id
-            # Determine direct approval
-            direct = await can_direct_commit(user, db, 'item_master.approve')
+                        category_by_key[cat_val.lower()] = new_cat
             initial_status = ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
 
             item = Item(
                 id=str(uuid.uuid4()),
                 name=str(data.get('name')).strip(),
-                sku=(data.get('sku') or f"SKU-{uuid.uuid4().hex[:6].upper()}"),
+                sku=sku,
                 barcode=data.get('barcode'),
                 country_of_origin=None,
                 category_id=category_id,
@@ -1415,21 +1511,14 @@ async def import_items(
             if branch_cells:
                 for branch_label, cols in branch_cells.items():
                     try:
-                        # find branch by name (case-insensitive) or id
-                        branch_res = await db.execute(select(Branch).where(func.lower(Branch.name) == branch_label.lower()))
-                        branch = branch_res.scalar_one_or_none()
-                        if branch is None:
-                            # also try matching by id
-                            branch_res = await db.execute(select(Branch).where(Branch.id == branch_label))
-                            branch = branch_res.scalar_one_or_none()
+                        # Branches were preloaded once before processing rows.
+                        branch = branch_by_key.get(branch_label.lower())
                         if branch is None:
                             errors.append({'row': idx, 'error': f'Unknown branch: {branch_label}'})
                             continue
                         # ensure user may access this branch
-                        try:
-                            await enforce_branch_access(branch.id, user=user, db=db)
-                        except Exception as e:
-                            errors.append({'row': idx, 'error': f'No access to branch {branch_label}: {e}'})
+                        if allowed_branch_ids is not None and branch.id not in allowed_branch_ids:
+                            errors.append({'row': idx, 'error': f'No access to branch {branch_label}'})
                             continue
 
                         # upsert branch config with provided cost/selling price if present
@@ -1496,6 +1585,10 @@ async def import_items(
                 metadata={'sku': item.sku, 'name': item.name},
             )
             created += 1
+            # Commit each successful row so one malformed row cannot roll back
+            # earlier items in a long-running background import.
+            await db.commit()
+            imported_sku_keys.add(sku_key)
         except Exception as e:
             # If a DB error (e.g. IntegrityError) occurred during flush/insert,
             # the session transaction will be in rollback state. Roll back to
@@ -1510,8 +1603,10 @@ async def import_items(
             orig = getattr(e, 'orig', None)
             msg = str(e)
             if isinstance(e, SAIntegrityError) or (orig is not None and 'duplicate key value violates unique constraint' in str(orig)):
-                # Check for items_sku_key or mention of (sku)= in the DB error
-                if (('items_sku_key' in msg) or (orig is not None and 'items_sku_key' in str(orig))) or ('Key (sku)' in msg) or (orig is not None and 'Key (sku)' in str(orig)):
+                # Match both PostgreSQL and SQLite constraint messages.
+                db_error = f'{msg} {orig or ""}'.lower()
+                if ('items_sku_key' in db_error or 'key (sku)' in db_error
+                        or 'items.sku' in db_error or 'unique constraint failed' in db_error):
                     sku_val = data.get('sku') if isinstance(data, dict) else None
                     sku_display = sku_val or '<unknown>'
                     errors.append({'row': idx, 'error': f"SKU already exists - {sku_display}"})
@@ -1519,8 +1614,32 @@ async def import_items(
             # Fallback: generic error string
             errors.append({'row': idx, 'error': msg})
 
+        if progress_callback and ((idx - 1) % 10 == 0 or idx == len(rows) - 1):
+            await progress_callback(
+                processed_rows=idx - 1,
+                total_rows=total_rows,
+                created=created,
+                errors=errors,
+            )
+
     await db.commit()
-    return {'created': created, 'errors': errors}
+    return {'created': created, 'errors': errors, 'total_rows': total_rows}
+
+
+def _read_import_rows(content: bytes) -> list[tuple]:
+    """Read only non-empty workbook rows away from FastAPI's event loop."""
+    from io import BytesIO
+    import openpyxl
+
+    wb = openpyxl.load_workbook(BytesIO(content), data_only=True, read_only=True)
+    ws = wb.active
+    try:
+        return [
+            row for row in ws.iter_rows(values_only=True)
+            if any(cell is not None and str(cell).strip() for cell in row)
+        ]
+    finally:
+        wb.close()
 
 
 @router.get("/import/template", dependencies=[Depends(require_perm("item_master.create"))])
@@ -1565,6 +1684,35 @@ async def download_import_template(db: AsyncSession = Depends(get_db)):
     return StreamingResponse(bio, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={
         'Content-Disposition': 'attachment; filename="item_import_template.xlsx"'
     })
+
+
+@router.get("/import/{job_id}", dependencies=[Depends(require_perm("item_master.create"))])
+async def get_import_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    result = await db.execute(
+        select(ItemImportJob).where(
+            ItemImportJob.id == job_id,
+            ItemImportJob.user_id == user.id,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, detail="Import job not found")
+    stale_seconds = int(os.getenv("ITEM_IMPORT_STALE_SECONDS", "900"))
+    if job.status == "processing" and job.started_at:
+        age_seconds = (datetime.utcnow() - job.started_at).total_seconds()
+        if age_seconds >= stale_seconds:
+            job.status = "failed"
+            job.error_message = (
+                "The item import worker stopped responding. "
+                "Please upload the workbook again."
+            )
+            job.completed_at = datetime.utcnow()
+            await db.commit()
+    return _import_job_response(job)
 
 
 

@@ -125,10 +125,11 @@ def _prefer_ipv4_host(host: str, port: int) -> str:
 
 def _build_postgres_connect_args(url):
     connect_args = {
-        "timeout": 20,
-        "command_timeout": 120,
+        "timeout": int(os.getenv("PGCONNECT_TIMEOUT", "20")),
+        "command_timeout": int(os.getenv("PGCOMMAND_TIMEOUT", "120")),
         "server_settings": {"application_name": "cosmopolitan_backend"},
-        "host": _prefer_ipv4_host(url.host, url.port or 5432),
+        # Preserve the hostname for TLS SNI required by hosted PostgreSQL proxies.
+        "host": url.host,
     }
 
     sslmode = (

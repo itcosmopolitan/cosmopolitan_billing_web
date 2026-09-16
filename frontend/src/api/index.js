@@ -230,7 +230,7 @@ export const activityAPI = {
 
 // ─── Items ────────────────────────────────────────────────────────────────────
 export const itemsAPI = {
-  list:    (params) => api.get('/items/',             { params }),
+  list:    (params) => api.get('/items/',             { params, timeout: 120_000 }),
   get:     (id)     => api.get(`/items/${id}`),
   create:  (data)   => api.post('/items/', data),
   update:  (id, data) => api.put(`/items/${id}`, data),
@@ -256,12 +256,19 @@ export const itemsAPI = {
     list:   ()     => api.get('/items/categories'),
     create: (data) => api.post('/items/categories', data),
   },
-  import: (file, branchId) => {
+  import: (file, branchId, idempotencyKey) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('branch_id', branchId)
-    return api.post('/items/import', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120_000 })
+    const requestKey = idempotencyKey || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`)
+    return api.post('/items/import', fd, {
+      headers: { 'Content-Type': 'multipart/form-data', 'Idempotency-Key': requestKey },
+      timeout: 30_000,
+    })
   },
+  importStatus: (jobId) => api.get(`/items/import/${jobId}`, { timeout: 15_000 }),
   downloadTemplate: async () => {
     // Request binary Excel file and return a Blob
     const data = await api.get('/items/import/template', { responseType: 'arraybuffer', noBranchScope: true })

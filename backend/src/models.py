@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -31,6 +31,25 @@ class ItemApprovalStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     inactive = "inactive"
+
+
+class ItemImportJob(Base):
+    __tablename__ = "item_import_jobs"
+
+    id = Column(String, primary_key=True)
+    idempotency_key = Column(String, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    filename = Column(String, nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    total_rows = Column(Integer, nullable=False, default=0)
+    processed_rows = Column(Integer, nullable=False, default=0)
+    created_count = Column(Integer, nullable=False, default=0)
+    errors = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
 
 class InvoiceStatus(str, enum.Enum):
     draft            = "draft"
