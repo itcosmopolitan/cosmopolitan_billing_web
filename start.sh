@@ -6,6 +6,9 @@ echo "Starting Cosmopolitan Pro Production..."
 
 cd /app/backend
 
+echo "Applying database migrations..."
+alembic upgrade head
+
 exec gunicorn -k uvicorn.workers.UvicornWorker src.main:app \
   --workers 2 \
   --threads 4 \
