@@ -51,6 +51,26 @@ class ItemImportJob(Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
+
+class CustomerImportJob(Base):
+    __tablename__ = "customer_import_jobs"
+
+    id = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    filename = Column(String, nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    branch_id = Column(String, nullable=False)
+    total_rows = Column(Integer, nullable=False, default=0)
+    processed_rows = Column(Integer, nullable=False, default=0)
+    created_count = Column(Integer, nullable=False, default=0)
+    skipped_count = Column(Integer, nullable=False, default=0)
+    errors = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
 class InvoiceStatus(str, enum.Enum):
     draft            = "draft"
     pending_approval = "pending_approval"

@@ -10,7 +10,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, Customer, CustomerCreditEntry, User
+from src.models import Branch, Customer, CustomerCreditEntry, CustomerImportJob, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import _build_customer_code, serialize_customer
 from src.permissions import CUSTOMER_PICKER_READ
@@ -315,101 +315,45 @@ async def import_customers(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Bulk import customers from an Excel file."""
+    """Queue a customer workbook for background processing."""
     await _validate_branch_id(branch_id, db)
     await enforce_branch_access(branch_id, user=user, db=db)
-
-    try:
-        content = await file.read()
-        wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
-        ws = wb.active
-    except Exception as e:
-        raise HTTPException(400, detail=f"Failed to read Excel file: {e}")
-
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows or len(rows) < 2:
-        raise HTTPException(400, detail="Spreadsheet must have a header row and at least one data row")
-
-    headers = [str(h).strip().lower() if h is not None else None for h in rows[0]]
-    map_keys = {
-        "name": "name", "customer name": "name", "phone": "phone", "email": "email",
-        "gst reg no": "gst_in", "gst number": "gst_in", "gstin": "gst_in",
-        "street 1": "street1", "street1": "street1", "street 2": "street2", "street2": "street2",
-        "street 3": "street3", "street3": "street3", "city": "city",
-        "state/province": "state_province", "state province": "state_province",
-        "country": "country", "postal code": "postal_code", "postal_code": "postal_code",
-        "credit limit": "credit_limit", "customer type": "customer_type",
-        "classification": "classification", "internal/external": "classification",
-        "key account manager": "key_account_manager", "credit terms": "credit_terms",
-    }
-
-    created = 0
-    errors = []
-
-    def as_text(value):
-        if value is None:
-            return None
-        return value.strip() if isinstance(value, str) else str(value).strip()
-
-    for idx, row in enumerate(rows[1:], start=2):
-        try:
-            data = {}
-            for col_idx, cell in enumerate(row):
-                key = headers[col_idx] if col_idx < len(headers) else None
-                mapped = map_keys.get(key) if key else None
-                if mapped:
-                    data[mapped] = cell
-
-            name = as_text(data.get("name"))
-            if not name:
-                raise ValueError("Customer name is required")
-            required = {key: as_text(data.get(key)) for key in ("street1", "city", "country")}
-            missing = [key for key, value in required.items() if not value]
-            if missing:
-                raise ValueError(f"Required field(s) missing: {', '.join(missing)}")
-
-            customer_type = _normalize_customer_type(as_text(data.get("customer_type")) or "retail")
-            classification = _normalize_classification(as_text(data.get("classification")) or "external")
-            raw_limit = data.get("credit_limit")
-            if customer_type == "retail":
-                credit_limit = 0.0
-                credit_terms = None
-            else:
-                credit_limit = float(raw_limit if raw_limit not in (None, "") else 10000)
-                credit_terms = as_text(data.get("credit_terms")) or None
-            customer_id = str(uuid.uuid4())
-            customer = Customer(
-                id=customer_id,
-                name=name,
-                phone=as_text(data.get("phone")) or None,
-                email=as_text(data.get("email")) or None,
-                gstin=as_text(data.get("gst_in")) or None,
-                branch_id=branch_id,
-                credit_limit=credit_limit,
-                type=customer_type,
-                classification=classification,
-                key_account_manager=as_text(data.get("key_account_manager")) or None,
-                credit_terms=credit_terms,
-                street1=required["street1"],
-                street2=as_text(data.get("street2")) or None,
-                street3=as_text(data.get("street3")) or None,
-                city=required["city"],
-                state_province=as_text(data.get("state_province")) or None,
-                country=required["country"],
-                postal_code=as_text(data.get("postal_code")) or None,
-            )
-            customer.address = _compose_address_from_parts(customer)
-            customer.customer_code = _build_customer_code(customer_id)
-            db.add(customer)
-            await db.flush()
-            await db.commit()
-            created += 1
-        except Exception as e:
-            await db.rollback()
-            errors.append({"row": idx, "error": str(e)})
-
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, detail="The uploaded file is empty")
+    job = CustomerImportJob(
+        id=str(uuid.uuid4()),
+        status="queued",
+        filename=file.filename or "customer-import.xlsx",
+        file_data=content,
+        user_id=user.id,
+        branch_id=branch_id,
+    )
+    db.add(job)
     await db.commit()
-    return {"created": created, "errors": errors}
+    return _customer_import_job_response(job)
+
+
+@router.get("/import/{job_id}", dependencies=[Depends(require_perm("customers.create"))])
+async def customer_import_status(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+    job = await db.get(CustomerImportJob, job_id)
+    if not job or job.user_id != user.id:
+        raise HTTPException(404, "Customer import job not found")
+    return _customer_import_job_response(job)
+
+
+def _customer_import_job_response(job: CustomerImportJob) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "filename": job.filename,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "created": job.created_count,
+        "skipped": job.skipped_count,
+        "errors": job.errors or [],
+        "error_message": job.error_message,
+    }
 
 
 @router.get("/import/template", dependencies=[Depends(require_perm("customers.create"))])

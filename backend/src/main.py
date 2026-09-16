@@ -194,9 +194,20 @@ async def startup():
             except Exception:
                 logger.exception("Item import worker stopped")
 
+        async def _customer_import_loop() -> None:
+            try:
+                from src.customer_import_worker import run_import_worker_loop
+
+                await run_import_worker_loop()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Customer import worker stopped")
+
         asyncio.create_task(_notification_scan_loop())
         asyncio.create_task(_initial_scan())
         asyncio.create_task(_item_import_loop())
+        asyncio.create_task(_customer_import_loop())
     except Exception:
         logger.exception("Application startup failed during database initialization")
         raise

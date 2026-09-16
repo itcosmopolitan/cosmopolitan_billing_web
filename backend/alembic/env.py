@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from src import config as app_config
 from src.database import Base
 import src.models  # noqa: F401
 
@@ -22,6 +24,16 @@ def _sync_database_url(raw_url: str) -> str:
 
 
 database_url = os.getenv("DATABASE_URL", "").strip()
+if not database_url:
+    env_file = Path(__file__).resolve().parents[1] / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == "DATABASE_URL":
+                database_url = value.strip().strip('"').strip("'")
+                break
+if not database_url:
+    database_url = app_config.load().database_url.strip()
 if database_url:
     config.set_main_option("sqlalchemy.url", _sync_database_url(database_url))
 

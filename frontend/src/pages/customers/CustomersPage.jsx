@@ -217,8 +217,21 @@ export default function CustomersPage() {
             if (!activeBranch?.id) { toast.error('Select a branch before importing'); return }
             setImportBusy(true)
             try {
-              const res = await customersAPI.import(importFile, activeBranch.id)
+              let res = await customersAPI.import(importFile, activeBranch.id)
               setImportResult(res)
+              const pollingStartedAt = Date.now()
+              const maxPollingMs = 15 * 60 * 1000
+              while (res.status === 'queued' || res.status === 'processing') {
+                if (Date.now() - pollingStartedAt >= maxPollingMs) {
+                  throw new Error('Customer import timed out. Check the backend worker logs and try again.')
+                }
+                await new Promise((resolve) => setTimeout(resolve, 1500))
+                res = await customersAPI.importStatus(res.job_id)
+                setImportResult(res)
+              }
+              if (res.status === 'failed') {
+                throw new Error(res.error_message || 'Customer import failed')
+              }
               toast.success(`${res.created || 0} customers imported`)
               setListVersion((v) => v + 1)
               setImportFile(null)
@@ -242,9 +255,24 @@ export default function CustomersPage() {
         <div style={{ display: 'grid', gap: 10 }}>
           <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', lineHeight: 1.45 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Upload instructions</div>
-            <div>Customers will be added to the currently selected branch. Name, Street 1, City, and Country are required.</div>
+            <div>Customers will be added to the currently selected branch. Name and City are required. Street 1 and Country are optional.</div>
             <div style={{ marginTop: 6 }}><strong>Columns:</strong> Customer Name, Phone, Email, GST Reg No, Street 1, Street 2, Street 3, City, State/Province, Country, Postal Code, Credit Limit, Customer Type, Key Account Manager, Credit Terms</div>
           </div>
+          {importResult && (
+            <div style={{ padding: 10, background: 'var(--bg-raised)', borderRadius: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                Import status: {importResult.status || 'processing'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {importResult.processed_rows || 0} of {importResult.total_rows || '...'} rows processed
+                {' · '}Created: {importResult.created || 0}
+                {' · '}Skipped: {importResult.skipped || importResult.errors?.length || 0}
+              </div>
+              {importResult.error_message && (
+                <div style={{ color: 'var(--danger)', marginTop: 4 }}>{importResult.error_message}</div>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <input type="file" accept=".xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
             <button className="btn btn-ghost btn-sm" onClick={async () => {
