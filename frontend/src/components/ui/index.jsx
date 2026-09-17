@@ -245,7 +245,7 @@ export function Select({
   error,
   placeholder = 'Select…',
   isSearchFieldRequired = false,
-  searchPlaceholder = 'Search…',
+  searchPlaceholder,
   fetchUrl,
   fetchParams,
   disabled = false,

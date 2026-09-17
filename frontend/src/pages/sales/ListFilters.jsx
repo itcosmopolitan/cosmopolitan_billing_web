@@ -234,7 +234,6 @@ export default function ListFilters({
                 fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
                 isSearchFieldRequired
                 placeholder="Select customer"
-                searchPlaceholder="Search customers…"
                 clearable
                 style={{ width: '100%' }}
               />

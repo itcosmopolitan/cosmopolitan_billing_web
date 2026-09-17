@@ -1,22 +1,66 @@
 import { useState, useRef, useLayoutEffect, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { api } from '@/api'
+import { api, AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
 
 const GAP = 6
 const VIEWPORT_PAD = 8
 const ROW_H = 34
+const DESC_ROW_H = 46
 const POPOVER_MAX_H = 280
 const DEBOUNCE_MS = 250
+const EMPTY_OPTIONS = []
+const CUSTOMER_SEARCH_PLACEHOLDER = 'Name or phone…'
+const CUSTOMER_LOADING_LABEL = 'Loading customers…'
+const CUSTOMER_EMPTY_LABEL = 'No customers found'
+
+function optionDescription(r) {
+  return String(r?.description ?? r?.phone ?? '').trim()
+}
+
+function normalizeOption(r) {
+  const source = r?.raw ?? r ?? {}
+  const label = String(r?.text ?? r?.label ?? r?.name ?? '')
+  const description = optionDescription(r) || optionDescription(source)
+  return {
+    id: r?.id,
+    label,
+    description,
+    searchText: [r?.searchText, label, description, source.phone].filter(Boolean).join(' '),
+    disabled: Boolean(r?.disabled),
+    raw: source,
+  }
+}
 
 function normalizeAutocompleteRows(data) {
   const rows = Array.isArray(data) ? data : (data?.items || [])
-  return rows.map((r) => ({
-    id: r.id,
-    label: r.text ?? r.label ?? r.name ?? '',
-    searchText: r.text ?? r.label ?? r.name ?? '',
-    disabled: Boolean(r.disabled),
-    raw: r,
-  }))
+  return rows.map(normalizeOption)
+}
+
+function optionRowHeight(opt) {
+  return opt?.description ? DESC_ROW_H : ROW_H
+}
+
+function LoadingRow({ label }) {
+  return (
+    <div
+      role="status"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        height: ROW_H,
+        padding: '0 10px',
+        fontSize: 12,
+        color: 'var(--text-muted)',
+      }}
+    >
+      <svg className="spinner" width={12} height={12} viewBox="0 0 24 24" fill="none" aria-hidden>
+        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
+        <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      </svg>
+      {label}
+    </div>
+  )
 }
 
 /**
@@ -28,18 +72,18 @@ export default function AutocompleteDropdown({
   value,
   onChange,
   onSelectOption,
-  options = [],
-  prependOptions = [],
+  options = EMPTY_OPTIONS,
+  prependOptions = EMPTY_OPTIONS,
   placeholder = 'Select…',
   selectedLabel,
   isSearchFieldRequired = false,
-  searchPlaceholder = 'Search…',
+  searchPlaceholder,
   fetchUrl,
   fetchParams,
   direction = 'auto',
   loading = false,
-  loadingLabel = 'Loading…',
-  emptyLabel = 'No items found',
+  loadingLabel,
+  emptyLabel,
   noMatchLabel = 'No matches',
   disabled = false,
   clearable = false,
@@ -60,9 +104,19 @@ export default function AutocompleteDropdown({
   const fetchRequestIdRef = useRef(0)
 
   const remote = Boolean(fetchUrl)
+  const isCustomerFetch = fetchUrl === AUTOCOMPLETE_CUSTOMER_URL
+  const resolvedSearchPlaceholder = searchPlaceholder
+    ?? (isCustomerFetch ? CUSTOMER_SEARCH_PLACEHOLDER : 'Search…')
+  const resolvedLoadingLabel = loadingLabel
+    ?? (isCustomerFetch ? CUSTOMER_LOADING_LABEL : 'Loading…')
+  const resolvedEmptyLabel = emptyLabel
+    ?? (isCustomerFetch ? CUSTOMER_EMPTY_LABEL : 'No items found')
   const fetchParamsKey = JSON.stringify(fetchParams || {})
   const effectiveOptions = useMemo(
-    () => (remote ? [...prependOptions, ...apiOptions] : [...prependOptions, ...options]),
+    () => [
+      ...prependOptions.map(normalizeOption),
+      ...(remote ? apiOptions : options.map(normalizeOption)),
+    ],
     [remote, prependOptions, apiOptions, options],
   )
   const effectiveLoading = remote ? apiLoading : loading
@@ -77,8 +131,16 @@ export default function AutocompleteDropdown({
 
   const selected = effectiveOptions.find((o) => o.id === value && !o.disabled)
   const triggerLabel = selected?.label || (value && (selectedLabel || pickedLabel)) || placeholder
+  const triggerTitle = selected?.description
+    ? `${triggerLabel} · ${selected.description}`
+    : triggerLabel
   const hasSelection = Boolean(selected || (value && selectedLabel))
   const listLoading = effectiveLoading && filteredOptions.length === 0
+  const showLoadingRow = effectiveLoading && filteredOptions.length > 0
+  const hasDescriptions = filteredOptions.some((o) => o.description)
+  const hasFooter = Boolean(footerAction?.label && footerAction?.onClick)
+  const rowsHeight = filteredOptions.reduce((sum, o) => sum + optionRowHeight(o), 0)
+    + ((listLoading || showLoadingRow) ? ROW_H : 0)
 
   const reposition = useCallback(() => {
     const el = triggerRef.current
@@ -102,9 +164,9 @@ export default function AutocompleteDropdown({
     ))
 
     const listHeight = Math.min(
-      Math.max(filteredOptions.length, listLoading ? 1 : 0) * ROW_H
+      Math.max(rowsHeight, ROW_H)
         + (isSearchFieldRequired ? 44 : 8)
-        + (footerAction ? 40 : 0),
+        + (hasFooter ? 40 : 0),
       maxHeight,
     )
 
@@ -112,20 +174,22 @@ export default function AutocompleteDropdown({
       ? Math.max(VIEWPORT_PAD, rect.top - listHeight - GAP)
       : rect.bottom + GAP
 
-    const width = Math.max(rect.width, footerAction ? 220 : 0)
+    const width = Math.max(rect.width, hasFooter ? 220 : 0, hasDescriptions ? 260 : 0)
     const left = Math.min(
       Math.max(VIEWPORT_PAD, rect.left),
       Math.max(VIEWPORT_PAD, window.innerWidth - width - VIEWPORT_PAD),
     )
 
-    setCoords({
-      top,
-      left,
-      width,
-      maxHeight,
-      flipUp,
-    })
-  }, [direction, filteredOptions.length, isSearchFieldRequired, listLoading, footerAction])
+    setCoords((prev) => (
+      prev.top === top
+        && prev.left === left
+        && prev.width === width
+        && prev.maxHeight === maxHeight
+        && prev.flipUp === flipUp
+        ? prev
+        : { top, left, width, maxHeight, flipUp }
+    ))
+  }, [direction, rowsHeight, isSearchFieldRequired, hasFooter, hasDescriptions])
 
   useLayoutEffect(() => {
     if (open) reposition()
@@ -143,12 +207,16 @@ export default function AutocompleteDropdown({
     if (disabled) setOpen(false)
   }, [disabled])
 
+  useLayoutEffect(() => {
+    if (remote && open) setApiLoading(true)
+  }, [remote, open])
+
   useEffect(() => {
     if (!remote || !open) return undefined
     const requestId = ++fetchRequestIdRef.current
+    setApiLoading(true)
     const delay = isSearchFieldRequired && search.trim() ? DEBOUNCE_MS : 0
     const timer = setTimeout(async () => {
-      setApiLoading(true)
       try {
         const params = Object.fromEntries(
           Object.entries({ ...(fetchParams || {}) }).filter(([, v]) => v !== undefined && v !== null && v !== ''),
@@ -248,7 +316,7 @@ export default function AutocompleteDropdown({
           <input
             ref={searchRef}
             type="text"
-            placeholder={searchPlaceholder}
+            placeholder={resolvedSearchPlaceholder}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="form-input"
@@ -259,48 +327,64 @@ export default function AutocompleteDropdown({
         </div>
       )}
       {listLoading ? (
-        <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
-          {loadingLabel}
-        </div>
+        <LoadingRow label={resolvedLoadingLabel} />
       ) : effectiveOptions.length === 0 ? (
         <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
-          {emptyLabel}
+          {resolvedEmptyLabel}
         </div>
       ) : filteredOptions.length === 0 ? (
         <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
-          {q ? `${noMatchLabel} for "${search.trim()}"` : emptyLabel}
+          {q ? `${noMatchLabel} for "${search.trim()}"` : resolvedEmptyLabel}
         </div>
       ) : (
-        filteredOptions.map((o) => (
-          <button
-            key={o.id || '__empty__'}
-            type="button"
-            role="option"
-            aria-selected={o.id === value}
-            disabled={o.disabled}
-            onClick={() => !o.disabled && pick(o)}
-            style={{
-              display: 'block',
-              width: '100%',
-              height: ROW_H,
-              padding: '0 10px',
-              border: 'none',
-              borderRadius: 6,
-              textAlign: 'left',
-              fontSize: 12,
-              lineHeight: `${ROW_H}px`,
-              cursor: o.disabled ? 'not-allowed' : 'pointer',
-              color: o.disabled ? 'var(--text-muted)' : 'var(--text-primary)',
-              background: o.id === value ? 'var(--accent-bg)' : 'transparent',
-              opacity: o.disabled ? 0.55 : 1,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {o.label}
-          </button>
-        ))
+        <>
+          {filteredOptions.map((o, idx) => (
+            <button
+              key={o.id || `__empty_${idx}`}
+              type="button"
+              role="option"
+              aria-selected={o.id === value}
+              disabled={o.disabled}
+              onClick={() => !o.disabled && pick(o)}
+              title={o.description ? `${o.label} · ${o.description}` : o.label}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                width: '100%',
+                height: optionRowHeight(o),
+                padding: o.description ? '4px 10px' : '0 10px',
+                border: 'none',
+                borderRadius: 6,
+                textAlign: 'left',
+                fontSize: 12,
+                lineHeight: 1.25,
+                cursor: o.disabled ? 'not-allowed' : 'pointer',
+                color: o.disabled ? 'var(--text-muted)' : 'var(--text-primary)',
+                background: o.id === value ? 'var(--accent-bg)' : 'transparent',
+                opacity: o.disabled ? 0.55 : 1,
+                overflow: 'hidden',
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {o.label}
+              </span>
+              {o.description ? (
+                <span style={{
+                  fontSize: 11,
+                  color: 'var(--text-muted)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                >
+                  {o.description}
+                </span>
+              ) : null}
+            </button>
+          ))}
+          {showLoadingRow ? <LoadingRow label={resolvedLoadingLabel} /> : null}
+        </>
       )}
       {footerAction?.label && footerAction?.onClick && (
         <button
@@ -358,7 +442,10 @@ export default function AutocompleteDropdown({
           ...style,
         }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+        <span
+          title={triggerTitle}
+          style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}
+        >
           {triggerLabel}
         </span>
         {clearable && value && !disabled ? (
