@@ -200,7 +200,7 @@ export default function QuoteFormModal({
             onChange={(e) => pqf('shipmentMethod', e.target.value)} />
         </FormGroup>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+      {/* <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
         <FormGroup label="Prices Include VAT">
           <label className="form-checkbox" style={{ alignItems: 'center' }}>
             <input type="checkbox" disabled={readOnly}
@@ -214,7 +214,7 @@ export default function QuoteFormModal({
             value={quoteForm.paymentDiscountOnVat || 0}
             onChange={(e) => pqf('paymentDiscountOnVat', e.target.value)} />
         </FormGroup>
-      </div>
+      </div> */}
       <FormGroup label="Items" required>
         {/* 2026-05-24: same column changes as OrderFormModal — Tax % out,
             per-line Discount in, 95px right-aligned numeric columns
