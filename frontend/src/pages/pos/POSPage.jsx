@@ -1241,7 +1241,11 @@ export default function POSPage() {
                   const c = await customersAPI.get(opt.id)
                   store.setCustomer(c)
                 } catch {
-                  store.setCustomer({ id: opt.id, name: opt.label })
+                  store.setCustomer({
+                    id: opt.id,
+                    name: opt.label,
+                    phone: opt.description || opt.raw?.phone || '',
+                  })
                 }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
@@ -1251,7 +1255,6 @@ export default function POSPage() {
               footerAction={addCustomerAction}
               selectedLabel={customer?.name}
               placeholder="Walk-in Customer"
-              searchPlaceholder="Customer…"
               style={{ width: 148, maxWidth: '36vw' }}
             />
             {customer && isInternalCustomer(customer) && (

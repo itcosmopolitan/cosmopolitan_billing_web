@@ -212,8 +212,6 @@ export default function InvoiceFormModal({
               isSearchFieldRequired
               selectedLabel={invoiceForm.customerName || undefined}
               placeholder="Search customers…"
-              searchPlaceholder="Search customers…"
-              emptyLabel="No customers found"
               footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />

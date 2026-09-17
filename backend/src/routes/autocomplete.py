@@ -24,7 +24,7 @@ async def autocomplete_customer(
     limit: int = Query(2000, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return `{ id, text }` rows for customer name dropdowns."""
+    """Return `{ id, text, phone, description }` rows for customer dropdowns."""
     q = select(Customer).where(Customer.active.is_(True))
     if search_text:
         term = f"%{search_text.strip()}%"
@@ -38,14 +38,20 @@ async def autocomplete_customer(
     rows = (
         await db.execute(q.order_by(Customer.name.asc()).limit(limit))
     ).scalars().all()
-    return [{
-        "id": c.id,
-        "text": c.name,
-        "customer_type": c.type,
-        "classification": getattr(c, "classification", None) or "external",
-        "credit_terms": getattr(c, "credit_terms", None),
-        "key_account_manager": getattr(c, "key_account_manager", None),
-    } for c in rows]
+    result = []
+    for c in rows:
+        phone = (c.phone or "").strip() or None
+        result.append({
+            "id": c.id,
+            "text": c.name,
+            "phone": phone,
+            "description": phone,
+            "customer_type": c.type,
+            "classification": getattr(c, "classification", None) or "external",
+            "credit_terms": getattr(c, "credit_terms", None),
+            "key_account_manager": getattr(c, "key_account_manager", None),
+        })
+    return result
 
 
 @router.get("/vendor", dependencies=[Depends(require_perm("vendors.view"))])
