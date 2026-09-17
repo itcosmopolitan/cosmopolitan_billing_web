@@ -42,8 +42,9 @@ export function useAccessibleBranches() {
     if (!user) return []
 
     const activeOnly = allBranches.filter((branch) => branch?.active !== false)
+    const hasGlobalBranchAccess = user.all_branches || user.role === 'super_admin' || user.role_id === 'role-super-admin'
 
-    if (user.all_branches) {
+    if (hasGlobalBranchAccess) {
       return activeOnly
     }
 

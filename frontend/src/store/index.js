@@ -129,7 +129,8 @@ export const useAppStore = create(
       setActiveBranch: (branch) => set((s) => {
         const list = Array.isArray(s.branches) ? s.branches : []
         const normalized = branch && typeof branch === 'object' ? branch : list.find((b) => b.id === branch) || null
-        const allowedIds = s.user?.all_branches || !s.user?.branch_ids?.length
+        const hasGlobalBranchAccess = s.user?.all_branches || s.user?.role === 'super_admin' || s.user?.role_id === 'role-super-admin'
+        const allowedIds = hasGlobalBranchAccess || !s.user?.branch_ids?.length
           ? null
           : new Set(s.user.branch_ids)
         const allowed = !normalized
@@ -154,7 +155,8 @@ export const useAppStore = create(
         // Keep the persisted activeBranch if it still exists in the new list,
         // otherwise default to the first allowed branch (or null if empty).
         const list = Array.isArray(branches) ? branches : []
-        const allowedIds = s.user?.all_branches || !s.user?.branch_ids?.length
+        const hasGlobalBranchAccess = s.user?.all_branches || s.user?.role === 'super_admin' || s.user?.role_id === 'role-super-admin'
+        const allowedIds = hasGlobalBranchAccess || !s.user?.branch_ids?.length
           ? null
           : new Set(s.user.branch_ids)
         const stillThere = list.find((b) => b.id === s.activeBranch?.id)

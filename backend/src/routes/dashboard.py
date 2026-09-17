@@ -35,7 +35,7 @@ from src.models import (
     User,
     UserBranch,
 )
-from src.security import current_user, get_allowed_branch_ids
+from src.security import _has_global_branch_access, current_user, get_allowed_branch_ids
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.dashboard")
 _DASHBOARD_CACHE: dict[str, tuple[datetime, dict]] = {}
@@ -147,7 +147,7 @@ async def _resolve_branch_scope(user: User, db: AsyncSession) -> Optional[list[s
             user = await current_user(authorization=None, db=db)
         except RuntimeError:
             return None
-    if getattr(user, "all_branches", False):
+    if _has_global_branch_access(user):
         return None
     branch_ids = await get_allowed_branch_ids(user, db)
     if branch_ids:
