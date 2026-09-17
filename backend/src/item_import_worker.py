@@ -70,13 +70,18 @@ async def update_progress(job_id: str, **values) -> None:
 async def run_job(job: ItemImportJob) -> None:
     session_factory = get_async_session()
     async with session_factory() as db:
+        job = await db.get(ItemImportJob, job.id)
+        if not job:
+            raise RuntimeError("Item import job no longer exists")
+        job_id = job.id
+        file_data = job.file_data
         user = await db.get(User, job.user_id)
         if not user:
             raise RuntimeError("The user who created this import no longer exists")
 
         async def progress_callback(*, processed_rows, total_rows, created, errors):
             await update_progress(
-                job.id,
+                job_id,
                 processed_rows=processed_rows,
                 total_rows=total_rows,
                 created_count=created,
@@ -86,20 +91,22 @@ async def run_job(job: ItemImportJob) -> None:
         timeout_seconds = int(os.getenv("ITEM_IMPORT_TIMEOUT_SECONDS", "900"))
         result = await asyncio.wait_for(
             process_item_import(
-                job.file_data,
+                file_data,
                 db,
                 user,
                 progress_callback=progress_callback,
             ),
             timeout=timeout_seconds,
         )
-        job.status = "completed"
-        job.total_rows = result.get("total_rows", 0)
-        job.processed_rows = result.get("total_rows", 0)
-        job.created_count = result.get("created", 0)
-        job.errors = result.get("errors", [])
-        job.completed_at = datetime.utcnow()
-        await db.commit()
+        await update_progress(
+            job_id,
+            status="completed",
+            total_rows=result.get("total_rows", 0),
+            processed_rows=result.get("total_rows", 0),
+            created_count=result.get("created", 0),
+            errors=result.get("errors", []),
+            completed_at=datetime.utcnow(),
+        )
 
 
 async def worker_loop(initialize_schema: bool = True) -> None:
@@ -118,14 +125,15 @@ async def worker_loop(initialize_schema: bool = True) -> None:
         if not job:
             await asyncio.sleep(2)
             continue
-        logger.info("Processing item import job %s", job.id)
+        job_id = job.id
+        logger.info("Processing item import job %s", job_id)
         try:
             await run_job(job)
-            logger.info("Completed item import job %s", job.id)
+            logger.info("Completed item import job %s", job_id)
         except Exception as exc:
-            logger.exception("Item import job %s failed", job.id)
+            logger.exception("Item import job %s failed", job_id)
             await update_progress(
-                job.id,
+                job_id,
                 status="failed",
                 error_message=str(exc),
                 completed_at=datetime.utcnow(),
