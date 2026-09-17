@@ -1630,11 +1630,18 @@ async def process_item_import(
                     sku_val = data.get('sku') if isinstance(data, dict) else None
                     sku_display = sku_val or '<unknown>'
                     errors.append({'row': idx, 'error': f"SKU already exists - {sku_display}"})
+                    if progress_callback and ((idx - 1) % 10 == 0 or idx - 1 == total_rows):
+                        await progress_callback(
+                            processed_rows=idx - 1,
+                            total_rows=total_rows,
+                            created=created,
+                            errors=errors,
+                        )
                     continue
             # Fallback: generic error string
             errors.append({'row': idx, 'error': msg})
 
-        if progress_callback and ((idx - 1) % 10 == 0 or idx == len(rows) - 1):
+        if progress_callback and ((idx - 1) % 10 == 0 or idx - 1 == total_rows):
             await progress_callback(
                 processed_rows=idx - 1,
                 total_rows=total_rows,

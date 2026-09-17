@@ -43,7 +43,7 @@ def _as_text(value):
 
 async def claim_job() -> CustomerImportJob | None:
     session_factory = get_async_session()
-    stale_before = datetime.utcnow() - timedelta(minutes=10)
+    stale_before = datetime.utcnow() - timedelta(minutes=5)
     async with session_factory() as db:
         async with db.begin():
             result = await db.execute(
@@ -101,6 +101,7 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
 
     headers = [str(value).strip().lower() if value is not None else None for value in rows[0]]
     total_rows = len(rows) - 1
+    branch_id = job.branch_id
     created = 0
     errors = []
     await progress_callback(processed_rows=0, total_rows=total_rows, created=0, skipped=0, errors=[])
@@ -137,7 +138,7 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
                 phone=_as_text(data.get("phone")) or None,
                 email=_as_text(data.get("email")) or None,
                 gstin=_as_text(data.get("gst_in")) or None,
-                branch_id=job.branch_id,
+                branch_id=branch_id,
                 credit_limit=credit_limit,
                 type=customer_type,
                 classification=classification,
@@ -175,8 +176,13 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
 async def run_job(job: CustomerImportJob) -> None:
     session_factory = get_async_session()
     async with session_factory() as db:
+        job = await db.get(CustomerImportJob, job.id)
+        if not job:
+            raise RuntimeError("Customer import job no longer exists")
+        job_id = job.id
+
         async def progress_callback(**values):
-            await update_progress(job.id, **values)
+            await update_progress(job_id, **values)
 
         result = await process_customer_import(job, db, progress_callback)
         job.status = "completed"
