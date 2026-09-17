@@ -1245,7 +1245,7 @@ export default function POSPage() {
                 }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
-              fetchParams={{ branch_id: activeBranch?.id }}
+              fetchParams={{ branch_id: null, limit: 2000 }}
               isSearchFieldRequired
               prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
               footerAction={addCustomerAction}

@@ -28,7 +28,8 @@ api.get = (url, config) => {
   try {
     const state = useAppStore.getState()
     const activeBranch = state?.activeBranch
-    const explicitNoBranch = config?.noBranchScope || (typeof url === 'string' && url.startsWith('/audit'))
+    const explicitNoBranch = config?.noBranchScope
+      || (typeof url === 'string' && (url.startsWith('/audit') || url === '/autocomplete/customer'))
 
     if (config?.noBranchScope) {
       delete config.noBranchScope

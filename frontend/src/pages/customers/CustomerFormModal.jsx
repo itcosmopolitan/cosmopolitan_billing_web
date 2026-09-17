@@ -78,6 +78,7 @@ export default function CustomerFormModal({
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(() => emptyForm(defaultBranchId || activeBranch?.id || branches[0]?.id || ''))
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const resolvedBranchId = form.branch_id || defaultBranchId || activeBranch?.id || branches[0]?.id || ''
 
   useEffect(() => {
     if (!open) return
@@ -91,8 +92,9 @@ export default function CustomerFormModal({
   const save = async () => {
     if (saving) return
     if (!form.name?.trim()) { toast.error('Customer name required'); return }
-    if (!form.branch_id) { toast.error('Select a branch'); return }
-    if (!branches.find((b) => b.id === form.branch_id)) { toast.error('Select a valid branch'); return }
+    const effectiveBranchId = form.branch_id || defaultBranchId || activeBranch?.id || branches[0]?.id || ''
+    if (!effectiveBranchId) { toast.error('No branch available for this customer'); return }
+    if (!branches.find((b) => b.id === effectiveBranchId)) { toast.error('Select a valid branch'); return }
     if (!form.street1?.trim()) { toast.error('Street 1 is required'); return }
     if (!form.city?.trim()) { toast.error('City is required'); return }
     if (!form.country?.trim()) { toast.error('Country is required'); return }
@@ -110,7 +112,7 @@ export default function CustomerFormModal({
       email: form.email?.trim() || undefined,
       address: '',
       gst_in: form.gst_in?.trim() || undefined,
-      branch_id: form.branch_id,
+      branch_id: effectiveBranchId,
       credit_limit: form.customer_type === 'retail' ? 0 : (Number(form.credit_limit) || 0),
       customer_type: form.customer_type,
       classification: form.classification === 'internal' ? 'internal' : 'external',
@@ -242,18 +244,6 @@ export default function CustomerFormModal({
         </FormGroup>
       </FormRow>
       <FormRow>
-        <FormGroup label="Primary Branch" required>
-          <AutocompleteDropdown
-            value={form.branch_id}
-            onChange={(v) => pf('branch_id', v)}
-            fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-            fetchParams={{ retail_only: true }}
-            prependOptions={[{ id: '', label: 'Select branch…' }]}
-            isSearchFieldRequired={false}
-            selectedLabel={form.branch_id && branches.find((b) => b.id === form.branch_id)?.name || undefined}
-            placeholder="Select branch…"
-          />
-        </FormGroup>
         <FormGroup label="Customer type" required>
           <AutocompleteDropdown
             value={form.classification}

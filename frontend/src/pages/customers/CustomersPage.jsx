@@ -73,6 +73,7 @@ export default function CustomersPage() {
       try {
         setLoading(true)
         const raw = await customersAPI.list({
+          branch_id: null,
           skip: custSkip,
           limit: custLimit,
           sort_by: custSortBy,
@@ -127,6 +128,11 @@ export default function CustomersPage() {
     setCustSortBy(key)
     setCustSortOrder('asc')
   }
+
+  const visibleTableIds = useMemo(
+    () => columnPrefs.visibleIds.filter((id) => id !== 'branch'),
+    [columnPrefs.visibleIds],
+  )
 
   const totals = useMemo(() => ({
     total:       custTotal,
@@ -328,7 +334,7 @@ export default function CustomersPage() {
             <thead>
               <tr>
                 <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
-                {columnPrefs.visibleIds.map((id) => {
+                {visibleTableIds.map((id) => {
                   if (id === 'customer') {
                     return (
                       <SortableHeader
@@ -444,7 +450,7 @@ export default function CustomersPage() {
                 return (
                   <tr key={c.id} {...tableRowClickProps(() => setShowDetail(c))}>
                     <ColumnPrefsSpacer />
-                    {columnPrefs.visibleIds.map((id) => {
+                    {visibleTableIds.map((id) => {
                       if (id === 'customer') {
                         return (
                           <td key={id}>
