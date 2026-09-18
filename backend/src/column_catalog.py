@@ -215,6 +215,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
+            _col("paid_amount", "Payment Paid"),
+            _col("remaining_amount", "Remaining"),
         _col("status", "Status"),
     ],
     # Drill-only invoice children share the sales-register column set.

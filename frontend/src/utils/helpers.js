@@ -103,7 +103,7 @@ export const humanizeValue = (value) => {
       cancelled: 'Cancelled',
       canceled: 'Cancelled',
       draft: 'Draft',
-      partial: 'Partial',
+      partial: 'Partially Paid',
       overdue: 'Overdue',
       active: 'Active',
       inactive: 'Inactive',
@@ -163,7 +163,7 @@ export const statusChip = (status) => {
 export const statusLabel = (status) => {
   const map = {
     paid: 'Paid', active: 'Active', pending: 'Pending', overdue: 'Overdue',
-    draft: 'Draft', partial: 'Partial', transit: 'In Transit', intransit: 'In Transit', in_progress: 'In Progress', inprogress: 'In Progress', receive: 'Receive', received: 'Received',
+    draft: 'Draft', partial: 'Partially Paid', transit: 'In Transit', intransit: 'In Transit', in_progress: 'In Progress', inprogress: 'In Progress', receive: 'Receive', received: 'Received',
     low: 'Low Stock', out: 'Out of Stock', cancelled: 'Cancelled', canceled: 'Cancelled', inactive: 'Inactive',
     pending_approval: 'Pending Approval', confirmed: 'Confirmed', invited: 'Invited',
   }

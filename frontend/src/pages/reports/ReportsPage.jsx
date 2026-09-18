@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { reportsAPI } from '@/api'
-import { fmt, fmtDate, fmtNum, fmtQty, exportToExcel } from '@/utils/helpers'
+import { fmt, fmtDate, fmtNum, fmtQty, statusLabel, exportToExcel } from '@/utils/helpers'
 import {
   Card, SearchBar, PaginationBar, SortableHeader, MultiSelect,
   DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
@@ -20,6 +20,17 @@ const formatCurrency = (value) => (value === null || value === undefined ? '—'
 const formatNumber = (value) => (value === null || value === undefined ? '—' : fmtNum(value))
 const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
 const formatCurrencyBlank = (value) => (value === null || value === undefined ? '' : formatCurrency(value))
+const formatPaymentMode = (value) => {
+  const labels = {
+    cash: 'Cash',
+    card: 'Card',
+    upi: 'UPI',
+    bank_transfer: 'Bank Transfer',
+    credit: 'Credit',
+  }
+  return labels[String(value || '').trim().toLowerCase()] || (value || '—')
+}
+const formatStatus = (value) => statusLabel(String(value || '').trim().toLowerCase())
 
 /** Formats that can be summed in a report totals footer. */
 const SUMMABLE_FORMATS = new Set(['currency', 'currency_blank', 'qty', 'number'])
@@ -215,6 +226,11 @@ const COLUMN_FORMATTERS = {
   currency_blank: formatCurrencyBlank,
   number: formatNumber,
   qty: formatQty,
+}
+
+const COLUMN_VALUE_FORMATTERS = {
+  payment_mode: formatPaymentMode,
+  status: formatStatus,
 }
 
 const DETAIL_PATH_BUILDERS = {
@@ -1035,7 +1051,12 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       const entry = {}
       visibleColumns.forEach((col) => {
         const value = row[col.key]
-        entry[col.label] = value === null || value === undefined ? '' : value
+        const formatted = COLUMN_VALUE_FORMATTERS[col.key]
+          ? COLUMN_VALUE_FORMATTERS[col.key](value)
+          : col.formatter
+            ? col.formatter(value, row)
+            : value
+        entry[col.label] = formatted === null || formatted === undefined || formatted === '—' ? '' : formatted
       })
       return entry
     })
@@ -1342,7 +1363,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                         {columnPrefs.ready && <ColumnPrefsSpacer />}
                         {visibleColumns.map((column) => {
                           const value = row[column.key]
-                          const rendered = column.formatter ? column.formatter(value, row) : value
+                          const rendered = COLUMN_VALUE_FORMATTERS[column.key]
+                            ? COLUMN_VALUE_FORMATTERS[column.key](value, row)
+                            : column.formatter ? column.formatter(value, row) : value
                           const alignClass =
                             column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
                           const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)

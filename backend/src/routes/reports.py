@@ -918,6 +918,8 @@ async def sales_register(
         SaleInvoice.discount.label("discount"),
         SaleInvoice.total.label("net_amount"),
         SaleInvoice.payment_mode.label("payment_mode"),
+        func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
+        (SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0)).label("remaining_amount"),
         SaleInvoice.status.label("status"),
     ).where(and_(*conds) if conds else True)
 
@@ -932,6 +934,8 @@ async def sales_register(
         "discount": SaleInvoice.discount,
         "net_amount": SaleInvoice.total,
         "payment_mode": SaleInvoice.payment_mode,
+        "paid_amount": SaleInvoice.paid_amount,
+        "remaining_amount": SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0),
         "status": SaleInvoice.status,
     }
 

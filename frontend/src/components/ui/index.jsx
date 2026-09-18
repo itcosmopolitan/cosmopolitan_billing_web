@@ -136,7 +136,7 @@ export function Chip({ status, label, custom }) {
     pending:  { cls: 'chip-pending',  lbl: 'Pending' },
     overdue:  { cls: 'chip-overdue',  lbl: 'Overdue' },
     draft:    { cls: 'chip-draft',    lbl: 'Draft' },
-    partial:  { cls: 'chip-partial',  lbl: 'Partial' },
+    partial:  { cls: 'chip-partial',  lbl: 'Partially Paid' },
     transit:  { cls: 'chip-transit',  lbl: 'In Transit' },
     received: { cls: 'chip-paid',     lbl: 'Received' },
     low:      { cls: 'chip-low',      lbl: 'Low Stock' },

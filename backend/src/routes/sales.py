@@ -2068,6 +2068,25 @@ async def record_payment(
 
     next_status = "paid" if balance <= 0 else "partial"
     applied_amount = round(credit_use + max(0.0, tender_amount - float(credit_applied or 0)), 2)
+    _log_sales_invoice_history(
+        db,
+        user=user,
+        invoice_id=inv_full.id,
+        invoice_number=inv_full.number,
+        event_type="payment_recorded",
+        action="record_customer_payment",
+        detail=f"Recorded payment of {round(total_toward, 2)} for {inv_full.number}",
+        metadata={
+            "payment_id": getattr(pay, "id", None),
+            "payment_number": getattr(pay, "number", None),
+            "amount": round(total_toward, 2),
+            "payment_mode": display_mode,
+            "payment_ref": data.ref or "",
+            "applied": applied_amount,
+            "credit_applied": round(float(credit_applied or 0), 2),
+        },
+        branch_id=inv_full.branch_id,
+    )
     await db.commit()
     await _write_post_commit_audit(
         db,

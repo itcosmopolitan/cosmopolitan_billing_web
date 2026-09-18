@@ -156,6 +156,8 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("discount", "Discount", align="right", format="currency"),
                     _col("net_amount", "Net Amount", align="right", format="currency"),
                     _col("payment_mode", "Payment Mode"),
+                    _col("paid_amount", "Payment Paid", align="right", format="currency"),
+                    _col("remaining_amount", "Remaining", align="right", format="currency"),
                     _col("status", "Status"),
                 ],
             ),
