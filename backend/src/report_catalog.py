@@ -447,16 +447,16 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
                 ],
             ),
-            _report(
-                "profit-loss",
-                "Profit & Loss",
-                api="profitLoss",
-                default_sort="sort_order",
-                columns=[
-                    _col("account", "ACCOUNT", sortable=False),
-                    _col("total", "TOTAL", align="right", sortable=False, format="currency_blank"),
-                ],
-            ),
+            # _report(
+            #     "profit-loss",
+            #     "Profit & Loss",
+            #     api="profitLoss",
+            #     default_sort="sort_order",
+            #     columns=[
+            #         _col("account", "ACCOUNT", sortable=False),
+            #         _col("total", "TOTAL", align="right", sortable=False, format="currency_blank"),
+            #     ],
+            # ),
             _report(
                 "petty-cash",
                 "Petty Cash",
