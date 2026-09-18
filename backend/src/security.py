@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
 from src.database import get_db
-from src.models import Organisation, Role, User, UserRole
+from src.models import Organisation, Role, User, UserRole, account_status_value
 from src.decimal_precision import org_precision
 from src.permissions import expand
 
@@ -323,6 +323,7 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         "all_branches": bool(getattr(user, "all_branches", False)),
         "avatar": user.avatar,
         "active": bool(user.active),
+        "status": account_status_value(user),
         # Read by the frontend RequirePasswordSet guard — when True, the
         # user is redirected to /change-password and blocked from everything
         # else. Mirror in routes/_serializers.serialize_user (used by other

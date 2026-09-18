@@ -24,6 +24,46 @@ class UserRole(str, enum.Enum):
     purchase_admin    = "purchase_admin"
 
 
+class UserAccountStatus(str, enum.Enum):
+    """Lifecycle shown in Settings → Users.
+
+    invited  — admin created the account and emailed a temp password; the
+               user has not completed first login + password change yet.
+               `active` stays True so they can still sign in with the temp
+               password.
+    active   — password has been set by the user (or the account was seeded
+               as a ready-to-use user).
+    inactive — admin deactivated the account; login is blocked.
+    """
+    invited  = "invited"
+    active   = "active"
+    inactive = "inactive"
+
+
+def account_status_value(user) -> str:
+    """Canonical account-status string, with a fallback for pre-column rows."""
+    raw = getattr(user, "status", None)
+    if raw is not None:
+        value = raw.value if hasattr(raw, "value") else str(raw)
+        if value in {s.value for s in UserAccountStatus}:
+            return value
+    return (
+        UserAccountStatus.inactive.value
+        if not getattr(user, "active", True)
+        else UserAccountStatus.active.value
+    )
+
+
+def apply_account_status(user, status: str) -> None:
+    """Set `status` and keep the legacy `active` boolean in lockstep.
+
+    Invited users remain `active=True` so `/auth/login` and `require_user`
+    still accept the temp-password first login.
+    """
+    user.status = status
+    user.active = status != UserAccountStatus.inactive.value
+
+
 class ItemApprovalStatus(str, enum.Enum):
     draft = "draft"
     pending = "pending"
@@ -269,6 +309,10 @@ class User(Base):
     branch_id    = Column(String, ForeignKey("branches.id"), nullable=True, index=True)
     avatar       = Column(String)
     active       = Column(Boolean, default=True)
+    # invited | active | inactive — see UserAccountStatus. Kept in sync with
+    # `active` (False only when inactive) so login checks on `active` still
+    # allow invited users through with their temp password.
+    status       = Column(String, default=UserAccountStatus.active.value, nullable=False)
     last_login   = Column(DateTime)
     created_at   = Column(DateTime, default=datetime.utcnow)
     # True when an admin has just created/reset this user with a temp password

@@ -12,6 +12,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, List, Optional
 
+from src.models import account_status_value
+
 
 def _build_customer_code(customer_id: Optional[str]) -> str:
     """Return a deterministic 8-digit customer code from a customer UUID."""
@@ -228,6 +230,7 @@ def serialize_user(u) -> dict:
         "role_id": u.role_id,
         "all_branches": bool(getattr(u, "all_branches", False)),
         "active": u.active,
+        "status": account_status_value(u),
         "last_login": u.last_login.isoformat() if u.last_login else None,
         # Read by the frontend RequirePasswordSet guard — when True, the user
         # is redirected to /change-password and blocked from everything else.
