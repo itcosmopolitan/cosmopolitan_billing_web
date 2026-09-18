@@ -18,10 +18,30 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import CashEntry
+
+
+def first_nonempty(*values: Optional[str]) -> Optional[str]:
+    """Return the first non-blank string among `values`."""
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def require_cash_branch_id(*candidates: Optional[str]) -> str:
+    """Cash entries FK to branches.id — never persist blank branch_id."""
+    branch_id = first_nonempty(*candidates)
+    if not branch_id:
+        raise HTTPException(400, "Branch is required to record a cash entry")
+    return branch_id
 
 
 async def _next_entry_number(db: AsyncSession, branch_id: str, date: str) -> str:
@@ -51,6 +71,7 @@ async def record_cash_in(
     source_ref: str,
     recorded_by: str,
 ) -> CashEntry:
+    branch_id = require_cash_branch_id(branch_id)
     entry_number = await _next_entry_number(db, branch_id, date)
     entry = CashEntry(
         id=str(uuid.uuid4()),
@@ -85,6 +106,7 @@ async def record_cash_out(
     source_ref: str,
     recorded_by: str,
 ) -> CashEntry:
+    branch_id = require_cash_branch_id(branch_id)
     entry_number = await _next_entry_number(db, branch_id, date)
     entry = CashEntry(
         id=str(uuid.uuid4()),

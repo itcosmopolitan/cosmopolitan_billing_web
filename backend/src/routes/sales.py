@@ -51,7 +51,13 @@ from src.routes._lifecycle import (
 )
 from src.routes._credit_ledger import adjust_customer_credit
 from src.routes._payment_ledger import record_customer_payment, void_payment_record
-from src.routes._cash_ledger import record_cash_in, record_cash_out, void_cash_entry as void_cash_for_payment
+from src.routes._cash_ledger import (
+    first_nonempty,
+    record_cash_in,
+    record_cash_out,
+    require_cash_branch_id,
+    void_cash_entry as void_cash_for_payment,
+)
 from src.routes._stock_ledger import (
     fulfil_reservations,
     get_allow_overselling,
@@ -2495,6 +2501,28 @@ class CustomerPaymentCreate(BaseModel):
         return _coerce_payment_mode_value(v)
 
 
+def _payment_branch(
+    data: CustomerPaymentCreate,
+    invoices,
+    user: Optional[User] = None,
+    existing: Optional[CustomerPayment] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Prefer the payload branch, then an allocated invoice, then the operator."""
+    branch_id = first_nonempty(
+        data.branch_id,
+        getattr(existing, "branch_id", None),
+        *(inv.branch_id for inv in invoices),
+        getattr(user, "branch_id", None),
+    )
+    branch_name = first_nonempty(data.branch_name, getattr(existing, "branch_name", None))
+    if not branch_name and branch_id:
+        for inv in invoices:
+            if first_nonempty(inv.branch_id) == branch_id:
+                branch_name = first_nonempty(inv.branch_name)
+                break
+    return branch_id, branch_name or branch_id
+
+
 def _payment_dict(p, allocations=None):
     d = {
         "id": p.id, "number": p.number,
@@ -2705,6 +2733,8 @@ async def update_payment(
         if balance <= 0:
             raise HTTPException(400, f"Invoice {inv.number} already settled")
 
+    pay_branch_id, pay_branch_name = _payment_branch(data, inv_rows, user=user, existing=pay)
+
     requested_total = sum(float(a.amount) for a in data.allocations)
     if data.payment_mode == "credit":
         for a in data.allocations:
@@ -2758,8 +2788,8 @@ async def update_payment(
     pay.payment_ref = data.payment_ref or ""
     pay.notes = data.notes
     pay.credit_applied = round(total_credit, 2)
-    pay.branch_id = data.branch_id or pay.branch_id
-    pay.branch_name = data.branch_name or pay.branch_name
+    pay.branch_id = pay_branch_id
+    pay.branch_name = pay_branch_name
     pay.customer_name = cust.name
     pay.voided = False
     pay.voided_at = None
@@ -2777,7 +2807,7 @@ async def update_payment(
     if data.payment_mode == "cash":
         await record_cash_in(
             db,
-            branch_id=pay.branch_id or "",
+            branch_id=require_cash_branch_id(pay_branch_id),
             amount=round(total_amount, 2),
             date=pay.date,
             description=f"Payment {pay.number}",
@@ -2974,6 +3004,8 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
         if balance <= 0:
             raise HTTPException(400, f"Invoice {inv.number} already settled")
 
+    pay_branch_id, pay_branch_name = _payment_branch(data, inv_rows, user=user)
+
     # 4b. Credit-mode draw-down (2026-05-30). Settling invoices FROM the
     #     customer's stored credit_balance. Overpayment is nonsensical here
     #     (we'd debit credit then re-credit the excess), so each allocation
@@ -3046,7 +3078,7 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             ),
             risk="low",
             ip_address=None,
-            branch_id=data.branch_id,
+            branch_id=pay_branch_id,
         ))
 
     # Create the Payment record + per-allocation rows.
@@ -3055,8 +3087,8 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
         number=pay_num,
         customer_id=data.customer_id,
         customer_name=cust.name,
-        branch_id=data.branch_id,
-        branch_name=data.branch_name,
+        branch_id=pay_branch_id,
+        branch_name=pay_branch_name,
         date=data.date or today,
         total_amount=round(total_amount, 2),
         payment_mode=data.payment_mode,
@@ -3079,7 +3111,7 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
     if data.payment_mode == "cash":
         await record_cash_in(
             db,
-            branch_id=data.branch_id or "",
+            branch_id=require_cash_branch_id(pay_branch_id),
             amount=round(total_amount, 2),
             date=data.date or today,
             description=f"Payment {pay_num}",
@@ -3117,7 +3149,7 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             ),
             risk="low",
             ip_address=None,
-            branch_id=data.branch_id,
+            branch_id=pay_branch_id,
         ))
 
     for a in data.allocations:
@@ -3322,7 +3354,7 @@ async def _write_tender_payment(
     if mode == "cash" and amount > 0:
         await record_cash_in(
             db,
-            branch_id=inv.branch_id or "",
+            branch_id=require_cash_branch_id(inv.branch_id, getattr(user, "branch_id", None)),
             amount=amount,
             date=today,
             description=f"Sale {inv.number}" if "POS" in (notes or "") else f"Payment on {inv.number}",

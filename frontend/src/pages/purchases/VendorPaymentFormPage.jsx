@@ -12,6 +12,7 @@ import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useQuickVendor } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
@@ -25,6 +26,7 @@ export default function VendorPaymentFormPage() {
   const { paymentId } = useParams()
   const isEdit = Boolean(paymentId)
   const can = useCan()
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const [vendor, setVendor] = useState(null)
   const [bills, setBills] = useState([])
   const [loading, setLoading] = useState(false)
@@ -242,12 +244,14 @@ export default function VendorPaymentFormPage() {
     }
     setSubmitting(true)
     try {
+      const selected = bills.find((b) => checkedIds.has(b.id))
       const payload = {
         vendor_id: vendor.id,
         payment_mode: paymentMode,
         payment_ref: paymentRef.trim() || null,
         notes: notes.trim() || null,
         allocations,
+        branch_id: selected?.branchId || activeBranch?.id || null,
       }
       const res = isEdit
         ? await purchasesAPI.payments.update(paymentId, payload)

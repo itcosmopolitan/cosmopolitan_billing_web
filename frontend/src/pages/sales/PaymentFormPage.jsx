@@ -10,6 +10,7 @@ import toast from 'react-hot-toast'
 import { FormGroup, AlertBar, EmptyState, AutocompleteDropdown } from '@/components/ui'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
@@ -26,6 +27,7 @@ export default function PaymentFormPage() {
   const { paymentId } = useParams()
   const isEdit = Boolean(paymentId)
   const can = useCan()
+  const activeBranch = useAppStore((s) => s.activeBranch)
   const [customer, setCustomer] = useState(null)
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(false)
@@ -244,6 +246,9 @@ export default function PaymentFormPage() {
       }
       allocations.push({ invoice_id: inv.id, amount: amt })
     }
+    const branch = {
+      branch_id: invoices.find((inv) => checkedIds.has(inv.id))?.branchId || activeBranch?.id || null,
+    }
     setSubmitting(true)
     try {
       // When store credit is applied, send credit-mode payment for that
@@ -261,6 +266,7 @@ export default function PaymentFormPage() {
           payment_ref: paymentRef.trim() || null,
           notes: notes.trim() || null,
           allocations,
+          ...branch,
         }
       } else if (creditApplied > 0) {
         // Split allocations: credit portion FIFO, then tender for rest.
@@ -280,6 +286,7 @@ export default function PaymentFormPage() {
             payment_mode: 'credit',
             notes: notes.trim() || 'Store credit applied',
             allocations: creditAllocs,
+            ...branch,
           })
         }
         payload = {
@@ -288,6 +295,7 @@ export default function PaymentFormPage() {
           payment_ref: paymentRef.trim() || null,
           notes: notes.trim() || null,
           allocations: tenderAllocs,
+          ...branch,
         }
         if (!tenderAllocs.length) {
           toast.success('Store credit applied')
@@ -301,6 +309,7 @@ export default function PaymentFormPage() {
           payment_ref: paymentRef.trim() || null,
           notes: notes.trim() || null,
           allocations,
+          ...branch,
         }
       }
       const res = isEdit

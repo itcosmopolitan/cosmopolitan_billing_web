@@ -48,7 +48,12 @@ from src.routes._lifecycle import (
     sync_vendor_outstanding,
 )
 from src.routes._payment_ledger import record_vendor_payment, void_payment_record
-from src.routes._cash_ledger import record_cash_out, void_cash_entry as void_cash_for_payment
+from src.routes._cash_ledger import (
+    first_nonempty,
+    record_cash_out,
+    require_cash_branch_id,
+    void_cash_entry as void_cash_for_payment,
+)
 from src.routes._vendor_credit_ledger import adjust_vendor_credit
 from src.routes._atomic import (
     add_batch_atomic,
@@ -974,7 +979,7 @@ async def create_bill(
         if data.payment_mode == "cash":
             await record_cash_out(
                 db,
-                branch_id=bill.branch_id or "",
+                branch_id=require_cash_branch_id(bill.branch_id),
                 amount=round(paid_amount, 2),
                 date=data.date or today,
                 description=f"Bill payment {bill_num}",
@@ -1121,7 +1126,7 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     if data.mode == "cash":
         await record_cash_out(
             db,
-            branch_id=pay.branch_id or "",
+            branch_id=require_cash_branch_id(pay.branch_id, b.branch_id),
             amount=float(data.amount),
             date=pay.date,
             description=f"Payment on {b.number}",
@@ -1291,7 +1296,7 @@ async def approve_bill(
         await record_vendor_payment(db, bpay)
         if payment_mode == "cash":
             await record_cash_out(
-                db, branch_id=bill.branch_id or "", amount=round(total, 2),
+                db, branch_id=require_cash_branch_id(bill.branch_id), amount=round(total, 2),
                 date=today_str, description=f"Bill payment {bill.number}",
                 category="Purchase — Cash Payment",
                 source_type="purchase_payment", source_id=bpay.id,
@@ -1709,6 +1714,27 @@ class VendorPaymentCreate(BaseModel):
         return _coerce_payment_mode_value(v)
 
 
+def _vendor_payment_branch(
+    data: VendorPaymentCreate,
+    bills,
+    user: Optional[User] = None,
+    existing: Optional[VendorPayment] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    branch_id = first_nonempty(
+        data.branch_id,
+        getattr(existing, "branch_id", None),
+        *(b.branch_id for b in bills),
+        getattr(user, "branch_id", None),
+    )
+    branch_name = first_nonempty(data.branch_name, getattr(existing, "branch_name", None))
+    if not branch_name and branch_id:
+        for b in bills:
+            if first_nonempty(b.branch_id) == branch_id:
+                branch_name = first_nonempty(b.branch_name)
+                break
+    return branch_id, branch_name or branch_id
+
+
 def _vendor_payment_dict(p, allocations=None):
     d = {
         "id": p.id, "number": p.number,
@@ -1895,6 +1921,10 @@ async def update_payment(
         if balance <= 0:
             raise HTTPException(400, f"Bill {b.number} already settled")
 
+    pay_branch_id, pay_branch_name = _vendor_payment_branch(
+        data, bill_rows, user=user, existing=pay,
+    )
+
     requested_total = sum(float(a.amount) for a in data.allocations)
     if data.payment_mode == "credit":
         for a in data.allocations:
@@ -1943,8 +1973,8 @@ async def update_payment(
     pay.payment_ref = data.payment_ref or ""
     pay.notes = data.notes
     pay.credit_applied = round(total_credit, 2)
-    pay.branch_id = data.branch_id or pay.branch_id
-    pay.branch_name = data.branch_name or pay.branch_name
+    pay.branch_id = pay_branch_id
+    pay.branch_name = pay_branch_name
     pay.vendor_name = vendor.name
     pay.voided = False
     pay.voided_at = None
@@ -1974,7 +2004,7 @@ async def update_payment(
     if data.payment_mode == "cash":
         await record_cash_out(
             db,
-            branch_id=pay.branch_id or "",
+            branch_id=require_cash_branch_id(pay.branch_id),
             amount=round(total_amount, 2),
             date=pay.date,
             description=f"Vendor payment {pay.number}",
@@ -2124,6 +2154,8 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         if balance <= 0:
             raise HTTPException(400, f"Bill {b.number} already settled")
 
+    pay_branch_id, pay_branch_name = _vendor_payment_branch(data, bill_rows, user=user)
+
     requested_total = sum(float(a.amount) for a in data.allocations)
     if data.payment_mode == "credit":
         for a in data.allocations:
@@ -2190,8 +2222,8 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         number=pay_num,
         vendor_id=data.vendor_id,
         vendor_name=vendor.name,
-        branch_id=data.branch_id,
-        branch_name=data.branch_name,
+        branch_id=pay_branch_id,
+        branch_name=pay_branch_name,
         date=data.date or today,
         total_amount=round(total_amount, 2),
         payment_mode=data.payment_mode,
@@ -2226,7 +2258,7 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
     if data.payment_mode == "cash":
         await record_cash_out(
             db,
-            branch_id=data.branch_id or "",
+            branch_id=require_cash_branch_id(pay_branch_id),
             amount=round(total_amount, 2),
             date=data.date or today,
             description=f"Vendor payment {pay_num}",
