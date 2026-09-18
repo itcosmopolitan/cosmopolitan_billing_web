@@ -225,7 +225,7 @@ export default function POSPage() {
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
-  const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, cashCollected } = store
+  const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
 
   // Guard route changes when the cart has unsaved lines. We stash the
@@ -601,6 +601,9 @@ export default function POSPage() {
         }),
         discount: disc,
         payment_mode: settling && remainingDue > 0.001 ? paymentMethod : (settling && creditAppliedNow > 0 && remainingDue <= 0.001 ? null : null),
+        payment_ref: settling && ['card', 'upi', 'bank_transfer'].includes(paymentMethod)
+          ? paymentRef.trim()
+          : null,
         store_credit_amount: creditAppliedNow > 0 ? creditAppliedNow : undefined,
         origin: 'pos',
         notes: notes || null,
@@ -1593,6 +1596,16 @@ export default function POSPage() {
                   due={remainingDuePreview}
                   value={cashCollected}
                   onChange={store.setCashCollected}
+                />
+              )}
+              {['card', 'upi', 'bank_transfer'].includes(paymentMethod) && remainingDuePreview > 0.001 && (
+                <input
+                  className="form-input"
+                  value={paymentRef}
+                  onChange={(e) => store.setPaymentRef(e.target.value)}
+                  placeholder="Payment reference number"
+                  aria-label="Payment reference number"
+                  style={{ width: '100%', maxWidth: 260, marginTop: 8, padding: '7px 10px', fontSize: 12 }}
                 />
               )}
               {!(paymentReceived || creditAppliedPreview > 0) && (

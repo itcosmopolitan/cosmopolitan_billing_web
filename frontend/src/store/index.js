@@ -456,7 +456,7 @@ export const usePOSStore = create((set, get) => ({
   setNotes: (n) => set({ notes: n }),
 
   holdBill: (branchId) => {
-    const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, cashCollected } = get()
+    const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = get()
     if (cart.length === 0) return
     const label = `Hold #${heldBills.length + 1}`
     set({
@@ -475,11 +475,12 @@ export const usePOSStore = create((set, get) => ({
         // them.
         paymentReceived,
         paymentMethod,
+        paymentRef,
         cashCollected,
         heldAt: new Date(),
       }],
       cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '',
-      paymentReceived: false, paymentMethod: null, cashCollected: '', applyStoreCredit: false,
+      paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '', applyStoreCredit: false,
     })
   },
 
@@ -522,6 +523,9 @@ export const usePOSStore = create((set, get) => ({
       discountReason: bill.discountReason || '',
       paymentReceived: resumedReceived,
       paymentMethod: resumedMethod,
+      paymentRef: ['card', 'upi', 'bank_transfer'].includes(resumedMethod)
+        ? (bill.paymentRef || '')
+        : '',
       cashCollected: resumedMethod === 'cash' ? (bill.cashCollected || '') : '',
       heldBills: heldBills.filter((b) => b.id !== heldId),
     })

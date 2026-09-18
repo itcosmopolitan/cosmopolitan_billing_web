@@ -650,11 +650,9 @@ export default function SalesPage() {
     const creditUse = storeCreditApplyAmount(avail, balance, !isWalkin)
     const remaining = remainingAfterStoreCredit(balance, creditUse)
     const tender = remaining > 0.001 ? Number(payAmt) : 0
-    const needsProof = tender > 0.001 && ['card', 'upi', 'bank_transfer'].includes(payMode)
     if (remaining > 0.001 && (!payAmt || tender <= 0)) { toast.error('Enter a valid amount for the remaining balance'); return }
     if (remaining > 0.001 && !payMode) { toast.error('Pick a payment method for the remaining amount'); return }
     if (creditUse <= 0 && tender <= 0) { toast.error('Enter a payment amount'); return }
-    if (needsProof && !paymentProofFile) { toast.error('Attach a PNG or PDF payment proof'); return }
     if (isWalkin && tender > balance) {
       toast.error(`Walk-in invoice — reduce amount to ${fmt(balance)} or assign a customer first`)
       return
@@ -681,7 +679,7 @@ export default function SalesPage() {
       } else {
         toast.success(`Payment of ${fmt(tender || balance)} recorded`)
       }
-      if (needsProof) {
+      if (paymentProofFile) {
         setShowPayment(null)
         await uploadPaymentProof(showPayment.id, paymentProofFile, payRef, res?.payment_id)
         toast.success('Payment proof uploaded')
