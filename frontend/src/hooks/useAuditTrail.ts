@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { auditApi } from "../api/auditApi";
 import type { AuditFilters, AuditLog, AuditLogListResponse } from "../types/audit";
+import { defaultAuditDateRange } from "../utils/dropdownOptions";
 
-const DEFAULT_FILTERS: AuditFilters = { page: 1, limit: 50 };
+const defaultRange = defaultAuditDateRange();
+const DEFAULT_FILTERS: AuditFilters = {
+  page: 1,
+  limit: 50,
+  date_from: defaultRange.from,
+  date_to: defaultRange.to,
+};
 
 export function useAuditTrail() {
   const [filters, setFilters] = useState<AuditFilters>(DEFAULT_FILTERS);

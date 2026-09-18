@@ -48,7 +48,20 @@ def _as_read_model(log: AuditLog) -> AuditLogRead:
     )
 
 
+def _this_month_date_bounds() -> Tuple[date, date]:
+    today = date.today()
+    start = today.replace(day=1)
+    if today.month == 12:
+        end = date(today.year, 12, 31)
+    else:
+        end = date(today.year, today.month + 1, 1) - timedelta(days=1)
+    return start, end
+
+
 def _to_datetime_bounds(date_from: Optional[date], date_to: Optional[date]) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """Unbounded queries scan the full audit log — default to this calendar month."""
+    if date_from is None and date_to is None:
+        date_from, date_to = _this_month_date_bounds()
     start_dt = None
     end_dt = None
     if date_from:

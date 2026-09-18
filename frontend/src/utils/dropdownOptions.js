@@ -141,8 +141,9 @@ export function auditFieldType(fieldKey) {
   return 'text'
 }
 
+export const DEFAULT_AUDIT_DATE_PRESET = 'this_month'
+
 export const AUDIT_DATE_RANGE_OPTIONS = [
-  { id: '', label: 'All dates' },
   { id: 'today', label: 'Today' },
   { id: 'this_week', label: 'This Week' },
   { id: 'this_month', label: 'This Month' },
@@ -150,7 +151,10 @@ export const AUDIT_DATE_RANGE_OPTIONS = [
   { id: 'custom', label: 'Custom Range' },
 ]
 
-const formatAuditDate = (date) => date.toISOString().slice(0, 10)
+const pad2 = (n) => String(n).padStart(2, '0')
+const formatAuditDate = (date) => (
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+)
 
 export function getAuditDateRangeForPreset(presetId) {
   const now = new Date()
@@ -185,10 +189,14 @@ export function getAuditDateRangeForPreset(presetId) {
   return { from: '', to: '' }
 }
 
+export function defaultAuditDateRange() {
+  return getAuditDateRangeForPreset(DEFAULT_AUDIT_DATE_PRESET)
+}
+
 export function inferAuditDateRangePreset(from, to) {
-  if (!from && !to) return ''
+  if (!from && !to) return DEFAULT_AUDIT_DATE_PRESET
   for (const opt of AUDIT_DATE_RANGE_OPTIONS) {
-    if (!opt.id || opt.id === 'custom') continue
+    if (opt.id === 'custom') continue
     const range = getAuditDateRangeForPreset(opt.id)
     if (from === range.from && to === range.to) return opt.id
   }
@@ -198,6 +206,8 @@ export function inferAuditDateRangePreset(from, to) {
 export function getAuditDateRangeChipLabel(from, to) {
   if (!from && !to) return ''
   const preset = inferAuditDateRangePreset(from, to)
+  // This month is the default window — don't treat it as a removable extra filter.
+  if (preset === DEFAULT_AUDIT_DATE_PRESET) return ''
   if (preset && preset !== 'custom') {
     return AUDIT_DATE_RANGE_OPTIONS.find((o) => o.id === preset)?.label ?? preset
   }

@@ -6,6 +6,7 @@ import { AuditTable } from '../components/audit/AuditTable'
 import { PageActionsMenu, SectionHeader, buildListPageMenuActions } from '../components/ui'
 import { PaginationBar } from '../components/ui/PaginationBar'
 import { useAuditTrail } from '../hooks/useAuditTrail'
+import { defaultAuditDateRange } from '../utils/dropdownOptions'
 
 export default function AuditTrailPage() {
   const { data, filters, loading, error, selected, setSelected, updateFilter, goToPage, refresh } = useAuditTrail()
@@ -38,6 +39,7 @@ export default function AuditTrailPage() {
   const rows = data?.results ?? []
 
   const clearFilters = () => {
+    const range = defaultAuditDateRange()
     updateFilter({
       search: '',
       module: '',
@@ -45,8 +47,8 @@ export default function AuditTrailPage() {
       operation_type: '',
       operation_type_not: '',
       criteria: null,
-      date_from: undefined,
-      date_to: undefined,
+      date_from: range.from,
+      date_to: range.to,
     })
   }
 

@@ -17,6 +17,8 @@ import {
   auditFieldType,
   auditValueOptionsForField,
   defaultAuditJoiners,
+  defaultAuditDateRange,
+  DEFAULT_AUDIT_DATE_PRESET,
   getAuditDateRangeChipLabel,
   getAuditDateRangeForPreset,
   inferAuditDateRangePreset,
@@ -112,14 +114,10 @@ export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Pr
   }, [open, filters])
 
   const handleDatePresetChange = (presetId: string) => {
-    setDraftDatePreset(presetId)
-    if (!presetId) {
-      setDraftDateFrom('')
-      setDraftDateTo('')
-      return
-    }
-    if (presetId === 'custom') return
-    const range = getAuditDateRangeForPreset(presetId)
+    const nextPreset = presetId || DEFAULT_AUDIT_DATE_PRESET
+    setDraftDatePreset(nextPreset)
+    if (nextPreset === 'custom') return
+    const range = getAuditDateRangeForPreset(nextPreset)
     setDraftDateFrom(range.from)
     setDraftDateTo(range.to)
   }
@@ -130,6 +128,10 @@ export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Pr
       ? { rows: criteriaRows, joiners: [...joiners] }
       : null
 
+    const range = draftDateFrom && draftDateTo
+      ? { from: draftDateFrom, to: draftDateTo }
+      : defaultAuditDateRange()
+
     onFilter({
       module: '',
       risk: '',
@@ -137,37 +139,41 @@ export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Pr
       operation_type_not: '',
       criteria,
       search: searchValue,
-      date_from: draftDateFrom || undefined,
-      date_to: draftDateTo || undefined,
+      date_from: range.from,
+      date_to: range.to,
     })
     setOpen(false)
   }
 
+  const resetToDefaultDateRange = () => {
+    const range = defaultAuditDateRange()
+    setDraftDatePreset(DEFAULT_AUDIT_DATE_PRESET)
+    setDraftDateFrom(range.from)
+    setDraftDateTo(range.to)
+    return range
+  }
+
   const clearDrawerFilters = () => {
+    const range = resetToDefaultDateRange()
     setFilterRows([buildFilterRow()])
     setJoiners([])
-    setDraftDatePreset('')
-    setDraftDateFrom('')
-    setDraftDateTo('')
     onFilter({
       module: '',
       risk: '',
       operation_type: '',
       operation_type_not: '',
       criteria: null,
-      date_from: undefined,
-      date_to: undefined,
+      date_from: range.from,
+      date_to: range.to,
     })
     setOpen(false)
   }
 
   const clearAllFilters = () => {
+    const range = resetToDefaultDateRange()
     setSearchValue('')
     setFilterRows([buildFilterRow()])
     setJoiners([])
-    setDraftDatePreset('')
-    setDraftDateFrom('')
-    setDraftDateTo('')
     onFilter({
       search: '',
       module: '',
@@ -175,8 +181,8 @@ export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Pr
       operation_type: '',
       operation_type_not: '',
       criteria: null,
-      date_from: undefined,
-      date_to: undefined,
+      date_from: range.from,
+      date_to: range.to,
     })
   }
 
@@ -226,7 +232,10 @@ export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Pr
     else if (key === 'risk') onFilter({ risk: '' })
     else if (key === 'operation_type') onFilter({ operation_type: '' })
     else if (key === 'operation_type_not') onFilter({ operation_type_not: '' })
-    else if (key === 'date') onFilter({ date_from: undefined, date_to: undefined })
+    else if (key === 'date') {
+      const range = defaultAuditDateRange()
+      onFilter({ date_from: range.from, date_to: range.to })
+    }
   }
 
   const updateRow = (id: string, patch: Partial<FilterRow>) => {
@@ -338,7 +347,7 @@ export function AuditFiltersBar({ filters, onFilter, toolbarActions = null }: Pr
               onChange={handleDatePresetChange}
               options={AUDIT_DATE_RANGE_OPTIONS}
               isSearchFieldRequired={false}
-              placeholder="All dates"
+              placeholder="This Month"
               style={{ width: '100%' }}
             />
             {draftDatePreset === 'custom' && (
