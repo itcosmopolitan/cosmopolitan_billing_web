@@ -42,8 +42,8 @@ const navItems = [
       { path: '/sales?tab=quotes', label: 'Quotations', tab: 'quotes' },
       { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders' },
       { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices' },
-      { path: '/sales?tab=returns', label: 'Credit Notes / CN', tab: 'returns' },
       { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments' },
+      { path: '/sales?tab=returns', label: 'Credit Notes / CN', tab: 'returns' }
     ],
   },
   {
@@ -59,14 +59,14 @@ const navItems = [
       { prefix: '/purchases/orders', tab: 'orders' },
       { prefix: '/purchases/grns', tab: 'grns' },
       { prefix: '/purchases/returns', tab: 'returns' },
-      { prefix: '/purchases/payments', tab: 'payments' },
+      { prefix: '/purchases/payments', tab: 'payments' }
     ],
     children: [
-      { path: '/purchases?tab=bills', label: 'Purchase Bills', tab: 'bills' },
       { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders' },
       { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns' },
-      { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns' },
+      { path: '/purchases?tab=bills', label: 'Purchase Bills', tab: 'bills' },
       { path: '/purchases?tab=payments', label: 'Payments Made', tab: 'payments' },
+      { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns' }
     ],
   },
   { section: null,        path: '/customers',  Icon: Icon.Users,       label: 'Customers',       perm: 'customers.view' },

@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { salesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty, formatLabel, conversionStatusDisplay } from '@/utils/helpers'
-import { Chip, CopyableId, ReturnStatusChip, Tag } from '@/components/ui'
+import { Chip, ReturnStatusChip, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import TxnLink, { salesTxnHref } from '@/components/detail/TxnLink'
 import {
   canShowCreditNoteAction,
   canShowDeletePayment,
@@ -340,11 +341,19 @@ export default function SalesTxnDetailPanel({
                 { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
                 ...(detail?.salesOrderNumber ? [{
                   label: 'Sales order',
-                  value: <CopyableId value={detail.salesOrderNumber} label={detail.salesOrderNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                  value: (
+                    <TxnLink to={salesTxnHref('order', detail.salesOrderId)}>
+                      {detail.salesOrderNumber}
+                    </TxnLink>
+                  ),
                 }] : []),
                 ...(detail?.quotationNumber ? [{
                   label: 'Quotation',
-                  value: <CopyableId value={detail.quotationNumber} label={detail.quotationNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                  value: (
+                    <TxnLink to={salesTxnHref('quote', detail.quotationId)}>
+                      {detail.quotationNumber}
+                    </TxnLink>
+                  ),
                 }] : []),
               ] : []),
               ...(kind === 'quote' ? [
@@ -353,13 +362,21 @@ export default function SalesTxnDetailPanel({
                 {
                   label: 'Linked SO',
                   value: detail?.convertedOrderNumber
-                    ? <CopyableId value={detail.convertedOrderNumber} label={detail.convertedOrderNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={salesTxnHref('order', detail.convertedOrderId)}>
+                        {detail.convertedOrderNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
                 {
                   label: 'Linked invoice',
                   value: detail?.convertedInvoiceNumber
-                    ? <CopyableId value={detail.convertedInvoiceNumber} label={detail.convertedInvoiceNumber} style={{ color: 'var(--green)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={salesTxnHref('invoice', detail.convertedInvoiceId)} style={{ color: 'var(--green)' }}>
+                        {detail.convertedInvoiceNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
               ] : []),
@@ -369,7 +386,11 @@ export default function SalesTxnDetailPanel({
                 {
                   label: 'Converted invoice',
                   value: detail?.convertedInvoiceNumber
-                    ? <CopyableId value={detail.convertedInvoiceNumber} label={detail.convertedInvoiceNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={salesTxnHref('invoice', detail.convertedInvoiceId)}>
+                        {detail.convertedInvoiceNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
               ] : []),
@@ -377,7 +398,11 @@ export default function SalesTxnDetailPanel({
                 {
                   label: 'Against invoice',
                   value: detail?.invoiceNumber
-                    ? <CopyableId value={detail.invoiceNumber} label={detail.invoiceNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={salesTxnHref('invoice', detail.invoiceId)}>
+                        {detail.invoiceNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
                 { label: 'Reason', value: detail?.reason || '—' },
@@ -558,11 +583,7 @@ export default function SalesTxnDetailPanel({
                 {payments.map((p) => (
                   <tr key={p.allocationId || p.id} style={p.voided ? { opacity: 0.65 } : undefined}>
                     <td>
-                      <CopyableId
-                        value={p.number}
-                        label={p.number}
-                        style={{ color: 'var(--accent)', fontSize: 12 }}
-                      />
+                      <TxnLink to={salesTxnHref('payment', p.id)}>{p.number}</TxnLink>
                     </td>
                     <td>{p.date || '—'}</td>
                     <td>

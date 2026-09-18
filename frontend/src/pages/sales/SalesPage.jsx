@@ -114,13 +114,6 @@ export default function SalesPage() {
   const [dateTo, setDateTo]     = useState('')
   const [salesDoc, setSalesDoc] = useState(null) // { kind: 'invoice'|'quote'|'order'|'return', data }
 
-  useEffect(() => {
-    if (!viewId) return
-    const kindByTab = { invoices: 'invoice', quotes: 'quote', orders: 'order', returns: 'return' }
-    const kind = kindByTab[tab]
-    if (!kind) return
-    setSalesDoc({ kind, data: { id: viewId } })
-  }, [tab, viewId])
   const [showPayment, setShowPayment] = useState(null)
   const [payAmt, setPayAmt]     = useState('')
   const [payMode, setPayMode]   = useState('bank_transfer')
@@ -357,6 +350,29 @@ export default function SalesPage() {
   const [deletePaySaving, setDeletePaySaving] = useState(false)
   const [showDeleteReturn, setShowDeleteReturn] = useState(null)
   const [deleteRetSaving, setDeleteRetSaving] = useState(false)
+
+  useEffect(() => {
+    if (!viewId) return undefined
+    if (tab === 'payments') {
+      let cancelled = false
+      salesAPI.payments.get(viewId)
+        .then((p) => {
+          if (cancelled) return
+          setSalesDoc(null)
+          setPayDetail(p)
+        })
+        .catch(() => {
+          if (!cancelled) toast.error('Payment not found')
+        })
+      return () => { cancelled = true }
+    }
+    const kindByTab = { invoices: 'invoice', quotes: 'quote', orders: 'order', returns: 'return' }
+    const kind = kindByTab[tab]
+    if (!kind) return undefined
+    setPayDetail(null)
+    setSalesDoc({ kind, data: { id: viewId } })
+    return undefined
+  }, [tab, viewId])
 
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -1563,7 +1579,12 @@ export default function SalesPage() {
       <PaymentDetailPanel
         open={!!payDetail}
         payment={payDetail}
-        onClose={() => setPayDetail(null)}
+        onClose={() => {
+          setPayDetail(null)
+          if (searchParams.get('view') && tab === 'payments') {
+            navigate(`/sales?tab=${tab}`, { replace: true })
+          }
+        }}
         partyLabel="Customer"
         partyName={payDetail?.customerName || 'Walk-in'}
         canVoid={can('invoices.edit')}

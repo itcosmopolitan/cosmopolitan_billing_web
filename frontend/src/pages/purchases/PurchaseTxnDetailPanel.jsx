@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { purchasesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty, formatLabel, conversionStatusDisplay } from '@/utils/helpers'
-import { Chip, CopyableId, ReturnStatusChip } from '@/components/ui'
+import { Chip, ReturnStatusChip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import TxnLink, { purchaseTxnHref } from '@/components/detail/TxnLink'
 import {
   canShowBillEdit,
   canShowDeleteBillPayment,
@@ -77,12 +78,22 @@ export default function PurchaseTxnDetailPanel({
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : kind === 'return' ? [
     { label: 'Credit total', value: fmt(detail?.total) },
-    { label: 'Against bill', value: detail?.billNumber || '—' },
+    {
+      label: 'Against bill',
+      value: detail?.billNumber
+        ? <TxnLink to={purchaseTxnHref('bill', detail.billId)}>{detail.billNumber}</TxnLink>
+        : '—',
+    },
     { label: 'Reason', value: detail?.reason || '—' },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : kind === 'grn' ? [
     { label: 'Total', value: fmt(detail?.total) },
-    { label: 'PO', value: detail?.poNumber || '—' },
+    {
+      label: 'PO',
+      value: detail?.poNumber
+        ? <TxnLink to={purchaseTxnHref('order', detail.purchaseOrderId)}>{detail.poNumber}</TxnLink>
+        : '—',
+    },
     { label: 'Lines', value: lineCount },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : [
@@ -203,11 +214,19 @@ export default function PurchaseTxnDetailPanel({
                 { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
                 ...(detail?.purchaseOrderNumber ? [{
                   label: 'Purchase order',
-                  value: <CopyableId value={detail.purchaseOrderNumber} label={detail.purchaseOrderNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                  value: (
+                    <TxnLink to={purchaseTxnHref('order', detail.purchaseOrderId)}>
+                      {detail.purchaseOrderNumber}
+                    </TxnLink>
+                  ),
                 }] : []),
                 ...(detail?.grnNumber ? [{
                   label: 'GRN',
-                  value: <CopyableId value={detail.grnNumber} label={detail.grnNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />,
+                  value: (
+                    <TxnLink to={purchaseTxnHref('grn', detail.grnId)}>
+                      {detail.grnNumber}
+                    </TxnLink>
+                  ),
                 }] : []),
               ] : []),
               ...(kind === 'order' ? [
@@ -216,7 +235,11 @@ export default function PurchaseTxnDetailPanel({
                 {
                   label: 'Converted bill',
                   value: detail?.convertedBillNumber
-                    ? <CopyableId value={detail.convertedBillNumber} label={detail.convertedBillNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={purchaseTxnHref('bill', detail.convertedBillId)}>
+                        {detail.convertedBillNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
               ] : []),
@@ -224,13 +247,21 @@ export default function PurchaseTxnDetailPanel({
                 {
                   label: 'PO #',
                   value: detail?.poNumber
-                    ? <CopyableId value={detail.poNumber} label={detail.poNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={purchaseTxnHref('order', detail.purchaseOrderId)}>
+                        {detail.poNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
                 {
                   label: 'Converted bill',
                   value: detail?.convertedBillNumber
-                    ? <CopyableId value={detail.convertedBillNumber} label={detail.convertedBillNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={purchaseTxnHref('bill', detail.convertedBillId)}>
+                        {detail.convertedBillNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
               ] : []),
@@ -238,7 +269,11 @@ export default function PurchaseTxnDetailPanel({
                 {
                   label: 'Against bill',
                   value: detail?.billNumber
-                    ? <CopyableId value={detail.billNumber} label={detail.billNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
+                    ? (
+                      <TxnLink to={purchaseTxnHref('bill', detail.billId)}>
+                        {detail.billNumber}
+                      </TxnLink>
+                    )
                     : '—',
                 },
                 { label: 'Reason', value: detail?.reason || '—' },

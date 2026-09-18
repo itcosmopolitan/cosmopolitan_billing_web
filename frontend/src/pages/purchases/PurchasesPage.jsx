@@ -152,6 +152,29 @@ export default function PurchasesPage() {
   const [payDetail, setPayDetail] = useState(null)
   const [activityTarget, setActivityTarget] = useState(null)
 
+  useEffect(() => {
+    if (!viewId) return undefined
+    if (tab === 'payments') {
+      let cancelled = false
+      purchasesAPI.payments.get(viewId)
+        .then((p) => {
+          if (cancelled) return
+          setPurchaseDoc(null)
+          setPayDetail(p)
+        })
+        .catch(() => {
+          if (!cancelled) toast.error('Payment not found')
+        })
+      return () => { cancelled = true }
+    }
+    const kindByTab = { bills: 'bill', orders: 'order', grns: 'grn', returns: 'return' }
+    const kind = kindByTab[tab]
+    if (!kind) return undefined
+    setPayDetail(null)
+    setPurchaseDoc({ kind, data: { id: viewId } })
+    return undefined
+  }, [tab, viewId])
+
   const [listVersion, setListVersion] = useState(0)
 
   const [selectedIds, setSelectedIds] = useState(new Set())
@@ -286,13 +309,6 @@ export default function PurchasesPage() {
   // Modals + sub-state
   const [purchaseDoc, setPurchaseDoc] = useState(null) // { kind: 'bill'|'order'|'grn'|'return', data }
 
-  useEffect(() => {
-    if (!viewId) return
-    const kindByTab = { bills: 'bill', orders: 'order', grns: 'grn', returns: 'return' }
-    const kind = kindByTab[tab]
-    if (!kind) return
-    setPurchaseDoc({ kind, data: { id: viewId } })
-  }, [tab, viewId])
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
   const [showDeletePayment, setShowDeletePayment] = useState(null)
@@ -1885,7 +1901,12 @@ export default function PurchasesPage() {
       <PaymentDetailPanel
         open={!!payDetail}
         payment={payDetail}
-        onClose={() => setPayDetail(null)}
+        onClose={() => {
+          setPayDetail(null)
+          if (searchParams.get('view') && tab === 'payments') {
+            navigate(`/purchases?tab=${tab}`, { replace: true })
+          }
+        }}
         partyLabel="Vendor"
         partyName={payDetail?.vendorName || '—'}
         accentColor="var(--purple)"

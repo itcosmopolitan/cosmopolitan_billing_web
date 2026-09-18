@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { fmt, formatLabel } from '@/utils/helpers'
-import { Chip, CopyableId, AlertBar } from '@/components/ui'
+import { Chip, AlertBar } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import TxnLink, { purchaseTxnHref, salesTxnHref } from '@/components/detail/TxnLink'
 
 /**
  * Shared payment detail drawer for sales & purchase payments.
@@ -110,18 +111,20 @@ export default function PaymentDetailPanel({
               </tr>
             </thead>
             <tbody>
-              {(detail?.allocations || []).map((a) => (
-                <tr key={a.id}>
-                  <td>
-                    <CopyableId
-                      value={a.billNumber || a.invoiceNumber}
-                      label={a.billNumber || a.invoiceNumber}
-                      style={{ color: accentColor, fontSize: 12 }}
-                    />
-                  </td>
-                  <td className="text-right mono">{fmt(a.amount)}</td>
-                </tr>
-              ))}
+              {(detail?.allocations || []).map((a) => {
+                const number = a.billNumber || a.invoiceNumber
+                const to = partyLabel === 'Vendor'
+                  ? purchaseTxnHref('bill', a.billId)
+                  : salesTxnHref('invoice', a.invoiceId)
+                return (
+                  <tr key={a.id}>
+                    <td>
+                      <TxnLink to={to} style={{ color: accentColor }}>{number}</TxnLink>
+                    </td>
+                    <td className="text-right mono">{fmt(a.amount)}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </DetailSection>
