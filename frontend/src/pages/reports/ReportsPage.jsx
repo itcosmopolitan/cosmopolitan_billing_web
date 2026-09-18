@@ -308,6 +308,16 @@ const DRILLDOWN_HANDLERS = {
     },
     label: row.cashier,
   } : null),
+  'customer-sales': (row, ctx) => ({
+    reportId: 'customer-sales-detail',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      customer_id: row.customer_id || '__none__',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.customer || 'Walk-in',
+  }),
   'vendor-purchases': (row, ctx) => (row.vendor_id ? {
     reportId: 'vendor-purchases-detail',
     filters: {

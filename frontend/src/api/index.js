@@ -570,6 +570,7 @@ export const reportsAPI = {
   paymentSales:          (params) => api.get('/reports/payment-sales',      { params }),
   branchSales:           (params) => api.get('/reports/branch-sales',       { params }),
   cashierSales:          (params) => api.get('/reports/cashier-sales',      { params }),
+  customerSales:         (params) => api.get('/reports/customer-sales',     { params }),
   purchaseRegister:      (params) => api.get('/reports/purchase-register',  { params }),
   purchaseLines:         (params) => api.get('/reports/purchase-lines',     { params }),
   vendorPurchases:       (params) => api.get('/reports/vendor-purchases',   { params }),

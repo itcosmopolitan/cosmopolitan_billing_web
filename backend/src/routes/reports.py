@@ -1990,6 +1990,64 @@ async def cashier_sales(
     return paged(rows, total, sk, lim)
 
 
+@router.get("/customer-sales", dependencies=[Depends(require_perm("reports.view"))])
+async def customer_sales(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
+):
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    start, end = _normalize_date_range(date_from, date_to)
+    conds = [
+        SaleInvoice.date >= start.isoformat(),
+        SaleInvoice.date <= end.isoformat(),
+        SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if search:
+        conds.append(SaleInvoice.customer_name.ilike(f"%{search}%"))
+
+    sort_map = {
+        "customer": SaleInvoice.customer_name,
+        "invoice_count": func.count(SaleInvoice.id),
+        "sales_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
+        "paid_amount": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
+        "outstanding_amount": func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0),
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_amount", "desc")
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    base = (
+        select(
+            SaleInvoice.customer_id.label("customer_id"),
+            SaleInvoice.customer_name.label("customer"),
+            func.count(SaleInvoice.id).label("invoice_count"),
+            func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
+            func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("paid_amount"),
+            func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0).label("outstanding_amount"),
+        )
+        .where(and_(*conds))
+        .group_by(SaleInvoice.customer_id, SaleInvoice.customer_name)
+    )
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [dict(r._mapping) for r in result.fetchall()]
+    for r in rows:
+        if not r.get("customer"):
+            r["customer"] = "Walk-in"
+    return paged(rows, total, sk, lim)
+
+
 @router.get("/purchase-register", dependencies=[Depends(require_perm("reports.view"))])
 async def purchase_register(
     branch_id: Optional[str] = None,

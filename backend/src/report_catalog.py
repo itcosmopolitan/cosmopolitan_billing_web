@@ -251,6 +251,20 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 ],
             ),
             _invoice_detail("cashier-sales-detail", "Cashier Sales Detail"),
+            _report(
+                "customer-sales",
+                "Customer-wise Sales",
+                api="customerSales",
+                default_sort="sales_amount",
+                columns=[
+                    _col("customer", "Customer"),
+                    _col("invoice_count", "Invoice Count", align="right", format="number"),
+                    _col("sales_amount", "Sales Amount", align="right", format="currency"),
+                    _col("paid_amount", "Paid Amount", align="right", format="currency"),
+                    _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
+                ],
+            ),
+            _invoice_detail("customer-sales-detail", "Customer Sales Detail"),
         ],
     },
     {
