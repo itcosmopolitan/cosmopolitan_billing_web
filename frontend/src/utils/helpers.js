@@ -155,6 +155,7 @@ export const statusChip = (status) => {
     inactive: 'chip-out',
     pending_approval: 'chip-pending',
     confirmed: 'chip-active',
+    invited: 'chip-pending',
   }
   return map[status] || 'chip-draft'
 }
@@ -164,7 +165,7 @@ export const statusLabel = (status) => {
     paid: 'Paid', active: 'Active', pending: 'Pending', overdue: 'Overdue',
     draft: 'Draft', partial: 'Partial', transit: 'In Transit', intransit: 'In Transit', in_progress: 'In Progress', inprogress: 'In Progress', receive: 'Receive', received: 'Received',
     low: 'Low Stock', out: 'Out of Stock', cancelled: 'Cancelled', canceled: 'Cancelled', inactive: 'Inactive',
-    pending_approval: 'Pending Approval', confirmed: 'Confirmed',
+    pending_approval: 'Pending Approval', confirmed: 'Confirmed', invited: 'Invited',
   }
   return map[status] || humanizeValue(status)
 }

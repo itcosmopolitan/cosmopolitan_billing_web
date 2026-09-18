@@ -111,6 +111,7 @@ async def _seed_initial_setup() -> None:
             role_id=role.id,
             branch_id=branch.id,
             active=True,
+            status="active",
             must_change_password=False,
             all_branches=False,
         )

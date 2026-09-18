@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src import config
 from src.database import get_db
 from src.email_utils import send_temp_password_email
-from src.models import AuditLog, User
+from src.models import AuditLog, User, UserAccountStatus, apply_account_status, account_status_value
 from src.security import (
     create_access_token,
     hash_password_async,
@@ -184,9 +184,9 @@ async def change_password(
     forced-first-login flow needs (user types the temp password as 'old').
 
     On success: hashes + stores the new password, clears the
-    `must_change_password` flag, returns 200. JWT is intentionally NOT
-    rotated in v1 — see docs/USERS_AND_ROLES.md §10 Phase 4 for the
-    token-revocation follow-up.
+    `must_change_password` flag, promotes invited users to active, returns
+    200. JWT is intentionally NOT rotated in v1 — see
+    docs/USERS_AND_ROLES.md §10 Phase 4 for the token-revocation follow-up.
     """
     if not await verify_password_async(data.old_password, user.hashed_password or ""):
         raise HTTPException(401, "Current password is incorrect")
@@ -197,5 +197,11 @@ async def change_password(
 
     user.hashed_password = await hash_password_async(data.new_password)
     user.must_change_password = False
+    if account_status_value(user) == UserAccountStatus.invited.value:
+        apply_account_status(user, UserAccountStatus.active.value)
     await db.commit()
-    return {"message": "Password changed", "must_change_password": False}
+    return {
+        "message": "Password changed",
+        "must_change_password": False,
+        "status": account_status_value(user),
+    }

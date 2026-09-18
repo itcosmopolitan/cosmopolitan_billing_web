@@ -11,7 +11,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, Role, User, UserBranch
+from src.models import Branch, Role, User, UserBranch, UserAccountStatus, apply_account_status
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
 from src.routes._serializers import attach_branch_ids, serialize_user
 from src.security import hash_password_async, require_perm, current_user, enforce_branch_access
@@ -53,8 +53,9 @@ class UserCreate(BaseModel):
     all_branches: bool = False
     # If omitted (or empty), the server generates a cryptographically random
     # temp password and returns it in the create response so the admin can
-    # share it with the new user. Either way, the user is flagged with
-    # must_change_password=True and forced to change on first login.
+    # share it with the new user. Either way, the user is created as
+    # status=invited with must_change_password=True and forced to change
+    # on first login — status becomes active only after that password change.
     password: Optional[str] = None
 
 
@@ -193,6 +194,7 @@ async def list_users(
             "role": User.role,
             "branch_id": User.branch_id,
             "active": User.active,
+            "status": User.status,
             "created_at": User.created_at,
             "last_login": User.last_login,
         },
@@ -231,6 +233,7 @@ async def create_user(
         role=rkey or "cashier",
         role_id=rid,
         active=True,
+        status=UserAccountStatus.invited.value,
         must_change_password=True,
     )
     db.add(u)
@@ -388,16 +391,26 @@ async def toggle_user(
     u = result.scalar_one_or_none()
     if not u:
         raise HTTPException(404, "User not found")
-    u.active = not u.active
+    if u.active:
+        apply_account_status(u, UserAccountStatus.inactive.value)
+    else:
+        # Restore invited if they still owe a first password change; otherwise
+        # they were a fully-activated user being turned back on.
+        next_status = (
+            UserAccountStatus.invited.value
+            if u.must_change_password
+            else UserAccountStatus.active.value
+        )
+        apply_account_status(u, next_status)
     add_audit_log(
         db,
         action="User status toggled",
         module="Settings",
         reference_id=u.id,
-        detail=f"Set user {u.name} ({u.email}) active={u.active}",
+        detail=f"Set user {u.name} ({u.email}) status={u.status} active={u.active}",
         user=user,
         request=request,
-        metadata={"active": u.active},
+        metadata={"active": u.active, "status": u.status},
     )
     await db.commit()
-    return {"active": u.active}
+    return {"active": u.active, "status": u.status}

@@ -4,7 +4,7 @@ import { humanizeLabel, roleColors } from '@/utils/helpers'
 import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel, AutocompleteDropdown } from '@/components/ui'
+import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel, AutocompleteDropdown, RowActionsMenu } from '@/components/ui'
 import { FINANCIAL_YEAR_OPTIONS, DECIMAL_PRECISION_OPTIONS } from '@/utils/dropdownOptions'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
@@ -826,8 +826,8 @@ export default function SettingsPage() {
           {/* Toggle lives in the Card header (replacing the redundant "Users" /
               "Roles & Permissions" title). One Card stays mounted across
               toggle flips — only its body swaps — so keyboard focus on the
-              toggle is preserved. The titleRight + bodyPadding adapt to the
-              active sub-tab.
+              toggle is preserved. Both sub-tabs render a flush data-table
+              (no card-body padding) so RowActionsMenu sits in the last column.
 
               NB: Card's title slot renders React elements as-is (no <h4>
               wrapping) — see components/ui/Card. */}
@@ -852,7 +852,7 @@ export default function SettingsPage() {
                     ? <button className="btn btn-primary btn-sm" onClick={openNewRole}>+ Add Role</button>
                     : null)
             }
-            bodyPadding={usersTab === 'roles'}
+            bodyPadding={false}
           >
             {usersTab === 'users' && (
               <TablePanel
@@ -868,8 +868,8 @@ export default function SettingsPage() {
                     <SortableHeader label="User" sortKey="name" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
                     <SortableHeader label="Role" sortKey="role" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
                     <SortableHeader label="Branch" sortKey="branch_id" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
-                    <SortableHeader label="Status" sortKey="active" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
-                    <th></th>
+                    <SortableHeader label="Status" sortKey="status" sortBy={userSortBy} sortOrder={userSortOrder} onSort={onUserSort} />
+                    <th style={{ width: 48 }} aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -917,18 +917,23 @@ export default function SettingsPage() {
                           />
                         )}
                       </td>
-                      <td><Chip status={u.active?'active':'inactive'}/></td>
-                      <td>
-                        <div style={{display:'flex',gap:4}}>
-                          {can('users.edit') && (
-                            <button className="btn btn-secondary btn-xs" onClick={()=>openEditUser(u)}>Edit</button>
-                          )}
-                          {can('users.edit') && (
-                            <button className="btn btn-secondary btn-xs" onClick={()=>toggleUser(u.id)}>
-                              {u.active ? 'Mark as Inactive' : 'Mark as Active'}
-                            </button>
-                          )}
-                        </div>
+                      <td><Chip status={u.status || (u.active ? 'active' : 'inactive')} /></td>
+                      <td className="text-right">
+                        <RowActionsMenu
+                          ariaLabel={`Actions for ${u.name}`}
+                          actions={[
+                            {
+                              label: 'Edit',
+                              hidden: !can('users.edit'),
+                              onClick: () => openEditUser(u),
+                            },
+                            {
+                              label: u.active ? 'Mark as Inactive' : 'Mark as Active',
+                              hidden: !can('users.edit'),
+                              onClick: () => toggleUser(u.id),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   )})}
@@ -954,34 +959,62 @@ export default function SettingsPage() {
                 emptyTitle="No roles yet"
                 emptyDesc="Restart backend after seeding, or create a custom role."
               >
-              {roleRows.map((r) => {
-                const rColor = roleColors[r.key] || (r.color && `var(--${r.color})`) || 'var(--accent)'
-                const granted = (r.permissions || []).join(', ') || '(none)'
-                return (
-                  <div key={r.id} style={{padding:'10px 12px',background:'var(--bg-raised)',borderRadius:8,marginBottom:8}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
-                      <span style={{fontSize:11.5,padding:'2px 8px',borderRadius:20,fontWeight:600,background:rColor+'18',color:rColor}}>{r.label}</span>
-                      {r.is_system && <Tag color="gray">system</Tag>}
-                      <span style={{fontSize:11,color:'var(--text-muted)'}}>· {r.user_count} user{r.user_count===1?'':'s'}</span>
-                      <div style={{flex:1}}/>
-                      {can('users.manage_roles') && (
-                        <button className="btn btn-secondary btn-xs" onClick={()=>openEditRole(r)}>Edit</button>
-                      )}
-                      {can('users.manage_roles') && (
-                        <button
-                          className="btn btn-danger btn-xs"
-                          onClick={()=>deleteRole(r)}
-                          disabled={r.is_system || r.user_count > 0}
-                          title={r.is_system ? 'System roles cannot be deleted' : (r.user_count > 0 ? 'Reassign users first' : 'Delete role')}
-                          style={{ opacity: (r.is_system || r.user_count > 0) ? 0.4 : 1 }}
-                        >Delete</button>
-                      )}
-                    </div>
-                    {r.description && <div style={{fontSize:11.5,color:'var(--text-secondary)',marginBottom:4}}>{r.description}</div>}
-                    <div style={{fontSize:11,color:'var(--text-muted)',lineHeight:1.5,fontFamily:'DM Mono, monospace'}}>{granted}</div>
-                  </div>
-                )
-              })}
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Role</th>
+                    <th>Description</th>
+                    <th>Users</th>
+                    <th>Permissions</th>
+                    <th style={{ width: 48 }} aria-label="Actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {roleRows.map((r) => {
+                    const rColor = roleColors[r.key] || (r.color && `var(--${r.color})`) || 'var(--accent)'
+                    const granted = (r.permissions || []).join(', ') || '(none)'
+                    return (
+                      <tr key={r.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 11.5, padding: '3px 9px', borderRadius: 20, fontWeight: 600, background: rColor + '18', color: rColor }}>{r.label}</span>
+                            {r.is_system && <Tag color="gray">system</Tag>}
+                          </div>
+                        </td>
+                        <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.description || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          {r.user_count} user{r.user_count === 1 ? '' : 's'}
+                        </td>
+                        <td
+                          style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono, monospace', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          title={granted}
+                        >
+                          {granted}
+                        </td>
+                        <td className="text-right">
+                          <RowActionsMenu
+                            ariaLabel={`Actions for ${r.label}`}
+                            actions={[
+                              {
+                                label: 'Edit',
+                                hidden: !can('users.manage_roles'),
+                                onClick: () => openEditRole(r),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                hidden: !can('users.manage_roles'),
+                                disabled: r.is_system || r.user_count > 0,
+                                onClick: () => deleteRole(r),
+                              },
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
               <PaginationBar
                 total={roleTotal}
                 skip={roleSkip}

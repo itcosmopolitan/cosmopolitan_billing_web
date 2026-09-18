@@ -94,7 +94,7 @@ export default function ChangePasswordPage() {
         const fresh = await authAPI.me()
         setUser(fresh)
       } catch {
-        setUser({ ...user, must_change_password: false })
+        setUser({ ...user, must_change_password: false, status: 'active', active: true })
       }
       toast.success('Password updated')
       navigate('/dashboard', { replace: true })

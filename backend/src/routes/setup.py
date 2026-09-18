@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.email_utils import send_temp_password_email
-from src.models import Branch, Organisation, Role, User, UserBranch
+from src.models import Branch, Organisation, Role, User, UserBranch, UserAccountStatus
 from src.security import hash_password_async
 
 router = APIRouter()
@@ -151,6 +151,7 @@ async def initialize_setup(data: SetupRequest, db: AsyncSession = Depends(get_db
         role_id=role.id if role else None,
         branch_id=branch.id,
         active=True,
+        status=UserAccountStatus.invited.value,
         must_change_password=True,  # Force password change on first login
         all_branches=True,
     )

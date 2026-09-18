@@ -543,16 +543,6 @@ export default function Sidebar() {
               </div>
             </div>
 
-            <MenuItem
-              icon={<Icon.UserCog size={15} />}
-              label="Profile & Settings"
-              onClick={() => { navigate('/settings'); setShowUserMenu(false) }}
-            />
-            <MenuItem
-              icon={<Icon.Search size={15} />}
-              label="Audit Trail"
-              onClick={() => { navigate('/audit'); setShowUserMenu(false) }}
-            />
             <div style={{ height: 1, background: 'var(--border-subtle)' }} />
             <MenuItem
               icon={<Icon.LogOut size={15} />}

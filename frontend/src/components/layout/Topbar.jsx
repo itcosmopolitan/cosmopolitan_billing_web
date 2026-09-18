@@ -7,7 +7,7 @@ import * as Icon from '@/components/ui/Icons'
 import { Modal } from '@/components/ui'
 
 // Topbar is intentionally chrome-only: it carries global context (active
-// branch) and global actions (new sale, notifications, theme, help). The
+// branch) and global actions (new sale, notifications, theme). The
 // per-page <SectionHeader> already owns the title + subtitle — repeating it
 // here just produced the duplicated "Sales Management" label users noticed.
 
@@ -472,11 +472,6 @@ export default function Topbar() {
         title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
       >
         {theme === 'dark' ? <Icon.Sun size={17} /> : <Icon.Moon size={17} />}
-      </IconButton>
-
-      {/* Help */}
-      <IconButton title="Help & shortcuts">
-        <Icon.HelpCircle size={17} />
       </IconButton>
 
       <Modal

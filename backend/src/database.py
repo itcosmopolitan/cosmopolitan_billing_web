@@ -281,6 +281,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # migration doesn't disrupt anyone; new users created via POST /users/
     # explicitly get 1 (true) until they self-change via /auth/change-password.
     ("users", "must_change_password", "BOOLEAN DEFAULT 0 NOT NULL"),
+    # Account lifecycle shown in Settings → Users. invited until the user
+    # completes first login + temp-password change; then active. Existing
+    # rows default to active and are backfilled once when the column is added.
+    ("users", "status", "VARCHAR DEFAULT 'active' NOT NULL"),
     # Multi-branch user assignment (added 2026-05-18 with the Add User
     # multi-select). When 1, the user has access to all branches and the
     # `user_branches` join is empty. The `user_branches` table itself is
@@ -544,7 +548,8 @@ async def init_schema() -> None:
         await _ensure_pg_enum_values(autocommit_conn)
     async with engine.begin() as conn:
         try:
-            await _ensure_columns(conn)
+            added_columns = await _ensure_columns(conn)
+            await _backfill_user_account_status(conn, added_columns)
             await _ensure_audit_log_indexes(conn)
             await _ensure_nullable_columns(conn)
             await _bootstrap_system_roles(conn)
@@ -795,9 +800,14 @@ async def _ensure_activity_seed_markers_table(conn) -> None:
     )
 
 
-async def _ensure_columns(conn) -> None:
-    """Add any missing columns from `_ADDITIVE_COLUMNS`. Idempotent."""
+async def _ensure_columns(conn) -> set[tuple[str, str]]:
+    """Add any missing columns from `_ADDITIVE_COLUMNS`. Idempotent.
+
+    Returns the (table, column) pairs that were actually added this boot so
+    callers can run one-time backfills.
+    """
     dialect = conn.dialect.name
+    added: set[tuple[str, str]] = set()
     for table, column, ddl_type in _ADDITIVE_COLUMNS:
         if dialect == "postgresql":
             table_exists = (
@@ -833,6 +843,34 @@ async def _ensure_columns(conn) -> None:
         if column in existing:
             continue
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        added.add((table, column))
+    return added
+
+
+async def _backfill_user_account_status(conn, added_columns: set[tuple[str, str]]) -> None:
+    """One-time: map existing users onto invited/active/inactive.
+
+    Only runs when `users.status` was just added. After that, create / toggle /
+    change-password own the column. Invited = still on the temp password
+    (`must_change_password`) and not deactivated.
+    """
+    if ("users", "status") not in added_columns:
+        return
+    tables = await _existing_tables(conn, ["users"])
+    if "users" not in tables:
+        return
+    await conn.execute(
+        text(
+            """
+            UPDATE users
+            SET status = CASE
+                WHEN NOT active THEN 'inactive'
+                WHEN must_change_password THEN 'invited'
+                ELSE 'active'
+            END
+            """
+        )
+    )
 
 
 async def _ensure_audit_log_indexes(conn) -> None:
