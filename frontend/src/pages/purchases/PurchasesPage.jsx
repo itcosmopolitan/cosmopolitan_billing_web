@@ -49,7 +49,7 @@ import {
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
 
 const TABS = [
-  { id: 'bills',    label: 'Purchase Bills' },
+  { id: 'bills',    label: 'Bills' },
   { id: 'orders',   label: 'Purchase Orders' },
   { id: 'grns',     label: 'GRN (Receipts)' },
   { id: 'returns',  label: 'Vendor Returns' },
@@ -83,7 +83,7 @@ export default function PurchasesPage() {
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
-  const pageTitle = TABS.find((t) => t.id === tab)?.label || 'Purchase Bills'
+  const pageTitle = TABS.find((t) => t.id === tab)?.label || 'Bills'
   const viewId = searchParams.get('view')
   const can = useCan()
   const billColumnPrefs = useColumnPrefs('purchases.bills')

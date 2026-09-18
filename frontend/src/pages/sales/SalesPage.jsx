@@ -44,9 +44,9 @@ import {
 // CRUD). See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md.
 const TABS = [
   { id: 'quotes',    label: 'Quotations' },
-  { id: 'orders',    label: 'Sales Orders (SO)' },
+  { id: 'orders',    label: 'Sales Orders' },
   { id: 'invoices',  label: 'Invoices' },
-  { id: 'returns',   label: 'Credit Notes / CN' },
+  { id: 'returns',   label: 'Credit Notes' },
   // 2026-05-24: standalone Payments record — lists every payment ever
   // recorded (single-invoice via the row Pay button OR multi-invoice
   // via + New Payment). See PaymentFormPage for the create flow.

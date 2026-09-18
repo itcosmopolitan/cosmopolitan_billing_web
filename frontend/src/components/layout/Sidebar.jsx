@@ -43,7 +43,7 @@ const navItems = [
       { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders' },
       { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices' },
       { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments' },
-      { path: '/sales?tab=returns', label: 'Credit Notes / CN', tab: 'returns' }
+      { path: '/sales?tab=returns', label: 'Credit Notes', tab: 'returns' }
     ],
   },
   {
@@ -64,7 +64,7 @@ const navItems = [
     children: [
       { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders' },
       { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns' },
-      { path: '/purchases?tab=bills', label: 'Purchase Bills', tab: 'bills' },
+      { path: '/purchases?tab=bills', label: 'Bills', tab: 'bills' },
       { path: '/purchases?tab=payments', label: 'Payments Made', tab: 'payments' },
       { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns' }
     ],
