@@ -53,6 +53,19 @@ export default function CartRow({
   const discValue = Number(item.lineDiscountValue ?? item.lineDiscountPct ?? item.lineDiscountFlat ?? 0) || 0
   const lastNonEmptyNameRef = useRef(item.name || '')
   if (String(item.name || '').trim()) lastNonEmptyNameRef.current = String(item.name).trim()
+  const lastPositiveQtyRef = useRef(item.qty)
+  if (Number(item.qty) > 0) lastPositiveQtyRef.current = item.qty
+  const [qtyText, setQtyText] = useState(null)
+  const qtyEditing = qtyText !== null
+
+  const commitQty = (raw) => {
+    const v = Number(raw)
+    if (Number.isFinite(v) && v > 0) {
+      onQtyChange(roundQty(v))
+      return
+    }
+    onQtyChange(roundQty(lastPositiveQtyRef.current || qtyInputStep()))
+  }
 
   const tracked = Boolean(item.batchTracking || item.batch_tracking)
   const expiryTracked = Boolean(item.expiryTracking || item.expiry_tracking)
@@ -193,11 +206,27 @@ export default function CartRow({
           type="number"
           min={qtyInputStep()}
           step={qtyInputStep()}
-          value={item.qty}
-          onChange={(e) => {
-            const v = Number(e.target.value)
-            if (Number.isFinite(v)) onQtyChange(roundQty(v))
+          value={qtyEditing ? qtyText : item.qty}
+          onFocus={(e) => {
+            setQtyText(String(item.qty ?? ''))
+            e.target.select()
           }}
+          onChange={(e) => {
+            const raw = e.target.value
+            setQtyText(raw)
+            if (raw.trim() === '' || raw === '.' || raw.endsWith('.')) return
+            const v = Number(raw)
+            if (!Number.isFinite(v) || v <= 0) return
+            onQtyChange(roundQty(v))
+          }}
+          onBlur={() => {
+            commitQty(qtyText)
+            setQtyText(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          aria-label={`Quantity for ${item.name || 'item'}`}
           style={{ width: 56, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />
       </td>
