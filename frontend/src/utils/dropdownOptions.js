@@ -1,5 +1,5 @@
 /** Shared option lists for AutocompleteDropdown / Select. */
-import { formatLabel } from '@/utils/helpers'
+import { formatLabel, statusLabel } from '@/utils/helpers'
 
 export const PAYMENT_METHOD_OPTIONS = [
   { id: 'cash', label: '💵 Cash' },
@@ -74,7 +74,7 @@ export const ADJUSTMENT_REASON_OPTIONS = [
 export function statusOptions(statuses) {
   return statuses.map((id) => ({
     id,
-    label: formatLabel(id),
+    label: statusLabel(id),
   }))
 }
 
