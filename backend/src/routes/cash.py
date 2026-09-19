@@ -15,7 +15,7 @@ from src.database import get_db
 from src.models import AuditLog, Branch, CashCategory, CashDayClose, CashEntry, Organisation, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
-from src.permissions import CASH_CATEGORIES_READ
+from src.permissions import CASH_CATEGORIES_READ, CASH_CATEGORIES_WRITE
 from src.security import enforce_branch_access, current_user, require_perm, get_allowed_branch_ids
 from src.services.audit_service import build_audit_entry
 
@@ -59,7 +59,7 @@ class CashEntryCreate(BaseModel):
     amount: float
     ref: Optional[str] = None
     date: Optional[str] = None
-    by: Optional[str] = "Staff"
+    by: Optional[str] = None
 
 class CashEntryUpdate(BaseModel):
     description: Optional[str] = None
@@ -82,7 +82,7 @@ class UnlockRequest(BaseModel):
 
 class CashCategoryCreate(BaseModel):
     name: str
-    direction: str   # in | out | both
+    direction: str = "both"   # in | out | both
     sort_order: int = 0
 
 class CashCategoryUpdate(BaseModel):
@@ -214,6 +214,17 @@ def _breakdown(entries: list, entry_type: str) -> list:
 
 # ─── Categories ───────────────────────────────────────────────────────────────
 
+def _serialize_cash_category(c: CashCategory) -> dict:
+    return {
+        "id": c.id,
+        "name": c.name,
+        "direction": c.direction,
+        "is_system": c.is_system,
+        "active": c.active,
+        "sort_order": c.sort_order,
+    }
+
+
 @router.get("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_READ))])
 async def list_categories(
     db: AsyncSession = Depends(get_db),
@@ -225,14 +236,10 @@ async def list_categories(
     if org:
         q = q.where(CashCategory.org_id == org.id)
     rows = (await db.execute(q)).scalars().all()
-    return [
-        {"id": c.id, "name": c.name, "direction": c.direction,
-         "is_system": c.is_system, "active": c.active, "sort_order": c.sort_order}
-        for c in rows
-    ]
+    return [_serialize_cash_category(c) for c in rows]
 
 
-@router.post("/categories", dependencies=[Depends(require_perm("settings.edit"))], status_code=201)
+@router.post("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_WRITE))], status_code=201)
 async def create_category(
     data: CashCategoryCreate,
     db: AsyncSession = Depends(get_db),
@@ -240,14 +247,31 @@ async def create_category(
     org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if not org:
         raise HTTPException(400, "Organisation not configured")
+    name = (data.name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(400, "Category name must be at least 2 characters")
+    direction = (data.direction or "both").strip().lower()
+    if direction not in ("in", "out", "both"):
+        raise HTTPException(400, "Direction must be in, out, or both")
+    existing = (
+        await db.execute(
+            select(CashCategory).where(
+                CashCategory.org_id == org.id,
+                func.lower(CashCategory.name) == name.lower(),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, "A category with this name already exists")
     cat = CashCategory(
         id=str(uuid.uuid4()), org_id=org.id,
-        name=data.name, direction=data.direction,
+        name=name, direction=direction,
         is_system=False, sort_order=data.sort_order,
     )
     db.add(cat)
     await db.commit()
-    return {"id": cat.id, "message": "Category created"}
+    await db.refresh(cat)
+    return _serialize_cash_category(cat)
 
 
 @router.put("/categories/{cat_id}", dependencies=[Depends(require_perm("settings.edit"))])
@@ -363,7 +387,7 @@ async def add_entry(
         ref=data.ref,
         date=target_date,
         time=datetime.now().strftime("%H:%M"),
-        by=data.by or current_user.name,
+        by=(current_user.name if current_user and current_user.name else None) or data.by or "Staff",
         entry_number=entry_number,
         source_type="manual",
         is_system=False,

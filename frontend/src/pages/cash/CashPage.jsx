@@ -434,6 +434,7 @@ export default function CashPage() {
         onSaved={refresh}
         editEntry={editEntry}
         categories={categories}
+        onCategoriesChange={setCategories}
       />
 
       <CloseDayModal

@@ -123,6 +123,12 @@ CASH_CATEGORIES_READ: tuple[str, ...] = (
     "cash.close",
 )
 
+CASH_CATEGORIES_WRITE: tuple[str, ...] = (
+    "settings.edit",
+    "cash.entry",
+    "cash.edit",
+)
+
 # Status tab counts on list pages — allow creators/approvers without full view.
 MODULE_SUMMARY_READ: dict[str, tuple[str, ...]] = {
     "transfers": (

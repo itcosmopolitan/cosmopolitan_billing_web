@@ -549,6 +549,7 @@ export const cashAPI = {
   unlock:  (branchId, closeId, data) => api.post(`/cash/${branchId}/close/${closeId}/unlock`, data),
   categories: {
     list: (params) => api.get('/cash/categories', { params }),
+    create: (data) => api.post('/cash/categories', data),
   },
   close:   (branchId, data) => api.post(`/cash/${branchId}/close`, data),
 }
