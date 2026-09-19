@@ -3053,19 +3053,21 @@ async def top_customers(
         "purchase_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
         "outstanding_amount": func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0),
     }
-    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "purchase_amount", "desc")
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "outstanding_amount", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
+    outstanding_amount = func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0)
     base = (
         select(
             SaleInvoice.customer_id.label("customer_id"),
             SaleInvoice.customer_name.label("customer"),
             func.count(SaleInvoice.id).label("invoice_count"),
             func.coalesce(func.sum(SaleInvoice.total), 0).label("purchase_amount"),
-            func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0).label("outstanding_amount"),
+            outstanding_amount.label("outstanding_amount"),
         )
         .where(and_(*conds))
         .group_by(SaleInvoice.customer_id, SaleInvoice.customer_name)
+        .having(outstanding_amount != 0)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -3106,16 +3108,18 @@ async def vendor_outstanding(
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "outstanding_amount", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
+    outstanding_amount = func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0)
     base = (
         select(
             PurchaseBill.vendor_id.label("vendor_id"),
             PurchaseBill.vendor_name.label("vendor"),
             func.count(PurchaseBill.id).label("purchase_count"),
             func.coalesce(func.sum(PurchaseBill.total), 0).label("purchase_amount"),
-            func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0).label("outstanding_amount"),
+            outstanding_amount.label("outstanding_amount"),
         )
         .where(and_(*conds))
         .group_by(PurchaseBill.vendor_id, PurchaseBill.vendor_name)
+        .having(outstanding_amount != 0)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)

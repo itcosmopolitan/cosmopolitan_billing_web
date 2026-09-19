@@ -525,9 +525,9 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
         "reports": [
             _report(
                 "top-customers",
-                "Top Customers",
+                "Customer Outstanding",
                 api="topCustomers",
-                default_sort="purchase_amount",
+                default_sort="outstanding_amount",
                 columns=[
                     _col("customer", "Customer"),
                     _col("invoice_count", "Invoice Count", align="right", format="number"),
