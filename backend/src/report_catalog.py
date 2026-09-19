@@ -59,6 +59,8 @@ _SALES_INVOICE_COLUMNS = [
     _col("discount", "Discount", align="right", format="currency"),
     _col("net_amount", "Net Amount", align="right", format="currency"),
     _col("payment_mode", "Payment Mode"),
+    _col("paid_amount", "Payment Paid", align="right", format="currency"),
+    _col("remaining_amount", "Balance Due", align="right", format="currency"),
     _col("status", "Status"),
 ]
 
@@ -75,6 +77,8 @@ _SALES_LINE_COLUMNS = [
     _col("discount", "Discount", align="right", format="currency"),
     _col("line_total", "Line Total", align="right", format="currency"),
     _col("payment_mode", "Payment Mode"),
+    _col("paid_amount", "Payment Paid", align="right", format="currency"),
+    _col("remaining_amount", "Balance Due", align="right", format="currency"),
     _col("status", "Status"),
 ]
 
@@ -157,7 +161,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("net_amount", "Net Amount", align="right", format="currency"),
                     _col("payment_mode", "Payment Mode"),
                     _col("paid_amount", "Payment Paid", align="right", format="currency"),
-                    _col("remaining_amount", "Remaining", align="right", format="currency"),
+                    _col("remaining_amount", "Balance Due", align="right", format="currency"),
                     _col("status", "Status"),
                 ],
             ),

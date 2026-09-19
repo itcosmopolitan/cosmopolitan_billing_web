@@ -54,6 +54,8 @@ const NO_FOOTER_TOTALS_REPORTS = new Set(['profit-loss'])
 const FOOTER_SUM_KEYS_BY_REPORT = {
   'tax-summary': new Set(['taxable_amount', 'tax_amount']),
   'tax-summary-detail': new Set(['transaction_amount', 'tax_amount']),
+  'product-sales-detail': new Set(['quantity', 'line_total']),
+  'category-sales-detail': new Set(['quantity', 'line_total']),
 }
 
 function isSummableColumn(column, reportId) {

@@ -1007,6 +1007,8 @@ async def sales_lines(
         "discount": SaleLineItem.discount,
         "line_total": SaleLineItem.line_total,
         "payment_mode": SaleInvoice.payment_mode,
+        "paid_amount": SaleInvoice.paid_amount,
+        "remaining_amount": SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0),
         "status": SaleInvoice.status,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "invoice_date", "desc")
@@ -1029,6 +1031,8 @@ async def sales_lines(
             SaleLineItem.discount.label("discount"),
             SaleLineItem.line_total.label("line_total"),
             SaleInvoice.payment_mode.label("payment_mode"),
+            func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
+            (SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0)).label("remaining_amount"),
             SaleInvoice.status.label("status"),
         )
         .select_from(SaleLineItem)

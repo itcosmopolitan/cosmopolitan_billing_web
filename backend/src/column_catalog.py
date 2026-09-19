@@ -215,8 +215,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
-            _col("paid_amount", "Payment Paid"),
-            _col("remaining_amount", "Remaining"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     # Drill-only invoice children share the sales-register column set.
@@ -231,6 +231,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.payment-sales-detail": [
@@ -244,6 +246,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.branch-sales-detail": [
@@ -257,6 +261,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.cashier-sales-detail": [
@@ -270,6 +276,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.top-customers-detail": [
@@ -283,6 +291,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("net_amount", "Net Amount"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.sales-lines": [
@@ -298,6 +308,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("line_total", "Line Total"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.product-sales-detail": [
@@ -313,6 +325,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("line_total", "Line Total"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.category-sales-detail": [
@@ -328,6 +342,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("discount", "Discount"),
         _col("line_total", "Line Total"),
         _col("payment_mode", "Payment Mode"),
+        _col("paid_amount", "Payment Paid"),
+        _col("remaining_amount", "Balance Due"),
         _col("status", "Status"),
     ],
     "reports.daily-sales": [
