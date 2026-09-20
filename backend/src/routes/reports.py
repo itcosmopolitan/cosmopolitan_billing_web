@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, func, literal, select
+from sqlalchemy import String, and_, case, cast, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, ConfigDict, Field
@@ -250,6 +250,363 @@ def _sale_filters(
     return conds
 
 
+def _iso_date(value) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _null_str():
+    return cast(literal(None), String)
+
+
+_TXN_TYPE_ALIASES = {
+    "invoice": "Invoice",
+    "credit_note": "Credit Note",
+    "creditnote": "Credit Note",
+    "bill": "Bill",
+    "debit_note": "Debit Note",
+    "debitnote": "Debit Note",
+    "vendor_return": "Debit Note",
+    "vendorreturn": "Debit Note",
+}
+
+
+def _canonical_transaction_types(raw: Optional[str]) -> Optional[list[str]]:
+    """Canonical labels to include, or None for all types.
+
+    Empty / ``__none__`` means match nothing.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text == "":
+        return None
+    if text.lower() in ("__none__", "__empty__"):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in text.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        key = token.lower().replace("-", "_").replace(" ", "_")
+        compact = key.replace("_", "")
+        label = _TXN_TYPE_ALIASES.get(key) or _TXN_TYPE_ALIASES.get(compact)
+        if label is None:
+            for canon in ("Invoice", "Credit Note", "Bill", "Debit Note"):
+                if canon.lower() == token.lower():
+                    label = canon
+                    break
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append(label)
+    return out
+
+
+def _restrict_transaction_types(query, column, raw: Optional[str]):
+    types = _canonical_transaction_types(raw)
+    if types is None:
+        return query
+    if not types:
+        return query.where(literal(False))
+    return query.where(column.in_(types))
+
+
+def _wants_transaction_type(raw: Optional[str], label: str) -> bool:
+    types = _canonical_transaction_types(raw)
+    if types is None:
+        return True
+    return label in types
+
+
+def _invoice_outstanding_expr():
+    """AR remaining after cash collections and active credit notes. Never below 0."""
+    raw = (
+        func.coalesce(SaleInvoice.total, 0)
+        - func.coalesce(SaleInvoice.paid_amount, 0)
+        - func.coalesce(SaleInvoice.credited_amount, 0)
+    )
+    return case((raw < 0, literal(0.0)), else_=raw)
+
+
+def _cn_filters(
+    branch_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional,
+    date_to: Optional,
+    allowed_branch_ids: Optional[list[str]] = None,
+    payment_mode: Optional[str] = None,
+    cashier_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    category_id: Optional[str] = None,
+):
+    """Filters for active credit notes. Cashier / payment_mode follow the source invoice
+    so parent aggregations and sales-register drilldowns stay aligned.
+    """
+    conds = [SalesReturn.status != SalesReturnStatus.void]
+    branch_cond = _branch_condition(SalesReturn.branch_id, branch_id, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if date_from:
+        conds.append(SalesReturn.date >= _iso_date(date_from))
+    if date_to:
+        conds.append(SalesReturn.date <= _iso_date(date_to))
+    if search:
+        conds.append(
+            SalesReturn.number.ilike(f"%{search}%")
+            | SalesReturn.customer_name.ilike(f"%{search}%")
+        )
+    if payment_mode is not None and str(payment_mode).strip() != "":
+        raw = str(payment_mode).strip()
+        if raw.lower() in ("unrecorded", "__none__"):
+            conds.append(SaleInvoice.payment_mode.is_(None))
+        else:
+            conds.append(func.lower(SaleInvoice.payment_mode) == raw.lower())
+    if cashier_id is not None and str(cashier_id).strip() != "":
+        raw_cashier = str(cashier_id).strip()
+        if raw_cashier in ("__none__",):
+            conds.append(SaleInvoice.cashier.is_(None) | (SaleInvoice.cashier == ""))
+        else:
+            conds.append(
+                SaleInvoice.cashier.in_(select(User.name).where(User.id == raw_cashier))
+            )
+    if customer_id is not None and str(customer_id).strip() != "":
+        raw_customer = str(customer_id).strip()
+        if raw_customer in ("__none__",):
+            conds.append(SalesReturn.customer_id.is_(None))
+        else:
+            conds.append(SalesReturn.customer_id == raw_customer)
+    if item_id:
+        conds.append(
+            SalesReturn.id.in_(
+                select(SalesReturnLineItem.return_id).where(SalesReturnLineItem.item_id == item_id)
+            )
+        )
+    if category_id:
+        if category_id in ("__none__", "__uncategorized__"):
+            conds.append(
+                SalesReturn.id.in_(
+                    select(SalesReturnLineItem.return_id)
+                    .outerjoin(Item, Item.id == SalesReturnLineItem.item_id)
+                    .where(Item.category_id.is_(None))
+                )
+            )
+        else:
+            conds.append(
+                SalesReturn.id.in_(
+                    select(SalesReturnLineItem.return_id)
+                    .join(Item, Item.id == SalesReturnLineItem.item_id)
+                    .where(Item.category_id == category_id)
+                )
+            )
+    return conds
+
+
+def _sales_register_union_query(inv_conds, cn_conds):
+    """Invoice rows (positive) UNION credit-note rows (negative amounts)."""
+    inv_q = select(
+        SaleInvoice.id.label("invoice_id"),
+        SaleInvoice.number.label("invoice_number"),
+        SaleInvoice.date.label("invoice_date"),
+        SaleInvoice.customer_name.label("customer"),
+        SaleInvoice.branch_name.label("branch"),
+        SaleInvoice.cashier.label("cashier"),
+        SaleInvoice.subtotal.label("taxable_amount"),
+        SaleInvoice.tax_total.label("tax_amount"),
+        SaleInvoice.discount.label("discount"),
+        SaleInvoice.total.label("net_amount"),
+        SaleInvoice.payment_mode.label("payment_mode"),
+        func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
+        _invoice_outstanding_expr().label("remaining_amount"),
+        literal("Invoice").label("transaction_type"),
+        cast(SaleInvoice.status, String).label("status"),
+        _null_str().label("document_id"),
+        literal("invoice").label("detail_kind"),
+    ).where(and_(*inv_conds) if inv_conds else True)
+
+    cn_q = (
+        select(
+            _null_str().label("invoice_id"),
+            SalesReturn.number.label("invoice_number"),
+            SalesReturn.date.label("invoice_date"),
+            SalesReturn.customer_name.label("customer"),
+            SalesReturn.branch_name.label("branch"),
+            SaleInvoice.cashier.label("cashier"),
+            (-func.coalesce(SalesReturn.subtotal, 0)).label("taxable_amount"),
+            (-func.coalesce(SalesReturn.tax_total, 0)).label("tax_amount"),
+            literal(0.0).label("discount"),
+            (-func.coalesce(SalesReturn.total, 0)).label("net_amount"),
+            SaleInvoice.payment_mode.label("payment_mode"),
+            (-func.coalesce(SalesReturn.credited_amount, 0)).label("paid_amount"),
+            literal(0.0).label("remaining_amount"),
+            literal("Credit Note").label("transaction_type"),
+            cast(SalesReturn.status, String).label("status"),
+            SalesReturn.id.label("document_id"),
+            literal("credit_note").label("detail_kind"),
+        )
+        .select_from(SalesReturn)
+        .join(SaleInvoice, SaleInvoice.id == SalesReturn.invoice_id)
+        .where(and_(*cn_conds) if cn_conds else True)
+    )
+    return inv_q.union_all(cn_q).subquery()
+
+
+def _signed_sales_docs_subquery(inv_conds, cn_conds):
+    """One row per invoice (+) and credit note (−) with signed totals/qty."""
+    per_inv = (
+        select(
+            SaleInvoice.date.label("doc_date"),
+            SaleInvoice.id.label("doc_id"),
+            SaleInvoice.payment_mode.label("payment_mode"),
+            SaleInvoice.cashier.label("cashier"),
+            SaleInvoice.branch_id.label("branch_id"),
+            SaleInvoice.branch_name.label("branch"),
+            SaleInvoice.customer_id.label("customer_id"),
+            SaleInvoice.customer_name.label("customer"),
+            SaleInvoice.total.label("total"),
+            func.coalesce(SaleInvoice.discount, 0).label("discount"),
+            func.coalesce(SaleInvoice.tax_total, 0).label("tax_total"),
+            func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
+            _invoice_outstanding_expr().label("outstanding"),
+            func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
+        )
+        .select_from(SaleInvoice)
+        .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
+        .where(and_(*inv_conds) if inv_conds else True)
+        .group_by(
+            SaleInvoice.date,
+            SaleInvoice.id,
+            SaleInvoice.payment_mode,
+            SaleInvoice.cashier,
+            SaleInvoice.branch_id,
+            SaleInvoice.branch_name,
+            SaleInvoice.customer_id,
+            SaleInvoice.customer_name,
+            SaleInvoice.total,
+            SaleInvoice.discount,
+            SaleInvoice.tax_total,
+            SaleInvoice.paid_amount,
+            SaleInvoice.credited_amount,
+        )
+    )
+    per_cn = (
+        select(
+            SalesReturn.date.label("doc_date"),
+            SalesReturn.id.label("doc_id"),
+            SaleInvoice.payment_mode.label("payment_mode"),
+            SaleInvoice.cashier.label("cashier"),
+            SalesReturn.branch_id.label("branch_id"),
+            SalesReturn.branch_name.label("branch"),
+            SalesReturn.customer_id.label("customer_id"),
+            SalesReturn.customer_name.label("customer"),
+            (-func.coalesce(SalesReturn.total, 0)).label("total"),
+            literal(0.0).label("discount"),
+            (-func.coalesce(SalesReturn.tax_total, 0)).label("tax_total"),
+            literal(0.0).label("paid_amount"),
+            literal(0.0).label("outstanding"),
+            (-func.coalesce(func.sum(SalesReturnLineItem.return_qty), 0)).label("quantity_sold"),
+        )
+        .select_from(SalesReturn)
+        .join(SaleInvoice, SaleInvoice.id == SalesReturn.invoice_id)
+        .outerjoin(SalesReturnLineItem, SalesReturnLineItem.return_id == SalesReturn.id)
+        .where(and_(*cn_conds) if cn_conds else True)
+        .group_by(
+            SalesReturn.date,
+            SalesReturn.id,
+            SaleInvoice.payment_mode,
+            SaleInvoice.cashier,
+            SalesReturn.branch_id,
+            SalesReturn.branch_name,
+            SalesReturn.customer_id,
+            SalesReturn.customer_name,
+            SalesReturn.total,
+            SalesReturn.tax_total,
+        )
+    )
+    return per_inv.union_all(per_cn).subquery()
+
+
+def _signed_sales_lines_query(inv_conds, cn_conds):
+    """Invoice lines (positive qty/value) UNION credit-note lines (negative)."""
+    inv_q = (
+        select(
+            SaleInvoice.id.label("invoice_id"),
+            SaleInvoice.number.label("invoice_number"),
+            SaleInvoice.date.label("invoice_date"),
+            SaleLineItem.item_id.label("item_id"),
+            func.coalesce(Item.sku, SaleLineItem.sku, SaleLineItem.item_id).label("product_code"),
+            SaleLineItem.name.label("product_name"),
+            Category.id.label("category_id"),
+            func.coalesce(Category.name, "Uncategorized").label("category"),
+            SaleInvoice.customer_name.label("customer"),
+            SaleInvoice.branch_name.label("branch"),
+            SaleInvoice.cashier.label("cashier"),
+            SaleLineItem.qty.label("quantity"),
+            SaleLineItem.price.label("unit_price"),
+            SaleLineItem.discount.label("discount"),
+            SaleLineItem.line_total.label("line_total"),
+            (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty).label("cost_value"),
+            (
+                SaleLineItem.line_total
+                - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
+            ).label("profit"),
+            SaleInvoice.payment_mode.label("payment_mode"),
+            func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
+            _invoice_outstanding_expr().label("remaining_amount"),
+            literal("Invoice").label("transaction_type"),
+            cast(SaleInvoice.status, String).label("status"),
+            _null_str().label("document_id"),
+            literal("invoice").label("detail_kind"),
+        )
+        .select_from(SaleLineItem)
+        .join(SaleInvoice, SaleInvoice.id == SaleLineItem.invoice_id)
+        .outerjoin(Item, Item.id == SaleLineItem.item_id)
+        .outerjoin(Category, Category.id == Item.category_id)
+        .where(and_(*inv_conds) if inv_conds else True)
+    )
+    cn_q = (
+        select(
+            _null_str().label("invoice_id"),
+            SalesReturn.number.label("invoice_number"),
+            SalesReturn.date.label("invoice_date"),
+            SalesReturnLineItem.item_id.label("item_id"),
+            func.coalesce(Item.sku, SalesReturnLineItem.item_id).label("product_code"),
+            SalesReturnLineItem.name.label("product_name"),
+            Category.id.label("category_id"),
+            func.coalesce(Category.name, "Uncategorized").label("category"),
+            SalesReturn.customer_name.label("customer"),
+            SalesReturn.branch_name.label("branch"),
+            SaleInvoice.cashier.label("cashier"),
+            (-func.coalesce(SalesReturnLineItem.return_qty, 0)).label("quantity"),
+            SalesReturnLineItem.price.label("unit_price"),
+            literal(0.0).label("discount"),
+            (-func.coalesce(SalesReturnLineItem.line_total, 0)).label("line_total"),
+            (
+                -func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0)
+            ).label("cost_value"),
+            (
+                -func.coalesce(SalesReturnLineItem.line_total, 0)
+                + (func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0))
+            ).label("profit"),
+            SaleInvoice.payment_mode.label("payment_mode"),
+            literal(0.0).label("paid_amount"),
+            literal(0.0).label("remaining_amount"),
+            literal("Credit Note").label("transaction_type"),
+            cast(SalesReturn.status, String).label("status"),
+            SalesReturn.id.label("document_id"),
+            literal("credit_note").label("detail_kind"),
+        )
+        .select_from(SalesReturnLineItem)
+        .join(SalesReturn, SalesReturn.id == SalesReturnLineItem.return_id)
+        .join(SaleInvoice, SaleInvoice.id == SalesReturn.invoice_id)
+        .outerjoin(Item, Item.id == SalesReturnLineItem.item_id)
+        .outerjoin(Category, Category.id == Item.category_id)
+        .where(and_(*cn_conds) if cn_conds else True)
+    )
+    return inv_q.union_all(cn_q)
+
+
 def _purchase_filters(
     branch_id: Optional[str],
     vendor_id: Optional[str],
@@ -281,6 +638,241 @@ def _purchase_filters(
             )
         )
     return conds
+
+
+def _vr_filters(
+    branch_id: Optional[str],
+    vendor_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    allowed_branch_ids: Optional[list[str]] = None,
+    item_id: Optional[str] = None,
+):
+    """Filters for active vendor returns (debit notes)."""
+    conds = [VendorReturn.voided.is_(False)]
+    branch_cond = _branch_condition(VendorReturn.branch_id, branch_id, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if vendor_id:
+        conds.append(VendorReturn.vendor_id == vendor_id)
+    if date_from:
+        conds.append(VendorReturn.date >= _iso_date(date_from))
+    if date_to:
+        conds.append(VendorReturn.date <= _iso_date(date_to))
+    if search:
+        conds.append(
+            VendorReturn.number.ilike(f"%{search}%")
+            | VendorReturn.vendor_name.ilike(f"%{search}%")
+        )
+    if item_id:
+        conds.append(
+            VendorReturn.id.in_(
+                select(ReturnLineItem.return_id).where(ReturnLineItem.item_id == item_id)
+            )
+        )
+    return conds
+
+
+def _active_vendor_return_totals():
+    """All active returns per bill — used to restore original bill amounts.
+
+    Creating a vendor return mutates PurchaseBill.total / paid_amount, so reports
+    must add those returns back on the bill row and then list them as negatives.
+    Date filters apply only to the debit-note union rows, not this restore.
+    """
+    return (
+        select(
+            VendorReturn.bill_id.label("bill_id"),
+            func.coalesce(func.sum(VendorReturn.total), 0).label("ret_total"),
+            func.coalesce(func.sum(VendorReturn.credited_amount), 0).label("ret_credited"),
+        )
+        .where(VendorReturn.voided.is_(False))
+        .group_by(VendorReturn.bill_id)
+        .subquery()
+    )
+
+
+def _original_bill_total(vr_agg):
+    return func.coalesce(PurchaseBill.total, 0) + func.coalesce(vr_agg.c.ret_total, 0)
+
+
+def _original_bill_paid(vr_agg):
+    return func.coalesce(PurchaseBill.paid_amount, 0) + func.coalesce(vr_agg.c.ret_credited, 0)
+
+
+def _bill_outstanding_expr(vr_agg):
+    """AP remaining after payments and active vendor returns. Never below 0."""
+    raw = (
+        func.coalesce(PurchaseBill.total, 0)
+        - func.coalesce(PurchaseBill.paid_amount, 0)
+        - func.coalesce(vr_agg.c.ret_credited, 0)
+    )
+    return case((raw < 0, literal(0.0)), else_=raw)
+
+
+def _purchase_register_union_query(bill_conds, vr_conds):
+    """Bill rows (original / positive) UNION vendor-return rows (negative amounts)."""
+    vr_agg = _active_vendor_return_totals()
+    bill_q = (
+        select(
+            PurchaseBill.id.label("bill_id"),
+            PurchaseBill.number.label("bill_number"),
+            PurchaseBill.date.label("bill_date"),
+            PurchaseBill.vendor_name.label("vendor"),
+            PurchaseBill.branch_name.label("branch"),
+            PurchaseBill.subtotal.label("subtotal"),
+            PurchaseBill.tax_total.label("tax"),
+            _original_bill_total(vr_agg).label("total"),
+            _original_bill_paid(vr_agg).label("paid"),
+            _bill_outstanding_expr(vr_agg).label("balance"),
+            literal("Bill").label("transaction_type"),
+            cast(PurchaseBill.status, String).label("status"),
+            _null_str().label("document_id"),
+            literal("bill").label("detail_kind"),
+        )
+        .select_from(PurchaseBill)
+        .outerjoin(vr_agg, vr_agg.c.bill_id == PurchaseBill.id)
+        .where(and_(*bill_conds) if bill_conds else True)
+    )
+    vr_q = (
+        select(
+            _null_str().label("bill_id"),
+            VendorReturn.number.label("bill_number"),
+            VendorReturn.date.label("bill_date"),
+            VendorReturn.vendor_name.label("vendor"),
+            VendorReturn.branch_name.label("branch"),
+            (-func.coalesce(VendorReturn.subtotal, 0)).label("subtotal"),
+            (-func.coalesce(VendorReturn.tax_total, 0)).label("tax"),
+            (-func.coalesce(VendorReturn.total, 0)).label("total"),
+            (-func.coalesce(VendorReturn.credited_amount, 0)).label("paid"),
+            literal(0.0).label("balance"),
+            literal("Debit Note").label("transaction_type"),
+            cast(VendorReturn.status, String).label("status"),
+            VendorReturn.id.label("document_id"),
+            literal("debit_note").label("detail_kind"),
+        )
+        .select_from(VendorReturn)
+        .where(and_(*vr_conds) if vr_conds else True)
+    )
+    return bill_q.union_all(vr_q).subquery()
+
+
+def _signed_purchase_docs_subquery(bill_conds, vr_conds):
+    """One row per bill (+) and vendor return (−) with signed totals/qty."""
+    vr_agg = _active_vendor_return_totals()
+    per_bill = (
+        select(
+            PurchaseBill.date.label("doc_date"),
+            PurchaseBill.id.label("doc_id"),
+            PurchaseBill.vendor_id.label("vendor_id"),
+            PurchaseBill.vendor_name.label("vendor"),
+            PurchaseBill.branch_id.label("branch_id"),
+            PurchaseBill.branch_name.label("branch"),
+            _original_bill_total(vr_agg).label("total"),
+            func.coalesce(PurchaseBill.tax_total, 0).label("tax_total"),
+            _original_bill_paid(vr_agg).label("paid_amount"),
+            _bill_outstanding_expr(vr_agg).label("outstanding"),
+            func.coalesce(func.sum(PurchaseLineItem.qty), 0).label("quantity_purchased"),
+        )
+        .select_from(PurchaseBill)
+        .outerjoin(vr_agg, vr_agg.c.bill_id == PurchaseBill.id)
+        .outerjoin(PurchaseLineItem, PurchaseLineItem.bill_id == PurchaseBill.id)
+        .where(and_(*bill_conds) if bill_conds else True)
+        .group_by(
+            PurchaseBill.date,
+            PurchaseBill.id,
+            PurchaseBill.vendor_id,
+            PurchaseBill.vendor_name,
+            PurchaseBill.branch_id,
+            PurchaseBill.branch_name,
+            PurchaseBill.total,
+            PurchaseBill.tax_total,
+            PurchaseBill.paid_amount,
+            PurchaseBill.credited_amount,
+            vr_agg.c.ret_total,
+            vr_agg.c.ret_credited,
+        )
+    )
+    per_vr = (
+        select(
+            VendorReturn.date.label("doc_date"),
+            VendorReturn.id.label("doc_id"),
+            VendorReturn.vendor_id.label("vendor_id"),
+            VendorReturn.vendor_name.label("vendor"),
+            VendorReturn.branch_id.label("branch_id"),
+            VendorReturn.branch_name.label("branch"),
+            (-func.coalesce(VendorReturn.total, 0)).label("total"),
+            (-func.coalesce(VendorReturn.tax_total, 0)).label("tax_total"),
+            (-func.coalesce(VendorReturn.credited_amount, 0)).label("paid_amount"),
+            literal(0.0).label("outstanding"),
+            (-func.coalesce(func.sum(ReturnLineItem.return_qty), 0)).label("quantity_purchased"),
+        )
+        .select_from(VendorReturn)
+        .outerjoin(ReturnLineItem, ReturnLineItem.return_id == VendorReturn.id)
+        .where(and_(*vr_conds) if vr_conds else True)
+        .group_by(
+            VendorReturn.date,
+            VendorReturn.id,
+            VendorReturn.vendor_id,
+            VendorReturn.vendor_name,
+            VendorReturn.branch_id,
+            VendorReturn.branch_name,
+            VendorReturn.total,
+            VendorReturn.tax_total,
+            VendorReturn.credited_amount,
+        )
+    )
+    return per_bill.union_all(per_vr).subquery()
+
+
+def _signed_purchase_lines_query(bill_conds, vr_conds):
+    """Bill lines (positive qty/value) UNION vendor-return lines (negative)."""
+    bill_q = (
+        select(
+            PurchaseBill.id.label("bill_id"),
+            PurchaseBill.number.label("bill_number"),
+            PurchaseBill.date.label("bill_date"),
+            PurchaseLineItem.item_id.label("item_id"),
+            PurchaseLineItem.name.label("product"),
+            PurchaseBill.vendor_name.label("vendor"),
+            PurchaseBill.branch_name.label("branch"),
+            PurchaseLineItem.qty.label("quantity"),
+            PurchaseLineItem.cost.label("unit_cost"),
+            PurchaseLineItem.discount.label("discount"),
+            PurchaseLineItem.line_total.label("line_total"),
+            literal("Bill").label("transaction_type"),
+            cast(PurchaseBill.status, String).label("status"),
+            _null_str().label("document_id"),
+            literal("bill").label("detail_kind"),
+        )
+        .select_from(PurchaseLineItem)
+        .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
+        .where(and_(*bill_conds) if bill_conds else True)
+    )
+    vr_q = (
+        select(
+            _null_str().label("bill_id"),
+            VendorReturn.number.label("bill_number"),
+            VendorReturn.date.label("bill_date"),
+            ReturnLineItem.item_id.label("item_id"),
+            ReturnLineItem.name.label("product"),
+            VendorReturn.vendor_name.label("vendor"),
+            VendorReturn.branch_name.label("branch"),
+            (-func.coalesce(ReturnLineItem.return_qty, 0)).label("quantity"),
+            ReturnLineItem.cost.label("unit_cost"),
+            literal(0.0).label("discount"),
+            (-func.coalesce(ReturnLineItem.line_total, 0)).label("line_total"),
+            literal("Debit Note").label("transaction_type"),
+            cast(VendorReturn.status, String).label("status"),
+            VendorReturn.id.label("document_id"),
+            literal("debit_note").label("detail_kind"),
+        )
+        .select_from(ReturnLineItem)
+        .join(VendorReturn, VendorReturn.id == ReturnLineItem.return_id)
+        .where(and_(*vr_conds) if vr_conds else True)
+    )
+    return bill_q.union_all(vr_q)
 
 
 def _branch_filter(search: Optional[str], branch_id: Optional[str]):
@@ -388,25 +980,19 @@ async def sales_summary(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _sale_filters(branch_id, None, start, end, allowed_branch_ids=branch_scope)
-    base = and_(*conds) if conds else True
-    start, end = parse_date_range(
-        date_from,
-        date_to,
-        date.today() - timedelta(days=30),
-        date.today(),
-        MAX_REPORT_DATE_RANGE_DAYS,
-    )
+    inv_conds = _sale_filters(branch_id, None, start, end, allowed_branch_ids=branch_scope)
+    cn_conds = _cn_filters(branch_id, None, start, end, allowed_branch_ids=branch_scope)
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     logger.debug("Sales summary date range %s to %s", start.isoformat(), end.isoformat())
 
     q = select(
-        func.sum(SaleInvoice.total).label("total"),
-        func.count(SaleInvoice.id).label("count"),
-        func.sum(SaleInvoice.tax_total).label("gst"),
-        func.sum(SaleInvoice.discount).label("discount"),
-        func.sum(SaleInvoice.paid_amount).label("collected"),
-    )
-    q = q.where(base)
+        func.coalesce(func.sum(docs.c.total), 0).label("total"),
+        func.count(docs.c.doc_id).label("count"),
+        func.coalesce(func.sum(docs.c.tax_total), 0).label("gst"),
+        func.coalesce(func.sum(docs.c.discount), 0).label("discount"),
+        func.coalesce(func.sum(docs.c.paid_amount), 0).label("collected"),
+        func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding"),
+    ).select_from(docs)
     result = await db.execute(q)
     row = result.one()
 
@@ -415,31 +1001,20 @@ async def sales_summary(
         for i in range(3, 17)
     ]
 
-    total_sales = float(
-        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.total), 0)).where(base))).scalar() or 0
-    )
-    invoice_count = int(
-        (await db.execute(select(func.count(SaleInvoice.id)).where(base))).scalar() or 0
-    )
-    total_tax = float(
-        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.tax_total), 0)).where(base))).scalar() or 0
-    )
-    total_discount = float(
-        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.discount), 0)).where(base))).scalar() or 0
-    )
-    total_paid = float(
-        (await db.execute(select(func.coalesce(func.sum(SaleInvoice.paid_amount), 0)).where(base))).scalar() or 0
-    )
+    total_sales = float(row.total or 0)
+    total_tax = float(row.gst or 0)
+    total_discount = float(row.discount or 0)
+    total_paid = float(row.collected or 0)
     return {
         "period": {"from": start, "to": end},
         "total_tax": total_tax,
         "total_paid": total_paid,
-        "total_sales": float(row.total or 0),
+        "total_sales": total_sales,
         "invoice_count": int(row.count or 0),
-        "total_gst": float(row.gst or 0),
-        "total_discount": float(row.discount or 0),
-        "collected": float(row.collected or 0),
-        "outstanding": float((row.total or 0) - (row.collected or 0)),
+        "total_gst": total_tax,
+        "total_discount": total_discount,
+        "collected": total_paid,
+        "outstanding": float(row.outstanding or 0),
         "daily": daily,
     }
 
@@ -454,45 +1029,27 @@ async def purchase_summary(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _purchase_filters(branch_id, None, None, start, end, allowed_branch_ids=branch_scope)
-    base = and_(*conds) if conds else True
-
-    total_purchases = float(
-        (await db.execute(select(func.coalesce(func.sum(PurchaseBill.total), 0)).where(base))).scalar() or 0
-    )
-    bill_count = int(
-        (await db.execute(select(func.count(PurchaseBill.id)).where(base))).scalar() or 0
-    )
-    total_paid = float(
-        (await db.execute(select(func.coalesce(func.sum(PurchaseBill.paid_amount), 0)).where(base))).scalar() or 0
-    )
-    start, end = parse_date_range(
-        date_from,
-        date_to,
-        date.today() - timedelta(days=30),
-        date.today(),
-        MAX_REPORT_DATE_RANGE_DAYS,
-    )
+    bill_conds = _purchase_filters(branch_id, None, None, start, end, allowed_branch_ids=branch_scope)
+    vr_conds = _vr_filters(branch_id, None, None, start, end, allowed_branch_ids=branch_scope)
+    docs = _signed_purchase_docs_subquery(bill_conds, vr_conds)
     logger.debug("Purchase summary date range %s to %s", start.isoformat(), end.isoformat())
 
     q = select(
-        func.sum(PurchaseBill.total).label("total"),
-        func.count(PurchaseBill.id).label("count"),
-        func.sum(PurchaseBill.paid_amount).label("paid"),
-    )
-    q = q.where(base)
+        func.coalesce(func.sum(docs.c.total), 0).label("total"),
+        func.count(docs.c.doc_id).label("count"),
+        func.coalesce(func.sum(docs.c.paid_amount), 0).label("paid"),
+        func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding"),
+    ).select_from(docs)
     result = await db.execute(q)
     row = result.one()
+    total_purchases = float(row.total or 0)
+    total_paid = float(row.paid or 0)
     return {
-        "total_purchases": float(row.total or 0),
-        "bill_count": int(row.count or 0),
-        "paid": float(row.paid or 0),
-        "outstanding": float((row.total or 0) - (row.paid or 0)),
         "period": {"from": start, "to": end},
         "total_purchases": total_purchases,
-        "bill_count": bill_count,
+        "bill_count": int(row.count or 0),
         "paid": total_paid,
-        "outstanding": max(0, total_purchases - total_paid),
+        "outstanding": float(row.outstanding or 0),
     }
 
 
@@ -707,6 +1264,7 @@ async def tax_summary_detail(
     tax_name: Optional[str] = None,
     full_rate: Optional[float] = None,
     tax_percentage: Optional[float] = None,
+    transaction_type: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -835,7 +1393,14 @@ async def tax_summary_detail(
     )
 
     rows: list[dict[str, Any]] = []
-    for query, sign in ((invoice_q, 1), (bill_q, 1), (cn_q, -1), (dn_q, -1)):
+    for query, sign, txn_label in (
+        (invoice_q, 1, "Invoice"),
+        (bill_q, 1, "Bill"),
+        (cn_q, -1, "Credit Note"),
+        (dn_q, -1, "Debit Note"),
+    ):
+        if not _wants_transaction_type(transaction_type, txn_label):
+            continue
         for raw in (await db.execute(query)).fetchall():
             mapping = dict(raw._mapping)
             if not _rate_match(mapping.get("rate") or 0):
@@ -885,6 +1450,7 @@ async def sales_register(
     customer_id: Optional[str] = None,
     item_id: Optional[str] = None,
     category_id: Optional[str] = None,
+    transaction_type: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -894,11 +1460,11 @@ async def sales_register(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _sale_filters(
-        branch_id,
-        search,
-        start,
-        end,
+    filter_kwargs = dict(
+        branch_id=branch_id,
+        search=search,
+        date_from=start,
+        date_to=end,
         allowed_branch_ids=branch_scope,
         payment_mode=payment_mode,
         cashier_id=cashier_id,
@@ -906,45 +1472,33 @@ async def sales_register(
         item_id=item_id,
         category_id=category_id,
     )
-    query = select(
-        SaleInvoice.id.label("invoice_id"),
-        SaleInvoice.number.label("invoice_number"),
-        SaleInvoice.date.label("invoice_date"),
-        SaleInvoice.customer_name.label("customer"),
-        SaleInvoice.branch_name.label("branch"),
-        SaleInvoice.cashier.label("cashier"),
-        SaleInvoice.subtotal.label("taxable_amount"),
-        SaleInvoice.tax_total.label("tax_amount"),
-        SaleInvoice.discount.label("discount"),
-        SaleInvoice.total.label("net_amount"),
-        SaleInvoice.payment_mode.label("payment_mode"),
-        func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
-        (SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0)).label("remaining_amount"),
-        SaleInvoice.status.label("status"),
-    ).where(and_(*conds) if conds else True)
+    inv_conds = _sale_filters(**filter_kwargs)
+    cn_conds = _cn_filters(**filter_kwargs)
+    docs = _sales_register_union_query(inv_conds, cn_conds)
 
     sort_map = {
-        "invoice_number": SaleInvoice.number,
-        "invoice_date": SaleInvoice.date,
-        "customer": SaleInvoice.customer_name,
-        "branch": SaleInvoice.branch_name,
-        "cashier": SaleInvoice.cashier,
-        "taxable_amount": SaleInvoice.subtotal,
-        "tax_amount": SaleInvoice.tax_total,
-        "discount": SaleInvoice.discount,
-        "net_amount": SaleInvoice.total,
-        "payment_mode": SaleInvoice.payment_mode,
-        "paid_amount": SaleInvoice.paid_amount,
-        "remaining_amount": SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0),
-        "status": SaleInvoice.status,
+        "invoice_number": docs.c.invoice_number,
+        "invoice_date": docs.c.invoice_date,
+        "customer": docs.c.customer,
+        "branch": docs.c.branch,
+        "cashier": docs.c.cashier,
+        "taxable_amount": docs.c.taxable_amount,
+        "tax_amount": docs.c.tax_amount,
+        "discount": docs.c.discount,
+        "net_amount": docs.c.net_amount,
+        "payment_mode": docs.c.payment_mode,
+        "paid_amount": docs.c.paid_amount,
+        "remaining_amount": docs.c.remaining_amount,
+        "transaction_type": docs.c.transaction_type,
+        "status": docs.c.status,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "invoice_date", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    total_q = select(func.count()).select_from(SaleInvoice).where(and_(*conds) if conds else True)
-    total = int((await db.execute(total_q)).scalar() or 0)
+    query = _restrict_transaction_types(select(docs), docs.c.transaction_type, transaction_type)
+    total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
     result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -958,6 +1512,7 @@ async def sales_lines(
     date_to: Optional[str] = None,
     item_id: Optional[str] = None,
     category_id: Optional[str] = None,
+    transaction_type: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -967,87 +1522,77 @@ async def sales_lines(
 ):
     """Line-item sales detail for product / category drilldowns.
 
-    Unlike sales-register (one row per invoice), this returns one row per
-    sale line so qty / line_total roll up to product-wise / category-wise parents.
+    Unlike sales-register (one row per invoice / credit note), this returns
+    one row per line so qty / line_total roll up to product-wise / category-wise
+    parents. Credit-note lines are signed negative.
     """
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    inv_conds = [
         SaleInvoice.status != InvoiceStatus.cancelled,
-        SaleInvoice.date >= (start.isoformat() if hasattr(start, "isoformat") else start),
-        SaleInvoice.date <= (end.isoformat() if hasattr(end, "isoformat") else end),
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
+    ]
+    cn_conds = [
+        SalesReturn.status != SalesReturnStatus.void,
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
     if search:
-        conds.append(
+        inv_conds.append(
             SaleInvoice.number.ilike(f"%{search}%")
             | SaleLineItem.name.ilike(f"%{search}%")
             | SaleInvoice.customer_name.ilike(f"%{search}%")
         )
+        cn_conds.append(
+            SalesReturn.number.ilike(f"%{search}%")
+            | SalesReturnLineItem.name.ilike(f"%{search}%")
+            | SalesReturn.customer_name.ilike(f"%{search}%")
+        )
     if item_id:
-        conds.append(SaleLineItem.item_id == item_id)
+        inv_conds.append(SaleLineItem.item_id == item_id)
+        cn_conds.append(SalesReturnLineItem.item_id == item_id)
     if category_id:
         if category_id in ("__none__", "__uncategorized__"):
-            conds.append(Item.category_id.is_(None))
+            inv_conds.append(Item.category_id.is_(None))
+            cn_conds.append(Item.category_id.is_(None))
         else:
-            conds.append(Item.category_id == category_id)
+            inv_conds.append(Item.category_id == category_id)
+            cn_conds.append(Item.category_id == category_id)
 
+    lines = _signed_sales_lines_query(inv_conds, cn_conds).subquery()
     sort_map = {
-        "invoice_number": SaleInvoice.number,
-        "invoice_date": SaleInvoice.date,
-        "product_code": func.coalesce(Item.sku, SaleLineItem.sku, SaleLineItem.item_id),
-        "product_name": SaleLineItem.name,
-        "customer": SaleInvoice.customer_name,
-        "branch": SaleInvoice.branch_name,
-        "cashier": SaleInvoice.cashier,
-        "quantity": SaleLineItem.qty,
-        "unit_price": SaleLineItem.price,
-        "discount": SaleLineItem.discount,
-        "line_total": SaleLineItem.line_total,
-        "payment_mode": SaleInvoice.payment_mode,
-        "paid_amount": SaleInvoice.paid_amount,
-        "remaining_amount": SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0),
-        "status": SaleInvoice.status,
+        "invoice_number": lines.c.invoice_number,
+        "invoice_date": lines.c.invoice_date,
+        "product_code": lines.c.product_code,
+        "product_name": lines.c.product_name,
+        "customer": lines.c.customer,
+        "branch": lines.c.branch,
+        "cashier": lines.c.cashier,
+        "quantity": lines.c.quantity,
+        "unit_price": lines.c.unit_price,
+        "discount": lines.c.discount,
+        "line_total": lines.c.line_total,
+        "payment_mode": lines.c.payment_mode,
+        "paid_amount": lines.c.paid_amount,
+        "remaining_amount": lines.c.remaining_amount,
+        "transaction_type": lines.c.transaction_type,
+        "status": lines.c.status,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "invoice_date", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    query = (
-        select(
-            SaleInvoice.id.label("invoice_id"),
-            SaleInvoice.number.label("invoice_number"),
-            SaleInvoice.date.label("invoice_date"),
-            SaleLineItem.item_id.label("item_id"),
-            func.coalesce(Item.sku, SaleLineItem.sku, SaleLineItem.item_id).label("product_code"),
-            SaleLineItem.name.label("product_name"),
-            SaleInvoice.customer_name.label("customer"),
-            SaleInvoice.branch_name.label("branch"),
-            SaleInvoice.cashier.label("cashier"),
-            SaleLineItem.qty.label("quantity"),
-            SaleLineItem.price.label("unit_price"),
-            SaleLineItem.discount.label("discount"),
-            SaleLineItem.line_total.label("line_total"),
-            SaleInvoice.payment_mode.label("payment_mode"),
-            func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
-            (SaleInvoice.total - func.coalesce(SaleInvoice.paid_amount, 0)).label("remaining_amount"),
-            SaleInvoice.status.label("status"),
-        )
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleInvoice.id == SaleLineItem.invoice_id)
-        .outerjoin(Item, Item.id == SaleLineItem.item_id)
-        .where(and_(*conds))
-    )
-    total_q = (
-        select(func.count())
-        .select_from(SaleLineItem)
-        .join(SaleInvoice, SaleInvoice.id == SaleLineItem.invoice_id)
-        .outerjoin(Item, Item.id == SaleLineItem.item_id)
-        .where(and_(*conds))
-    )
-    total = int((await db.execute(total_q)).scalar() or 0)
+    query = _restrict_transaction_types(select(lines), lines.c.transaction_type, transaction_type)
+    total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
     result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -1068,80 +1613,60 @@ async def daily_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
 
-    date_expr = func.to_date(SaleInvoice.date, "YYYY-MM-DD")
-    # Exclude cancelled so parent totals match sales-register drilldowns.
-    si_conds = [
-        date_expr >= start,
-        date_expr <= end,
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        si_conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
     if search:
-        si_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
+        inv_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
+        cn_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
 
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    # Aggregate line qty per invoice first so invoice-level totals are not
-    # multiplied by the number of line items (which inflated invoice_count /
-    # gross_sales / tax when drilling into sales-register).
-    # net_sales uses invoice total (same as sales-register net_amount), not
-    # paid_amount — collections diverge on credit / partial payments.
-    per_invoice = (
-        select(
-            date_expr.label("sale_date"),
-            SaleInvoice.id.label("invoice_id"),
-            SaleInvoice.total.label("total"),
-            SaleInvoice.discount.label("discount"),
-            SaleInvoice.tax_total.label("tax_total"),
-            func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-        )
-        .select_from(SaleInvoice)
-        .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
-        .where(and_(*si_conds))
-        .group_by(
-            date_expr,
-            SaleInvoice.id,
-            SaleInvoice.total,
-            SaleInvoice.discount,
-            SaleInvoice.tax_total,
-        )
-    ).subquery()
-
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     base_q = (
         select(
-            per_invoice.c.sale_date.label("date"),
-            func.count(per_invoice.c.invoice_id).label("invoice_count"),
-            func.coalesce(func.sum(per_invoice.c.quantity_sold), 0).label("quantity_sold"),
-            func.coalesce(func.sum(per_invoice.c.total), 0).label("gross_sales"),
-            func.coalesce(func.sum(per_invoice.c.discount), 0).label("discounts"),
-            func.coalesce(func.sum(per_invoice.c.tax_total), 0).label("tax"),
-            func.coalesce(func.sum(per_invoice.c.total), 0).label("net_sales"),
+            docs.c.doc_date.label("date"),
+            func.count(docs.c.doc_id).label("invoice_count"),
+            func.coalesce(func.sum(docs.c.quantity_sold), 0).label("quantity_sold"),
+            func.coalesce(func.sum(docs.c.total), 0).label("gross_sales"),
+            func.coalesce(func.sum(docs.c.discount), 0).label("discounts"),
+            func.coalesce(func.sum(docs.c.tax_total), 0).label("tax"),
+            func.coalesce(func.sum(docs.c.total), 0).label("net_sales"),
         )
-        .select_from(per_invoice)
-        .group_by(per_invoice.c.sale_date)
+        .select_from(docs)
+        .group_by(docs.c.doc_date)
     )
 
     sort_map = {
-        "date": per_invoice.c.sale_date,
-        "invoice_count": func.count(per_invoice.c.invoice_id),
-        "quantity_sold": func.coalesce(func.sum(per_invoice.c.quantity_sold), 0),
-        "gross_sales": func.coalesce(func.sum(per_invoice.c.total), 0),
-        "discounts": func.coalesce(func.sum(per_invoice.c.discount), 0),
-        "tax": func.coalesce(func.sum(per_invoice.c.tax_total), 0),
-        "net_sales": func.coalesce(func.sum(per_invoice.c.total), 0),
+        "date": docs.c.doc_date,
+        "invoice_count": func.count(docs.c.doc_id),
+        "quantity_sold": func.coalesce(func.sum(docs.c.quantity_sold), 0),
+        "gross_sales": func.coalesce(func.sum(docs.c.total), 0),
+        "discounts": func.coalesce(func.sum(docs.c.discount), 0),
+        "tax": func.coalesce(func.sum(docs.c.tax_total), 0),
+        "net_sales": func.coalesce(func.sum(docs.c.total), 0),
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
 
     total = int(
-        (
-            await db.execute(
-                select(func.count(func.distinct(date_expr))).select_from(SaleInvoice).where(and_(*si_conds))
-            )
-        ).scalar()
+        (await db.execute(select(func.count(func.distinct(docs.c.doc_date))).select_from(docs))).scalar()
         or 0
     )
     result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
@@ -1167,91 +1692,60 @@ async def product_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    use_mv = _use_materialized_read_models(db)
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
 
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
+        SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
+    ]
+    branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
+    if search:
+        inv_conds.append(SaleLineItem.name.ilike(f"%{search}%"))
+        cn_conds.append(SalesReturnLineItem.name.ilike(f"%{search}%"))
+
+    lines = _signed_sales_lines_query(inv_conds, cn_conds).subquery()
     sort_map = {
-        "product_code": Item.sku if use_mv else Item.sku,
-        "product_name": ProductSalesSummary.product_name if use_mv else SaleLineItem.name,
-        "category": Category.name,
-        "quantity_sold": ProductSalesSummary.quantity_sold if use_mv else func.sum(SaleLineItem.qty),
-        "sales_value": ProductSalesSummary.revenue if use_mv else func.coalesce(func.sum(SaleLineItem.line_total), 0),
-        "cost_value": (
-            (ProductSalesSummary.revenue - ProductSalesSummary.profit) if use_mv
-            else func.coalesce(func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0)
-        ),
-        "profit": ProductSalesSummary.profit if use_mv else func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0),
+        "product_code": lines.c.product_code,
+        "product_name": lines.c.product_name,
+        "category": lines.c.category,
+        "quantity_sold": func.coalesce(func.sum(lines.c.quantity), 0),
+        "sales_value": func.coalesce(func.sum(lines.c.line_total), 0),
+        "cost_value": func.coalesce(func.sum(lines.c.cost_value), 0),
+        "profit": func.coalesce(func.sum(lines.c.profit), 0),
     }
-
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_value", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    if use_mv:
-        conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
-        branch_cond = _branch_condition(ProductSalesSummary.branch_id, branch_id, branch_scope)
-        if branch_cond is not None:
-            conds.append(branch_cond)
-        if search:
-            conds.append(ProductSalesSummary.product_name.ilike(f"%{search}%"))
-
-        total_q = select(func.count()).select_from(ProductSalesSummary).where(and_(*conds))
-        total = int((await db.execute(total_q)).scalar() or 0)
-        result = await db.execute(
-            select(
-                ProductSalesSummary.item_id.label("item_id"),
-                func.coalesce(Item.sku, ProductSalesSummary.item_id).label("product_code"),
-                ProductSalesSummary.product_name.label("product_name"),
-                func.coalesce(Category.name, "Uncategorized").label("category"),
-                ProductSalesSummary.quantity_sold.label("quantity_sold"),
-                ProductSalesSummary.revenue.label("sales_value"),
-                (ProductSalesSummary.revenue - ProductSalesSummary.profit).label("cost_value"),
-                ProductSalesSummary.profit.label("profit"),
-            )
-            .select_from(ProductSalesSummary)
-            .outerjoin(Item, Item.id == ProductSalesSummary.item_id)
-            .outerjoin(Category, Category.id == Item.category_id)
-            .where(and_(*conds))
-            .group_by(ProductSalesSummary.item_id, Item.sku, ProductSalesSummary.product_name, Category.name, ProductSalesSummary.quantity_sold, ProductSalesSummary.revenue, ProductSalesSummary.profit)
-            .order_by(order_by_expr)
-            .offset(sk)
-            .limit(lim)
+    base = (
+        select(
+            lines.c.item_id.label("item_id"),
+            lines.c.product_code.label("product_code"),
+            lines.c.product_name.label("product_name"),
+            lines.c.category.label("category"),
+            func.coalesce(func.sum(lines.c.quantity), 0).label("quantity_sold"),
+            func.coalesce(func.sum(lines.c.line_total), 0).label("sales_value"),
+            func.coalesce(func.sum(lines.c.cost_value), 0).label("cost_value"),
+            func.coalesce(func.sum(lines.c.profit), 0).label("profit"),
         )
-        rows = [dict(r._mapping) for r in result.fetchall()]
-    else:
-        conds = [
-            SaleInvoice.date >= (start.isoformat() if hasattr(start, 'isoformat') else start),
-            SaleInvoice.date <= (end.isoformat() if hasattr(end, 'isoformat') else end),
-            SaleInvoice.status != InvoiceStatus.cancelled,
-        ]
-        branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
-        if branch_cond is not None:
-            conds.append(branch_cond)
-        if search:
-            conds.append(SaleLineItem.name.ilike(f"%{search}%"))
-
-        base = (
-            select(
-                SaleLineItem.item_id.label("item_id"),
-                func.coalesce(Item.sku, SaleLineItem.item_id).label("product_code"),
-                SaleLineItem.name.label("product_name"),
-                func.coalesce(Category.name, "Uncategorized").label("category"),
-                func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("sales_value"),
-                func.coalesce(func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0).label("cost_value"),
-                func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0).label("profit"),
-            )
-            .select_from(SaleLineItem)
-            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-            .outerjoin(Item, SaleLineItem.item_id == Item.id)
-            .outerjoin(Category, Item.category_id == Category.id)
-            .where(and_(*conds))
-            .group_by(SaleLineItem.item_id, Item.sku, SaleLineItem.name, Category.name)
-        )
-        total_q = select(func.count()).select_from(base.subquery())
-        total = int((await db.execute(total_q)).scalar() or 0)
-        result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
-        rows = [dict(r._mapping) for r in result.fetchall()]
-
+        .select_from(lines)
+        .group_by(lines.c.item_id, lines.c.product_code, lines.c.product_name, lines.c.category)
+    )
+    total = int((await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
 
 
@@ -1717,46 +2211,35 @@ async def payment_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    si_conds = [
-        SaleInvoice.date >= start.isoformat(),
-        SaleInvoice.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        si_conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
 
-    # Per-invoice first so qty join does not multiply invoice totals.
-    per_invoice = (
-        select(
-            SaleInvoice.payment_mode.label("payment_mode"),
-            SaleInvoice.id.label("invoice_id"),
-            SaleInvoice.total.label("total"),
-            SaleInvoice.tax_total.label("tax_total"),
-            SaleInvoice.discount.label("discount"),
-            func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-        )
-        .select_from(SaleInvoice)
-        .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
-        .where(and_(*si_conds))
-        .group_by(
-            SaleInvoice.payment_mode,
-            SaleInvoice.id,
-            SaleInvoice.total,
-            SaleInvoice.tax_total,
-            SaleInvoice.discount,
-        )
-    ).subquery()
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
 
     sort_map = {
-        "payment_method": per_invoice.c.payment_mode,
-        "invoice_count": func.count(per_invoice.c.invoice_id),
-        "quantity_sold": func.coalesce(func.sum(per_invoice.c.quantity_sold), 0),
-        "sales_amount": func.coalesce(func.sum(per_invoice.c.total), 0),
-        "tax_amount": func.coalesce(func.sum(per_invoice.c.tax_total), 0),
-        "discount_amount": func.coalesce(func.sum(per_invoice.c.discount), 0),
-        # Align with sales-register net_amount (invoice total), not paid_amount.
-        "net_sales": func.coalesce(func.sum(per_invoice.c.total), 0),
+        "payment_method": docs.c.payment_mode,
+        "invoice_count": func.count(docs.c.doc_id),
+        "quantity_sold": func.coalesce(func.sum(docs.c.quantity_sold), 0),
+        "sales_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "tax_amount": func.coalesce(func.sum(docs.c.tax_total), 0),
+        "discount_amount": func.coalesce(func.sum(docs.c.discount), 0),
+        "net_sales": func.coalesce(func.sum(docs.c.total), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_amount", "desc")
@@ -1765,16 +2248,16 @@ async def payment_sales(
 
     base = (
         select(
-            per_invoice.c.payment_mode.label("payment_mode"),
-            func.count(per_invoice.c.invoice_id).label("invoice_count"),
-            func.coalesce(func.sum(per_invoice.c.quantity_sold), 0).label("quantity_sold"),
-            func.coalesce(func.sum(per_invoice.c.total), 0).label("sales_amount"),
-            func.coalesce(func.sum(per_invoice.c.tax_total), 0).label("tax_amount"),
-            func.coalesce(func.sum(per_invoice.c.discount), 0).label("discount_amount"),
-            func.coalesce(func.sum(per_invoice.c.total), 0).label("net_sales"),
+            docs.c.payment_mode.label("payment_mode"),
+            func.count(docs.c.doc_id).label("invoice_count"),
+            func.coalesce(func.sum(docs.c.quantity_sold), 0).label("quantity_sold"),
+            func.coalesce(func.sum(docs.c.total), 0).label("sales_amount"),
+            func.coalesce(func.sum(docs.c.tax_total), 0).label("tax_amount"),
+            func.coalesce(func.sum(docs.c.discount), 0).label("discount_amount"),
+            func.coalesce(func.sum(docs.c.total), 0).label("net_sales"),
         )
-        .select_from(per_invoice)
-        .group_by(per_invoice.c.payment_mode)
+        .select_from(docs)
+        .group_by(docs.c.payment_mode)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -1814,68 +2297,53 @@ async def category_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    use_mv = _use_materialized_read_models(db)
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
 
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
+        SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
+    ]
+    branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
+    if search:
+        inv_conds.append(Category.name.ilike(f"%{search}%"))
+        cn_conds.append(Category.name.ilike(f"%{search}%"))
+
+    lines = _signed_sales_lines_query(inv_conds, cn_conds).subquery()
     sort_map = {
-        "category": Category.name,
-        "quantity_sold": func.sum(ProductSalesSummary.quantity_sold) if use_mv else func.sum(SaleLineItem.qty),
-        "sales_value": func.sum(ProductSalesSummary.revenue) if use_mv else func.coalesce(func.sum(SaleLineItem.line_total), 0),
-        "cost_value": (
-            func.sum(ProductSalesSummary.revenue - ProductSalesSummary.profit) if use_mv
-            else func.coalesce(func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0)
-        ),
-        "profit": func.sum(ProductSalesSummary.profit) if use_mv else func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0),
+        "category": lines.c.category,
+        "quantity_sold": func.coalesce(func.sum(lines.c.quantity), 0),
+        "sales_value": func.coalesce(func.sum(lines.c.line_total), 0),
+        "cost_value": func.coalesce(func.sum(lines.c.cost_value), 0),
+        "profit": func.coalesce(func.sum(lines.c.profit), 0),
     }
-
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_value", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    if use_mv:
-        conds = [ProductSalesSummary.sale_date >= start, ProductSalesSummary.sale_date <= end]
-        branch_cond = _branch_condition(ProductSalesSummary.branch_id, branch_id, branch_scope)
-        if branch_cond is not None:
-            conds.append(branch_cond)
-        if search:
-            conds.append(Category.name.ilike(f"%{search}%"))
-
-        base = select(
-            Category.id.label("category_id"),
-            func.coalesce(Category.name, "Uncategorized").label("category"),
-            func.coalesce(func.sum(ProductSalesSummary.quantity_sold), 0).label("quantity_sold"),
-            func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("sales_value"),
-            func.coalesce(func.sum(ProductSalesSummary.revenue - ProductSalesSummary.profit), 0).label("cost_value"),
-            func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
-        ).select_from(ProductSalesSummary).join(Category, Category.id == ProductSalesSummary.category_id, isouter=True).where(and_(*conds)).group_by(Category.id, Category.name)
-    else:
-        conds = [
-            SaleInvoice.date >= (start.isoformat() if hasattr(start, 'isoformat') else start),
-            SaleInvoice.date <= (end.isoformat() if hasattr(end, 'isoformat') else end),
-            SaleInvoice.status != InvoiceStatus.cancelled,
-        ]
-        branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
-        if branch_cond is not None:
-            conds.append(branch_cond)
-        if search:
-            conds.append(Category.name.ilike(f"%{search}%"))
-
-        base = (
-            select(
-                Category.id.label("category_id"),
-                func.coalesce(Category.name, "Uncategorized").label("category"),
-                func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-                func.coalesce(func.sum(SaleLineItem.line_total), 0).label("sales_value"),
-                func.coalesce(func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0).label("cost_value"),
-                func.coalesce(func.sum(SaleLineItem.line_total - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)), 0).label("profit"),
-            )
-            .select_from(SaleLineItem)
-            .join(SaleInvoice, SaleLineItem.invoice_id == SaleInvoice.id)
-            .outerjoin(Item, SaleLineItem.item_id == Item.id)
-            .outerjoin(Category, Item.category_id == Category.id)
-            .where(and_(*conds))
-            .group_by(Category.id, Category.name)
+    base = (
+        select(
+            lines.c.category_id.label("category_id"),
+            lines.c.category.label("category"),
+            func.coalesce(func.sum(lines.c.quantity), 0).label("quantity_sold"),
+            func.coalesce(func.sum(lines.c.line_total), 0).label("sales_value"),
+            func.coalesce(func.sum(lines.c.cost_value), 0).label("cost_value"),
+            func.coalesce(func.sum(lines.c.profit), 0).label("profit"),
         )
-
+        .select_from(lines)
+        .group_by(lines.c.category_id, lines.c.category)
+    )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
@@ -1897,37 +2365,49 @@ async def branch_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
-        SaleInvoice.date >= start.isoformat(),
-        SaleInvoice.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
+
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     sort_map = {
-        "branch": SaleInvoice.branch_name,
-        "invoice_count": func.count(SaleInvoice.id),
-        "sales_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
-        "tax_amount": func.coalesce(func.sum(SaleInvoice.tax_total), 0),
-        "discount_amount": func.coalesce(func.sum(SaleInvoice.discount), 0),
-        "net_sales": func.coalesce(func.sum(SaleInvoice.total), 0),
+        "branch": docs.c.branch,
+        "invoice_count": func.count(docs.c.doc_id),
+        "sales_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "tax_amount": func.coalesce(func.sum(docs.c.tax_total), 0),
+        "discount_amount": func.coalesce(func.sum(docs.c.discount), 0),
+        "net_sales": func.coalesce(func.sum(docs.c.total), 0),
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_amount", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     base = (
         select(
-            SaleInvoice.branch_id.label("branch_id"),
-            SaleInvoice.branch_name.label("branch"),
-            func.count(SaleInvoice.id).label("invoice_count"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
-            func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax_amount"),
-            func.coalesce(func.sum(SaleInvoice.discount), 0).label("discount_amount"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("net_sales"),
+            docs.c.branch_id.label("branch_id"),
+            docs.c.branch.label("branch"),
+            func.count(docs.c.doc_id).label("invoice_count"),
+            func.coalesce(func.sum(docs.c.total), 0).label("sales_amount"),
+            func.coalesce(func.sum(docs.c.tax_total), 0).label("tax_amount"),
+            func.coalesce(func.sum(docs.c.discount), 0).label("discount_amount"),
+            func.coalesce(func.sum(docs.c.total), 0).label("net_sales"),
         )
-        .where(and_(*conds))
-        .group_by(SaleInvoice.branch_id, SaleInvoice.branch_name)
+        .select_from(docs)
+        .group_by(docs.c.branch_id, docs.c.branch)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -1950,20 +2430,32 @@ async def cashier_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
-        SaleInvoice.date >= start.isoformat(),
-        SaleInvoice.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
+
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     sort_map = {
-        "cashier": SaleInvoice.cashier,
-        "invoice_count": func.count(SaleInvoice.id),
-        "sales_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
-        "tax_amount": func.coalesce(func.sum(SaleInvoice.tax_total), 0),
-        "discount_amount": func.coalesce(func.sum(SaleInvoice.discount), 0),
+        "cashier": docs.c.cashier,
+        "invoice_count": func.count(docs.c.doc_id),
+        "sales_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "tax_amount": func.coalesce(func.sum(docs.c.tax_total), 0),
+        "discount_amount": func.coalesce(func.sum(docs.c.discount), 0),
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_amount", "desc")
     sk = normalize_skip(skip)
@@ -1971,16 +2463,15 @@ async def cashier_sales(
     base = (
         select(
             User.id.label("cashier_id"),
-            SaleInvoice.cashier.label("cashier"),
-            func.count(SaleInvoice.id).label("invoice_count"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
-            func.coalesce(func.sum(SaleInvoice.tax_total), 0).label("tax_amount"),
-            func.coalesce(func.sum(SaleInvoice.discount), 0).label("discount_amount"),
+            docs.c.cashier.label("cashier"),
+            func.count(docs.c.doc_id).label("invoice_count"),
+            func.coalesce(func.sum(docs.c.total), 0).label("sales_amount"),
+            func.coalesce(func.sum(docs.c.tax_total), 0).label("tax_amount"),
+            func.coalesce(func.sum(docs.c.discount), 0).label("discount_amount"),
         )
-        .select_from(SaleInvoice)
-        .outerjoin(User, User.name == SaleInvoice.cashier)
-        .where(and_(*conds))
-        .group_by(User.id, SaleInvoice.cashier)
+        .select_from(docs)
+        .outerjoin(User, User.name == docs.c.cashier)
+        .group_by(User.id, docs.c.cashier)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -2009,38 +2500,50 @@ async def customer_sales(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
-        SaleInvoice.date >= start.isoformat(),
-        SaleInvoice.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
     if search:
-        conds.append(SaleInvoice.customer_name.ilike(f"%{search}%"))
+        inv_conds.append(SaleInvoice.customer_name.ilike(f"%{search}%"))
+        cn_conds.append(SalesReturn.customer_name.ilike(f"%{search}%"))
 
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     sort_map = {
-        "customer": SaleInvoice.customer_name,
-        "invoice_count": func.count(SaleInvoice.id),
-        "sales_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
-        "paid_amount": func.coalesce(func.sum(SaleInvoice.paid_amount), 0),
-        "outstanding_amount": func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0),
+        "customer": docs.c.customer,
+        "invoice_count": func.count(docs.c.doc_id),
+        "sales_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "paid_amount": func.coalesce(func.sum(docs.c.paid_amount), 0),
+        "outstanding_amount": func.coalesce(func.sum(docs.c.outstanding), 0),
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "sales_amount", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     base = (
         select(
-            SaleInvoice.customer_id.label("customer_id"),
-            SaleInvoice.customer_name.label("customer"),
-            func.count(SaleInvoice.id).label("invoice_count"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("sales_amount"),
-            func.coalesce(func.sum(SaleInvoice.paid_amount), 0).label("paid_amount"),
-            func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0).label("outstanding_amount"),
+            docs.c.customer_id.label("customer_id"),
+            docs.c.customer.label("customer"),
+            func.count(docs.c.doc_id).label("invoice_count"),
+            func.coalesce(func.sum(docs.c.total), 0).label("sales_amount"),
+            func.coalesce(func.sum(docs.c.paid_amount), 0).label("paid_amount"),
+            func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding_amount"),
         )
-        .where(and_(*conds))
-        .group_by(SaleInvoice.customer_id, SaleInvoice.customer_name)
+        .select_from(docs)
+        .group_by(docs.c.customer_id, docs.c.customer)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -2058,6 +2561,7 @@ async def purchase_register(
     search: Optional[str] = None,
     vendor_id: Optional[str] = None,
     item_id: Optional[str] = None,
+    transaction_type: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -2069,47 +2573,38 @@ async def purchase_register(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = _purchase_filters(
-        branch_id,
-        vendor_id,
-        search,
-        start,
-        end,
+    filter_kwargs = dict(
+        branch_id=branch_id,
+        vendor_id=vendor_id,
+        search=search,
+        date_from=start,
+        date_to=end,
         allowed_branch_ids=branch_scope,
         item_id=item_id,
     )
-    query = select(
-        PurchaseBill.id.label("bill_id"),
-        PurchaseBill.number.label("bill_number"),
-        PurchaseBill.date.label("bill_date"),
-        PurchaseBill.vendor_name.label("vendor"),
-        PurchaseBill.branch_name.label("branch"),
-        PurchaseBill.subtotal.label("subtotal"),
-        PurchaseBill.tax_total.label("tax"),
-        PurchaseBill.total.label("total"),
-        PurchaseBill.paid_amount.label("paid"),
-        (PurchaseBill.total - PurchaseBill.paid_amount).label("balance"),
-        PurchaseBill.status.label("status"),
-    ).where(and_(*conds) if conds else True)
+    bill_conds = _purchase_filters(**filter_kwargs)
+    vr_conds = _vr_filters(**filter_kwargs)
+    docs = _purchase_register_union_query(bill_conds, vr_conds)
 
     sort_map = {
-        "bill_number": PurchaseBill.number,
-        "bill_date": PurchaseBill.date,
-        "vendor": PurchaseBill.vendor_name,
-        "branch": PurchaseBill.branch_name,
-        "subtotal": PurchaseBill.subtotal,
-        "tax": PurchaseBill.tax_total,
-        "total": PurchaseBill.total,
-        "paid": PurchaseBill.paid_amount,
-        "balance": PurchaseBill.total - PurchaseBill.paid_amount,
-        "status": PurchaseBill.status,
+        "bill_number": docs.c.bill_number,
+        "bill_date": docs.c.bill_date,
+        "vendor": docs.c.vendor,
+        "branch": docs.c.branch,
+        "subtotal": docs.c.subtotal,
+        "tax": docs.c.tax,
+        "total": docs.c.total,
+        "paid": docs.c.paid,
+        "balance": docs.c.balance,
+        "transaction_type": docs.c.transaction_type,
+        "status": docs.c.status,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "bill_date", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    total_q = select(func.count()).select_from(PurchaseBill).where(and_(*conds) if conds else True)
-    total = int((await db.execute(total_q)).scalar() or 0)
+    query = _restrict_transaction_types(select(docs), docs.c.transaction_type, transaction_type)
+    total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
     result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -2121,6 +2616,7 @@ async def purchase_lines(
     search: Optional[str] = None,
     vendor_id: Optional[str] = None,
     item_id: Optional[str] = None,
+    transaction_type: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -2130,70 +2626,69 @@ async def purchase_lines(
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
-    """Line-item purchase detail for product-wise purchase drilldowns."""
+    """Line-item purchase detail for product-wise purchase drilldowns.
+
+    One row per bill line / vendor-return line so qty / line_total roll up
+    to product-wise parents. Debit-note lines are signed negative.
+    """
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    bill_conds = [
         PurchaseBill.status != InvoiceStatus.cancelled,
-        PurchaseBill.date >= (start.isoformat() if hasattr(start, "isoformat") else start),
-        PurchaseBill.date <= (end.isoformat() if hasattr(end, "isoformat") else end),
+        PurchaseBill.date >= start_s,
+        PurchaseBill.date <= end_s,
+    ]
+    vr_conds = [
+        VendorReturn.voided.is_(False),
+        VendorReturn.date >= start_s,
+        VendorReturn.date <= end_s,
     ]
     branch_cond = _branch_condition(PurchaseBill.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        bill_conds.append(branch_cond)
+    vr_branch = _branch_condition(VendorReturn.branch_id, branch_id, branch_scope)
+    if vr_branch is not None:
+        vr_conds.append(vr_branch)
     if vendor_id:
-        conds.append(PurchaseBill.vendor_id == vendor_id)
+        bill_conds.append(PurchaseBill.vendor_id == vendor_id)
+        vr_conds.append(VendorReturn.vendor_id == vendor_id)
     if item_id:
-        conds.append(PurchaseLineItem.item_id == item_id)
+        bill_conds.append(PurchaseLineItem.item_id == item_id)
+        vr_conds.append(ReturnLineItem.item_id == item_id)
     if search:
-        conds.append(
+        bill_conds.append(
             PurchaseBill.number.ilike(f"%{search}%")
             | PurchaseLineItem.name.ilike(f"%{search}%")
             | PurchaseBill.vendor_name.ilike(f"%{search}%")
         )
+        vr_conds.append(
+            VendorReturn.number.ilike(f"%{search}%")
+            | ReturnLineItem.name.ilike(f"%{search}%")
+            | VendorReturn.vendor_name.ilike(f"%{search}%")
+        )
 
+    lines = _signed_purchase_lines_query(bill_conds, vr_conds).subquery()
     sort_map = {
-        "bill_number": PurchaseBill.number,
-        "bill_date": PurchaseBill.date,
-        "product": PurchaseLineItem.name,
-        "vendor": PurchaseBill.vendor_name,
-        "branch": PurchaseBill.branch_name,
-        "quantity": PurchaseLineItem.qty,
-        "unit_cost": PurchaseLineItem.cost,
-        "discount": PurchaseLineItem.discount,
-        "line_total": PurchaseLineItem.line_total,
-        "status": PurchaseBill.status,
+        "bill_number": lines.c.bill_number,
+        "bill_date": lines.c.bill_date,
+        "product": lines.c.product,
+        "vendor": lines.c.vendor,
+        "branch": lines.c.branch,
+        "quantity": lines.c.quantity,
+        "unit_cost": lines.c.unit_cost,
+        "discount": lines.c.discount,
+        "line_total": lines.c.line_total,
+        "transaction_type": lines.c.transaction_type,
+        "status": lines.c.status,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "bill_date", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    query = (
-        select(
-            PurchaseBill.id.label("bill_id"),
-            PurchaseBill.number.label("bill_number"),
-            PurchaseBill.date.label("bill_date"),
-            PurchaseLineItem.item_id.label("item_id"),
-            PurchaseLineItem.name.label("product"),
-            PurchaseBill.vendor_name.label("vendor"),
-            PurchaseBill.branch_name.label("branch"),
-            PurchaseLineItem.qty.label("quantity"),
-            PurchaseLineItem.cost.label("unit_cost"),
-            PurchaseLineItem.discount.label("discount"),
-            PurchaseLineItem.line_total.label("line_total"),
-            PurchaseBill.status.label("status"),
-        )
-        .select_from(PurchaseLineItem)
-        .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
-        .where(and_(*conds))
-    )
-    total_q = (
-        select(func.count())
-        .select_from(PurchaseLineItem)
-        .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
-        .where(and_(*conds))
-    )
-    total = int((await db.execute(total_q)).scalar() or 0)
+    query = _restrict_transaction_types(select(lines), lines.c.transaction_type, transaction_type)
+    total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
     result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -2214,23 +2709,35 @@ async def vendor_purchases(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
-        PurchaseBill.date >= start.isoformat(),
-        PurchaseBill.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    bill_conds = [
+        PurchaseBill.date >= start_s,
+        PurchaseBill.date <= end_s,
         PurchaseBill.status != InvoiceStatus.cancelled,
+    ]
+    vr_conds = [
+        VendorReturn.date >= start_s,
+        VendorReturn.date <= end_s,
+        VendorReturn.voided.is_(False),
     ]
     branch_cond = _branch_condition(PurchaseBill.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        bill_conds.append(branch_cond)
+    vr_branch = _branch_condition(VendorReturn.branch_id, branch_id, branch_scope)
+    if vr_branch is not None:
+        vr_conds.append(vr_branch)
     if search:
-        conds.append(PurchaseBill.vendor_name.ilike(f"%{search}%"))
+        bill_conds.append(PurchaseBill.vendor_name.ilike(f"%{search}%"))
+        vr_conds.append(VendorReturn.vendor_name.ilike(f"%{search}%"))
 
+    docs = _signed_purchase_docs_subquery(bill_conds, vr_conds)
     sort_map = {
-        "vendor": PurchaseBill.vendor_name,
-        "purchase_count": func.count(PurchaseBill.id),
-        "purchase_amount": func.coalesce(func.sum(PurchaseBill.total), 0),
-        "paid_amount": func.coalesce(func.sum(PurchaseBill.paid_amount), 0),
-        "outstanding_amount": func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0),
+        "vendor": docs.c.vendor,
+        "purchase_count": func.count(docs.c.doc_id),
+        "purchase_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "paid_amount": func.coalesce(func.sum(docs.c.paid_amount), 0),
+        "outstanding_amount": func.coalesce(func.sum(docs.c.outstanding), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "purchase_amount", "desc")
@@ -2238,15 +2745,15 @@ async def vendor_purchases(
     lim = normalize_limit(limit)
     base = (
         select(
-            PurchaseBill.vendor_id.label("vendor_id"),
-            PurchaseBill.vendor_name.label("vendor"),
-            func.count(PurchaseBill.id).label("purchase_count"),
-            func.coalesce(func.sum(PurchaseBill.total), 0).label("purchase_amount"),
-            func.coalesce(func.sum(PurchaseBill.paid_amount), 0).label("paid_amount"),
-            func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0).label("outstanding_amount"),
+            docs.c.vendor_id.label("vendor_id"),
+            docs.c.vendor.label("vendor"),
+            func.count(docs.c.doc_id).label("purchase_count"),
+            func.coalesce(func.sum(docs.c.total), 0).label("purchase_amount"),
+            func.coalesce(func.sum(docs.c.paid_amount), 0).label("paid_amount"),
+            func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding_amount"),
         )
-        .where(and_(*conds))
-        .group_by(PurchaseBill.vendor_id, PurchaseBill.vendor_name)
+        .select_from(docs)
+        .group_by(docs.c.vendor_id, docs.c.vendor)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -2270,21 +2777,33 @@ async def product_purchases(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
-        PurchaseBill.date >= start.isoformat(),
-        PurchaseBill.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    bill_conds = [
+        PurchaseBill.date >= start_s,
+        PurchaseBill.date <= end_s,
         PurchaseBill.status != InvoiceStatus.cancelled,
+    ]
+    vr_conds = [
+        VendorReturn.date >= start_s,
+        VendorReturn.date <= end_s,
+        VendorReturn.voided.is_(False),
     ]
     branch_cond = _branch_condition(PurchaseBill.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        bill_conds.append(branch_cond)
+    vr_branch = _branch_condition(VendorReturn.branch_id, branch_id, branch_scope)
+    if vr_branch is not None:
+        vr_conds.append(vr_branch)
     if search:
-        conds.append(PurchaseLineItem.name.ilike(f"%{search}%"))
+        bill_conds.append(PurchaseLineItem.name.ilike(f"%{search}%"))
+        vr_conds.append(ReturnLineItem.name.ilike(f"%{search}%"))
 
+    lines = _signed_purchase_lines_query(bill_conds, vr_conds).subquery()
     sort_map = {
-        "product": PurchaseLineItem.name,
-        "quantity_purchased": func.coalesce(func.sum(PurchaseLineItem.qty), 0),
-        "purchase_cost": func.coalesce(func.sum(PurchaseLineItem.line_total), 0),
+        "product": lines.c.product,
+        "quantity_purchased": func.coalesce(func.sum(lines.c.quantity), 0),
+        "purchase_cost": func.coalesce(func.sum(lines.c.line_total), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "quantity_purchased", "desc")
@@ -2292,15 +2811,13 @@ async def product_purchases(
     lim = normalize_limit(limit)
     base = (
         select(
-            PurchaseLineItem.item_id.label("item_id"),
-            PurchaseLineItem.name.label("product"),
-            func.coalesce(func.sum(PurchaseLineItem.qty), 0).label("quantity_purchased"),
-            func.coalesce(func.sum(PurchaseLineItem.line_total), 0).label("purchase_cost"),
+            lines.c.item_id.label("item_id"),
+            lines.c.product.label("product"),
+            func.coalesce(func.sum(lines.c.quantity), 0).label("quantity_purchased"),
+            func.coalesce(func.sum(lines.c.line_total), 0).label("purchase_cost"),
         )
-        .select_from(PurchaseLineItem)
-        .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
-        .where(and_(*conds))
-        .group_by(PurchaseLineItem.item_id, PurchaseLineItem.name)
+        .select_from(lines)
+        .group_by(lines.c.item_id, lines.c.product)
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
@@ -2875,7 +3392,11 @@ async def outstanding_receivables(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [SaleInvoice.total > SaleInvoice.paid_amount]
+    outstanding = _invoice_outstanding_expr()
+    conds = [
+        outstanding > 0.01,
+        SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
@@ -2891,7 +3412,7 @@ async def outstanding_receivables(
         "invoice_number": SaleInvoice.number,
         "invoice_date": SaleInvoice.date,
         "due_date": SaleInvoice.date,
-        "outstanding_amount": SaleInvoice.total - SaleInvoice.paid_amount,
+        "outstanding_amount": outstanding,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "due_date", "asc")
     sk = normalize_skip(skip)
@@ -2903,7 +3424,7 @@ async def outstanding_receivables(
             SaleInvoice.number.label("invoice_number"),
             SaleInvoice.date.label("invoice_date"),
             SaleInvoice.date.label("due_date"),
-            (SaleInvoice.total - SaleInvoice.paid_amount).label("outstanding_amount"),
+            outstanding.label("outstanding_amount"),
         )
         .where(and_(*conds))
         .order_by(order_by_expr)
@@ -3042,35 +3563,46 @@ async def top_customers(
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [
-        SaleInvoice.date >= start.isoformat(),
-        SaleInvoice.date <= end.isoformat(),
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+    inv_conds = [
+        SaleInvoice.date >= start_s,
+        SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+    ]
+    cn_conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
     ]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
-        conds.append(branch_cond)
+        inv_conds.append(branch_cond)
+    cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if cn_branch is not None:
+        cn_conds.append(cn_branch)
 
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    outstanding_amount = func.coalesce(func.sum(docs.c.outstanding), 0)
     sort_map = {
-        "customer": SaleInvoice.customer_name,
-        "invoice_count": func.count(SaleInvoice.id),
-        "purchase_amount": func.coalesce(func.sum(SaleInvoice.total), 0),
-        "outstanding_amount": func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0),
+        "customer": docs.c.customer,
+        "invoice_count": func.count(docs.c.doc_id),
+        "purchase_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "outstanding_amount": outstanding_amount,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "outstanding_amount", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    outstanding_amount = func.coalesce(func.sum(SaleInvoice.total - SaleInvoice.paid_amount), 0)
     base = (
         select(
-            SaleInvoice.customer_id.label("customer_id"),
-            SaleInvoice.customer_name.label("customer"),
-            func.count(SaleInvoice.id).label("invoice_count"),
-            func.coalesce(func.sum(SaleInvoice.total), 0).label("purchase_amount"),
+            docs.c.customer_id.label("customer_id"),
+            docs.c.customer.label("customer"),
+            func.count(docs.c.doc_id).label("invoice_count"),
+            func.coalesce(func.sum(docs.c.total), 0).label("purchase_amount"),
             outstanding_amount.label("outstanding_amount"),
         )
-        .where(and_(*conds))
-        .group_by(SaleInvoice.customer_id, SaleInvoice.customer_name)
+        .select_from(docs)
+        .group_by(docs.c.customer_id, docs.c.customer)
         .having(outstanding_amount != 0)
     )
     total_q = select(func.count()).select_from(base.subquery())

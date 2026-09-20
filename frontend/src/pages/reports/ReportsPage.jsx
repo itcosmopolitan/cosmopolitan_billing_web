@@ -30,6 +30,16 @@ const formatPaymentMode = (value) => {
   }
   return labels[String(value || '').trim().toLowerCase()] || (value || '—')
 }
+const formatTransactionType = (value) => {
+  const labels = {
+    invoice: 'Invoice',
+    credit_note: 'Credit Note',
+    bill: 'Bill',
+    debit_note: 'Debit Note',
+  }
+  const key = String(value || '').trim().toLowerCase().replace(/\s+/g, '_')
+  return labels[key] || (value || '—')
+}
 const formatStatus = (value) => statusLabel(String(value || '').trim().toLowerCase())
 
 /** Formats that can be summed in a report totals footer. */
@@ -56,6 +66,7 @@ const FOOTER_SUM_KEYS_BY_REPORT = {
   'tax-summary-detail': new Set(['transaction_amount', 'tax_amount']),
   'product-sales-detail': new Set(['quantity', 'line_total']),
   'category-sales-detail': new Set(['quantity', 'line_total']),
+  'product-purchases-detail': new Set(['quantity', 'line_total']),
 }
 
 function isSummableColumn(column, reportId) {
@@ -104,6 +115,7 @@ const DRILLDOWN_PARAM_KEYS = [
   'tax_name',
   'full_rate',
   'tax_percentage',
+  'transaction_type',
   'sort_by',
   'sort_order',
   'skip',
@@ -117,6 +129,7 @@ const PARENT_FILTER_PARAM_KEYS = [
   'parent_date_to',
   'parent_branch_id',
   'parent_branch_label',
+  'parent_transaction_type',
   'parent_sort_by',
   'parent_sort_order',
   'parent_skip',
@@ -155,12 +168,57 @@ function branchParamForApi(branchIds, branchOptions) {
   return serializeBranchIds(branchIds)
 }
 
-function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, sortBy, sortOrder, skip }) {
+const SALES_TXN_TYPE_OPTIONS = [
+  { id: 'invoice', label: 'Invoice' },
+  { id: 'credit_note', label: 'Credit Note' },
+]
+const PURCHASE_TXN_TYPE_OPTIONS = [
+  { id: 'bill', label: 'Bill' },
+  { id: 'debit_note', label: 'Debit Note' },
+]
+const TAX_TXN_TYPE_OPTIONS = [
+  { id: 'invoice', label: 'Invoice' },
+  { id: 'credit_note', label: 'Credit Note' },
+  { id: 'bill', label: 'Bill' },
+  { id: 'debit_note', label: 'Debit Note' },
+]
+const TRANSACTION_TYPE_OPTIONS_BY_API = {
+  salesRegister: SALES_TXN_TYPE_OPTIONS,
+  salesLines: SALES_TXN_TYPE_OPTIONS,
+  purchaseRegister: PURCHASE_TXN_TYPE_OPTIONS,
+  purchaseLines: PURCHASE_TXN_TYPE_OPTIONS,
+  taxSummaryDetail: TAX_TXN_TYPE_OPTIONS,
+}
+const EMPTY_TXN_TYPE_OPTIONS = []
+
+function parseTxnTypeIds(value, options) {
+  const allIds = (options || []).map((option) => option.id)
+  if (!value) return allIds
+  if (String(value).trim().toLowerCase() === '__none__') return []
+  const allowed = new Set(allIds)
+  return String(value).split(',').map((part) => part.trim()).filter((id) => allowed.has(id))
+}
+
+function txnParamForApi(ids, options) {
+  if (!options?.length) return ''
+  if (!ids?.length) return '__none__'
+  if (ids.length >= options.length) return ''
+  return ids.filter(Boolean).join(',')
+}
+
+function txnTypesDirty(draftIds, appliedIds) {
+  const draftKey = [...(draftIds || [])].sort().join(',')
+  const appliedKey = [...(appliedIds || [])].sort().join(',')
+  return draftKey !== appliedKey
+}
+
+function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, transactionType, sortBy, sortOrder, skip }) {
   return {
     parent_date_from: dateFrom || '',
     parent_date_to: dateTo || '',
     ...(branchId ? { parent_branch_id: branchId } : {}),
     ...(branchLabel ? { parent_branch_label: branchLabel } : {}),
+    ...(transactionType ? { parent_transaction_type: transactionType } : {}),
     ...(sortBy ? { parent_sort_by: sortBy } : {}),
     ...(sortOrder ? { parent_sort_order: sortOrder } : {}),
     ...(skip > 0 ? { parent_skip: String(skip) } : {}),
@@ -183,6 +241,7 @@ function restoreParentFilters(urlFilters, fallbacks = {}) {
       : {}),
     ...(urlFilters.parent_sort_by ? { sort_by: urlFilters.parent_sort_by } : {}),
     ...(urlFilters.parent_sort_order ? { sort_order: urlFilters.parent_sort_order } : {}),
+    ...(urlFilters.parent_transaction_type ? { transaction_type: urlFilters.parent_transaction_type } : {}),
     ...(Number.isFinite(skip) && skip > 0 ? { skip: String(skip) } : {}),
   }
 }
@@ -232,12 +291,49 @@ const COLUMN_FORMATTERS = {
 
 const COLUMN_VALUE_FORMATTERS = {
   payment_mode: formatPaymentMode,
+  transaction_type: formatTransactionType,
   status: formatStatus,
 }
 
+const NUMERIC_EXPORT_FORMATS = new Set(['currency', 'currency_blank', 'qty', 'number'])
+
+function exportColumnLabel(column) {
+  const label = column.label || column.key
+  if ((column.format === 'currency' || column.format === 'currency_blank') && !/\(MVR\)/i.test(label)) {
+    return `${label} (MVR)`
+  }
+  return label
+}
+
+function exportColumnValue(column, row) {
+  const value = row?.[column.key]
+  if (NUMERIC_EXPORT_FORMATS.has(column.format)) {
+    if (value === null || value === undefined || value === '') return null
+    const num = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(num) ? num : null
+  }
+  const formatted = COLUMN_VALUE_FORMATTERS[column.key]
+    ? COLUMN_VALUE_FORMATTERS[column.key](value, row)
+    : column.formatter
+      ? column.formatter(value, row)
+      : value
+  if (formatted === null || formatted === undefined || formatted === '—') return ''
+  return formatted
+}
+
 const DETAIL_PATH_BUILDERS = {
-  invoice: (row) => (row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null),
-  bill: (row) => (row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null),
+  invoice: (row) => {
+    if (row.detail_kind === 'credit_note' && row.document_id) {
+      return `/sales/returns/${encodeURIComponent(row.document_id)}/edit`
+    }
+    return row.invoice_id ? `/sales?tab=invoices&view=${encodeURIComponent(row.invoice_id)}` : null
+  },
+  bill: (row) => {
+    if (row.detail_kind === 'debit_note' && row.document_id) {
+      return `/purchases/returns/${encodeURIComponent(row.document_id)}/edit`
+    }
+    return row.bill_id ? `/purchases?tab=bills&view=${encodeURIComponent(row.bill_id)}` : null
+  },
   transfer: (row) => (row.transfer_id ? `/transfers/${encodeURIComponent(row.transfer_id)}/edit` : null),
   tax_txn: (row) => {
     const id = row.document_id
@@ -857,16 +953,24 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   )
   const allBranchIds = useMemo(() => branchOptions.map((b) => b.id), [branchOptions])
 
+  const txnTypeOptions = useMemo(
+    () => TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS,
+    [report.api],
+  )
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('date_from') || defaultFrom)
   const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') || today)
   const [branchIds, setBranchIds] = useState(() => {
     const fromUrl = parseBranchIds(searchParams.get('branch_id'))
     return fromUrl
   })
+  const [transactionTypes, setTransactionTypes] = useState(() => (
+    parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions)
+  ))
   const [appliedFilters, setAppliedFilters] = useState(() => ({
     dateFrom: searchParams.get('date_from') || defaultFrom,
     dateTo: searchParams.get('date_to') || today,
     branchIds: parseBranchIds(searchParams.get('branch_id')),
+    transactionTypes: parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions),
   }))
   const [sortBy, setSortBy] = useState(
     () => searchParams.get('sort_by') || report.defaultSort || report.columns[0]?.key,
@@ -922,6 +1026,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       parent_sort_by: _psb,
       parent_sort_order: _pso,
       parent_skip: _psk,
+      parent_transaction_type: _ptt,
+      transaction_type: _tt,
       sort_by: _sb,
       sort_order: _so,
       skip: _sk,
@@ -961,13 +1067,16 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     const nextBranches = urlBranchIds.length
       ? urlBranchIds
       : (allBranchIds.length ? allBranchIds : [])
+    const nextTxn = parseTxnTypeIds(urlFilters.transaction_type, txnTypeOptions)
     setDateFrom(nextFrom)
     setDateTo(nextTo)
     setBranchIds(nextBranches)
+    setTransactionTypes(nextTxn)
     setAppliedFilters({
       dateFrom: nextFrom,
       dateTo: nextTo,
       branchIds: nextBranches,
+      transactionTypes: nextTxn,
     })
     setSortBy(urlFilters.sort_by || report.defaultSort || report.columns[0]?.key)
     setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
@@ -989,6 +1098,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         // Prefer applied branch selection; fall back to URL for drill-down
         // before draft/applied sync completes.
         const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
+        const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
         const params = {
           branch_id: appliedBranchId ? appliedBranchId : null,
           date_from: appliedFilters.dateFrom,
@@ -998,6 +1108,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           skip,
           limit: report.id === 'profit-loss' ? Math.max(limit, 100) : limit,
           ...drillFilters,
+          ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
         }
         const response = await reportsAPI[report.api](params)
         const payload = response?.data ?? response
@@ -1022,6 +1133,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     appliedBranchIdParam,
     appliedFilters.dateFrom,
     appliedFilters.dateTo,
+    appliedFilters.transactionTypes,
     sortBy,
     sortOrder,
     skip,
@@ -1029,6 +1141,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     runKey,
     drillFilters,
     urlFilters.branch_id,
+    txnTypeOptions,
   ])
 
   const applyFilters = () => {
@@ -1037,6 +1150,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       dateFrom,
       dateTo,
       branchIds: [...branchIds],
+      transactionTypes: [...transactionTypes],
     })
   }
 
@@ -1045,7 +1159,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     const draftKey = [...branchIds].sort().join(',')
     const appliedKey = [...(appliedFilters.branchIds || [])].sort().join(',')
     return !(sameDates && draftKey === appliedKey)
-  }, [dateFrom, dateTo, branchIds, appliedFilters])
+      || txnTypesDirty(transactionTypes, appliedFilters.transactionTypes)
+  }, [dateFrom, dateTo, branchIds, transactionTypes, appliedFilters])
 
   const handleSort = (key) => {
     const nextOrder = sortBy === key && sortOrder === 'asc' ? 'desc' : 'asc'
@@ -1062,13 +1177,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     const exportData = rows.map((row) => {
       const entry = {}
       visibleColumns.forEach((col) => {
-        const value = row[col.key]
-        const formatted = COLUMN_VALUE_FORMATTERS[col.key]
-          ? COLUMN_VALUE_FORMATTERS[col.key](value)
-          : col.formatter
-            ? col.formatter(value, row)
-            : value
-        entry[col.label] = formatted === null || formatted === undefined || formatted === '—' ? '' : formatted
+        entry[exportColumnLabel(col)] = exportColumnValue(col, row)
       })
       return entry
     })
@@ -1088,6 +1197,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     })
     if (!drill?.reportId) return
     const filters = { ...(drill.filters || {}) }
+    const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
+    if (appliedTxnParam && !filters.transaction_type) {
+      filters.transaction_type = appliedTxnParam
+    }
     // Always carry the selected Branch filter into the drill-down register.
     // Row-level branch (branch-wise sales) wins when already present.
     if (appliedBranchIdParam && !filters.branch_id) {
@@ -1112,6 +1225,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         dateTo: appliedFilters.dateTo,
         branchId: appliedBranchIdParam,
         branchLabel: appliedBranchLabel,
+        transactionType: appliedTxnParam,
         sortBy,
         sortOrder,
         skip,
@@ -1137,6 +1251,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             branch_id: appliedBranchIdParam,
             ...(appliedBranchLabel ? { branch_label: appliedBranchLabel } : {}),
           }
+        : {}),
+      ...(txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
+        ? { transaction_type: txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions) }
         : {}),
       ...(sortBy ? { sort_by: sortBy } : {}),
       ...(sortOrder ? { sort_order: sortOrder } : {}),
@@ -1207,6 +1324,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
 
       <div className="filter-toolbar-stack">
         {isDrilldown ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -1266,6 +1384,35 @@ function ReportDetailPage({ report, reportMap, onBack }) {
               <span style={{ color: 'var(--text-muted)' }}>{appliedDrillParams}</span>
             ) : null}
           </div>
+            {txnTypeOptions.length > 0 && (
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 12,
+                alignItems: 'end',
+              }}>
+                <div style={{ width: 220, maxWidth: '100%' }}>
+                  <label className="form-label">Transaction Type</label>
+                  <MultiSelect
+                    options={txnTypeOptions}
+                    value={transactionTypes}
+                    defaultName="All types"
+                    onChange={setTransactionTypes}
+                    placeholder="All types"
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={applyFilters}
+                  disabled={loading || !filtersDirty}
+                  style={{ height: 36, width: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap' }}
+                >
+                  Apply filters
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div style={{
             display: 'flex',
@@ -1291,6 +1438,18 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 placeholder="All Branches"
               />
             </div>
+            {txnTypeOptions.length > 0 && (
+              <div style={{ width: 220, maxWidth: '100%' }}>
+                <label className="form-label">Transaction Type</label>
+                <MultiSelect
+                  options={txnTypeOptions}
+                  value={transactionTypes}
+                  defaultName="All types"
+                  onChange={setTransactionTypes}
+                  placeholder="All types"
+                />
+              </div>
+            )}
             <button
               type="button"
               className="btn btn-primary"
@@ -1381,6 +1540,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                           const alignClass =
                             column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
                           const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+                          const numeric = typeof value === 'number' ? value : Number(value)
+                          const isNegativeAmount = (
+                            column.format === 'currency'
+                            || column.format === 'currency_blank'
+                            || column.format === 'qty'
+                            || column.format === 'number'
+                          ) && Number.isFinite(numeric) && numeric < 0
                           return (
                             <td
                               key={column.key}
@@ -1388,6 +1554,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                               style={{
                                 ...(isPnL && column.key === 'account' && row.row_type === 'detail' ? { paddingLeft: 28 } : {}),
                                 ...(clickable && isNameCol ? { color: 'var(--blue)', fontWeight: 500 } : {}),
+                                ...(isNegativeAmount ? { color: 'var(--red)' } : {}),
                               }}
                             >
                               {rendered !== null && rendered !== undefined && rendered !== ''
@@ -1417,8 +1584,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                       if (Object.prototype.hasOwnProperty.call(columnTotals, column.key)) {
                         const value = columnTotals[column.key]
                         const rendered = column.formatter ? column.formatter(value) : value
+                        const isNegativeTotal = Number.isFinite(Number(value)) && Number(value) < 0
                         return (
-                          <td key={column.key} className={alignClass}>
+                          <td
+                            key={column.key}
+                            className={alignClass}
+                            style={isNegativeTotal ? { color: 'var(--red)' } : undefined}
+                          >
                             {rendered}
                           </td>
                         )

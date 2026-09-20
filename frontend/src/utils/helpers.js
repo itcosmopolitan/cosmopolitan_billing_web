@@ -166,6 +166,7 @@ export const statusLabel = (status) => {
     draft: 'Draft', partial: 'Partially Paid', transit: 'In Transit', intransit: 'In Transit', in_progress: 'In Progress', inprogress: 'In Progress', receive: 'Receive', received: 'Received',
     low: 'Low Stock', out: 'Out of Stock', cancelled: 'Cancelled', canceled: 'Cancelled', inactive: 'Inactive',
     pending_approval: 'Pending Approval', confirmed: 'Confirmed', invited: 'Invited',
+    credit_note: 'Credit Note', processed: 'Processed',
   }
   return map[status] || humanizeValue(status)
 }
@@ -296,7 +297,8 @@ export const exportToExcel = (data, filename = 'export.xlsx', columns = null) =>
   const normalizedRows = data.map((row) => {
     const normalized = {}
     cols.forEach((col) => {
-      normalized[col] = row[col] ?? ''
+      // Keep JS numbers as numbers so Excel uses a numeric column (not text).
+      normalized[col] = row[col] == null ? null : row[col]
     })
     return normalized
   })
