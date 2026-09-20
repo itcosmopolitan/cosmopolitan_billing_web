@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.batch_dates import _today
 from src.db_dialect import pg_invoice_status_case, scalar_min
 from src.models import Item, ItemBatch, ItemStock, SaleInvoice
+from src.qty import as_qty, qty_eq
 from src.routes._stock_ledger import get_physical_qty, record_stock_movement
 
 
@@ -48,11 +49,11 @@ async def clamp_stock_to_zero_with_ledger(
     source_ref: Optional[str] = None,
     created_by: Optional[str] = None,
     notes: Optional[str] = None,
-) -> int:
+) -> float:
     """Oversell path: zero aggregate stock and record the actual delta drained."""
     current = await get_physical_qty(db, item_id=item_id, branch_id=branch_id)
     if current <= 0:
-        return 0
+        return 0.0
     await db.execute(
         text(
             "UPDATE item_stock SET quantity = 0 "
@@ -81,19 +82,20 @@ async def adjust_stock_atomic(
     *,
     item_id: str,
     branch_id: str,
-    delta: int,
+    delta: float,
     movement_type: str = "adjustment",
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
     created_by: Optional[str] = None,
-) -> int:
+) -> float:
     """Apply `delta` to the (item_id, branch_id) stock row and return the new
     quantity. Creates the row if it doesn't exist (delta becomes the opening
     quantity, clamped at 0). For negative deltas, refuses if the resulting
     quantity would go below zero (raises ValueError); the WHERE clause does
     the check so the overall operation is still race-safe.
     """
-    if delta == 0:
+    delta = as_qty(delta)
+    if qty_eq(delta, 0):
         # No-op, but still return the current quantity for callers.
         row = await db.execute(
             select(ItemStock.quantity).where(
@@ -101,7 +103,7 @@ async def adjust_stock_atomic(
                 ItemStock.branch_id == branch_id,
             )
         )
-        return int(row.scalar() or 0)
+        return as_qty(row.scalar() or 0)
 
     if delta > 0:
         # Atomically insert-or-increment the row. This avoids the classic
@@ -140,7 +142,7 @@ async def adjust_stock_atomic(
                     ItemStock.branch_id == branch_id,
                 )
             )
-            cur = int(current.scalar() or 0)
+            cur = as_qty(current.scalar() or 0)
             raise ValueError(
                 f"Insufficient stock for item={item_id} branch={branch_id}: "
                 f"have {cur}, need {-delta}"
@@ -154,8 +156,8 @@ async def adjust_stock_atomic(
             ItemStock.branch_id == branch_id,
         )
     )
-    after = int(row.scalar() or 0)
-    before = after - delta
+    after = as_qty(row.scalar() or 0)
+    before = as_qty(after - delta)
     await record_stock_movement(
         db,
         item_id=item_id,
@@ -182,13 +184,14 @@ async def set_stock_atomic(
     *,
     item_id: str,
     branch_id: str,
-    new_qty: int,
-) -> int:
+    new_qty: float,
+) -> float:
     """Set the absolute quantity (used by `items.adjust_stock`). Last-write-
     wins is acceptable here because adjustments are deliberate operator
     actions, not concurrent automated flows."""
     if new_qty < 0:
         raise ValueError("new_qty must be >= 0")
+    new_qty = as_qty(new_qty)
     await db.execute(
         text(
             "INSERT INTO item_stock (id, item_id, branch_id, quantity) "
@@ -236,7 +239,7 @@ async def add_batch_atomic(
     *,
     item_id: str,
     branch_id: str,
-    qty: int,
+    qty: float,
     batch_number: Optional[str] = None,
     mfg_date: Optional[str] = None,
     expiry_date: Optional[str] = None,
@@ -252,6 +255,9 @@ async def add_batch_atomic(
     Used by purchases, transfer-receive, opening-stock, and the explicit
     "Add Batch" item action.
     """
+    if qty <= 0:
+        return None
+    qty = as_qty(qty)
     if qty <= 0:
         return None
     # 2026-05-31: reject duplicate operator-entered batch numbers within the
@@ -340,7 +346,7 @@ async def consume_batches_atomic(
     *,
     item_id: str,
     branch_id: str,
-    qty: int,
+    qty: float,
     strategy: str = "fifo",
     preferred_batch_id: Optional[str] = None,
     explicit_allocation: Optional[list[dict]] = None,
@@ -367,8 +373,9 @@ async def consume_batches_atomic(
     Returns the consumption ledger as `[{batch_id, batch_number, consumed,
     expiry_date}, ...]` in the order consumed, mirrors the deduction onto
     item_stock, and raises ValueError when stock is short (rolling back any
-    partial decrements so the txn stays atomic). Caller commits.
+    partial decrements so the txn stays atomic).     Caller commits.
     """
+    qty = as_qty(qty)
     if qty <= 0:
         return []
 
@@ -385,7 +392,7 @@ async def consume_batches_atomic(
         cleaned: list[dict] = []
         for e in explicit_allocation:
             try:
-                q = int(e.get("qty") or 0)
+                q = as_qty(e.get("qty") or 0)
             except (TypeError, ValueError):
                 raise ValueError(
                     f"Invalid allocation qty {e.get('qty')!r} for item={item_id}"
@@ -400,8 +407,8 @@ async def consume_batches_atomic(
                 )
             cleaned.append({"batch_id": e["batch_id"], "qty": q})
 
-        total = sum(e["qty"] for e in cleaned)
-        if total != qty:
+        total = as_qty(sum(e["qty"] for e in cleaned))
+        if not qty_eq(total, qty):
             raise ValueError(
                 f"Allocation sum ({total}) does not match line qty ({qty}) "
                 f"for item={item_id}"
@@ -414,7 +421,7 @@ async def consume_batches_atomic(
         by_id = {b.id: b for b in rows}
 
         consumed: list[dict] = []
-        taken: list[tuple[ItemBatch, int]] = []
+        taken: list[tuple[ItemBatch, float]] = []
         for entry in cleaned:
             bid = entry["batch_id"]
             take = entry["qty"]
@@ -440,7 +447,7 @@ async def consume_batches_atomic(
                     f"Insufficient stock on batch {b.batch_number}: "
                     f"need {take}, have {b.quantity}"
                 )
-            b.quantity = b.quantity - take
+            b.quantity = as_qty(b.quantity - take)
             taken.append((b, take))
             consumed.append({
                 "batch_id": b.id,
@@ -494,9 +501,9 @@ async def consume_batches_atomic(
     for b in batches:
         if remaining <= 0:
             break
-        take = min(b.quantity, remaining)
-        b.quantity = b.quantity - take
-        remaining -= take
+        take = min(as_qty(b.quantity), remaining)
+        b.quantity = as_qty(b.quantity - take)
+        remaining = as_qty(remaining - take)
         taken.append((b, take))
         consumed.append({
             "batch_id": b.id,
@@ -532,7 +539,7 @@ async def set_batch_quantity_atomic(
     db: AsyncSession,
     *,
     batch_id: str,
-    new_qty: int,
+    new_qty: float,
 ) -> Optional[ItemBatch]:
     """Absolute set on a single batch (used by per-batch stock adjustment).
     Adjusts item_stock by the delta. Returns the updated batch or None if not
@@ -543,9 +550,10 @@ async def set_batch_quantity_atomic(
     b = res.scalar_one_or_none()
     if not b:
         return None
-    delta = int(new_qty) - int(b.quantity or 0)
-    b.quantity = int(new_qty)
-    if delta != 0:
+    new_qty = as_qty(new_qty)
+    delta = as_qty(new_qty - as_qty(b.quantity or 0))
+    b.quantity = new_qty
+    if not qty_eq(delta, 0):
         # Stock should never go below zero from a per-batch absolute set, but
         # adjust_stock_atomic will refuse a negative delta that would drop the
         # aggregate below zero — clamp in that case.

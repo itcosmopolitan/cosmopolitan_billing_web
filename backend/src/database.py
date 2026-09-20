@@ -549,6 +549,7 @@ async def init_schema() -> None:
     async with engine.begin() as conn:
         try:
             added_columns = await _ensure_columns(conn)
+            await _promote_qty_columns_to_float(conn)
             await _backfill_user_account_status(conn, added_columns)
             await _ensure_audit_log_indexes(conn)
             await _ensure_nullable_columns(conn)
@@ -845,6 +846,44 @@ async def _ensure_columns(conn) -> set[tuple[str, str]]:
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
         added.add((table, column))
     return added
+
+
+_QTY_FLOAT_COLUMNS = (
+    ("sale_line_items", "qty"),
+    ("item_stock", "quantity"),
+    ("item_batches", "quantity"),
+    ("item_batches", "initial_qty"),
+    ("stock_movements", "delta"),
+    ("stock_movements", "before_qty"),
+    ("stock_movements", "after_qty"),
+    ("stock_reservations", "qty"),
+    ("sales_return_line_items", "original_qty"),
+    ("sales_return_line_items", "return_qty"),
+)
+
+
+async def _promote_qty_columns_to_float(conn) -> None:
+    """Widen integer qty/stock columns so POS can sell fractional weights."""
+    if conn.dialect.name != "postgresql":
+        return
+    for table, column in _QTY_FLOAT_COLUMNS:
+        dtype = (
+            await conn.execute(
+                text(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = :table AND column_name = :column"
+                ),
+                {"table": table, "column": column},
+            )
+        ).scalar_one_or_none()
+        if dtype in ("integer", "bigint", "smallint"):
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {table} ALTER COLUMN {column} "
+                    f"TYPE DOUBLE PRECISION USING {column}::double precision"
+                )
+            )
 
 
 async def _backfill_user_account_status(conn, added_columns: set[tuple[str, str]]) -> None:

@@ -41,6 +41,7 @@ from src.models import (
     User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.qty import as_qty, qty_eq
 from src.routes._lifecycle import (
     compute_due_date,
     recalc_invoice_after_cn,
@@ -128,13 +129,13 @@ class BatchAllocationEntry(BaseModel):
     silently corrupting the SUM(batches) == item_stock invariant.
     """
     batch_id: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
 
 
 class LineItemIn(BaseModel):
     item_id: Optional[str] = None
     name: str
-    qty: int
+    qty: float = Field(..., gt=0)
     price: float
     tax_rate: float = 0
     line_discount: float = 0
@@ -3569,7 +3570,7 @@ async def _consume_sale_line_stock(
         avail = await get_available_qty(
             db, item_id=item.item_id, branch_id=branch_id,
         )
-        if int(item.qty) > avail:
+        if as_qty(item.qty) > avail:
             raise HTTPException(
                 400,
                 f"Insufficient stock for {item.name}: need {item.qty}, available {avail}",
@@ -3675,10 +3676,10 @@ async def _consume_sale_line_stock(
             )
 
 
-async def _restock_invoice_lines(db, inv, line_items) -> int:
+async def _restock_invoice_lines(db, inv, line_items) -> float:
     """Reverse stock deducted at invoice create/convert. Uses the per-line
     batch_allocation ledger when present; otherwise aggregate add-back."""
-    restored = 0
+    restored = 0.0
     for li in line_items:
         if not li.item_id or not li.qty:
             continue
@@ -3689,7 +3690,7 @@ async def _restock_invoice_lines(db, inv, line_items) -> int:
                 ledger = []
             for entry in ledger:
                 bid = entry.get("batch_id")
-                qty = int(entry.get("consumed") or 0)
+                qty = as_qty(entry.get("consumed") or 0)
                 if not bid or qty <= 0:
                     continue
                 b = (await db.execute(
@@ -3697,7 +3698,7 @@ async def _restock_invoice_lines(db, inv, line_items) -> int:
                 )).scalar_one_or_none()
                 if b is not None:
                     await set_batch_quantity_atomic(
-                        db, batch_id=bid, new_qty=int(b.quantity or 0) + qty,
+                        db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty,
                     )
                 else:
                     try:
@@ -3712,13 +3713,14 @@ async def _restock_invoice_lines(db, inv, line_items) -> int:
                 restored += qty
         else:
             try:
+                line_qty = as_qty(li.qty)
                 await adjust_stock_atomic(
-                    db, item_id=li.item_id, branch_id=inv.branch_id, delta=int(li.qty),
+                    db, item_id=li.item_id, branch_id=inv.branch_id, delta=line_qty,
                     movement_type="sale_reversal",
                     source_type="sale_invoice",
                     source_ref=inv.id,
                 )
-                restored += int(li.qty)
+                restored += line_qty
             except ValueError:
                 pass
     return restored
@@ -3737,7 +3739,7 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
                 ledger = []
             for entry in ledger:
                 bid = entry.get("batch_id")
-                qty = int(entry.get("restored") or 0)
+                qty = as_qty(entry.get("restored") or 0)
                 if not bid or qty <= 0:
                     continue
                 b = (await db.execute(
@@ -3745,7 +3747,7 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
                 )).scalar_one_or_none()
                 if b is not None:
                     await set_batch_quantity_atomic(
-                        db, batch_id=bid, new_qty=max(0, int(b.quantity or 0) - qty),
+                        db, batch_id=bid, new_qty=max(0, as_qty(b.quantity or 0) - qty),
                     )
                 elif rl.item_id:
                     try:
@@ -3761,7 +3763,7 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
             try:
                 await adjust_stock_atomic(
                     db, item_id=rl.item_id, branch_id=ret.branch_id,
-                    delta=-int(rl.return_qty or 0),
+                    delta=-as_qty(rl.return_qty or 0),
                 )
             except ValueError:
                 pass
@@ -4258,7 +4260,7 @@ class ReturnBatchAlloc(BaseModel):
     put `qty` units back into lot `batch_id`. Sum across a line's entries
     must equal that line's return_qty."""
     batch_id: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
 
 
 class SalesReturnLineIn(BaseModel):
@@ -4268,7 +4270,7 @@ class SalesReturnLineIn(BaseModel):
     invoice_line_id: Optional[str] = None
     item_id: Optional[str] = None
     name: str
-    return_qty: int = Field(..., gt=0)
+    return_qty: float = Field(..., gt=0)
     # 2026-05-31: optional explicit per-batch restore split. When omitted,
     # the backend distributes the return across the invoice line's source
     # lots FEFO (nearest-expiry refilled first), capped per lot by what the
@@ -4674,7 +4676,7 @@ def _summarize_quotation_item_changes(old_lines, new_items) -> list[dict]:
     return changes
 
 
-def _line_amounts(qty: int, price: float, discount: float, tax_rate: float, tax_mode: str = "inclusive") -> tuple[float, float, float]:
+def _line_amounts(qty: float, price: float, discount: float, tax_rate: float, tax_mode: str = "inclusive") -> tuple[float, float, float]:
     """Return (line_taxable, line_tax, line_total) for one SO/quote-style line."""
     gross = round(qty * price, 2)
     line_net = round(gross * (1 - (discount or 0) / 100), 2)
@@ -6057,7 +6059,7 @@ def _return_dict(ret, items=None):
 
 async def _already_returned_for_invoice(
     db: AsyncSession, invoice_id: str
-) -> dict[str, int]:
+) -> dict[str, float]:
     """Sum of return_qty per invoice_line_id across all SalesReturns for
     this invoice. Used to validate that a new return's per-line qty plus
     the cumulative prior returns doesn't exceed the original line's qty.
@@ -6079,12 +6081,12 @@ async def _already_returned_for_invoice(
         )
         .group_by(SalesReturnLineItem.invoice_line_id)
     )
-    return {row[0]: int(row[1] or 0) for row in res.all()}
+    return {row[0]: as_qty(row[1] or 0) for row in res.all()}
 
 
 async def _restored_per_batch_for_invoice_line(
     db: AsyncSession, invoice_line_id: str
-) -> dict[str, int]:
+) -> dict[str, float]:
     """Sum of qty already restored per source batch across processed returns
     for a given invoice line. Drives the per-batch cap so cumulative restores
     to any one lot can't exceed what the invoice took from it. Reads the
@@ -6098,13 +6100,13 @@ async def _restored_per_batch_for_invoice_line(
             SalesReturnLineItem.batch_allocation.is_not(None),
         )
     )).scalars().all()
-    out: dict[str, int] = {}
+    out: dict[str, float] = {}
     for raw in rows:
         try:
             for e in json.loads(raw):
                 bid = e.get("batch_id")
                 if bid:
-                    out[bid] = out.get(bid, 0) + int(e.get("restored") or 0)
+                    out[bid] = as_qty(out.get(bid, 0) + as_qty(e.get("restored") or 0))
         except (ValueError, TypeError):
             continue
     return out
@@ -6330,8 +6332,8 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
             continue
         existing = already_returned.get(rl.invoice_line_id, 0)
         inv_line = inv_lines_by_id.get(rl.invoice_line_id)
-        original_qty = int(inv_line.qty or 0) if inv_line else 0
-        if existing + int(rl.return_qty or 0) > original_qty:
+        original_qty = as_qty(inv_line.qty or 0) if inv_line else 0
+        if existing + as_qty(rl.return_qty or 0) > original_qty + 1e-9:
             conflicts.append(rl.name or rl.invoice_line_id)
     if conflicts:
         items_str = ", ".join(f"'{n}'" for n in conflicts[:3])
@@ -6765,7 +6767,7 @@ async def _apply_sales_return(
             )
 
         prior = already_returned.get(inv_line.id, 0)
-        remaining_qty = int(inv_line.qty or 0) - prior
+        remaining_qty = as_qty((inv_line.qty or 0) - prior)
         if r.return_qty > remaining_qty:
             raise HTTPException(
                 400,
@@ -6891,54 +6893,54 @@ async def _apply_sales_return(
                 else:
                     # Per-lot cap = consumed − already restored (cumulative).
                     prior = await _restored_per_batch_for_invoice_line(db, inv_line.id)
-                    caps: dict[str, int] = {}
+                    caps: dict[str, float] = {}
                     fefo_order: list[tuple[str, str]] = []  # (expiry, batch_id)
                     for e in src:
                         bid = e.get("batch_id")
                         if not bid:
                             continue
-                        cap = int(e.get("consumed") or 0) - int(prior.get(bid, 0))
+                        cap = as_qty(as_qty(e.get("consumed") or 0) - as_qty(prior.get(bid, 0)))
                         if cap <= 0:
                             continue
                         caps[bid] = cap
                         fefo_order.append((e.get("expiry_date") or "9999-12-31", bid))
 
-                    plan: dict[str, int] = {}
+                    plan: dict[str, float] = {}
                     if r.batch_allocation:
                         # Explicit operator split — validate against caps.
-                        total = 0
+                        total = 0.0
                         for a in r.batch_allocation:
                             if a.batch_id not in caps:
                                 raise HTTPException(
                                     400,
                                     f"{inv_line.name}: batch {a.batch_id} is not a source lot for this line",
                                 )
-                            if a.qty > caps[a.batch_id]:
+                            if a.qty > caps[a.batch_id] + 1e-9:
                                 raise HTTPException(
                                     400,
                                     f"{inv_line.name}: batch {a.batch_id} can take at most {caps[a.batch_id]} more",
                                 )
-                            plan[a.batch_id] = plan.get(a.batch_id, 0) + a.qty
+                            plan[a.batch_id] = as_qty(plan.get(a.batch_id, 0) + a.qty)
                             total += a.qty
-                        if total != r.return_qty:
+                        if not qty_eq(total, r.return_qty):
                             raise HTTPException(
                                 400,
                                 f"{inv_line.name}: per-batch split ({total}) must equal return qty ({r.return_qty})",
                             )
                     else:
                         # Default FEFO across source lots, capped per lot.
-                        remaining = r.return_qty
+                        remaining = as_qty(r.return_qty)
                         for _exp, bid in sorted(fefo_order):
                             if remaining <= 0:
                                 break
                             take = min(caps[bid], remaining)
                             if take > 0:
                                 plan[bid] = take
-                                remaining -= take
+                                remaining = as_qty(remaining - take)
                         if remaining > 0:
                             raise HTTPException(
                                 400,
-                                f"{inv_line.name}: only {r.return_qty - remaining} unit(s) can be "
+                                f"{inv_line.name}: only {as_qty(r.return_qty - remaining)} unit(s) can be "
                                 f"restored to the invoice's source batches (rest already returned)",
                             )
 
@@ -6949,7 +6951,7 @@ async def _apply_sales_return(
                         )).scalar_one_or_none()
                         if b is not None:
                             await set_batch_quantity_atomic(
-                                db, batch_id=bid, new_qty=int(b.quantity or 0) + qty,
+                                db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty,
                             )
                         else:
                             # Source lot since deleted — keep the count correct.

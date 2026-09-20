@@ -453,7 +453,7 @@ class ItemStock(Base):
     id         = Column(String, primary_key=True)
     item_id    = Column(String, ForeignKey("items.id"), nullable=False, index=True)
     branch_id  = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
-    quantity   = Column(Integer, default=0)
+    quantity   = Column(Float, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     item   = relationship("Item", back_populates="stock")
@@ -481,8 +481,8 @@ class ItemBatch(Base):
     batch_number  = Column(String, nullable=False)         # vendor lot # or auto
     mfg_date      = Column(String)                          # YYYY-MM-DD
     expiry_date   = Column(String)                          # YYYY-MM-DD
-    quantity      = Column(Integer, default=0)              # remaining
-    initial_qty   = Column(Integer, default=0)              # received qty
+    quantity      = Column(Float, default=0)              # remaining
+    initial_qty   = Column(Float, default=0)              # received qty
     cost_price    = Column(Float, default=0)
     vendor_id     = Column(String, nullable=True)
     # `source_type` records how this batch came into existence so the audit
@@ -640,7 +640,7 @@ class SaleLineItem(Base):
     invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
     item_id    = Column(String, ForeignKey("items.id"), nullable=True)
     name       = Column(String, nullable=False)
-    qty        = Column(Integer, default=1)
+    qty        = Column(Float, default=1)
     price      = Column(Float, default=0)
     tax_rate   = Column(Float, default=0)
     discount   = Column(Float, default=0)
@@ -1181,8 +1181,8 @@ class SalesReturnLineItem(Base):
     invoice_line_id = Column(String, ForeignKey("sale_line_items.id"), nullable=True)
     item_id       = Column(String, ForeignKey("items.id"), nullable=True)
     name          = Column(String, nullable=False)
-    original_qty  = Column(Integer)                # qty on the original invoice line
-    return_qty    = Column(Integer, default=1)
+    original_qty  = Column(Float)                  # qty on the original invoice line
+    return_qty    = Column(Float, default=1)
     price         = Column(Float, default=0)       # price at time of original sale
     tax_rate      = Column(Float, default=0)
     line_total    = Column(Float, default=0)       # incl. tax
@@ -1291,9 +1291,9 @@ class StockMovement(Base):
     id             = Column(String, primary_key=True)
     item_id        = Column(String, ForeignKey("items.id"), nullable=False)
     branch_id      = Column(String, ForeignKey("branches.id"), nullable=False)
-    delta          = Column(Integer, nullable=False)
-    before_qty     = Column(Integer, default=0)
-    after_qty      = Column(Integer, default=0)
+    delta          = Column(Float, nullable=False)
+    before_qty     = Column(Float, default=0)
+    after_qty      = Column(Float, default=0)
     movement_type  = Column(String, nullable=False)
     source_type    = Column(String)
     source_ref     = Column(String)
@@ -1309,7 +1309,7 @@ class StockReservation(Base):
     id              = Column(String, primary_key=True)
     item_id         = Column(String, ForeignKey("items.id"), nullable=False)
     branch_id       = Column(String, ForeignKey("branches.id"), nullable=False)
-    qty             = Column(Integer, default=0)
+    qty             = Column(Float, default=0)
     source_type     = Column(String, nullable=False)   # sales_order
     source_ref      = Column(String, nullable=False)
     source_line_id  = Column(String)

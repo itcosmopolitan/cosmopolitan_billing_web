@@ -8,6 +8,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import ItemStock, Organisation, StockMovement, StockReservation, StockReservationStatus
+from src.qty import as_qty
 
 
 async def get_allow_overselling(db: AsyncSession) -> bool:
@@ -17,19 +18,19 @@ async def get_allow_overselling(db: AsyncSession) -> bool:
     return bool(row)
 
 
-async def get_physical_qty(db: AsyncSession, *, item_id: str, branch_id: str) -> int:
+async def get_physical_qty(db: AsyncSession, *, item_id: str, branch_id: str) -> float:
     q = (await db.execute(
         select(ItemStock.quantity).where(
             ItemStock.item_id == item_id,
             ItemStock.branch_id == branch_id,
         )
     )).scalar_one_or_none()
-    return int(q or 0)
+    return as_qty(q or 0)
 
 
 async def get_reserved_qty(
     db: AsyncSession, *, item_id: str, branch_id: str, exclude_source_ref: Optional[str] = None,
-) -> int:
+) -> float:
     conds = [
         StockReservation.item_id == item_id,
         StockReservation.branch_id == branch_id,
@@ -40,7 +41,7 @@ async def get_reserved_qty(
     total = (await db.execute(
         select(func.coalesce(func.sum(StockReservation.qty), 0)).where(and_(*conds))
     )).scalar()
-    return int(total or 0)
+    return as_qty(total or 0)
 
 
 async def get_available_qty(
@@ -49,12 +50,12 @@ async def get_available_qty(
     item_id: str,
     branch_id: str,
     exclude_source_ref: Optional[str] = None,
-) -> int:
+) -> float:
     physical = await get_physical_qty(db, item_id=item_id, branch_id=branch_id)
     reserved = await get_reserved_qty(
         db, item_id=item_id, branch_id=branch_id, exclude_source_ref=exclude_source_ref,
     )
-    return max(0, physical - reserved)
+    return max(0.0, as_qty(physical - reserved))
 
 
 async def record_stock_movement(
@@ -62,9 +63,9 @@ async def record_stock_movement(
     *,
     item_id: str,
     branch_id: str,
-    delta: int,
-    before_qty: int,
-    after_qty: int,
+    delta: float,
+    before_qty: float,
+    after_qty: float,
     movement_type: str,
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
@@ -72,15 +73,15 @@ async def record_stock_movement(
     notes: Optional[str] = None,
     created_by: Optional[str] = None,
 ) -> None:
-    if delta == 0:
+    if as_qty(delta) == 0:
         return
     db.add(StockMovement(
         id=str(uuid.uuid4()),
         item_id=item_id,
         branch_id=branch_id,
-        delta=delta,
-        before_qty=before_qty,
-        after_qty=after_qty,
+        delta=as_qty(delta),
+        before_qty=as_qty(before_qty),
+        after_qty=as_qty(after_qty),
         movement_type=movement_type,
         source_type=source_type,
         source_ref=source_ref,
