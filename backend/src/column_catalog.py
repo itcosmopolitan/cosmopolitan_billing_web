@@ -205,7 +205,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
     ],
     # Reports (table_key = reports.<report-id>)
     "reports.sales-register": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -221,7 +222,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
     ],
     # Drill-only invoice children share the sales-register column set.
     "reports.daily-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -236,7 +238,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.payment-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -251,7 +254,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.branch-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -266,7 +270,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.cashier-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -281,7 +286,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.top-customers-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -296,7 +302,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.sales-lines": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("product_code", "Product Code"),
         _col("product_name", "Product Name"),
@@ -313,7 +320,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.product-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("product_code", "Product Code"),
         _col("product_name", "Product Name"),
@@ -330,7 +338,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.category-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("product_code", "Product Code"),
         _col("product_name", "Product Name"),
@@ -402,7 +411,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("outstanding_amount", "Outstanding Amount"),
     ],
     "reports.customer-sales-detail": [
-        _col("invoice_number", "Invoice Number", locked=True),
+        _col("invoice_number", "Invoice / CN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("invoice_date", "Invoice Date"),
         _col("customer", "Customer"),
         _col("branch", "Branch"),
@@ -417,7 +427,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.purchase-register": [
-        _col("bill_number", "Bill Number", locked=True),
+        _col("bill_number", "Bill / DN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("bill_date", "Bill Date"),
         _col("vendor", "Vendor"),
         _col("branch", "Branch"),
@@ -429,7 +440,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.vendor-purchases-detail": [
-        _col("bill_number", "Bill Number", locked=True),
+        _col("bill_number", "Bill / DN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("bill_date", "Bill Date"),
         _col("vendor", "Vendor"),
         _col("branch", "Branch"),
@@ -441,7 +453,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.vendor-outstanding-detail": [
-        _col("bill_number", "Bill Number", locked=True),
+        _col("bill_number", "Bill / DN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("bill_date", "Bill Date"),
         _col("vendor", "Vendor"),
         _col("branch", "Branch"),
@@ -453,7 +466,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.purchase-lines": [
-        _col("bill_number", "Bill Number", locked=True),
+        _col("bill_number", "Bill / DN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("bill_date", "Bill Date"),
         _col("product", "Product"),
         _col("vendor", "Vendor"),
@@ -465,7 +479,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status"),
     ],
     "reports.product-purchases-detail": [
-        _col("bill_number", "Bill Number", locked=True),
+        _col("bill_number", "Bill / DN No.", locked=True),
+        _col("transaction_type", "Transaction Type"),
         _col("bill_date", "Bill Date"),
         _col("product", "Product"),
         _col("vendor", "Vendor"),

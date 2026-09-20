@@ -49,7 +49,8 @@ def _report(
 
 
 _SALES_INVOICE_COLUMNS = [
-    _col("invoice_number", "Invoice Number"),
+    _col("invoice_number", "Invoice / CN No."),
+    _col("transaction_type", "Transaction Type"),
     _col("invoice_date", "Invoice Date", format="date"),
     _col("customer", "Customer"),
     _col("branch", "Branch"),
@@ -65,7 +66,8 @@ _SALES_INVOICE_COLUMNS = [
 ]
 
 _SALES_LINE_COLUMNS = [
-    _col("invoice_number", "Invoice Number"),
+    _col("invoice_number", "Invoice / CN No."),
+    _col("transaction_type", "Transaction Type"),
     _col("invoice_date", "Invoice Date", format="date"),
     _col("product_code", "Product Code"),
     _col("product_name", "Product Name"),
@@ -83,7 +85,8 @@ _SALES_LINE_COLUMNS = [
 ]
 
 _PURCHASE_BILL_COLUMNS = [
-    _col("bill_number", "Bill Number"),
+    _col("bill_number", "Bill / DN No."),
+    _col("transaction_type", "Transaction Type"),
     _col("bill_date", "Bill Date", format="date"),
     _col("vendor", "Vendor"),
     _col("branch", "Branch"),
@@ -96,7 +99,8 @@ _PURCHASE_BILL_COLUMNS = [
 ]
 
 _PURCHASE_LINE_COLUMNS = [
-    _col("bill_number", "Bill Number"),
+    _col("bill_number", "Bill / DN No."),
+    _col("transaction_type", "Transaction Type"),
     _col("bill_date", "Bill Date", format="date"),
     _col("product", "Product"),
     _col("vendor", "Vendor"),
@@ -150,7 +154,8 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 default_sort="invoice_date",
                 detail_type="invoice",
                 columns=[
-                    _col("invoice_number", "Invoice Number"),
+                    _col("invoice_number", "Invoice / CN No."),
+                    _col("transaction_type", "Transaction Type"),
                     _col("invoice_date", "Invoice Date", format="date"),
                     _col("customer", "Customer"),
                     _col("branch", "Branch"),
@@ -282,7 +287,8 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 default_sort="bill_date",
                 detail_type="bill",
                 columns=[
-                    _col("bill_number", "Bill Number"),
+                    _col("bill_number", "Bill / DN No."),
+                    _col("transaction_type", "Transaction Type"),
                     _col("bill_date", "Bill Date", format="date"),
                     _col("vendor", "Vendor"),
                     _col("branch", "Branch"),
