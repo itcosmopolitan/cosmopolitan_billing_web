@@ -8,6 +8,15 @@ function getFirstDefined(...values) {
 }
 
 function toPackagingValue(item, nestedItem) {
+  const packaging = getFirstDefined(
+    item?.packaging,
+    nestedItem?.packaging,
+  )
+
+  if (packaging !== '') {
+    return packaging
+  }
+
   const packagingQty = getFirstDefined(
     item?.packaging_quantity,
     item?.packagingQty,

@@ -97,7 +97,7 @@ from src.services.audit_service import build_audit_entry
 router = APIRouter()
 
 
-def _snapshot_item_metadata(item):
+def _snapshot_item_metadata(item, packaging=None):
     if item is None:
         return {}
     return {
@@ -106,6 +106,7 @@ def _snapshot_item_metadata(item):
         "brand": item.brand,
         "country_of_origin": item.country_of_origin,
         "unit": item.unit,
+        "packaging": item.packaging if packaging is None else packaging,
         "packaging_quantity": item.packaging_quantity,
         "is_packaging": item.is_packaging,
         "hsn_code": item.hsn_code,
@@ -132,6 +133,30 @@ class BatchAllocationEntry(BaseModel):
     qty: float = Field(..., gt=0)
 
 
+def _coerce_int_like(value, *, field_name: str) -> int:
+    """Accept integer-like floats / strings from POS clients (e.g. 1.0)."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a whole number")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise ValueError(f"{field_name} must be a whole number")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError(f"{field_name} is required")
+        try:
+            numeric = float(stripped)
+        except ValueError as exc:  # pragma: no cover - runtime validation path
+            raise ValueError(f"{field_name} must be a whole number") from exc
+        if numeric.is_integer():
+            return int(numeric)
+        raise ValueError(f"{field_name} must be a whole number")
+    raise ValueError(f"{field_name} must be a whole number")
+
+
 class LineItemIn(BaseModel):
     item_id: Optional[str] = None
     name: str
@@ -141,6 +166,7 @@ class LineItemIn(BaseModel):
     line_discount: float = 0
     line_discount_amount: float = 0
     unit: Optional[str] = None
+    packaging: Optional[str] = None
     vat_identifier: Optional[str] = None
     allow_invoice_discount: Optional[bool] = None
     hsn_code: Optional[str] = None
@@ -151,6 +177,11 @@ class LineItemIn(BaseModel):
     # API. Treated as a one-entry allocation when allocation is absent.
     batch_allocation: Optional[List[BatchAllocationEntry]] = None
     batch_id: Optional[str] = None
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return _coerce_int_like(value, field_name="qty")
 
 """Allowed payment methods on a SALE INVOICE.
 
@@ -1273,7 +1304,7 @@ async def update_invoice(
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
             line_total=line_amount,
-            **_snapshot_item_metadata(item_obj),
+            **_snapshot_item_metadata(item_obj, packaging=item.packaging),
         )
         db.add(li)
         if item.item_id and not is_approval_held:
@@ -1499,7 +1530,7 @@ async def create_invoice(
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
             line_total=line_amount,
-            **_snapshot_item_metadata(item_obj),
+            **_snapshot_item_metadata(item_obj, packaging=item.packaging),
         )
         db.add(li)
         if direct and item.item_id:
@@ -3983,7 +4014,8 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
             "id": i.id,
             "itemId": i.item_id,
             "sku": getattr(_loaded_rel(i, "item"), "sku", None),
-            "packing": getattr(_loaded_rel(i, "item"), "packaging_quantity", None),
+            "packing": getattr(_loaded_rel(i, "item"), "packaging", None) or getattr(_loaded_rel(i, "item"), "packaging_quantity", None),
+            "packaging": getattr(_loaded_rel(i, "item"), "packaging", None),
             "name": i.name,
             "qty": i.qty,
             "price": i.price,
@@ -4155,6 +4187,7 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
                 "barcode": _snapshot_field("barcode"),
                 "brand": _snapshot_field("brand"),
                 "hsn_code": _snapshot_field("hsn_code"),
+                "packaging": _snapshot_field("packaging"),
                 "packing": _snapshot_field("packaging_quantity"),
                 "packaging_quantity": _snapshot_field("packaging_quantity"),
                 "is_packaging": _snapshot_field("is_packaging"),

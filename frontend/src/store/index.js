@@ -374,6 +374,12 @@ export const usePOSStore = create((set, get) => ({
     }))
   },
 
+  setLinePackaging: (id, packaging) => {
+    set((s) => ({
+      cart: s.cart.map((i) => (i.id === id ? { ...i, packaging } : i)),
+    }))
+  },
+
   // Backward-compatible wrappers
   setLineDiscountPct: (id, pct) => get().setLineDiscount(id, pct, 'pct'),
   setLineDiscountFlat: (id, amt) => get().setLineDiscount(id, amt, 'flat'),

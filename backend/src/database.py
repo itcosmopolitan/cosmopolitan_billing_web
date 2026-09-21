@@ -331,6 +331,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("items", "country_of_origin", "VARCHAR"),
     ("items", "is_packaging", "BOOLEAN DEFAULT 0"),
     ("items", "packaging_quantity", "FLOAT"),
+    ("items", "packaging", "VARCHAR"),
     # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
     # `outstanding` so the two intents don't sign-flip on each other.
     ("customers", "credit_balance", "FLOAT DEFAULT 0 NOT NULL"),
@@ -368,6 +369,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("sale_line_items", "brand", "VARCHAR"),
     ("sale_line_items", "country_of_origin", "VARCHAR"),
     ("sale_line_items", "unit", "VARCHAR"),
+    ("sale_line_items", "packaging", "VARCHAR"),
     ("sale_line_items", "packaging_quantity", "FLOAT"),
     ("sale_line_items", "is_packaging", "BOOLEAN DEFAULT 0"),
     ("sale_line_items", "hsn_code", "VARCHAR"),

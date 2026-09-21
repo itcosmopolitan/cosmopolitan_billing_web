@@ -202,32 +202,18 @@ export default function ItemFormFields({
             </FormGroup>
           </div>
 
-          <div className="item-form-inline-opts">
-            <label className="item-form-check">
-              <input
-                type="checkbox"
-                checked={Boolean(form.is_packaging)}
-                onChange={(e) => {
-                  const checked = e.target.checked
-                  patchForm('is_packaging', checked)
-                  if (!checked) patchForm('packaging_quantity', '')
-                }}
-              />
-              Sold as pack / set
-            </label>
-            {Boolean(form.is_packaging) && (
-              <FormGroup label="Qty per pack" required>
+          <div className="item-form-grid">
+            <div className="item-form-field item-form-field--packaging">
+              <FormGroup label="Packaging">
                 <input
-                  className="form-input item-form-input--narrow"
-                  type="number"
-                  min={qtyInputStep()}
-                  step={qtyInputStep()}
-                  value={form.packaging_quantity ?? ''}
-                  onChange={(e) => patchForm('packaging_quantity', e.target.value)}
-                  placeholder="12"
+                  className="form-input"
+                  type="text"
+                  value={form.packaging ?? ''}
+                  onChange={(e) => patchForm('packaging', e.target.value)}
+                  placeholder="e.g. 12 per pack or box of 6"
                 />
               </FormGroup>
-            )}
+            </div>
           </div>
         </section>
 

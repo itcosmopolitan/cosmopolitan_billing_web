@@ -1101,6 +1101,10 @@ h4 { font-size: 14px; font-weight: 600; }
   max-width: 420px;
 }
 
+.item-form-field--packaging {
+  max-width: 300px;
+}
+
 .item-form-inline-opts {
   display: flex;
   align-items: flex-start;
@@ -1679,6 +1683,10 @@ h4 { font-size: 14px; font-weight: 600; }
   }
 
   .item-form-field--compact {
+    max-width: none;
+  }
+
+  .item-form-field--packaging {
     max-width: none;
   }
 

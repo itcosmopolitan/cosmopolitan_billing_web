@@ -7,6 +7,14 @@ function packingDisplay(item) {
 }
 
 describe('POS packaging metadata', () => {
+  it('prefers text packaging when present', () => {
+    expect(packingDisplay({
+      packaging: '12 per pack',
+      is_packaging: true,
+      packaging_quantity: 12,
+    })).toBe('12 per pack')
+  })
+
   it('displays packaging quantity when present', () => {
     expect(packingDisplay({
       is_packaging: true,

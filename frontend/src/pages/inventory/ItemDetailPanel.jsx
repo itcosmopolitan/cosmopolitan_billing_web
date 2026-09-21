@@ -191,7 +191,7 @@ export default function ItemDetailPanel({
               { label: 'Tax rate', value: detail?.tax_rate != null ? `${detail.tax_rate}%` : '—' },
               { label: 'Status', value: statusChip(detail) },
               { label: 'Created by', value: detail?.created_by || '—' },
-              { label: 'Packaging', value: detail?.is_packaging ? `Yes (${detail.packaging_quantity != null ? fmtQty(detail.packaging_quantity) : '—'} per pack)` : 'No' },
+              { label: 'Packaging', value: detail?.packaging || (detail?.is_packaging ? `Yes (${detail.packaging_quantity != null ? fmtQty(detail.packaging_quantity) : '—'} per pack)` : '—') },
             ]}
             />
           </DetailSection>

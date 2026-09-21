@@ -17,7 +17,7 @@ export const EMPTY_ITEM = {
   tax_rate: '8',
   priceTaxMode: 'inclusive',
   hsn_code: '', reorder_level: '10', active: true,
-  is_packaging: false, packaging_quantity: '',
+  packaging: '',
   batch_tracking: false, expiry_tracking: false, emoji: '📦',
 }
 
@@ -111,8 +111,7 @@ export function formFromItem(item) {
     priceTaxMode: 'inclusive',
     hsn_code: item.hsn_code || '',
     reorder_level: item.default_reorder_level ?? item.reorder_level ?? '10',
-    is_packaging: Boolean(item.is_packaging),
-    packaging_quantity: item.packaging_quantity ?? '',
+    packaging: item.packaging || (item.packaging_quantity != null ? String(item.packaging_quantity) : ''),
     emoji: item.emoji || '📦',
     batch_tracking: Boolean(item.batch_tracking),
     expiry_tracking: Boolean(item.expiry_tracking),
@@ -125,9 +124,6 @@ export function validateItemForm(form, branchConfigs) {
   if (!form.categoryId) return { ok: false, error: 'Category is required' }
   if (!form.unit) return { ok: false, error: 'Unit is required' }
   if (!form.cost_price && form.cost_price !== 0) return { ok: false, error: 'Default cost price is required' }
-  if (form.is_packaging && (!form.packaging_quantity && form.packaging_quantity !== 0)) {
-    return { ok: false, error: 'Quantity per pack/set is required when packaging is enabled' }
-  }
   if (!form.selling_price) return { ok: false, error: 'Selling price is required' }
   const categoryMode = form.categoryPricingMode === 'price' ? 'price' : 'pct'
   const wholesaleDisc = Number(form.wholesale_discount_pct || 0)
@@ -260,8 +256,7 @@ export function buildCatalogPayload(form, branchFilter) {
     tax_rate: Number(form.tax_rate),
     hsn_code: form.hsn_code,
     reorder_level: Number(form.reorder_level),
-    is_packaging: Boolean(form.is_packaging),
-    packaging_quantity: form.is_packaging ? Number(form.packaging_quantity) : null,
+    packaging: form.packaging?.trim() || null,
     emoji: form.emoji || '📦',
     batch_tracking: form.batch_tracking,
     expiry_tracking: form.expiry_tracking,

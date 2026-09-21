@@ -700,6 +700,7 @@ class ItemCreate(BaseModel):
     country_of_origin: Optional[str] = None
     category_id: Optional[str] = None
     brand: Optional[str] = None
+    packaging: Optional[str] = None
     is_packaging: bool = False
     packaging_quantity: Optional[float] = None
     unit: str = "Pcs"
@@ -795,6 +796,7 @@ class ItemPatch(BaseModel):
     barcode: Optional[str] = None
     country_of_origin: Optional[str] = None
     category_id: Optional[str] = None
+    packaging: Optional[str] = None
     is_packaging: Optional[bool] = None
     packaging_quantity: Optional[float] = None
     brand: Optional[str] = None
@@ -1060,6 +1062,7 @@ async def list_items(
             "hsn_code": item.hsn_code,
             "reorder_level": eff_reorder,
             "default_reorder_level": item.reorder_level,
+            "packaging": item.packaging,
             "is_packaging": item.is_packaging,
             "packaging_quantity": item.packaging_quantity,
             "emoji": item.emoji,
@@ -1112,8 +1115,8 @@ async def create_item(
     user: User = Depends(current_user),
 ):
     await _validate_category_id(data.category_id, db)
-    if data.is_packaging and (data.packaging_quantity is None or data.packaging_quantity <= 0):
-        raise HTTPException(400, "Packaging quantity must be greater than zero when packaging is enabled")
+    packaging = data.packaging.strip() if data.packaging else None
+    is_packaging = bool(packaging) or data.is_packaging
     direct = await can_direct_commit(user, db, "item_master.approve")
     initial_status = ItemApprovalStatus.approved if direct else ItemApprovalStatus.pending
     category_pricing = _category_pricing_fields(data)
@@ -1132,8 +1135,9 @@ async def create_item(
         tax_rate=data.tax_rate,
         hsn_code=data.hsn_code,
         reorder_level=data.reorder_level,
-        is_packaging=data.is_packaging,
-        packaging_quantity=data.packaging_quantity if data.is_packaging else None,
+        packaging=packaging,
+        is_packaging=is_packaging,
+        packaging_quantity=data.packaging_quantity if not packaging and is_packaging else None,
         emoji=data.emoji,
         batch_tracking=data.batch_tracking,
         expiry_tracking=data.expiry_tracking,
@@ -1773,6 +1777,7 @@ async def get_item(item_id: str, db: AsyncSession = Depends(get_db)):
         "hsn_code": item.hsn_code,
         "default_reorder_level": item.reorder_level,
         "reorder_level": item.reorder_level,
+        "packaging": item.packaging,
         "is_packaging": item.is_packaging,
         "packaging_quantity": item.packaging_quantity,
         "emoji": item.emoji,
@@ -1922,8 +1927,8 @@ async def update_item(
         raise HTTPException(404, "Item not found")
 
     await _validate_category_id(data.category_id, db)
-    if data.is_packaging and (data.packaging_quantity is None or data.packaging_quantity <= 0):
-        raise HTTPException(400, "Packaging quantity must be greater than zero when packaging is enabled")
+    packaging = data.packaging.strip() if data.packaging else None
+    is_packaging = bool(packaging) or data.is_packaging
 
     was_tracked = bool(item.batch_tracking)
     before = {
@@ -1953,8 +1958,9 @@ async def update_item(
     item.tax_rate = data.tax_rate
     item.hsn_code = data.hsn_code
     item.reorder_level = data.reorder_level
-    item.is_packaging = data.is_packaging
-    item.packaging_quantity = data.packaging_quantity if data.is_packaging else None
+    item.packaging = packaging
+    item.is_packaging = is_packaging
+    item.packaging_quantity = data.packaging_quantity if not packaging and is_packaging else None
     item.batch_tracking = data.batch_tracking
     item.expiry_tracking = data.expiry_tracking if data.batch_tracking else False
 
@@ -2293,6 +2299,7 @@ async def patch_item(
             "staff_price",
             "is_packaging",
             "packaging_quantity",
+            "packaging",
             "tax_rate",
             "reorder_level",
             "batch_tracking",
@@ -2334,6 +2341,9 @@ async def patch_item(
     if any(k in updates for k in pricing_keys):
         merged = {**_item_category_pricing_dict(item), **{k: updates[k] for k in pricing_keys if k in updates}}
         updates.update(_category_pricing_fields(merged))
+    if "packaging" in updates:
+        updates["packaging"] = updates["packaging"].strip() if updates["packaging"] else None
+        updates["is_packaging"] = bool(updates["packaging"])
     for k, v in updates.items():
         setattr(item, k, v)
 

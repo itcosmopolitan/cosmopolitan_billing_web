@@ -425,7 +425,7 @@
       const amount = Number(it.lineTotal || it.total || qty * rate)
       const gstAmt = Math.round((amount * gstRate) / 100 * 100) / 100
       const sku = it.sku || ''
-      return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+        return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
   }
 

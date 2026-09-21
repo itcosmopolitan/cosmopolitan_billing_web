@@ -31,6 +31,7 @@ export default function CartRow({
   onQtyChange,
   onPriceChange,
   onNameChange,
+  onPackagingChange,
   onRemove,
   onDiscChange,
   onDiscTypeChange,
@@ -44,7 +45,6 @@ export default function CartRow({
   const margin = posLineMargin(item, entityDiscountShare)
   const hsn = item.hsnCode || '—'
   const metadata = getInvoiceItemMetadata(item)
-  const packing = metadata.packaging === '' ? '—' : metadata.packaging
   const uom = metadata.units === '' ? '—' : metadata.units
   const hasStock = item.availableStock != null || item.available_stock != null
   const stockQty = hasStock ? Number(item.availableStock ?? item.available_stock) || 0 : null
@@ -172,7 +172,6 @@ export default function CartRow({
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 10, rowGap: 2, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
               <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>UOM: {uom}</span>
-              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>Packing: {packing}</span>
               <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty != null ? fmtQty(stockQty) : '—'}</span>
               {stockExceeded && (
                 <span title="Stock exceeded" style={{ color: 'var(--amber)', cursor: 'help', fontSize: 12, lineHeight: 1 }} aria-label="Stock exceeded">⚠️</span>
@@ -199,6 +198,21 @@ export default function CartRow({
             )}
           </div>
         </div>
+      </td>
+      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
+        <input
+          className="form-input"
+          type="text"
+          value={item.packaging ?? ''}
+          onChange={(e) => onPackagingChange?.(e.target.value)}
+          onBlur={(e) => onPackagingChange?.(e.target.value.trim())}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          aria-label={`Packaging for ${item.name || 'item'}`}
+          placeholder="—"
+          style={{ width: 120, padding: '4px 7px', fontSize: 12 }}
+        />
       </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
         <input

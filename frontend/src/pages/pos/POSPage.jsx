@@ -143,6 +143,7 @@ function invoiceToCartSession(inv, customer) {
       taxRate: it.taxRate ?? it.tax_rate ?? 0,
       sku: it.sku,
       hsnCode: it.hsn_code || it.hsnCode || '',
+      packaging: it.packaging || '',
       is_packaging: Boolean(it.is_packaging),
       packaging_quantity: it.packaging_quantity ?? null,
       costPrice: it.costPrice ?? it.cost_price ?? 0,
@@ -596,6 +597,7 @@ export default function POSPage() {
             tax_rate: i.taxRate || 0,
             line_discount: Math.round(effPct * 10000) / 10000,
             line_discount_amount: Math.round(lineDiscountAmount * 100) / 100,
+            packaging: i.packaging?.trim() || null,
             batch_allocation: toApiPayload(i.batchAllocation),
           }
         }),
@@ -702,6 +704,7 @@ export default function POSPage() {
           costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
           availableStock: stock, batchTracking: Boolean(inMemory.batch_tracking),
           expiryTracking: Boolean(inMemory.expiry_tracking),
+          packaging: inMemory.packaging || '',
           is_packaging: Boolean(inMemory.is_packaging),
           packaging_quantity: inMemory.packaging_quantity ?? null,
           wholesale_pricing_mode: inMemory.wholesale_pricing_mode || 'pct',
@@ -743,6 +746,7 @@ export default function POSPage() {
             costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
             availableStock: stock, batchTracking: Boolean(hit.batch_tracking),
             expiryTracking: Boolean(hit.expiry_tracking),
+            packaging: hit.packaging || '',
             is_packaging: Boolean(hit.is_packaging),
             packaging_quantity: hit.packaging_quantity ?? null,
             wholesale_pricing_mode: hit.wholesale_pricing_mode || 'pct',
@@ -1105,6 +1109,7 @@ export default function POSPage() {
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
                       availableStock: stock,
+                      packaging: p.packaging || '',
                       is_packaging: Boolean(p.is_packaging),
                       packaging_quantity: p.packaging_quantity ?? null,
                       wholesale_pricing_mode: p.wholesale_pricing_mode || 'pct',
@@ -1371,10 +1376,10 @@ export default function POSPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', minWidth: 760, borderCollapse: 'separate', borderSpacing: 0 }}>
+              <table style={{ width: '100%', minWidth: 860, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
-                    {['Item Details', 'Qty', 'Rate', 'Discount', 'Margin', 'Line Total', ''].map((h) => (
+                    {['Item Details', 'Packaging', 'Qty', 'Rate', 'Discount', 'Margin', 'Line Total', ''].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -1415,6 +1420,7 @@ export default function POSPage() {
                       }}
                       onPriceChange={(price) => store.setLinePrice(item.id, price)}
                       onNameChange={(name) => store.setLineName(item.id, name)}
+                      onPackagingChange={(packaging) => store.setLinePackaging(item.id, packaging)}
                       onRemove={() => store.removeItem(item.id)}
                       onDiscChange={(value) => store.setLineDiscount(item.id, value, item.lineDiscountType)}
                       onDiscTypeChange={(type) => store.setLineDiscountType(item.id, type)}
