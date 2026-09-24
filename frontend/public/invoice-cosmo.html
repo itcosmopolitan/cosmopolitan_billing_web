@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Sales Invoice</title>
+<title>Tax Invoice</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -20,7 +20,12 @@
     padding: 30px 40px 20px 40px;
     position: relative;
     page-break-after: always;
-    page-break-inside: avoid;
+    page-break-inside: auto;
+  }
+  .continuation-page .header,
+  .continuation-page .title-row,
+  .continuation-page .parties {
+    display: none;
   }
   .page:last-child {
     page-break-after: auto;
@@ -52,7 +57,7 @@
     display: block;
   }
   .logo-tag {
-    font-size: 10px;
+    font-size: 7px;
     font-style: italic;
     color: #444;
   }
@@ -64,17 +69,19 @@
   }
   .company-info {
     flex: 1;
-    max-width: 350px;
-    padding-top:10px ;
+    width: 100%;
+    max-width: none;
+    padding-top: 5px;
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     justify-content: center;
+    text-align: center;
   }
   .company-name {
-    color: #6dbe4b;
+    color: #47aa1c;
     font-weight: 800;
-    font-size: 10px;
+    font-size: 15px;
     margin-bottom: 4px;
     white-space: nowrap;
     line-height: 1.2;
@@ -85,6 +92,10 @@
     line-height: 1.4;
     white-space: pre;
     overflow-x: visible;
+  }
+  .company-tin {
+    width: 100%;
+    text-align: center;
   }
   .company-addr {
     display: none;
@@ -178,6 +189,21 @@
     display: flex;
     flex-direction: column;
     justify-content: space-between;
+    min-width: 0;
+  }
+  .bill-to table {
+    width: 100%;
+    table-layout: fixed;
+  }
+  .bill-to table td {
+    min-width: 0;
+  }
+  .bill-to table td.label {
+    width: 78px;
+  }
+  .bill-to table td:not(.label) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   .bill-to h2 {
     font-size: 15px;
@@ -308,8 +334,20 @@
     text-align: right;
     width: 110px;
   }
-  .totals .grand {
+  .totals .grand-row td {
     border-top: 1.5px solid #1b3e6f;
+  }
+  .totals .grand {
+    font-weight: bold;
+  }
+  .totals-payment {
+    text-align: left;
+    font-size: 9.5px;
+    line-height: 1.35;
+    vertical-align: top;
+    padding-right: 12px !important;
+  }
+  .totals-payment strong {
     font-weight: bold;
   }
 
@@ -400,16 +438,13 @@
   function formatDate(value) {
     if (!value) return ''
     const date = new Date(value)
-    if (Number.isNaN(date)) return value
+    if (Number.isNaN(date.getTime())) return value
 
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
-    const hours = String(date.getHours()).padStart(2, '0')
-    const minutes = String(date.getMinutes()).padStart(2, '0')
-    const seconds = String(date.getSeconds()).padStart(2, '0')
 
-    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
+    return `${day}/${month}/${year}`
   }
 
   function escapeHtml(value) {
@@ -425,25 +460,41 @@
       const amount = Number(it.lineTotal || it.total || qty * rate)
       const gstAmt = Math.round((amount * gstRate) / 100 * 100) / 100
       const sku = it.sku || ''
-        return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.origin || it.country || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+        return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
   }
 
   function renderPage(pageIndex, totalPages, pageItems, invoice, branch, totals, copyLabel) {
+    const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
+    const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
+    const branchCountry = branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const paymentTerms = invoice.customerCreditTerms || invoice.customer_credit_terms || invoice.paymentTerms || invoice.payment_terms || ''
+    const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
+    const paymentMode = String(invoice.paymentMode || invoice.payment_mode || invoice.method || '').toLowerCase()
+    const paymentDetails = paymentMode === 'cash'
+      ? `<strong>Cash Collected:</strong> ${formatNumber(invoice.cashCollected || 0)}<br/><strong>Cash Refunded:</strong> ${formatNumber(invoice.cashChange || invoice.cash_change || 0)}`
+      : ['card', 'upi', 'bank_transfer'].includes(paymentMode) && (invoice.paymentRef || invoice.payment_ref)
+        ? `<strong>Payment Ref:</strong> ${escapeHtml(invoice.paymentRef || invoice.payment_ref)}`
+        : ''
     return `
-      <div class="page">
+      <div class="page${pageIndex > 0 ? ' continuation-page' : ''}">
         <div class="header">
           <div style="display:flex; align-items:flex-start;">
             <div class="logo-block">
               <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
               <div class="logo-tag">"where quality and service matters"</div>
-              <div class="fssc">&#9678; FSSC 22000</div>
             </div>
           </div>
           <div class="company-info">
-            <div class="company-name">${escapeHtml(branch.company || 'Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
-            <div class="company-line">${escapeHtml(('LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv').split('\n')[0])}</div>
-            <div class="company-line">${escapeHtml(('LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv').split('\n')[1] || 'Hulhumale\', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv')}</div>
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            <div class="company-line">${escapeHtml(`${branchStreet2}, ${branchStreet3}, ${branchCountry}`)}</div>
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
           </div>
           <div class="gold-badge">
             ${branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl ? `<img class="badge-img" src="${escapeHtml(branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl)}" alt="Badge" />` : `
@@ -460,7 +511,7 @@
 
         <div class="title-row">
           ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
-          <h1 class='center'>Sales Invoice</h1>
+          <h1 class='center'>Tax Invoice</h1>
           <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
         </div>
 
@@ -468,63 +519,34 @@
           <div class="bill-to details-box">
             <div class="details-title">Customer Details</div>
             <h2 style="margin:0 0 6px 0;">${escapeHtml(invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '')}</h2>
-            <div class="addr-line">${(() => {
-              // Put street1/street2/street3 on the same line, then other parts on subsequent lines
-              const streetParts = [
-                invoice.customerStreet1 || invoice.customer_street1,
-                invoice.customerStreet2 || invoice.customer_street2,
-                invoice.customerStreet3 || invoice.customer_street3,
-              ].filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim())
-
-              const otherParts = [
-                invoice.customerCity || invoice.customer_city || invoice.city,
-                invoice.customerStateProvince || invoice.customer_state_province,
-                invoice.customerCountry || invoice.customer_country || invoice.country,
-                invoice.customerPostalCode || invoice.customer_postal_code || invoice.postal_code,
-              ].filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim())
-
-              const addressLines = []
-              if (streetParts.length) addressLines.push(streetParts.join(', '))
-              if (otherParts.length) addressLines.push(...otherParts)
-
-              if (!addressLines.length) {
-                const rawAddress = invoice.customerAddress || invoice.customer_address || invoice.address || invoice.shippingAddress || invoice.address_lines || invoice.addressLines || ''
-                if (Array.isArray(rawAddress)) {
-                  addressLines.push(...rawAddress.filter(Boolean).map((line) => String(line).trim()))
-                } else if (rawAddress) {
-                  addressLines.push(...String(rawAddress).split('\n').map((line) => line.trim()).filter(Boolean))
-                }
-              }
-              return escapeHtml(addressLines.join('\n')).replace(/\n/g,'<br/>')
-            })()}</div>
-            <table style="margin-top:10px; width:100%;">
-              ${(() => {
-                const customerCode = invoice.customerCode || invoice.customer_code || ''
-                const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || ''
-                const customerName = (invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '').toString().trim().toLowerCase()
-                const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
-                return customerCode && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''
-              })()}
-              ${(() => {
-                const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || ''
-                const customerName = (invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '').toString().trim().toLowerCase()
-                const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
-                return customerGstin && !isWalkIn ? `<tr><td class="label">Customer GST IN</td><td>${escapeHtml(customerGstin)}</td></tr>` : ''
-              })()}
+            <div class="addr-line">${escapeHtml(invoice.phoneNo || invoice.phone_no || invoice.customerPhone || invoice.customer_phone || '')}</div>
+            <table style="margin-top:4px; width:100%;">
+              <tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || '')}</td></tr>
               <tr><td class="label">Invoice No.</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
-              <tr><td class="label">Posting Date</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
+              <tr><td class="label">Address</td><td>${(() => {
+                const addressParts = [
+                  invoice.customerStreet1 || invoice.customer_street1,
+                  invoice.customerStreet2 || invoice.customer_street2,
+                  invoice.customerStreet3 || invoice.customer_street3,
+                  invoice.customerCity || invoice.customer_city || invoice.city,
+                  invoice.customerStateProvince || invoice.customer_state_province,
+                  invoice.customerCountry || invoice.customer_country || invoice.country,
+                  invoice.customerPostalCode || invoice.customer_postal_code || invoice.postal_code,
+                ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+                const rawAddress = invoice.customerAddress || invoice.customer_address || invoice.address || invoice.shippingAddress || invoice.address_lines || invoice.addressLines || ''
+                const address = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
+                return escapeHtml(String(address || '')).replace(/\n/g, '<br/>')
+              })()}</td></tr>
+              <tr><td class="label">Remarks</td><td>${escapeHtml(invoice.notes || invoice.remark || invoice.remarks || '')}</td></tr>
             </table>
           </div>
           <div class="seller-addr details-box">
-            <div class="details-title">Branch Details</div>
-            <div style="font-weight:700; margin-bottom:6px;">${escapeHtml('Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
-            <div style="margin-bottom:8px;">${escapeHtml(branch.address || branch.address_lines || branch.addressLines || 'LOT NO-10627, Haivakaru Magu, Hulhumale\', Maldives.').replace(/\n/g,'<br/>')}</div>
             <table style="width:100%;">
-              <tr><td class="label">Phone No.</td><td>${escapeHtml(branch.phone || branch.tel || branch.phoneNo || branch.phone_no || '')}</td></tr>
-              <tr><td class="label">Branch E-Mail</td><td>${escapeHtml(invoice.email || branch.email || branch.emailAddress || branch.email_address || '')}</td></tr>
-              <tr><td class="label">Website</td><td>${escapeHtml(invoice.website || branch.homePage || branch.url || branch.website || '')}</td></tr>
-              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branch.gst || branch.gstNo || branch.gstin || branch.gst_no || '')}</td></tr>
-              <tr><td class="label">Salesperson</td><td>${escapeHtml(invoice.salesperson || invoice.salesPerson || invoice.salesperson_name || '')}</td></tr>
+              <tr><td class="label">Invoice Date</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
+              <tr><td class="label">Quotation No.</td><td>${escapeHtml(invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || '')}</td></tr>
+              <tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>
+              <tr><td class="label">Sales Person</td><td>${escapeHtml(invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || '')}</td></tr>
+              <tr><td class="label">Cashier</td><td>${escapeHtml(invoice.cashier || invoice.cashierName || invoice.cashier_name || '')}</td></tr>
             </table>
           </div>
         </div>
@@ -535,13 +557,12 @@
               <th>Product ID</th>
               <th>Description</th>
               <th>Packing</th>
-              <th>Origin</th>
               <th>Units</th>
               <th class="num">Qty</th>
               <th class="num">Rate</th>
               <th class="num">Disc %</th>
               <th class="num">GST</th>
-              <th class="num">Amount</th>
+              <th class="num">Net Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -552,33 +573,28 @@
         ${pageIndex === totalPages - 1 ? `
           <table class="totals">
             <tr>
-              <td colspan="6"></td>
-              <td class="tlabel">Total MVR Excl. GST</td>
-              <td class="tval">${formatNumber(totals.subtotal)}</td>
+              <td colspan="5" class="totals-payment">${paymentDetails}</td>
+              <td class="tlabel">Gross Amount</td>
+              <td class="tval">${formatNumber(totals.grossAmount)}</td>
             </tr>
-            ${totals.discountAmount ? `
             <tr>
-              <td colspan="6"></td>
-              <td class="tlabel">Discount (${totals.discountPercent}%)</td>
+              <td colspan="5"></td>
+              <td class="tlabel">Discount Amount</td>
               <td class="tval">-${formatNumber(totals.discountAmount)}</td>
             </tr>
-            ` : ''}
             <tr>
-              <td colspan="6"></td>
-              <td class="tlabel">${escapeHtml(totals.taxLabel)}</td>
+              <td colspan="5"></td>
+              <td class="tlabel">GST</td>
               <td class="tval">${formatNumber(totals.taxTotal)}</td>
             </tr>
-            <tr>
-              <td colspan="6"></td>
-              <td class="tlabel grand">Total MVR Incl. GST</td>
+            <tr class="grand-row">
+              <td colspan="5"></td>
+              <td class="tlabel grand">Total Payable (Inc. GST)</td>
               <td class="tval grand">${formatNumber(totals.total)}</td>
             </tr>
           </table>
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
           <div class="payment-section">
-            <div class="payment-row">
-              <div class="plabel">Payment Due Date</div><div class="pcolon">:</div><div>${formatDate(invoice.dueDate || invoice.due_date)}</div>
-            </div>
             <div class="payment-row">
               <div class="plabel">Terms &amp; Conditions</div><div class="pcolon">:</div>
               <div>30DAYS &nbsp; from date of invoice to our account as follows:</div>
@@ -624,9 +640,9 @@
     const organisation = sale.organisation || sale.organization || {}
     const branch = { ...organisation, ...sourceBranch }
 
-    const phone = sale.phoneNo || sale.phone_no ||
-      branch.phone || branch.tel || branch.phoneNo || branch.phone_no ||
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no ||
       organisation.phone || ''
+    const salePhone = sale.phoneNo || sale.phone_no || ''
     const email = sale.email ||
       branch.email || branch.emailAddress || branch.email_address ||
       organisation.email || ''
@@ -642,8 +658,8 @@
     Object.assign(branch, {
       company: sourceBranch.company || sourceBranch.companyName || '',
       address: sourceBranch.address || sourceBranch.address_lines || sourceBranch.addressLines || '',
-      phone,
-      phoneNo: branch.phoneNo || phone,
+      phone: branchPhone,
+      phoneNo: branch.phoneNo || branchPhone,
       website,
       homePage: branch.homePage || website,
       gstin: branchGst,
@@ -655,7 +671,7 @@
 
     Object.assign(sale, {
       salesperson,
-      phoneNo: phone,
+      phoneNo: salePhone,
       email,
       website,
     })
@@ -667,15 +683,22 @@
     if (hasRenderedInvoice) return
     hasRenderedInvoice = true
     const sale = payload?.sale || {}
-    document.title = sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || 'Sales Invoice'
+    document.title = sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || 'Tax Invoice'
     const branch = payload?.branch || {}
     const items = sale.items || []
     const subtotal = Number(sale.subtotal ?? items.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0))
     const taxtotal = Number(sale.taxTotal ?? sale.tax_total ?? 0)
     const total = Number(sale.total ?? subtotal + taxtotal)
     const taxPercent = sale.taxPercent ?? sale.tax_percent ?? (subtotal ? Math.round((taxtotal / subtotal) * 100) : 0)
-    const pages = paginateItems(items, 16)
-    const discountAmount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
+    const pages = paginateItems(items, 14)
+    const grossAmount = items.reduce((sum, item) => sum + (Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)), 0)
+    const lineDiscountAmount = items.reduce((sum, item) => {
+      const lineGross = Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)
+      const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
+      return sum + (lineGross * discountPct / 100)
+    }, 0)
+    const documentDiscountAmount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
+    const discountAmount = lineDiscountAmount + documentDiscountAmount
     const discountPercent = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
     const allPages = pages.map((pageItems, pageIndex) => ({
       pageItems,
@@ -685,6 +708,7 @@
 
     const totals = {
       subtotal,
+      grossAmount,
       taxTotal: taxtotal,
       total,
       discountAmount,

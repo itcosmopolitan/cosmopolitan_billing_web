@@ -240,7 +240,6 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 <div className="logo-block">
                   <img className="logo-img" src={logoSrc} alt="Cosmopolitan" />
                   <div className="logo-tag">"where quality and service matters"</div>
-                  <div className="fssc">◆ FSSC 22000</div>
                 </div>
               </div>
 
@@ -265,7 +264,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
 
             <div className="title-row">
               {invoice.copyType ? <div className="copy-label">{invoice.copyType}</div> : null}
-              <h1>Sales Invoice</h1>
+              <h1>Tax Invoice</h1>
               <div className="pageno">Page {pageNumber} of {totalPages}</div>
             </div>
 
@@ -290,11 +289,6 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
               </div>
 
               <div className="seller-addr details-box">
-                <div className="details-title">Branch Details</div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>{companyName}</div>
-                <div style={{ marginBottom: 8 }}>
-                  {companyAddressLines.map((line, index) => <div key={`org-${index}`}>{line}</div>)}
-                </div>
                 <table style={{ width: '100%' }}>
                   <tr><td className="label">Phone No.</td><td>{invoice.phoneNo || branch?.phone || ''}</td></tr>
                   <tr><td className="label">Branch E-Mail</td><td>{displayEmail}</td></tr>

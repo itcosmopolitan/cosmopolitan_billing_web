@@ -1488,6 +1488,18 @@ async def create_invoice(
         ),
     )
 
+    invoice_customer = None
+    if data.customer_id:
+        invoice_customer = (await db.execute(
+            select(Customer).where(Customer.id == data.customer_id)
+        )).scalar_one_or_none()
+    invoice_customer_snapshot = await _invoice_customer_snapshot(db, invoice_customer)
+    quotation_number_snapshot = None
+    if data.quotation_id:
+        quotation_number_snapshot = (await db.execute(
+            select(Quotation.number).where(Quotation.id == data.quotation_id)
+        )).scalar_one_or_none()
+
     inv = SaleInvoice(
         id=str(uuid.uuid4()), number=inv_num,
         customer_id=data.customer_id,
@@ -1514,6 +1526,8 @@ async def create_invoice(
         # Draft invoices: remember SO/quotation link; applied on approval.
         pending_order_id=(data.sales_order_id if not direct else None),
         pending_quote_id=(data.quotation_id if not direct else None),
+        quotation_number_snapshot=quotation_number_snapshot,
+        **invoice_customer_snapshot,
     )
     db.add(inv)
 
@@ -3936,6 +3950,38 @@ def _loaded_rel(obj, name):
     return getattr(obj, name, None)
 
 
+async def _invoice_customer_snapshot(db: AsyncSession, customer) -> dict:
+    if customer is None:
+        return {}
+    address_parts = [
+        getattr(customer, "street1", None),
+        getattr(customer, "street2", None),
+        getattr(customer, "street3", None),
+        getattr(customer, "city", None),
+        getattr(customer, "state_province", None),
+        getattr(customer, "country", None),
+        getattr(customer, "postal_code", None),
+    ]
+    address = ", ".join(str(part).strip() for part in address_parts if part and str(part).strip())
+    if not address:
+        address = getattr(customer, "address", None) or ""
+    key_account_manager = getattr(customer, "key_account_manager", None)
+    key_account_manager_name = key_account_manager
+    if key_account_manager:
+        manager = (await db.execute(
+            select(User).where(User.id == key_account_manager)
+        )).scalar_one_or_none()
+        key_account_manager_name = getattr(manager, "name", None) or key_account_manager
+    return {
+        "customer_phone_snapshot": getattr(customer, "phone", None),
+        "customer_gstin_snapshot": getattr(customer, "gstin", None),
+        "customer_address_snapshot": address,
+        "customer_credit_terms_snapshot": getattr(customer, "credit_terms", None),
+        "customer_key_account_manager_snapshot": key_account_manager,
+        "customer_key_account_manager_name_snapshot": key_account_manager_name,
+    }
+
+
 
 async def _sales_doc_number_map(db: AsyncSession, model, ids) -> dict:
     """Map document ids → human-readable numbers (batch)."""
@@ -4093,6 +4139,14 @@ async def _resolve_invoice_linked_docs(db: AsyncSession, inv) -> dict:
 
 def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, quotation_id=None, quotation_number=None):
     customer = _loaded_rel(inv, "customer")
+    customer_snapshot = {
+        "customer_phone_snapshot": getattr(inv, "customer_phone_snapshot", None),
+        "customer_gstin_snapshot": getattr(inv, "customer_gstin_snapshot", None),
+        "customer_address_snapshot": getattr(inv, "customer_address_snapshot", None),
+        "customer_credit_terms_snapshot": getattr(inv, "customer_credit_terms_snapshot", None),
+        "customer_key_account_manager_snapshot": getattr(inv, "customer_key_account_manager_snapshot", None),
+        "customer_key_account_manager_name_snapshot": getattr(inv, "customer_key_account_manager_name_snapshot", None),
+    }
     customer_code = None
     if customer is not None:
         customer_code = getattr(customer, "customer_code", None) or None
@@ -4110,8 +4164,8 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "customerType": (getattr(customer, "type", None) if customer else None) or "retail",
         "customer_type": (getattr(customer, "type", None) if customer else None) or "retail",
         "classification": (getattr(customer, "classification", None) if customer else None) or "external",
-        "customerAddress": customer.address if customer else None,
-        "customer_address": customer.address if customer else None,
+        "customerAddress": customer_snapshot["customer_address_snapshot"] or (customer.address if customer else None),
+        "customer_address": customer_snapshot["customer_address_snapshot"] or (customer.address if customer else None),
         "customerStreet1": customer.street1 if customer else None,
         "customer_street1": customer.street1 if customer else None,
         "customerStreet2": customer.street2 if customer else None,
@@ -4126,15 +4180,25 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "customer_country": customer.country if customer else None,
         "customerPostalCode": customer.postal_code if customer else None,
         "customer_postal_code": customer.postal_code if customer else None,
-        "gstNo": customer.gstin if customer else None,
-        "gst_no": customer.gstin if customer else None,
-        "phoneNo": customer.phone if customer else None,
-        "phone_no": customer.phone if customer else None,
+        "customerKeyAccountManager": getattr(customer, "key_account_manager", None) if customer else None,
+        "customer_key_account_manager": getattr(customer, "key_account_manager", None) if customer else None,
+        "customerCreditTerms": getattr(customer, "credit_terms", None) if customer else None,
+        "customer_credit_terms": getattr(customer, "credit_terms", None) if customer else None,
+        "customerCreditTerms": customer_snapshot["customer_credit_terms_snapshot"] or (getattr(customer, "credit_terms", None) if customer else None),
+        "customer_credit_terms": customer_snapshot["customer_credit_terms_snapshot"] or (getattr(customer, "credit_terms", None) if customer else None),
+        "customerKeyAccountManager": customer_snapshot["customer_key_account_manager_name_snapshot"] or customer_snapshot["customer_key_account_manager_snapshot"] or (getattr(customer, "key_account_manager", None) if customer else None),
+        "customer_key_account_manager": customer_snapshot["customer_key_account_manager_name_snapshot"] or customer_snapshot["customer_key_account_manager_snapshot"] or (getattr(customer, "key_account_manager", None) if customer else None),
+        "gstNo": customer_snapshot["customer_gstin_snapshot"] or (customer.gstin if customer else None),
+        "gst_no": customer_snapshot["customer_gstin_snapshot"] or (customer.gstin if customer else None),
+        "phoneNo": customer_snapshot["customer_phone_snapshot"] or (customer.phone if customer else None),
+        "phone_no": customer_snapshot["customer_phone_snapshot"] or (customer.phone if customer else None),
         "email": customer.email if customer else None,
         "branchId": inv.branch_id,
         "branchName": inv.branch_name,
         "cashier": inv.cashier,
         "date": inv.date,
+        "paymentTerms": getattr(inv, "customer_credit_terms_snapshot", None) or getattr(inv, "payment_terms", None),
+        "payment_terms": getattr(inv, "customer_credit_terms_snapshot", None) or getattr(inv, "payment_terms", None),
         "subtotal": inv.subtotal,
         "taxTotal": inv.tax_total,
         "discount": inv.discount,
@@ -4155,7 +4219,7 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "salesOrderId": sales_order_id or getattr(inv, "pending_order_id", None) or None,
         "salesOrderNumber": sales_order_number or None,
         "quotationId": quotation_id or getattr(inv, "pending_quote_id", None) or None,
-        "quotationNumber": quotation_number or None,
+        "quotationNumber": getattr(inv, "quotation_number_snapshot", None) or quotation_number or None,
     }
     if items is not None:
         out_lines = []
@@ -5506,6 +5570,12 @@ async def convert_order_to_invoice(
     paid = inv_total if data.payment_received else 0.0
     status = "paid" if paid >= inv_total and inv_total > 0 else "pending"
     payment_mode = data.payment_mode if data.payment_received else None
+    invoice_customer = (await db.execute(
+        select(Customer).where(Customer.id == so.customer_id)
+    )).scalar_one_or_none() if so.customer_id else None
+    quotation_number_snapshot = (await db.execute(
+        select(Quotation.number).where(Quotation.converted_order_id == so.id)
+    )).scalar_one_or_none()
 
     inv = SaleInvoice(
         id=str(uuid.uuid4()), number=inv_num,
@@ -5524,6 +5594,8 @@ async def convert_order_to_invoice(
         status=status,
         origin="sales_order",
         notes=data.notes or so.notes,
+        quotation_number_snapshot=quotation_number_snapshot,
+        **await _invoice_customer_snapshot(db, invoice_customer),
     )
     db.add(inv)
 
@@ -5877,6 +5949,9 @@ async def convert_quote_to_invoice(
     due_date = None
     if status in ("pending", "partial"):
         due_date = compute_due_date(today, None)
+    invoice_customer = (await db.execute(
+        select(Customer).where(Customer.id == quote.customer_id)
+    )).scalar_one_or_none() if quote.customer_id else None
 
     inv = SaleInvoice(
         id=str(uuid.uuid4()), number=inv_num,
@@ -5896,6 +5971,8 @@ async def convert_quote_to_invoice(
         due_date=due_date,
         origin="quotation",
         notes=data.notes or quote.notes,
+        quotation_number_snapshot=quote.number,
+        **await _invoice_customer_snapshot(db, invoice_customer),
     )
     db.add(inv)
 

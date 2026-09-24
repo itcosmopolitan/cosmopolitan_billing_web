@@ -158,7 +158,7 @@ function invoiceToCartSession(inv, customer) {
     discountPct: 0,
     discountAmt: Number(inv.discount) || 0,
     discountReason,
-    notes: userNotes,
+    notes: userNotes.slice(0, 100),
     paymentReceived: false,
     paymentMethod: null,
     paymentRef: '',
@@ -226,7 +226,7 @@ export default function POSPage() {
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
-  const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const { cart, customer, discountPct, discountAmt, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
 
   // Guard route changes when the cart has unsaved lines. We stash the
@@ -1435,6 +1435,25 @@ export default function POSPage() {
               </table>
             </div>
           )}
+        </div>
+
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+            <label htmlFor="pos-remarks" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>
+              Remarks
+            </label>
+            <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{notes.length}/100</span>
+          </div>
+          <textarea
+            id="pos-remarks"
+            className="form-input"
+            rows={2}
+            maxLength={100}
+            value={notes}
+            onChange={(e) => store.setNotes(e.target.value)}
+            placeholder="Add a remark to show on the invoice"
+            style={{ width: '100%', resize: 'vertical', minHeight: 50, padding: '7px 10px', fontSize: 12 }}
+          />
         </div>
 
         {/* Discount row — gated on pos.discount; cashier role does not have it. */}

@@ -11,7 +11,14 @@ export async function openInvoicePrintWindow(sale, branch) {
     const needsFetch = !sale || (sale?.id && (!sale.salesperson || !sale.email || !sale.phoneNo || !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)))
     if (needsFetch && sale?.id) {
       const res = await fetch(`/api/v1/sales/${sale.id}`, { headers: { Accept: 'application/json', ...authHeaders } })
-      if (res.ok) fullSale = await res.json()
+      if (res.ok) {
+        const fetchedSale = await res.json()
+        fullSale = {
+          ...fetchedSale,
+          cashCollected: sale.cashCollected ?? fetchedSale.cashCollected,
+          cashChange: sale.cashChange ?? fetchedSale.cashChange,
+        }
+      }
     }
   } catch (e) { /* ignore */ }
 

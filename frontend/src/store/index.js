@@ -459,10 +459,10 @@ export const usePOSStore = create((set, get) => ({
   }),
   setPaymentRef: (r) => set({ paymentRef: r }),
   setCashCollected: (v) => set({ cashCollected: v }),
-  setNotes: (n) => set({ notes: n }),
+  setNotes: (n) => set({ notes: String(n || '').slice(0, 100) }),
 
   holdBill: (branchId) => {
-    const { cart, customer, discountPct, discountAmt, discountReason, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = get()
+    const { cart, customer, discountPct, discountAmt, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = get()
     if (cart.length === 0) return
     const label = `Hold #${heldBills.length + 1}`
     set({
@@ -475,6 +475,7 @@ export const usePOSStore = create((set, get) => ({
         discountPct,
         discountAmt,
         discountReason,
+        notes,
         // PR 1: persist the new payment fields so resume restores the
         // operator's state. Older held bills (created before this version)
         // won't have these and the migration in resumeBill below handles
@@ -485,7 +486,7 @@ export const usePOSStore = create((set, get) => ({
         cashCollected,
         heldAt: new Date(),
       }],
-      cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '',
+      cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '', notes: '',
       paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '', applyStoreCredit: false,
     })
   },
@@ -527,6 +528,7 @@ export const usePOSStore = create((set, get) => ({
       discountPct: bill.discountPct,
       discountAmt: bill.discountAmt || 0,
       discountReason: bill.discountReason || '',
+      notes: bill.notes || '',
       paymentReceived: resumedReceived,
       paymentMethod: resumedMethod,
       paymentRef: ['card', 'upi', 'bank_transfer'].includes(resumedMethod)

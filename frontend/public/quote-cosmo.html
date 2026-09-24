@@ -17,19 +17,30 @@
     width: 850px;
     background: #fff;
     margin: 20px auto;
-    padding: 30px 40px 30px 40px;
+    padding: 30px 40px 20px 40px;
     position: relative;
     page-break-after: always;
-    page-break-inside: avoid;
+    page-break-inside: auto;
+  }
+  .continuation-page .header,
+  .continuation-page .title-row,
+  .continuation-page .parties {
+    display: none;
   }
   .page:last-child { page-break-after: auto; }
+  table.items {
+    page-break-inside: auto;
+  }
+  table.items thead, table.items tbody, table.items tbody tr {
+    page-break-inside: avoid;
+  }
   .header {
     display: grid;
-    grid-template-columns: 180px 1fr 120px;
+    grid-template-columns: 140px 1fr 90px;
     align-items: flex-start;
     border-bottom: 0px solid transparent;
     padding-bottom: 6px;
-    gap: 16px;
+    gap: 1px;
   }
   .logo-block {
     display: flex;
@@ -43,7 +54,7 @@
     display: block;
   }
   .logo-tag {
-    font-size: 10px;
+    font-size: 7px;
     font-style: italic;
     color: #444;
   }
@@ -56,13 +67,16 @@
   .company-info {
     flex: 1;
     max-width: 420px;
+    max-width: none;
+    padding-top: 5px;
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     justify-content: center;
+    text-align: center;
   }
   .company-name {
-    color: #6dbe4b;
+    color: #47aa1c;
     font-weight: 800;
     font-size: 18px;
     margin-bottom: 4px;
@@ -76,13 +90,19 @@
     white-space: pre;
     overflow-x: visible;
   }
+  .company-tin {
+    width: 100%;
+    text-align: center;
+  }
   .company-addr {
     display: none;
   }
   .gold-badge {
     text-align: center;
     width: 120px;
-    display:flex;justify-content:flex-end;align-items:center
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
   }
   .badge-img {
     width: 86px;
@@ -469,102 +489,92 @@
   }
 
   function renderPage(pageIndex, totalPages, pageItems, quote, branch, totals, copyLabel) {
+    const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
+    const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
+    const branchCountry = branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const customerPhone = quote.customerPhone || quote.customer_phone || quote.phoneNo || quote.phone_no || ''
     const customerAddress = (quote.customerAddress || quote.customer_address || quote.address || '').toString().trim()
     const customerCode = quote.customerCode || quote.customer_code || ''
     const customerGstin = quote.customerGstin || quote.customer_gstin || quote.gstin || quote.gstNo || quote.gst_no || ''
-    const customerName = (quote.customerName || quote.customer_name || quote.customer || quote.name || '').toString().trim().toLowerCase()
-    const isWalkIn = customerName === 'walkin' || customerName === 'walk-in' || customerName === 'walk in' || customerName === 'walkin customer' || customerName === 'cash customer'
-    const salesperson = quote.salesperson || quote.createdBy || quote.created_by || ''
-    const paymentTerms = quote.paymentTerms || quote.payment_terms || ''
+    const customerName = (quote.customerName || quote.customer_name || quote.customer || quote.name || '').toString().trim()
+    const isWalkIn = customerName.toLowerCase() === 'walkin' || customerName.toLowerCase() === 'walk-in' || customerName.toLowerCase() === 'walk in' || customerName.toLowerCase() === 'walkin customer' || customerName.toLowerCase() === 'cash customer'
+    const salesperson = quote.salesperson || quote.createdBy || quote.created_by || quote.customerKeyAccountManagerName || quote.customer_key_account_manager_name || quote.customerKeyAccountManager || quote.customer_key_account_manager || ''
+    const paymentTerms = quote.paymentTerms || quote.payment_terms || quote.creditTerms || quote.credit_terms || ''
+    const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
     const shipmentMethod = quote.shipmentMethod || quote.shipment_method || ''
     const pricesIncludingVat = quote.pricesIncludingVat || quote.prices_including_vat || false
     const paymentDiscountOnVat = Number(quote.paymentDiscountOnVat ?? quote.payment_discount_on_vat ?? 0)
+    const customerRemarks = quote.notes || quote.remark || quote.remarks || ''
 
     return `
-      <div class="page">
+      <div class="page${pageIndex > 0 ? ' continuation-page' : ''}">
         <div class="header">
           <div style="display:flex; align-items:flex-start;">
             <div class="logo-block">
               <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
               <div class="logo-tag">"where quality and service matters"</div>
-              <div class="fssc">&#9678; FSSC 22000</div>
             </div>
           </div>
           <div class="company-info">
-            <div class="company-name">Cosmopolitan Champa Brothers Maldives</div>
-            <div class="company-line">LOT NO-10627, Haivakaru Magu,  T : 960 331 0477  E : info@cosmopolitan.com.mv</div>
-            <div class="company-line">Hulhumale', Republic of Maldives,  F : 960 331 0458  W : www.cosmopolitan.com.mv</div>
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            <div class="company-line">${escapeHtml(`${branchStreet2}, ${branchStreet3}, ${branchCountry}`)}</div>
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line company-tin">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
           </div>
           <div class="gold-badge">
-            <img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='block'" />
-            <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
-              <div class="gold-corporate">Corporate Maldives</div>
-              <div class="gold-text">GOLD</div>
-              <div class="gold-100">100</div>
-              <div class="gold-year">2023</div>
-            </div>
+            ${branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl ? `<img class="badge-img" src="${escapeHtml(branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl)}" alt="Badge" />` : `
+                <img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='block'" />
+                <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+                  <div class="gold-corporate">Corporate Maldives</div>
+                  <div class="gold-text">GOLD</div>
+                  <div class="gold-100">100</div>
+                  <div class="gold-year">2023</div>
+                </div>
+            `}
           </div>
         </div>
 
         <div class="title-row">
           ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
-          <h1>Sales - Quote</h1>
+          <h1 class='center'>Sales - Quote</h1>
           <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
         </div>
 
         <div class="parties">
           <div class="bill-to details-box">
             <div class="details-title">Customer Details</div>
-            <h2 style="margin:0 0 6px 0;">${escapeHtml(quote.customerName || quote.customer_name || quote.customer || quote.name || '')}</h2>
-            ${customerAddress ? `<div class="addr-line">${escapeHtml(customerAddress).replace(/\n/g,'<br/>')}</div>` : `<div class="addr-line">${(() => {
-              const streetParts = [
-                quote.customerStreet1 || quote.customer_street1,
-                quote.customerStreet2 || quote.customer_street2,
-                quote.customerStreet3 || quote.customer_street3,
-              ].filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim())
-
-              const otherParts = [
-                quote.customerCity || quote.customer_city || quote.city,
-                quote.customerStateProvince || quote.customer_state_province,
-                quote.customerCountry || quote.customer_country || quote.country,
-                quote.customerPostalCode || quote.customer_postal_code || quote.postal_code,
-              ].filter((p) => typeof p === 'string' && p.trim()).map((p) => p.trim())
-
-              const addressLines = []
-              if (streetParts.length) addressLines.push(streetParts.join(', '))
-              if (otherParts.length) addressLines.push(...otherParts)
-
-              if (!addressLines.length) {
-                const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
-                if (Array.isArray(rawAddress)) {
-                  addressLines.push(...rawAddress.filter(Boolean).map((line) => String(line).trim()))
-                } else if (rawAddress) {
-                  addressLines.push(...String(rawAddress).split('\n').map((line) => line.trim()).filter(Boolean))
-                }
-              }
-              return escapeHtml(addressLines.join('\n')).replace(/\n/g,'<br/>')
-            })()}</div>`}
-            <table style="margin-top:10px; width:100%;">
-              ${customerCode && !isWalkIn ? `<tr><td class="label">Bill-to Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''}
-              <tr><td class="label">GST Registration No.</td><td>${escapeHtml(quote.customerGstin)}</td></tr>
-              <tr><td class="label">Document Date</td><td>${escapeHtml(formatDate(quote.date || quote.quote_date || ''))}</td></tr>
-              <tr><td class="label">Shipment Date</td><td>${escapeHtml(formatDate(quote.shipmentDate || quote.shipment_date || ''))}</td></tr>
+            <h2 style="margin:0 0 6px 0;">${escapeHtml(customerName)}</h2>
+            <div class="addr-line">${escapeHtml(customerPhone)}</div>
+            <table style="margin-top:4px; width:100%;">
+              ${customerCode && !isWalkIn ? `<tr><td class="label">Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''}
+              <tr><td class="label">GST Number</td><td>${escapeHtml(customerGstin)}</td></tr>
               <tr><td class="label">Quote No.</td><td>${escapeHtml(quote.number || quote.quote_no || '')}</td></tr>
-              <tr><td class="label">Prices Including GST</td><td>${escapeHtml(formatYesNo(pricesIncludingVat))}</td></tr>
-              <tr><td class="label">Payment Terms</td><td>${escapeHtml(paymentTerms)}</td></tr>
-              <tr><td class="label">Shipment Method</td><td>${escapeHtml(shipmentMethod)}</td></tr>
+              <tr><td class="label">Address</td><td>${(() => {
+                const addressParts = [
+                  quote.customerStreet1 || quote.customer_street1,
+                  quote.customerStreet2 || quote.customer_street2,
+                  quote.customerStreet3 || quote.customer_street3,
+                  quote.customerCity || quote.customer_city || quote.city,
+                  quote.customerStateProvince || quote.customer_state_province,
+                  quote.customerCountry || quote.customer_country || quote.country,
+                  quote.customerPostalCode || quote.customer_postal_code || quote.postal_code,
+                ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+                const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
+                const address = rawAddress ? (Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress) : addressParts.join(', ')
+                return escapeHtml(String(address || '')).replace(/\n/g, '<br/>')
+              })()}</td></tr>
             </table>
           </div>
           <div class="seller-addr details-box">
-            <div class="details-title">Branch Details</div>
-            <div style="font-weight:700; margin-bottom:6px;">${escapeHtml('Cosmopolitan Champa Brothers Maldives Pvt Ltd')}</div>
-            <div style="margin-bottom:8px;">${escapeHtml(branch.address || branch.address_lines || branch.addressLines || 'LOT NO-10627, Haivakaru Magu, Hulhumale\', Maldives.').replace(/\n/g,'<br/>')}</div>
             <table style="width:100%;">
-              <tr><td class="label">Phone No.</td><td>${escapeHtml(branch.phone || branch.tel || branch.phoneNo || branch.phone_no || '')}</td></tr>
-              <tr><td class="label">Branch E-Mail</td><td>${escapeHtml(quote.email || branch.email || branch.emailAddress || branch.email_address || '')}</td></tr>
-              <tr><td class="label">Website</td><td>${escapeHtml(quote.website || branch.homePage || branch.url || branch.website || '')}</td></tr>
-              <tr><td class="label">GST Reg no</td><td>${escapeHtml(branch.gst || branch.gstNo || branch.gstin || branch.gst_no || '')}</td></tr>
-              <tr><td class="label">Salesperson</td><td>${escapeHtml(salesperson)}</td></tr>
+              <tr><td class="label">Quote Date</td><td>${escapeHtml(formatDate(quote.date || quote.quote_date || ''))}</td></tr>
+              <tr><td class="label">Quotation No.</td><td>${escapeHtml(quote.number || quote.quote_no || '')}</td></tr>
+              <tr><td class="label">Sales Person</td><td>${escapeHtml(salesperson)}</td></tr>
             </table>
           </div>
         </div>
@@ -612,10 +622,7 @@
         <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
         <div class="quote-terms-box">
           <div class="payment-row">
-            <div class="plabel">Payment Due Date</div><div class="pcolon">:</div><div>Not applicable for quotation</div>
-          </div>
-          <div class="payment-row">
-            <div class="plabel">Payment Terms</div><div class="pcolon">:</div><div>${escapeHtml(quote.paymentTerms || 'As agreed')}</div>
+            <div class="plabel">Payment Terms</div><div class="pcolon">:</div><div>${escapeHtml(displayPaymentTerms || quote.paymentTerms || 'As agreed')}</div>
           </div>
           <div class="bank-details">
             Payment details for settlement when invoiced:<br>
