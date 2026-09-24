@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -33,9 +34,10 @@ from src.models import (  # noqa: E402
     apply_account_status,
 )
 from src.routes._serializers import serialize_user  # noqa: E402
-from src.routes.auth import ChangePasswordRequest, change_password  # noqa: E402
+from src.routes.auth import ChangePasswordRequest, LoginRequest, change_password, login  # noqa: E402
 from src.routes.users import UserCreate, create_user, toggle_user  # noqa: E402
 users_mod = sys.modules["src.routes.users"]
+auth_mod = sys.modules["src.routes.auth"]
 from src.security import hash_password_async  # noqa: E402
 
 
@@ -86,6 +88,47 @@ async def test_create_user_starts_invited(monkeypatch):
         assert result["active"] is True
         assert result["must_change_password"] is True
         assert result["email"] == "cashier@test.com"
+        assert result["temporary_password"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_no_email_creation_returns_one_time_credentials_and_forces_reset(monkeypatch):
+    monkeypatch.setattr(users_mod, "send_temp_password_email", lambda *a, **k: None)
+    monkeypatch.setattr(auth_mod, "create_access_token", lambda user_id: "test-token")
+    db = await _session()
+    try:
+        admin = await _seed_admin(db)
+        result = await create_user(
+            data=UserCreate(name="Raghvendra Pratap Singh", role="cashier", branch_ids=["b1"]),
+            db=db,
+            request=None,
+            user=admin,
+        )
+
+        assert result["email"] is None
+        assert result["username"] == "raghvsi"
+        assert result["temporary_password"]
+        assert "temporary_password" not in serialize_user(
+            (await db.execute(select(User).where(User.username == "raghvsi"))).scalar_one()
+        )
+
+        logged_in = await login(
+            data=LoginRequest(identifier=result["username"], password=result["temporary_password"]),
+            request=type("Request", (), {"state": type("State", (), {})()})(),
+            db=db,
+        )
+        assert logged_in["user"]["must_change_password"] is True
+
+        created = (await db.execute(select(User).where(User.username == result["username"]))).scalar_one()
+        changed = await change_password(
+            data=ChangePasswordRequest(old_password=result["temporary_password"], new_password="new-pass-99"),
+            user=created,
+            db=db,
+        )
+        assert changed["must_change_password"] is False
+        assert created.status == UserAccountStatus.active.value
     finally:
         await db.close()
 

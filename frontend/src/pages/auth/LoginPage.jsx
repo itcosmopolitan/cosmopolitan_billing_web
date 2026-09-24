@@ -145,15 +145,15 @@ export default function LoginPage() {
             {recoveryMode ? (
               <form onSubmit={handleForgotPassword} className="login-form">
                 <div className="form-group">
-                  <label className="form-label">Work email</label>
+                  <label className="form-label">Email or username</label>
                   <div className="login-input-wrap">
                     <MailIcon className="login-input-icon" />
                     <input
                       className="form-input"
-                      type="email"
+                      type="text"
                       value={recoveryEmail}
                       onChange={(e) => setRecoveryEmail(e.target.value)}
-                      placeholder="Enter work email"
+                      placeholder="Enter email or username"
                       required
                       autoFocus
                     />

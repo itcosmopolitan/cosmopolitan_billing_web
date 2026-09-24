@@ -291,7 +291,8 @@ class User(Base):
     __tablename__ = "users"
     id           = Column(String, primary_key=True)
     name         = Column(String, nullable=False)
-    email        = Column(String, nullable=False, unique=True)
+    email        = Column(String, nullable=True, unique=True)
+    username     = Column(String, nullable=True, unique=True, index=True)
     hashed_password = Column(String, nullable=False)
     # Legacy denormalised role enum — kept as a read-cache for one release cycle
     # (frontend and seed.py still write/read it). New code should resolve via
@@ -569,6 +570,12 @@ class SaleInvoice(Base):
     number        = Column(String, unique=True, nullable=False)
     customer_id   = Column(String, ForeignKey("customers.id"), nullable=True)
     customer_name = Column(String, default="Walk-in")
+    customer_phone_snapshot = Column(String, nullable=True)
+    customer_gstin_snapshot = Column(String, nullable=True)
+    customer_address_snapshot = Column(Text, nullable=True)
+    customer_credit_terms_snapshot = Column(String, nullable=True)
+    customer_key_account_manager_snapshot = Column(String, nullable=True)
+    customer_key_account_manager_name_snapshot = Column(String, nullable=True)
     branch_id     = Column(String, ForeignKey("branches.id"), nullable=False)
     branch_name   = Column(String)
     cashier       = Column(String)
@@ -605,6 +612,7 @@ class SaleInvoice(Base):
     # Pending links for draft invoices: applied (and cleared) on approval.
     pending_order_id = Column(String, nullable=True)
     pending_quote_id = Column(String, nullable=True)
+    quotation_number_snapshot = Column(String, nullable=True)
 
     customer  = relationship("Customer", back_populates="invoices")
     line_items = relationship("SaleLineItem", back_populates="invoice", cascade="all, delete-orphan")

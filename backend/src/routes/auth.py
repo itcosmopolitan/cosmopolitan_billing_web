@@ -13,10 +13,11 @@ import secrets
 from datetime import datetime
 
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
@@ -47,7 +48,10 @@ MIN_PASSWORD_LENGTH = 8
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # `email` remains accepted for existing clients; new clients may send an
+    # identifier containing either an email address or a generated username.
+    identifier: Optional[str] = None
+    email: Optional[EmailStr] = None
     password: str
 
 
@@ -75,9 +79,10 @@ def _get_settings():
 async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Verify credentials against `users.hashed_password` (bcrypt) and return
     a real JWT plus the serialized user with their expanded permissions."""
-    user = (
-        await db.execute(select(User).where(User.email == data.email.lower()))
-    ).scalar_one_or_none()
+    identifier = (data.identifier or str(data.email or "")).strip().lower()
+    user = (await db.execute(
+        select(User).where(or_(User.email == identifier, User.username == identifier))
+    )).scalar_one_or_none()
 
     # Constant message regardless of which check fails — don't leak whether
     # the email exists.
@@ -96,14 +101,14 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
         action="User Login",
         module="Auth",
         reference_id=user.id,
-        detail=f"Successful login for {user.email}",
+        detail=f"Successful login for {user.email or user.username}",
         user_id=user.id,
         user_name=user.name,
         user_role=role,
         ip_address=getattr(request.state, "ip_address", None),
         device_info=getattr(request.state, "device_info", None),
         branch_id=user.branch_id,
-        metadata={"email": user.email, "login_anomaly": False},
+        metadata={"email": user.email, "username": user.username, "login_anomaly": False},
     )
     db.add(AuditLog(id=str(uuid.uuid4()), **payload))
     await db.commit()

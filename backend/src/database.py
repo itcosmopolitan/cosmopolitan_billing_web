@@ -447,6 +447,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("branches", "cash_opening_mode",       "VARCHAR DEFAULT 'carry_forward'"),
     ("branches", "cash_fixed_float",        "FLOAT DEFAULT 0"),
     ("branches", "cash_variance_threshold", "FLOAT DEFAULT 500"),
+    # No-email users: username is the login identifier when email is absent.
+    ("users", "username", "VARCHAR"),
     # Cash Control (2026-06-14): extended CashEntry tracking columns.
     ("cash_entries", "entry_number", "VARCHAR"),
     ("cash_entries", "source_type",  "VARCHAR DEFAULT 'manual'"),
@@ -555,6 +557,7 @@ async def init_schema() -> None:
             await _backfill_user_account_status(conn, added_columns)
             await _ensure_audit_log_indexes(conn)
             await _ensure_nullable_columns(conn)
+            await _ensure_user_identity_schema(conn)
             await _bootstrap_system_roles(conn)
             await _ensure_activity_seed_markers_table(conn)
             await _bootstrap_activity_role_defaults(conn)
@@ -1018,6 +1021,22 @@ async def _ensure_nullable_columns(conn) -> None:
         default_value = result.scalar_one_or_none()
         if default_value is None:
             await conn.execute(text("ALTER TABLE audit_logs ALTER COLUMN reference_id SET DEFAULT ''"))
+
+
+async def _ensure_user_identity_schema(conn) -> None:
+    """Allow email-less accounts and enforce generated username uniqueness."""
+    if conn.dialect.name == "postgresql":
+        result = await conn.execute(
+            text(
+                "SELECT is_nullable FROM information_schema.columns "
+                "WHERE table_name = 'users' AND column_name = 'email'"
+            )
+        )
+        if result.scalar_one_or_none() == "NO":
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN email DROP NOT NULL"))
+    await conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username_unique ON users (username)"
+    ))
 
 
 async def _bootstrap_document_numbering(conn) -> None:

@@ -226,6 +226,7 @@ def serialize_user(u) -> dict:
         "id": u.id,
         "name": u.name,
         "email": u.email,
+        "username": getattr(u, "username", None),
         "role": _enum_value(u.role),
         "role_id": u.role_id,
         "all_branches": bool(getattr(u, "all_branches", False)),

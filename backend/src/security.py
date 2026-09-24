@@ -315,6 +315,7 @@ async def user_with_permissions(user: User, db: AsyncSession) -> dict:
         "id": user.id,
         "name": user.name,
         "email": user.email,
+        "username": getattr(user, "username", None),
         "role": user.role.value if hasattr(user.role, "value") else user.role,
         "role_id": user.role_id,
         # Multi-branch list: super-admins keep a row for every available branch

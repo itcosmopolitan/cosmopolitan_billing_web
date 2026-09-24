@@ -83,11 +83,12 @@ export default function SettingsPage() {
   // all_branches=True for older clients but nothing in this UI sends it.
   // Add an explicit `all_branches` flag so super_admin selection can toggle
   // the branches UI and submit the explicit value to the server.
-  const [userForm, setUserForm] = useState({ name:'', email:'', role_id:'', branch_ids:[], all_branches:false, active:true, password:'' })
+  const [userForm, setUserForm] = useState({ name:'', email:'', username:'', username_custom:false, has_email:true, role_id:'', branch_ids:[], all_branches:false, active:true, password:'' })
   // After a successful create, holds the temp password to display in a
   // confirmation modal (with copy). Cleared on close. null while the modal
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
+  const [credentialsAcknowledged, setCredentialsAcknowledged] = useState(false)
   const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'' })
   const [loading, setLoading] = useState(true)
 
@@ -104,6 +105,16 @@ export default function SettingsPage() {
     setUsersTab(newSubTab)
   }
   const puf = (k,v) => setUserForm(f=>({...f,[k]:v}))
+  const previewUsername = (name) => {
+    const tokens = (name || '').normalize('NFKD').replace(/[^a-zA-Z0-9\s]/g, '').toLowerCase().trim().split(/\s+/).filter(Boolean)
+    if (!tokens.length) return ''
+    return tokens.length === 1 ? tokens[0].slice(0, 7) : `${tokens[0].slice(0, 5)}${tokens[tokens.length - 1].slice(0, 2)}`
+  }
+  const setUserName = (value) => setUserForm((f) => ({
+    ...f,
+    name: value,
+    username: f.has_email || f.username_custom ? f.username : previewUsername(value),
+  }))
   const pbf = (k,v) => setBranchForm(f=>({...f,[k]:v}))
   const [showEditBranch, setShowEditBranch] = useState(false)
   const [editBranchForm, setEditBranchForm] = useState({})
@@ -408,8 +419,9 @@ export default function SettingsPage() {
   const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s || '').trim())
 
   const saveUser = async () => {
-    if (!userForm.name || !userForm.email) { toast.error('Name and email required'); return }
-    if (!isValidEmail(userForm.email)) { toast.error('Enter a valid email (e.g. name@example.com)'); return }
+    if (!userForm.name.trim()) { toast.error('Name is required'); return }
+    if (userForm.has_email && !userForm.email) { toast.error('Email is required'); return }
+    if (userForm.has_email && !isValidEmail(userForm.email)) { toast.error('Enter a valid email (e.g. name@example.com)'); return }
     if (!userForm.role_id) { toast.error('Select a role'); return }
     // Mirror backend _assign_branches: caller must pick at least one branch OR set all_branches.
     if (!userForm.all_branches && (!userForm.branch_ids || userForm.branch_ids.length === 0)) {
@@ -419,7 +431,7 @@ export default function SettingsPage() {
     // Backend would also accept an empty/missing password and auto-generate,
     // but for the post-create confirmation modal we always want a value to
     // display — so guard here too.
-    if (!userForm.password || userForm.password.length < 8) {
+    if (userForm.has_email && (!userForm.password || userForm.password.length < 8)) {
       toast.error('Temporary password must be at least 8 characters')
       return
     }
@@ -431,21 +443,25 @@ export default function SettingsPage() {
         // (`data.email.lower()`) so a user created here matches their own
         // /auth/login lookup. Avoids "I created Foo@X.com, login fails"
         // class of bugs.
-        email: userForm.email.trim().toLowerCase(),
+        ...(userForm.has_email ? { email: userForm.email.trim().toLowerCase() } : {}),
+        ...(!userForm.has_email && userForm.username ? { username: userForm.username.trim().toLowerCase() } : {}),
         role_id: userForm.role_id,
         branch_ids: userForm.branch_ids,
         all_branches: !!userForm.all_branches,
-        password: userForm.password,
+        ...(userForm.has_email ? { password: userForm.password } : {}),
       }
       const result = await usersAPI.create(payload)
       setUserSkip(0)
       setUserListVersion((v) => v + 1)
       setShowUser(false)
+      setCredentialsAcknowledged(false)
       setCreatedUser({
         name: userForm.name,
         email: userForm.email,
+        username: result.username,
+        password: result.temporary_password,
       })
-      setUserForm({ name:'', email:'', role_id:'', branch_ids:[], all_branches:false, active:true, password:'' })
+      setUserForm({ name:'', email:'', username:'', username_custom:false, has_email:true, role_id:'', branch_ids:[], all_branches:false, active:true, password:'' })
     } catch (err) {
       console.error(err)
       // toast already fired by global axios interceptor on non-2xx
@@ -460,6 +476,26 @@ export default function SettingsPage() {
     } catch {
       toast.error('Copy failed — select and copy manually')
     }
+  }
+
+  const copyCredential = async (value, label) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      toast.success(`${label} copied`)
+    } catch {
+      toast.error('Copy failed — select and copy manually')
+    }
+  }
+
+  const downloadCredentials = () => {
+    if (!createdUser) return
+    const text = `Cosmo login credentials\nUsername: ${createdUser.username}\nTemporary password: ${createdUser.password}\n`
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${createdUser.username}-credentials.txt`
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   const toggleUser = async (userId) => {
@@ -1041,8 +1077,15 @@ export default function SettingsPage() {
 
           <Modal open={showUser} onClose={()=>setShowUser(false)} title="Add User" icon="👤" size="md"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowUser(false)}>Cancel</button><button className="btn btn-primary" onClick={saveUser}>Create User</button></>}>
-            <FormRow><FormGroup label="Full Name" required><input className="form-input" value={userForm.name} onChange={e=>puf('name',e.target.value)}/></FormGroup>
-            <FormGroup label="Email" required><input className="form-input" type="email" value={userForm.email} onChange={e=>puf('email',e.target.value)}/></FormGroup></FormRow>
+            <FormGroup label="Account type" required>
+              <div style={{ display:'flex', gap:16 }}>
+                <label><input type="radio" checked={userForm.has_email} onChange={()=>puf('has_email', true)} /> User has email</label>
+                <label><input type="radio" checked={!userForm.has_email} onChange={()=>setUserForm(f=>({...f, has_email:false, username:f.username || previewUsername(f.name)}))} /> User has no email</label>
+              </div>
+            </FormGroup>
+            <FormRow><FormGroup label="Full Name" required><input className="form-input" value={userForm.name} onChange={e=>setUserName(e.target.value)}/></FormGroup>
+            {userForm.has_email && <FormGroup label="Email" required><input className="form-input" type="email" value={userForm.email} onChange={e=>puf('email',e.target.value)}/></FormGroup>}</FormRow>
+            {!userForm.has_email && <FormGroup label="Username" required><input className="form-input" value={userForm.username} onChange={e=>setUserForm(f=>({...f, username:e.target.value, username_custom:true}))}/></FormGroup>}
             <FormGroup label="Role" required>
               <AutocompleteDropdown
                 value={userForm.role_id}
@@ -1077,8 +1120,8 @@ export default function SettingsPage() {
               </FormGroup>
             )}
             <AlertBar type="blue" icon="ℹ">
-              A temporary password will be emailed to the new user automatically.
-              They must change it on first login for security.
+              {userForm.has_email ? 'A temporary password will be emailed to the new user automatically.' : 'A username and temporary password will be generated and shown once after creation.'}
+              {' '}They must change it on first login for security.
             </AlertBar>
           </Modal>
 
@@ -1087,25 +1130,33 @@ export default function SettingsPage() {
               recoverable later (only the bcrypt hash is stored server-side). */}
           <Modal
             open={!!createdUser}
-            onClose={()=>setCreatedUser(null)}
+            onClose={()=>credentialsAcknowledged && setCreatedUser(null)}
             title="User created"
             icon="✅"
             size="sm"
             footer={
               <>
-                <button className="btn btn-primary" onClick={()=>setCreatedUser(null)}>Got it</button>
+                <button className="btn btn-primary" disabled={!credentialsAcknowledged} onClick={()=>setCreatedUser(null)}>Got it</button>
               </>
             }
           >
             {createdUser && (
               <div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                  <strong>{createdUser.name}</strong> ({createdUser.email}) was created.
-                  A temporary password has been sent to their email address.
+                  <strong>{createdUser.name}</strong> was created. Save these credentials now; they will not be shown or retrievable again after this screen closes.
+                </div>
+                <div style={{ display:'grid', gap:8 }}>
+                  <div><strong>Username:</strong> {createdUser.username} <button className="btn btn-secondary" onClick={()=>copyCredential(createdUser.username, 'Username')}>Copy</button></div>
+                  <div><strong>Temporary password:</strong> {createdUser.password} <button className="btn btn-secondary" onClick={()=>copyCredential(createdUser.password, 'Temporary password')}>Copy</button></div>
+                  <button className="btn btn-secondary" onClick={downloadCredentials}>Download as text</button>
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 10 }}>
                   The new user will need to sign in with that temporary password and change it on first login.
                 </div>
+                <label style={{ display:'flex', gap:8, marginTop:14, fontSize:12 }}>
+                  <input type="checkbox" checked={credentialsAcknowledged} onChange={(e)=>setCredentialsAcknowledged(e.target.checked)} />
+                  I have securely noted these credentials.
+                </label>
               </div>
             )}
           </Modal>

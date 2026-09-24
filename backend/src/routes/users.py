@@ -1,5 +1,4 @@
 import asyncio
-import secrets
 import uuid
 from typing import List, Optional
 
@@ -16,20 +15,13 @@ from src.pagination import normalize_limit, normalize_skip, paged_list, paginati
 from src.routes._serializers import attach_branch_ids, serialize_user
 from src.security import hash_password_async, require_perm, current_user, enforce_branch_access
 from src.services.audit_service import add_audit_log
+from src.user_credentials import generate_temp_password, generate_username, unique_username
 
 router = APIRouter()
 
 # Length of an auto-generated temp password (URL-safe base64 chars ≈ 12 chars
 # from 9 bytes ≈ 72 bits of entropy — plenty for a one-use credential that
 # expires on first login).
-TEMP_PASSWORD_BYTES = 9
-
-
-def _generate_temp_password() -> str:
-    """Cryptographically random URL-safe temp password (~12 chars)."""
-    return secrets.token_urlsafe(TEMP_PASSWORD_BYTES)
-
-
 class UserCreate(BaseModel):
     name: str
     # EmailStr enforces RFC-5322-ish syntax + checks deliverability via
@@ -37,7 +29,8 @@ class UserCreate(BaseModel):
     # paths agree on what counts as a valid address. Direct API callers
     # (curl / scripts) sending a malformed email get a 422 from FastAPI
     # before the handler runs.
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    username: Optional[str] = None
     # `role` is the legacy enum string ("cashier", ...). `role_id` is the new
     # FK. Either is accepted on create/update; if both are provided role_id
     # wins. See docs/USERS_AND_ROLES.md §5.2 (role kept as cache for one cycle).
@@ -214,21 +207,29 @@ async def create_user(
     request: Request = None,
     user: User = Depends(current_user),
 ):
-    normalized_email = data.email.lower()
-    existing = (await db.execute(select(User).where(User.email == normalized_email))).scalar_one_or_none()
-    if existing:
-        raise HTTPException(409, "A user with this email already exists")
+    normalized_email = str(data.email).lower() if data.email else None
+    if normalized_email:
+        existing = (await db.execute(select(User).where(User.email == normalized_email))).scalar_one_or_none()
+        if existing:
+            raise HTTPException(409, "A user with this email already exists")
     rid, rkey = await _resolve_role(db, data.role_id, data.role)
 
     # Use admin-supplied password if given, else generate one. The plaintext
     # is included in the response (one-time, post-create) so the admin can
     # share it with the new user out of band.
-    temp_password = (data.password or "").strip() or _generate_temp_password()
+    username_base = (data.username or "").strip().lower() or generate_username(data.name)
+
+    async def username_exists(candidate: str) -> bool:
+        return (await db.execute(select(User.id).where(User.username == candidate))).scalar_one_or_none() is not None
+
+    username = await unique_username(username_base, username_exists)
+    temp_password = (data.password or "").strip() or generate_temp_password()
 
     u = User(
         id=str(uuid.uuid4()),
         name=data.name,
         email=normalized_email,
+        username=username,
         hashed_password=await hash_password_async(temp_password),
         role=rkey or "cashier",
         role_id=rid,
@@ -262,12 +263,14 @@ async def create_user(
         action="User created",
         module="Settings",
         reference_id=u.id,
-        detail=f"Created user {u.name} ({u.email})",
+        detail=f"Created user {u.name} ({u.email or 'without email'})",
         user=user,
         request=request,
         metadata={
             "name": u.name,
             "email": u.email,
+            "created_without_email": u.email is None,
+            "username": u.username,
             "role": u.role,
             "role_id": u.role_id,
             "branch_ids": data.branch_ids,
@@ -279,23 +282,28 @@ async def create_user(
     payload = serialize_user(u)
     await attach_branch_ids(db, [payload])
 
-    try:
-        await asyncio.to_thread(
-            send_temp_password_email,
-            normalized_email,
-            temp_password,
-            first_name=data.name,
-            welcome=True,
-        )
-    except Exception:
-        # Don't fail user creation if email sending is temporarily broken.
-        # The admin can still see the created user and re-send via the forgot
-        # password flow later.
-        pass
+    if normalized_email:
+        try:
+            await asyncio.to_thread(
+                send_temp_password_email,
+                normalized_email,
+                temp_password,
+                first_name=data.name,
+                welcome=True,
+            )
+        except Exception:
+            # Don't fail user creation if email sending is temporarily broken.
+            pass
 
     return {
         **payload,
-        "message": "The new user has been emailed a temporary password.",
+        "username": u.username,
+        "temporary_password": temp_password,
+        "message": (
+            "The new user has been emailed a temporary password."
+            if normalized_email
+            else "Save these credentials now. They will not be shown again."
+        ),
     }
 
 
@@ -352,15 +360,16 @@ async def update_user(
         )
 
     if "email" in payload:
-        payload["email"] = payload["email"].lower()
-        existing = (
-            await db.execute(
-                select(User)
-                .where(User.email == payload["email"], User.id != user_id)
-            )
-        ).scalar_one_or_none()
-        if existing:
-            raise HTTPException(409, "A user with this email already exists")
+        payload["email"] = str(payload["email"]).lower() if payload["email"] else None
+        if payload["email"]:
+            existing = (
+                await db.execute(
+                    select(User)
+                    .where(User.email == payload["email"], User.id != user_id)
+                )
+            ).scalar_one_or_none()
+            if existing:
+                raise HTTPException(409, "A user with this email already exists")
 
     for k, v in payload.items():
         setattr(u, k, v)
