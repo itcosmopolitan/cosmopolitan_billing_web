@@ -426,6 +426,12 @@
 <div id="invoicePages"></div>
 <script>
 (function(){
+  function roundNumber(value) {
+    const n = Number(value || 0)
+    if (Number.isNaN(n)) return 0
+    return Math.round((n + Number.EPSILON) * 100) / 100
+  }
+
   function formatNumber(value, opts = {}) {
     const n = Number(value || 0)
     if (Number.isNaN(n)) return '0.00'
@@ -458,7 +464,9 @@
       const discountPct = Number(it.discount ?? it.discPercent ?? it.disc_percent ?? it.discount_pct ?? 0)
       const gstRate = Number(it.taxRate ?? it.tax_rate ?? 0)
       const amount = Number(it.lineTotal || it.total || qty * rate)
-      const gstAmt = Math.round((amount * gstRate) / 100 * 100) / 100
+      const gstAmt = gstRate > 0
+        ? Math.round((amount * gstRate) / (100 + gstRate) * 100) / 100
+        : 0
       const sku = it.sku || ''
         return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
@@ -686,20 +694,20 @@
     document.title = sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || 'Tax Invoice'
     const branch = payload?.branch || {}
     const items = sale.items || []
-    const subtotal = Number(sale.subtotal ?? items.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0))
+    const grossAmount = items.reduce((sum, item) => sum + (Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)), 0)
+    const subtotal = Number(sale.subtotal ?? (grossAmount - (Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0))))
     const taxtotal = Number(sale.taxTotal ?? sale.tax_total ?? 0)
     const total = Number(sale.total ?? subtotal + taxtotal)
     const taxPercent = sale.taxPercent ?? sale.tax_percent ?? (subtotal ? Math.round((taxtotal / subtotal) * 100) : 0)
     const pages = paginateItems(items, 14)
-    const grossAmount = items.reduce((sum, item) => sum + (Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)), 0)
-    const lineDiscountAmount = items.reduce((sum, item) => {
-      const lineGross = Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)
-      const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
-      return sum + (lineGross * discountPct / 100)
+    const lineNetAmount = items.reduce((sum, item) => {
+      const qty = Number(item.qty || item.quantity || 0)
+      const rate = Number(item.price || item.rate || 0)
+      return sum + Number(item.lineTotal || item.total || qty * rate)
     }, 0)
-    const documentDiscountAmount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
-    const discountAmount = lineDiscountAmount + documentDiscountAmount
-    const discountPercent = subtotal && discountAmount ? Math.round((discountAmount / subtotal) * 100) : 0
+    const headerDiscount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
+    const discountAmount = Math.max(0, roundNumber(grossAmount - lineNetAmount) + headerDiscount)
+    const discountPercent = grossAmount && discountAmount ? Math.round((discountAmount / grossAmount) * 100) : 0
     const allPages = pages.map((pageItems, pageIndex) => ({
       pageItems,
       pageIndex,

@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 import amountToWords from '@/utils/amountToWords'
+import { calcInvoiceSummary } from '@/utils/taxCalc'
 
 export interface InvoiceLineItem {
   itemNo?: string
@@ -79,7 +80,11 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     const qty = parseNumber(item?.qty ?? item?.quantity ?? 0)
     const rate = parseNumber(item?.price ?? item?.rate ?? 0)
     const lineTotal = parseNumber(item?.lineTotal ?? item?.total ?? qty * rate)
-    const gstAmount = parseNumber(item?.gstAmount ?? item?.taxAmount ?? item?.tax_amount ?? 0)
+    const lineTaxRate = parseNumber(item?.taxRate ?? item?.tax_rate ?? 0)
+    const gstAmount = parseNumber(
+      item?.gstAmount ?? item?.taxAmount ?? item?.tax_amount ??
+      (lineTotal * lineTaxRate) / (100 + lineTaxRate),
+    )
     const discountPct = parseNumber(item?.discount ?? item?.discPercent ?? item?.disc_percent ?? item?.discount_pct ?? 0)
     const metadata = getInvoiceItemMetadata(item)
     return {
@@ -92,17 +97,17 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
       qty,
       rate,
       discountPct: discountPct || undefined,
-      gstAmount: gstAmount || parseNumber((lineTotal * parseNumber(item?.taxRate ?? item?.tax_rate ?? 0)) / 100),
+      gstAmount,
       lineTotal,
     }
   })
 
-  const subtotal = parseNumber(sale?.subtotal ?? lineItems.reduce((sum: number, item: InvoiceLineItem) => sum + item.lineTotal, 0))
-  const totalGst = parseNumber(sale?.taxTotal ?? sale?.tax_total ?? 0)
-  const totalInclGst = parseNumber(sale?.total ?? subtotal + totalGst)
-  const discountAmount = parseNumber(sale?.discount ?? sale?.discount_amount ?? sale?.discount_amt ?? 0)
-  const discountBase = totalInclGst + discountAmount
-  const discountPct = discountBase && discountAmount ? Math.round((discountAmount / discountBase) * 100) : 0
+  const summary = calcInvoiceSummary(rawItems, sale)
+  const subtotal = summary.subtotal
+  const totalGst = summary.taxTotal
+  const totalInclGst = summary.total
+  const discountAmount = summary.discountAmount
+  const discountPct = subtotal > 0 && discountAmount > 0 ? Math.round((discountAmount / (subtotal + totalGst)) * 100) : 0
   const gstRatePercent = parseNumber(sale?.gstRatePercent ?? sale?.tax_rate_percent ?? sale?.taxRate ?? sale?.tax_rate ?? sale?.taxPercent ?? sale?.tax_percent ?? 0)
   const postingDate = `${sale?.date || sale?.invoiceDate || sale?.invoice_date || ''}`.trim()
 

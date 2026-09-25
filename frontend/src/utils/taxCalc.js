@@ -124,3 +124,40 @@ export function calcCartTotals(cart, { discountPct = 0, discountAmt = 0 } = {}) 
     total: Math.max(0, roundAmount(grossSubtotal - discount)),
   }
 }
+
+/**
+ * Invoice summary math for printed tax invoices.
+ * Gross amount is the raw pre-discount calculation based on qty × price.
+ * Discount is the amount stripped from that gross before GST is added back.
+ */
+export function calcInvoiceSummary(items = [], sale = {}) {
+  const grossAmount = roundAmount(
+    (items || []).reduce((sum, item) => {
+      const qty = Number(item?.qty ?? item?.quantity ?? 0)
+      const price = Number(item?.price ?? item?.rate ?? 0)
+      return sum + (qty * price)
+    }, 0),
+  )
+
+  const lineNetAmount = roundAmount(
+    (items || []).reduce((sum, item) => {
+      const qty = Number(item?.qty ?? item?.quantity ?? 0)
+      const price = Number(item?.price ?? item?.rate ?? 0)
+      const lineTotal = Number(item?.lineTotal ?? item?.total ?? qty * price)
+      return sum + lineTotal
+    }, 0),
+  )
+  const headerDiscount = roundAmount(Number(sale?.discount ?? sale?.discount_amount ?? sale?.discount_amt ?? 0))
+  const subtotal = roundAmount(Number(sale?.subtotal ?? sale?.netSubtotal ?? grossAmount))
+  const taxTotal = roundAmount(Number(sale?.taxTotal ?? sale?.tax_total ?? 0))
+  const total = roundAmount(Number(sale?.total ?? subtotal + taxTotal))
+  const discountAmount = roundAmount(Math.max(0, grossAmount - lineNetAmount) + headerDiscount)
+
+  return {
+    grossAmount,
+    subtotal,
+    taxTotal,
+    discountAmount,
+    total,
+  }
+}

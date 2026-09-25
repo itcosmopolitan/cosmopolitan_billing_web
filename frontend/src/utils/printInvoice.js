@@ -1,5 +1,30 @@
 import amountToWords from '@/utils/amountToWords'
 
+function withCashTender(sale) {
+  if (!sale) return sale
+  const paymentMode = String(sale.paymentMode || sale.payment_mode || '').toLowerCase()
+  if (paymentMode !== 'cash' || !Array.isArray(sale.payments)) return sale
+
+  const cashPayments = sale.payments.filter((payment) => {
+    return !payment.voided && String(payment.paymentMode || payment.payment_mode || '').toLowerCase() === 'cash'
+  })
+  if (cashPayments.length === 0) return sale
+
+  const tendered = cashPayments.reduce((sum, payment) => {
+    return sum + Number(payment.totalAmount ?? payment.total_amount ?? payment.amount ?? 0)
+  }, 0)
+  const applied = cashPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  return {
+    ...sale,
+    cashCollected: sale.cashCollected ?? roundCurrency(tendered),
+    cashChange: sale.cashChange ?? roundCurrency(Math.max(0, tendered - applied)),
+  }
+}
+
+function roundCurrency(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
 export async function openInvoicePrintWindow(sale, branch) {
   if (typeof window === 'undefined') return
   const authToken = window.localStorage.getItem('retailos_token')
@@ -8,19 +33,23 @@ export async function openInvoicePrintWindow(sale, branch) {
 
   let fullSale = sale
   try {
-    const needsFetch = !sale || (sale?.id && (!sale.salesperson || !sale.email || !sale.phoneNo || !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)))
+    const paymentMode = String(sale?.paymentMode || sale?.payment_mode || '').toLowerCase()
+    const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
+    const needsFetch = !sale || (sale?.id && (needsCashPaymentDetails || !sale.salesperson || !sale.email || !sale.phoneNo || !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)))
     if (needsFetch && sale?.id) {
       const res = await fetch(`/api/v1/sales/${sale.id}`, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) {
         const fetchedSale = await res.json()
-        fullSale = {
+        fullSale = withCashTender({
           ...fetchedSale,
           cashCollected: sale.cashCollected ?? fetchedSale.cashCollected,
           cashChange: sale.cashChange ?? fetchedSale.cashChange,
-        }
+        })
       }
     }
   } catch (e) { /* ignore */ }
+
+  fullSale = withCashTender(fullSale)
 
   // fetch organisation as fallback
   let org = null

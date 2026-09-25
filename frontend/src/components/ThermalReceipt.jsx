@@ -70,11 +70,12 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           .item-desc { font-weight: bold; }
           .box { border: 1px solid #000; padding: 4px 6px; margin: 6px 0; }
           .box-title { text-align: center; font-weight: bold; font-size: 10px; border-bottom: 1px dashed #000; margin-bottom: 3px; padding-bottom: 2px; }
-          .kv { display: flex; justify-content: space-between; font-size: 9.5px; padding: 1px 0; }
-          .kv .label { flex: 0 0 40%; }
-          .kv .value { flex: 1; text-align: right; }
-          .disclaimer { font-size: 8.5px; margin-top: 6px; }
-          .disclaimer li { margin-left: 12px; }
+          .kv { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; font-size: 9.5px; padding: 1px 0; }
+          .kv .label { flex: 0 0 40%; min-width: 0; }
+          .kv .value { flex: 1 1 auto; min-width: 0; text-align: right; overflow-wrap: anywhere; word-break: break-word; }
+          .disclaimer { font-size: 8.5px; margin-top: 6px; overflow-wrap: anywhere; word-break: break-word; }
+          .disclaimer ol { margin: 0; padding-left: 14px; }
+          .disclaimer li { margin-left: 0; padding-left: 2px; }
           @media print {
             @page { size: 80mm 200mm; margin: 0; }
             html, body { width: 80mm; min-width: 80mm; max-width: 80mm; }
@@ -314,11 +315,11 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
 
         <div style={{ border: '1px solid #000', padding: '4px 6px', margin: '6px 0' }}>
           <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, borderBottom: '1px dashed #000', marginBottom: 3, paddingBottom: 2 }}>Summary</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Gross Amount</span><span>{fmt(grossAmount)}</span></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Discount</span><span>{fmt(discountAmount)}</span></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>GST Value</span><span>{fmt(gstAmount)}</span></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, fontWeight: 700 }}><span>Payable</span><span>{fmt(payable)}</span></div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, fontWeight: 700 }}><span>Invoice Amount (MVR)</span><span>{fmt(payable)}</span></div>
+          <div className="kv"><span className="label">Gross Amount</span><span className="value">{fmt(grossAmount)}</span></div>
+          <div className="kv"><span className="label">Discount</span><span className="value">{fmt(discountAmount)}</span></div>
+          <div className="kv"><span className="label">GST Value</span><span className="value">{fmt(gstAmount)}</span></div>
+          <div className="kv" style={{ fontWeight: 700 }}><span className="label">Payable</span><span className="value">{fmt(payable)}</span></div>
+          <div className="kv" style={{ fontWeight: 700 }}><span className="label">Invoice Amount (MVR)</span><span className="value">{fmt(payable)}</span></div>
         </div>
 
         {config.showPayment !== false && (
@@ -360,9 +361,9 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
         <div style={{ borderTop: '1px dashed #999', margin: '8px 0' }} />
         <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, marginBottom: 4 }}>Thank You! Visit Us Again</div>
 
-        <div style={{ fontSize: 8.5 }}>
+        <div className="disclaimer" style={{ fontSize: 8.5 }}>
           <div style={{ fontWeight: 700 }}>Disclaimer:</div>
-          <ol style={{ paddingLeft: 14, margin: 0 }}>
+          <ol>
             <li>Jurisdiction Male, Republic of Maldives.</li>
             <li>This is a computer generated invoice / Receipt and hence no signature required.</li>
             <li>No Returns Accepted.</li>

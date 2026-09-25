@@ -501,6 +501,7 @@ class SaleCreate(BaseModel):
     # `_coerce_payment_mode` below so the contract is forgiving on input
     # but strict on storage.
     payment_mode: Optional[PaymentMode] = None
+    cash_collected: Optional[float] = Field(default=None, ge=0)
     payment_ref: Optional[str] = None
     notes: Optional[str] = None
     # Optional store-credit draw (not a payment method). Capped to
@@ -1439,7 +1440,13 @@ async def create_invoice(
                 and float(data.store_credit_amount or 0) <= 0
             ),
         )
-        settle_tender = round(max(0.0, total - settle_credit_use), 2)
+        minimum_tender = round(max(0.0, total - settle_credit_use), 2)
+        if data.payment_mode == "cash" and data.cash_collected is not None:
+            if float(data.cash_collected) + 0.001 < minimum_tender:
+                raise HTTPException(400, "Cash collected is less than the remaining invoice amount")
+            settle_tender = round(float(data.cash_collected), 2)
+        else:
+            settle_tender = minimum_tender
         if settle_tender > 0.001 and tender_mode not in TENDER_PAYMENT_MODES:
             if require_tender or float(data.store_credit_amount or 0) > 0:
                 raise HTTPException(
@@ -1449,7 +1456,7 @@ async def create_invoice(
             # Unpaid remainder (account sale) — only credit portion settles now.
             settle_tender = 0.0
             tender_mode = None
-        paid_now = round(settle_credit_use + settle_tender, 2)
+        paid_now = round(min(total, settle_credit_use + settle_tender), 2)
         if settle_tender > 0.001:
             settle_display_mode = tender_mode
         elif settle_credit_use > 0 and paid_now >= total - 0.001:
@@ -1581,6 +1588,11 @@ async def create_invoice(
             notes_tender="POS sale" if inv_origin == "pos" else "Invoice settlement",
             auto_apply_credit=False,
             require_tender_for_remainder=settle_tender > 0.001,
+            tender_amount=(
+                settle_tender
+                if data.payment_mode == "cash" and data.cash_collected is not None
+                else None
+            ),
         )
 
     if direct and data.customer_id:
@@ -3386,6 +3398,7 @@ async def _write_tender_payment(
     user: Optional[User],
     notes: str,
     overpay_credit: float = 0.0,
+    applied_amount: Optional[float] = None,
 ) -> CustomerPayment:
     """Write a cash/card/upi/bank_transfer CustomerPayment (+ cash drawer)."""
     amount = round(float(amount), 2)
@@ -3406,7 +3419,12 @@ async def _write_tender_payment(
         created_by=getattr(user, "name", None) or "Staff",
     )
     db.add(pay)
-    applied_to_invoice = round(amount - float(overpay_credit or 0), 2)
+    applied_to_invoice = round(
+        min(
+            amount - float(overpay_credit or 0),
+            float(applied_amount) if applied_amount is not None else amount,
+        ),
+    )
     if applied_to_invoice > 0:
         db.add(CustomerPaymentAllocation(
             id=str(uuid.uuid4()),
@@ -3445,6 +3463,7 @@ async def _apply_settlement_split(
     notes_tender: str,
     auto_apply_credit: bool = False,
     require_tender_for_remainder: bool = True,
+    tender_amount: Optional[float] = None,
 ) -> tuple[float, float, Optional[str]]:
     """Apply store credit (optional) + tender method for remainder.
 
@@ -3466,7 +3485,13 @@ async def _apply_settlement_split(
         legacy_full_credit=legacy_full,
         auto_apply=auto_apply_credit and not legacy_full,
     )
-    tender = round(max(0.0, due - credit_use), 2)
+    minimum_tender = round(max(0.0, due - credit_use), 2)
+    tender = round(
+        max(0.0, float(tender_amount)) if tender_amount is not None else minimum_tender,
+        2,
+    )
+    if tender + 0.001 < minimum_tender:
+        raise HTTPException(400, "Cash collected is less than the remaining invoice amount")
 
     if tender > 0.001:
         if mode in TENDER_PAYMENT_MODES:
@@ -3501,10 +3526,11 @@ async def _apply_settlement_split(
             ref=payment_ref,
             user=user,
             notes=notes_tender,
+            applied_amount=minimum_tender,
         )
 
     display_mode = mode if tender > 0.001 else ("credit" if credit_use > 0 else None)
-    return credit_use, tender, display_mode
+    return credit_use, minimum_tender if tender > 0.001 else 0.0, display_mode
 
 
 async def _next_sales_return_number(db: AsyncSession) -> str:

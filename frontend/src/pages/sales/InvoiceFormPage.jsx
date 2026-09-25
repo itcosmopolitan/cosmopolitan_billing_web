@@ -218,6 +218,9 @@ export default function InvoiceFormPage() {
         payment_mode: remaining > 0.001 && (form.paymentReceived || mustPay || creditUse > 0)
           ? form.paymentMethod
           : (creditUse > 0 && remaining <= 0.001 ? null : (form.paymentReceived ? form.paymentMethod : null)),
+        cash_collected: form.paymentMethod === 'cash' && form.cashCollected !== ''
+          ? Number(form.cashCollected)
+          : undefined,
         store_credit_amount: creditUse > 0 ? creditUse : undefined,
         payment_ref: form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer'
           ? (form.paymentRef || '').trim() || null
