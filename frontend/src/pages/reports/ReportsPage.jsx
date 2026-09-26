@@ -20,6 +20,12 @@ const formatCurrency = (value) => (value === null || value === undefined ? '—'
 const formatNumber = (value) => (value === null || value === undefined ? '—' : fmtNum(value))
 const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
 const formatCurrencyBlank = (value) => (value === null || value === undefined ? '' : formatCurrency(value))
+const formatPct = (value) => {
+  if (value === null || value === undefined || value === '') return '—'
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return `${fmtNum(num)}%`
+}
 const formatPaymentMode = (value) => {
   const labels = {
     cash: 'Cash',
@@ -293,6 +299,7 @@ const COLUMN_FORMATTERS = {
   currency_blank: formatCurrencyBlank,
   number: formatNumber,
   qty: formatQty,
+  pct: formatPct,
 }
 
 const COLUMN_VALUE_FORMATTERS = {
@@ -301,10 +308,15 @@ const COLUMN_VALUE_FORMATTERS = {
   status: formatStatus,
 }
 
-const NUMERIC_EXPORT_FORMATS = new Set(['currency', 'currency_blank', 'qty', 'number'])
+const NUMERIC_EXPORT_FORMATS = new Set(['currency', 'currency_blank', 'qty', 'number', 'pct'])
+
+/** Export-facing labels when the API key still uses a legacy name. */
+const EXPORT_LABEL_OVERRIDES = {
+  profit: 'Margin',
+}
 
 function exportColumnLabel(column) {
-  const label = column.label || column.key
+  const label = EXPORT_LABEL_OVERRIDES[column.key] || column.label || column.key
   if ((column.format === 'currency' || column.format === 'currency_blank') && !/\(MVR\)/i.test(label)) {
     return `${label} (MVR)`
   }
@@ -1018,10 +1030,41 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     return map
   }, [report.columns])
 
+  /** Prefs drive order/hidden; report catalog is source of truth for which columns exist. */
   const visibleColumns = useMemo(() => {
     if (!columnPrefs.ready) return report.columns
-    return columnPrefs.visibleIds.map((id) => columnByKey.get(id)).filter(Boolean)
-  }, [columnPrefs.ready, columnPrefs.visibleIds, columnByKey, report.columns])
+    const hidden = new Set(columnPrefs.prefs?.hidden || [])
+    const reportKeys = report.columns.map((col) => col.key)
+    const reportKeySet = new Set(reportKeys)
+    let order = (columnPrefs.prefs?.order || []).filter((id) => reportKeySet.has(id))
+    // Insert newly added report columns at their catalog position (not only at the end).
+    reportKeys.forEach((key, index) => {
+      if (order.includes(key)) return
+      let insertAt = order.length
+      for (let i = index - 1; i >= 0; i -= 1) {
+        const prevIdx = order.indexOf(reportKeys[i])
+        if (prevIdx !== -1) {
+          insertAt = prevIdx + 1
+          break
+        }
+      }
+      if (insertAt === order.length) {
+        for (let i = index + 1; i < reportKeys.length; i += 1) {
+          const nextIdx = order.indexOf(reportKeys[i])
+          if (nextIdx !== -1) {
+            insertAt = nextIdx
+            break
+          }
+        }
+      }
+      order.splice(insertAt, 0, key)
+    })
+    if (!order.length) order = reportKeys
+    return order
+      .filter((id) => !hidden.has(id))
+      .map((id) => columnByKey.get(id))
+      .filter(Boolean)
+  }, [columnPrefs.ready, columnPrefs.prefs, columnByKey, report.columns])
 
   const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 
@@ -1207,9 +1250,36 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       })
       return entry
     })
+    if (columnTotals) {
+      const totalEntry = {}
+      visibleColumns.forEach((col) => {
+        const label = exportColumnLabel(col)
+        if (Object.prototype.hasOwnProperty.call(columnTotals, col.key)) {
+          totalEntry[label] = exportColumnValue(col, { [col.key]: columnTotals[col.key] })
+        } else if (col.key === totalsLabelColumnKey) {
+          totalEntry[label] = totalsLabel
+        } else {
+          totalEntry[label] = null
+        }
+      })
+      exportData.push(totalEntry)
+    }
+    const fromLabel = formatDate(appliedFilters.dateFrom)
+    const toLabel = formatDate(appliedFilters.dateTo)
+    const dateRangeLabel = fromLabel === toLabel
+      ? fromLabel
+      : `${fromLabel} – ${toLabel}`
+    const safeName = String(report.label || 'Report').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Report'
+    const stampFrom = appliedFilters.dateFrom || 'start'
+    const stampTo = appliedFilters.dateTo || 'end'
     exportToExcel(
       exportData,
-      `${report.label.replace(/\s+/g, '_')}_${appliedFilters.dateFrom}_to_${appliedFilters.dateTo}.xlsx`,
+      `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`,
+      null,
+      {
+        title: report.label || 'Report',
+        subtitle: `Date range: ${dateRangeLabel}`,
+      },
     )
     toast.success('Excel export ready')
   }

@@ -287,7 +287,7 @@ export const exportToCSV = (data, filename = 'export.csv', columns = null) => {
   document.body.removeChild(link)
 }
 
-export const exportToExcel = (data, filename = 'export.xlsx', columns = null) => {
+export const exportToExcel = (data, filename = 'export.xlsx', columns = null, meta = null) => {
   if (!data || data.length === 0) {
     console.warn('No data to export')
     return
@@ -303,7 +303,23 @@ export const exportToExcel = (data, filename = 'export.xlsx', columns = null) =>
     return normalized
   })
 
-  const worksheet = XLSX.utils.json_to_sheet(normalizedRows, { header: cols })
+  const title = meta?.title ? String(meta.title).trim() : ''
+  const subtitle = meta?.subtitle ? String(meta.subtitle).trim() : ''
+  let worksheet
+  if (title || subtitle) {
+    const aoa = []
+    if (title) aoa.push([title])
+    if (subtitle) aoa.push([subtitle])
+    aoa.push([])
+    aoa.push(cols)
+    normalizedRows.forEach((row) => {
+      aoa.push(cols.map((col) => (row[col] == null ? null : row[col])))
+    })
+    worksheet = XLSX.utils.aoa_to_sheet(aoa)
+  } else {
+    worksheet = XLSX.utils.json_to_sheet(normalizedRows, { header: cols })
+  }
+
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Report')
   XLSX.writeFile(workbook, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`)
