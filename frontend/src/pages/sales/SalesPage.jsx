@@ -20,10 +20,16 @@ import {
   storeCreditApplyAmount,
   remainingAfterStoreCredit,
 } from '@/utils/storeCredit'
-import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
+import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import {
+  EXPORT_PAGE_SIZE_SAFE,
+  SALES_EXPORT_FILENAMES,
+  SALES_EXPORT_MAPPERS,
+} from '@/utils/listExport'
 import openInvoicePrintWindow, { openQuotePrintWindow } from '@/utils/printInvoice'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
+import ExportListModal from '@/components/ExportListModal'
 import SalesTxnDetailPanel from './SalesTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from './ListFilters'
@@ -81,6 +87,13 @@ function displayPaymentMode(raw) {
   const v = String(raw).trim().toLowerCase()
   if (!VALID_PAYMENT_MODES.has(v)) return '—'
   return formatLabel(v)
+}
+
+function displayKeyAccountManager(row) {
+  return row?.customerKeyAccountManager
+    || row?.customer_key_account_manager
+    || row?.keyAccountManager
+    || '—'
 }
 
 export default function SalesPage() {
@@ -175,6 +188,8 @@ export default function SalesPage() {
   // alert; the operator deselects + retries.
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
@@ -979,56 +994,101 @@ export default function SalesPage() {
     toast.success('List refreshed')
   }
 
-  const exportCurrentTab = () => {
-    const stamp = new Date().toISOString().split('T')[0]
-    if (tab === 'invoices') {
-      exportToCSV(invoices.map((i) => ({
-        'Invoice Number': i.number || i.id,
-        Customer: i.customerName || 'Walk-in',
-        Date: i.date || '—',
-        'Amount (MVR)': i.total || 0,
-        'Paid (MVR)': i.paidAmount || 0,
-        'Outstanding (MVR)': (i.total || 0) - (i.paidAmount || 0),
-        Status: statusLabel(i.status),
-      })), `Invoices_${stamp}.csv`)
-    } else if (tab === 'orders') {
-      exportToCSV(orders.map((o) => ({
-        'Order Number': o.number || o.id,
-        Customer: o.customerName || '—',
-        Date: o.date || '—',
-        'Amount (MVR)': o.total || 0,
-        Status: statusLabel(o.status),
-      })), `SalesOrders_${stamp}.csv`)
-    } else if (tab === 'quotes') {
-      exportToCSV(quotations.map((q) => ({
-        'Quote Number': q.number || q.id,
-        Customer: q.customerName || '—',
-        Date: q.date || '—',
-        'Amount (MVR)': q.total || 0,
-        Status: statusLabel(q.status),
-      })), `Quotations_${stamp}.csv`)
-    } else if (tab === 'returns') {
-      exportToCSV(returns.map((r) => ({
-        'Return Number': r.number || r.id,
-        Customer: r.customerName || '—',
-        Date: r.date || '—',
-        'Amount (MVR)': r.total || 0,
-        Status: statusLabel(r.status),
-      })), `Returns_${stamp}.csv`)
-    } else if (tab === 'payments') {
-      exportToCSV(payments.map((p) => ({
-        'Payment Number': p.number || p.id,
-        Customer: p.customerName || '—',
-        Date: p.date || '—',
-        'Amount (MVR)': p.amount || 0,
-        Method: p.paymentMode || '—',
-      })), `Payments_${stamp}.csv`)
+  const exportStatusOptionsForTab = () => {
+    if (tab === 'invoices') return INVOICE_STATUS_FILTER_OPTIONS
+    if (tab === 'orders') return ORDER_STATUS_FILTER_OPTIONS
+    if (tab === 'quotes') return QUOTE_STATUS_FILTER_OPTIONS
+    if (tab === 'returns') return RETURN_STATUS_FILTER_OPTIONS
+    if (tab === 'payments') return PAYMENT_STATUS_FILTER_OPTIONS
+    return []
+  }
+
+  const exportInitialStatusForTab = () => {
+    if (tab === 'invoices') return invStatusF
+    if (tab === 'orders') return orderStatusF
+    if (tab === 'quotes') return quoteStatusF
+    if (tab === 'returns') return retStatusF
+    if (tab === 'payments') return payStatusF
+    return ''
+  }
+
+  const openExportModal = () => setExportOpen(true)
+
+  const runExport = async ({ status, dateFrom: from, dateTo: to }) => {
+    const mapper = SALES_EXPORT_MAPPERS[tab]
+    const fileBase = SALES_EXPORT_FILENAMES[tab]
+    if (!mapper || !fileBase) return
+
+    setExportBusy(true)
+    try {
+      const common = {
+        date_from: from,
+        date_to: to,
+        status: status || undefined,
+        // Keep party / mode filters from the list so export matches operator context.
+        customer_id: customerF || undefined,
+      }
+      let rows = []
+      if (tab === 'invoices') {
+        rows = await fetchAllList(
+          (params) => salesAPI.list({
+            ...params,
+            ...common,
+            payment_mode: paymentModeF || undefined,
+            category_id: categoryF || undefined,
+            discount: discountF || undefined,
+          }),
+          {},
+          500,
+        )
+      } else if (tab === 'orders') {
+        rows = await fetchAllList(
+          (params) => salesAPI.orders.list({ ...params, ...common }),
+          {},
+          500,
+        )
+      } else if (tab === 'quotes') {
+        rows = await fetchAllList(
+          (params) => salesAPI.quotations.list({ ...params, ...common }),
+          {},
+          500,
+        )
+      } else if (tab === 'returns') {
+        rows = await fetchAllList(
+          (params) => salesAPI.returns.list({ ...params, ...common }),
+          {},
+          500,
+        )
+      } else if (tab === 'payments') {
+        rows = await fetchAllList(
+          (params) => salesAPI.payments.list({
+            ...params,
+            ...common,
+            payment_mode: paymentModeF || undefined,
+          }),
+          {},
+          EXPORT_PAGE_SIZE_SAFE,
+        )
+      }
+
+      if (!rows.length) {
+        toast.error('No entries found for the selected filters')
+        return
+      }
+
+      const stamp = new Date().toISOString().split('T')[0]
+      exportToCSV(rows.map(mapper), `${fileBase}_${from}_to_${to}_${stamp}.csv`)
+      toast.success(`Exported ${rows.length} ${entityLabelForTab(tab)}${rows.length === 1 ? '' : 's'}`)
+      setExportOpen(false)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || err?.message || 'Export failed')
+    } finally {
+      setExportBusy(false)
     }
-    toast.success('List exported')
   }
 
   const listMenuActions = buildListPageMenuActions({
-    onExport: exportCurrentTab,
+    onExport: openExportModal,
     onRefresh: refreshCurrentTab,
   })
 
@@ -1151,6 +1211,7 @@ export default function SalesPage() {
                     {invoiceColumnPrefs.visibleIds.map((id) => {
                       if (id === 'number') return <SortableHeader key={id} label="Invoice #" sortKey="number" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'branch') return <SortableHeader key={id} label="Branch" sortKey="branch_id" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
                       if (id === 'cashier') return <SortableHeader key={id} label="Cashier" sortKey="cashier" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
@@ -1189,6 +1250,9 @@ export default function SalesPage() {
                               <div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{inv.customerName || 'Walk-in'}</div>
                             </td>
                           )
+                        }
+                        if (id === 'kam') {
+                          return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(inv)}</td>
                         }
                         if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || 'N/A'}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.date}</td>
@@ -1382,6 +1446,7 @@ export default function SalesPage() {
                     {quoteColumnPrefs.visibleIds.map((id) => {
                       if (id === 'number') return <SortableHeader key={id} label="Quote #" sortKey="number" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
+                      if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'valid_until') return <SortableHeader key={id} label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
@@ -1414,6 +1479,7 @@ export default function SalesPage() {
                         const linked = linkedDocNumber(q)
                         if (id === 'number') return <td key={id}><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
+                        if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(q)}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
                         if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono">{fmt(q.total)}</td>
@@ -1529,6 +1595,19 @@ export default function SalesPage() {
         blocked={deleteBlocked}
         submitting={deleting}
         reversalLines={reversalLinesForTabKey(deleteOneTarget?.tabKey || tab)}
+      />
+
+      <ExportListModal
+        open={exportOpen}
+        onClose={() => !exportBusy && setExportOpen(false)}
+        title={`Export ${pageTitle}`}
+        entityLabel={pageTitle.toLowerCase()}
+        statusOptions={exportStatusOptionsForTab()}
+        initialStatus={exportInitialStatusForTab()}
+        initialDateFrom={dateFrom}
+        initialDateTo={dateTo}
+        busy={exportBusy}
+        onExport={runExport}
       />
 
       <CustomizeColumnsModal
@@ -1648,6 +1727,7 @@ export default function SalesPage() {
                       if (id === 'number') return <SortableHeader key={id} label="Credit Note #" sortKey="number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
                       if (id === 'invoice') return <SortableHeader key={id} label="Invoice" sortKey="invoice_number" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
+                      if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
                       if (id === 'total') return <SortableHeader key={id} label="Total" sortKey="total" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'credited') return <th key={id} className="text-right">Credited</th>
@@ -1680,6 +1760,7 @@ export default function SalesPage() {
                         if (id === 'number') return <td key={id}><CopyableId value={r.number} label={r.number} style={{ color: 'var(--red)', fontSize: 12 }} /></td>
                         if (id === 'invoice') return <td key={id}><CopyableId value={r.invoiceNumber} label={r.invoiceNumber} style={{ fontSize: 12 }} /></td>
                         if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{r.customerName || 'Walk-in'}</td>
+                        if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(r)}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.date}</td>
                         if (id === 'total') return <td key={id} className="text-right mono" style={{ color: 'var(--red)' }}>-{fmt(r.total)}</td>
                         if (id === 'credited') {
@@ -1822,6 +1903,7 @@ export default function SalesPage() {
                     {paymentColumnPrefs.visibleIds.map((id) => {
                       if (id === 'number') return <SortableHeader key={id} label="Payment #" sortKey="number" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
+                      if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
                       if (id === 'method') return <SortableHeader key={id} label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
                       if (id === 'invoices') return <th key={id}>Invoices</th>
@@ -1855,6 +1937,7 @@ export default function SalesPage() {
                         {paymentColumnPrefs.visibleIds.map((id) => {
                           if (id === 'number') return <td key={id}><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                           if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.customerName || 'Walk-in'}</td>
+                          if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(p)}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
                           if (id === 'method') {
                             return (
@@ -1990,6 +2073,7 @@ export default function SalesPage() {
                     {orderColumnPrefs.visibleIds.map((id) => {
                       if (id === 'number') return <SortableHeader key={id} label="Order #" sortKey="number" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
+                      if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                       if (id === 'expected') return <SortableHeader key={id} label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
@@ -2028,6 +2112,7 @@ export default function SalesPage() {
                         {orderColumnPrefs.visibleIds.map((id) => {
                           if (id === 'number') return <td key={id}><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                           if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{o.customerName || 'Walk-in'}</td>
+                          if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(o)}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                           if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                           if (id === 'amount') return <td key={id} className="text-right mono">{fmt(o.total)}</td>

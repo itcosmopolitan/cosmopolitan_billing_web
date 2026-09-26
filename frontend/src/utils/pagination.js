@@ -38,14 +38,19 @@ export function unwrapPaged(data) {
   }
 }
 
-/** Load all rows by paging with max page size (500). Use for dropdowns / POS catalog. */
-export async function fetchAllList(apiListFn, extraParams = {}) {
+/**
+ * Load all rows by paging. Default page size is 500 (invoices/bills).
+ * Pass `pageSize` (e.g. 200) for endpoints whose `limit` max is lower.
+ */
+export async function fetchAllList(apiListFn, extraParams = {}, pageSize = 500) {
   let skip = 0
-  const limit = 500
+  const limit = pageSize
   let total = Infinity
   const acc = []
+  // Strip skip/limit from extraParams so the loop owns pagination.
+  const { skip: _skip, limit: _limit, ...rest } = extraParams
   while (skip < total) {
-    const raw = await apiListFn({ ...extraParams, skip, limit })
+    const raw = await apiListFn({ ...rest, skip, limit })
     const { items, total: t } = unwrapPaged(raw)
     total = t
     acc.push(...items)

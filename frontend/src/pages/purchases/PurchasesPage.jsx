@@ -30,11 +30,17 @@ import { SectionHeader, Card, Chip, Modal, FormGroup, AlertBar, PaginationBar, S
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { PAYMENT_MODE_LABEL_OPTIONS, PAYMENT_STATUS_FILTER_OPTIONS, statusOptions } from '@/utils/dropdownOptions'
-import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
+import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
+import {
+  EXPORT_PAGE_SIZE_SAFE,
+  PURCHASE_EXPORT_FILENAMES,
+  PURCHASE_EXPORT_MAPPERS,
+} from '@/utils/listExport'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 // In-flight cache to deduplicate identical purchases requests across remounts
 const inFlightPurchasesRequests = new Map()
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
+import ExportListModal from '@/components/ExportListModal'
 import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
@@ -179,6 +185,8 @@ export default function PurchasesPage() {
 
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
@@ -800,57 +808,98 @@ export default function PurchasesPage() {
     toast.success('List refreshed')
   }
 
-  const exportCurrentTab = () => {
-    const stamp = new Date().toISOString().split('T')[0]
-    if (tab === 'bills') {
-      exportToCSV(bills.map((b) => ({
-        'Bill Number': b.number || b.id,
-        Vendor: b.vendorName || '—',
-        'Bill Date': b.date || '—',
-        'Due Date': b.dueDate || '—',
-        'Amount (MVR)': b.total || 0,
-        'Paid (MVR)': b.paidAmount || 0,
-        'Outstanding (MVR)': (b.total || 0) - (b.paidAmount || 0),
-        Status: (b.status || '—').toUpperCase(),
-      })), `PurchaseBills_${stamp}.csv`)
-    } else if (tab === 'orders') {
-      exportToCSV(orders.map((o) => ({
-        'PO Number': o.number || o.id,
-        Vendor: o.vendorName || '—',
-        Date: o.date || '—',
-        'Amount (MVR)': o.total || 0,
-        Status: (o.status || '—').toUpperCase(),
-      })), `PurchaseOrders_${stamp}.csv`)
-    } else if (tab === 'grns') {
-      exportToCSV(grns.map((g) => ({
-        'GRN Number': g.number || g.id,
-        Vendor: g.vendorName || '—',
-        Date: g.date || '—',
-        'Amount (MVR)': g.total || 0,
-        Status: (g.status || '—').toUpperCase(),
-      })), `GRNs_${stamp}.csv`)
-    } else if (tab === 'returns') {
-      exportToCSV(returns.map((r) => ({
-        'Return Number': r.number || r.id,
-        Vendor: r.vendorName || '—',
-        Date: r.date || '—',
-        'Amount (MVR)': r.total || 0,
-        Status: (r.status || '—').toUpperCase(),
-      })), `VendorReturns_${stamp}.csv`)
-    } else if (tab === 'payments') {
-      exportToCSV(payments.map((p) => ({
-        'Payment Number': p.number || p.id,
-        Vendor: p.vendorName || '—',
-        Date: p.date || '—',
-        'Amount (MVR)': p.amount || 0,
-        Method: p.paymentMode || '—',
-      })), `VendorPayments_${stamp}.csv`)
+  const exportStatusOptionsForTab = () => {
+    if (tab === 'bills') return BILL_STATUS_FILTER_OPTIONS
+    if (tab === 'orders') return ORDER_STATUS_FILTER_OPTIONS
+    if (tab === 'grns') return GRN_STATUS_FILTER_OPTIONS
+    if (tab === 'returns') return RETURN_STATUS_FILTER_OPTIONS
+    if (tab === 'payments') return PAYMENT_STATUS_FILTER_OPTIONS
+    return []
+  }
+
+  const exportInitialStatusForTab = () => {
+    if (tab === 'bills') return billStatusF
+    if (tab === 'orders') return orderStatusF
+    if (tab === 'grns') return grnStatusF
+    if (tab === 'returns') return retStatusF
+    if (tab === 'payments') return payStatusF
+    return ''
+  }
+
+  const openExportModal = () => setExportOpen(true)
+
+  const runExport = async ({ status, dateFrom: from, dateTo: to }) => {
+    const mapper = PURCHASE_EXPORT_MAPPERS[tab]
+    const fileBase = PURCHASE_EXPORT_FILENAMES[tab]
+    if (!mapper || !fileBase) return
+
+    setExportBusy(true)
+    try {
+      const common = {
+        date_from: from,
+        date_to: to,
+        status: status || undefined,
+        vendor_id: vendorF || undefined,
+      }
+      let rows = []
+      if (tab === 'bills') {
+        rows = await fetchAllList(
+          (params) => purchasesAPI.list({
+            ...params,
+            ...common,
+            payment_mode: paymentModeF || undefined,
+          }),
+          {},
+          500,
+        )
+      } else if (tab === 'orders') {
+        rows = await fetchAllList(
+          (params) => purchasesAPI.orders.list({ ...params, ...common }),
+          {},
+          EXPORT_PAGE_SIZE_SAFE,
+        )
+      } else if (tab === 'grns') {
+        rows = await fetchAllList(
+          (params) => purchasesAPI.grns.list({ ...params, ...common }),
+          {},
+          EXPORT_PAGE_SIZE_SAFE,
+        )
+      } else if (tab === 'returns') {
+        rows = await fetchAllList(
+          (params) => purchasesAPI.returns.list({ ...params, ...common }),
+          {},
+          500,
+        )
+      } else if (tab === 'payments') {
+        rows = await fetchAllList(
+          (params) => purchasesAPI.payments.list({
+            ...params,
+            ...common,
+            payment_mode: paymentModeF || undefined,
+          }),
+          {},
+          EXPORT_PAGE_SIZE_SAFE,
+        )
+      }
+
+      if (!rows.length) {
+        toast.error('No entries found for the selected filters')
+        return
+      }
+
+      const stamp = new Date().toISOString().split('T')[0]
+      exportToCSV(rows.map(mapper), `${fileBase}_${from}_to_${to}_${stamp}.csv`)
+      toast.success(`Exported ${rows.length} ${entityLabelForTab()}${rows.length === 1 ? '' : 's'}`)
+      setExportOpen(false)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || err?.message || 'Export failed')
+    } finally {
+      setExportBusy(false)
     }
-    toast.success('List exported')
   }
 
   const listMenuActions = buildListPageMenuActions({
-    onExport: exportCurrentTab,
+    onExport: openExportModal,
     onRefresh: refreshCurrentTab,
   })
 
@@ -1933,6 +1982,19 @@ export default function PurchasesPage() {
         blocked={deleteBlocked}
         submitting={deleting}
         reversalLines={reversalLinesForTab()}
+      />
+
+      <ExportListModal
+        open={exportOpen}
+        onClose={() => !exportBusy && setExportOpen(false)}
+        title={`Export ${pageTitle}`}
+        entityLabel={pageTitle.toLowerCase()}
+        statusOptions={exportStatusOptionsForTab()}
+        initialStatus={exportInitialStatusForTab()}
+        initialDateFrom={dateFrom}
+        initialDateTo={dateTo}
+        busy={exportBusy}
+        onExport={runExport}
       />
 
       <CustomizeColumnsModal

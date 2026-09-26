@@ -1677,6 +1677,97 @@ async def daily_sales(
     return paged(rows, total, sk, lim)
 
 
+@router.get("/daily-sales-returns", dependencies=[Depends(require_perm("reports.view"))])
+async def daily_sales_returns(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
+):
+    """Credit notes (sales returns) aggregated by return date."""
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    start, end = _normalize_date_range(date_from, date_to)
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+
+    conds = [
+        SalesReturn.date >= start_s,
+        SalesReturn.date <= end_s,
+        SalesReturn.status != SalesReturnStatus.void,
+    ]
+    branch_cond = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if search:
+        conds.append(
+            SalesReturn.number.ilike(f"%{search}%")
+            | SalesReturn.customer_name.ilike(f"%{search}%")
+        )
+
+    qty_sq = (
+        select(
+            SalesReturnLineItem.return_id.label("return_id"),
+            func.coalesce(func.sum(SalesReturnLineItem.return_qty), 0).label("qty"),
+        )
+        .group_by(SalesReturnLineItem.return_id)
+        .subquery()
+    )
+
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+
+    base_q = (
+        select(
+            SalesReturn.date.label("date"),
+            func.count(SalesReturn.id).label("return_count"),
+            func.coalesce(func.sum(qty_sq.c.qty), 0).label("quantity_returned"),
+            func.coalesce(func.sum(SalesReturn.subtotal), 0).label("gross_returns"),
+            func.coalesce(func.sum(SalesReturn.tax_total), 0).label("tax"),
+            func.coalesce(func.sum(SalesReturn.credited_amount), 0).label("credited_amount"),
+            func.coalesce(func.sum(SalesReturn.total), 0).label("net_returns"),
+        )
+        .select_from(SalesReturn)
+        .outerjoin(qty_sq, qty_sq.c.return_id == SalesReturn.id)
+        .where(and_(*conds))
+        .group_by(SalesReturn.date)
+    )
+
+    sort_map = {
+        "date": SalesReturn.date,
+        "return_count": func.count(SalesReturn.id),
+        "quantity_returned": func.coalesce(func.sum(qty_sq.c.qty), 0),
+        "gross_returns": func.coalesce(func.sum(SalesReturn.subtotal), 0),
+        "tax": func.coalesce(func.sum(SalesReturn.tax_total), 0),
+        "credited_amount": func.coalesce(func.sum(SalesReturn.credited_amount), 0),
+        "net_returns": func.coalesce(func.sum(SalesReturn.total), 0),
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
+
+    total = int(
+        (
+            await db.execute(
+                select(func.count(func.distinct(SalesReturn.date))).where(and_(*conds))
+            )
+        ).scalar()
+        or 0
+    )
+    result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [
+        {
+            **dict(r._mapping),
+            "date": r.date.isoformat() if hasattr(r.date, "isoformat") and r.date else r.date,
+        }
+        for r in result.fetchall()
+    ]
+    return paged(rows, total, sk, lim)
+
+
 @router.get("/product-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def product_sales(
     branch_id: Optional[str] = None,
@@ -2607,6 +2698,97 @@ async def purchase_register(
     total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
     result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
+    return paged(rows, total, sk, lim)
+
+
+@router.get("/daily-purchase-returns", dependencies=[Depends(require_perm("reports.view"))])
+async def daily_purchase_returns(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
+):
+    """Vendor returns (debit notes) aggregated by return date."""
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    start, end = _normalize_date_range(date_from, date_to)
+    start_s = _iso_date(start)
+    end_s = _iso_date(end)
+
+    conds = [
+        VendorReturn.date >= start_s,
+        VendorReturn.date <= end_s,
+        VendorReturn.voided.is_(False),
+    ]
+    branch_cond = _branch_condition(VendorReturn.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if search:
+        conds.append(
+            VendorReturn.number.ilike(f"%{search}%")
+            | VendorReturn.vendor_name.ilike(f"%{search}%")
+        )
+
+    qty_sq = (
+        select(
+            ReturnLineItem.return_id.label("return_id"),
+            func.coalesce(func.sum(ReturnLineItem.return_qty), 0).label("qty"),
+        )
+        .group_by(ReturnLineItem.return_id)
+        .subquery()
+    )
+
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+
+    base_q = (
+        select(
+            VendorReturn.date.label("date"),
+            func.count(VendorReturn.id).label("return_count"),
+            func.coalesce(func.sum(qty_sq.c.qty), 0).label("quantity_returned"),
+            func.coalesce(func.sum(VendorReturn.subtotal), 0).label("gross_returns"),
+            func.coalesce(func.sum(VendorReturn.tax_total), 0).label("tax"),
+            func.coalesce(func.sum(VendorReturn.credited_amount), 0).label("credited_amount"),
+            func.coalesce(func.sum(VendorReturn.total), 0).label("net_returns"),
+        )
+        .select_from(VendorReturn)
+        .outerjoin(qty_sq, qty_sq.c.return_id == VendorReturn.id)
+        .where(and_(*conds))
+        .group_by(VendorReturn.date)
+    )
+
+    sort_map = {
+        "date": VendorReturn.date,
+        "return_count": func.count(VendorReturn.id),
+        "quantity_returned": func.coalesce(func.sum(qty_sq.c.qty), 0),
+        "gross_returns": func.coalesce(func.sum(VendorReturn.subtotal), 0),
+        "tax": func.coalesce(func.sum(VendorReturn.tax_total), 0),
+        "credited_amount": func.coalesce(func.sum(VendorReturn.credited_amount), 0),
+        "net_returns": func.coalesce(func.sum(VendorReturn.total), 0),
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
+
+    total = int(
+        (
+            await db.execute(
+                select(func.count(func.distinct(VendorReturn.date))).where(and_(*conds))
+            )
+        ).scalar()
+        or 0
+    )
+    result = await db.execute(base_q.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [
+        {
+            **dict(r._mapping),
+            "date": r.date.isoformat() if hasattr(r.date, "isoformat") and r.date else r.date,
+        }
+        for r in result.fetchall()
+    ]
     return paged(rows, total, sk, lim)
 
 

@@ -263,8 +263,14 @@ function drilldownAppliedParamsLabel(filters) {
   const parts = []
   const from = filters.date_from || ''
   const to = filters.date_to || ''
-  // Daily-sales chip is already the single day — skip repeating it.
-  const dateIsDrillChip = Boolean(from && from === to && filters.drill_from === 'daily-sales')
+  // Daily sales / returns chips already show the single day — skip repeating it.
+  const dateIsDrillChip = Boolean(
+    from
+    && from === to
+    && (filters.drill_from === 'daily-sales'
+      || filters.drill_from === 'daily-sales-returns'
+      || filters.drill_from === 'daily-purchase-returns'),
+  )
   if (!dateIsDrillChip && (from || to)) {
     const fromLabel = from ? formatDate(from) : '…'
     const toLabel = to ? formatDate(to) : '…'
@@ -353,6 +359,26 @@ const DRILLDOWN_HANDLERS = {
     filters: {
       date_from: row.date,
       date_to: row.date,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: formatDate(row.date),
+  } : null),
+  'daily-sales-returns': (row, ctx) => (row.date ? {
+    reportId: 'daily-sales-returns-detail',
+    filters: {
+      date_from: row.date,
+      date_to: row.date,
+      transaction_type: 'credit_note',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: formatDate(row.date),
+  } : null),
+  'daily-purchase-returns': (row, ctx) => (row.date ? {
+    reportId: 'daily-purchase-returns-detail',
+    filters: {
+      date_from: row.date,
+      date_to: row.date,
+      transaction_type: 'debit_note',
       ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
     },
     label: formatDate(row.date),

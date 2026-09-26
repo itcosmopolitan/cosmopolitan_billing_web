@@ -823,6 +823,9 @@ async def list_quotations(
     total = int((await db.execute(q_count)).scalar() or 0)
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     quotations = result.unique().scalars().all()
+    await _attach_customer_kam_names(
+        db, [_loaded_rel(qt, "customer") for qt in quotations],
+    )
     order_nums = await _sales_doc_number_map(
         db, SalesOrder, {qt.converted_order_id for qt in quotations if qt.converted_order_id},
     )
@@ -2601,10 +2604,13 @@ def _payment_branch(
 
 
 def _payment_dict(p, allocations=None):
+    customer = _loaded_rel(p, "customer")
     d = {
         "id": p.id, "number": p.number,
         "customerId": p.customer_id,
         "customerName": p.customer_name or "Walk-in",
+        "customerKeyAccountManager": _customer_kam_label(customer),
+        "customer_key_account_manager": _customer_kam_label(customer),
         "branchId": p.branch_id, "branchName": p.branch_name,
         "date": p.date,
         "totalAmount": p.total_amount,
@@ -2715,13 +2721,17 @@ async def list_payments(
     )
     q = (
         select(CustomerPayment)
-        .options(selectinload(CustomerPayment.allocations))
+        .options(
+            selectinload(CustomerPayment.allocations),
+            selectinload(CustomerPayment.customer),
+        )
         .where(base)
         .order_by(sort_expr)
         .offset(sk)
         .limit(lim)
     )
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(q)).unique().scalars().all()
+    await _attach_customer_kam_names(db, [_loaded_rel(p, "customer") for p in rows])
     out = [_payment_dict(p, p.allocations) for p in rows]
     return paged(out, total, sk, lim)
 
@@ -3976,6 +3986,39 @@ def _loaded_rel(obj, name):
     return getattr(obj, name, None)
 
 
+def _customer_kam_label(customer) -> Optional[str]:
+    """Display label for a customer's key account manager (name preferred over id)."""
+    if customer is None:
+        return None
+    return (
+        getattr(customer, "_key_account_manager_name", None)
+        or getattr(customer, "key_account_manager", None)
+        or None
+    )
+
+
+async def _attach_customer_kam_names(db: AsyncSession, customers) -> None:
+    """Resolve key_account_manager user ids → display names on loaded customers."""
+    rows = [c for c in (customers or []) if c is not None]
+    kam_ids = {
+        getattr(c, "key_account_manager", None)
+        for c in rows
+        if getattr(c, "key_account_manager", None)
+    }
+    kam_ids.discard(None)
+    if not kam_ids:
+        for c in rows:
+            c._key_account_manager_name = getattr(c, "key_account_manager", None)
+        return
+    name_rows = (
+        await db.execute(select(User.id, User.name).where(User.id.in_(kam_ids)))
+    ).all()
+    name_by_id = {row.id: row.name for row in name_rows}
+    for c in rows:
+        kam = getattr(c, "key_account_manager", None)
+        c._key_account_manager_name = name_by_id.get(kam) or kam
+
+
 async def _invoice_customer_snapshot(db: AsyncSession, customer) -> dict:
     if customer is None:
         return {}
@@ -4053,6 +4096,8 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
         "customer_postal_code": customer.postal_code if customer else None,
         "customerGstin": customer.gstin if customer else None,
         "customer_gstin": customer.gstin if customer else None,
+        "customerKeyAccountManager": _customer_kam_label(customer),
+        "customer_key_account_manager": _customer_kam_label(customer),
         "branchId": quote.branch_id,
         "branchName": quote.branch_name,
         "createdBy": quote.created_by,
@@ -4419,12 +4464,17 @@ class SalesReturnCreate(BaseModel):
 
 
 # ─── Sales Order helpers ─────────────────────────────────────────────────────
-def _so_dict(so, items=None, classification=None, *, converted_invoice_number=None):
+def _so_dict(so, items=None, classification=None, *, converted_invoice_number=None, customer_key_account_manager=None):
+    customer = _loaded_rel(so, "customer")
     d = {
         "id": so.id, "number": so.number,
         "customerId": so.customer_id,
         "customerName": so.customer_name or "Walk-in",
-        "classification": classification or "external",
+        "classification": classification or (
+            (getattr(customer, "classification", None) if customer else None) or "external"
+        ),
+        "customerKeyAccountManager": customer_key_account_manager or _customer_kam_label(customer),
+        "customer_key_account_manager": customer_key_account_manager or _customer_kam_label(customer),
         "branchId": so.branch_id,
         "branchName": so.branch_name,
         "createdBy": so.created_by,
@@ -5057,13 +5107,17 @@ async def list_orders(
         default_key="created_at",
         default_order="desc",
     )
-    q = select(SalesOrder).options(selectinload(SalesOrder.line_items))
+    q = select(SalesOrder).options(
+        selectinload(SalesOrder.line_items),
+        selectinload(SalesOrder.customer),
+    )
     q_count = select(func.count(SalesOrder.id))
     if conds:
         q = q.where(and_(*conds))
         q_count = q_count.where(and_(*conds))
     total = int((await db.execute(q_count)).scalar() or 0)
     rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
+    await _attach_customer_kam_names(db, [_loaded_rel(so, "customer") for so in rows])
     inv_nums = await _sales_doc_number_map(
         db, SaleInvoice, {so.converted_invoice_id for so in rows if so.converted_invoice_id},
     )
@@ -6158,12 +6212,15 @@ async def convert_quote_to_invoice(
 
 # ─── Sales Returns: helpers ──────────────────────────────────────────────────
 def _return_dict(ret, items=None):
+    customer = _loaded_rel(ret, "customer")
     d = {
         "id": ret.id, "number": ret.number,
         "invoiceId": ret.invoice_id,
         "invoiceNumber": ret.invoice_number,
         "customerId": ret.customer_id,
         "customerName": ret.customer_name or "Walk-in",
+        "customerKeyAccountManager": _customer_kam_label(customer),
+        "customer_key_account_manager": _customer_kam_label(customer),
         "branchId": ret.branch_id,
         "branchName": ret.branch_name,
         "date": ret.date,
@@ -6298,7 +6355,10 @@ async def list_returns(
         default_key="created_at",
         default_order="desc",
     )
-    q = select(SalesReturn).options(selectinload(SalesReturn.line_items))
+    q = select(SalesReturn).options(
+        selectinload(SalesReturn.line_items),
+        selectinload(SalesReturn.customer),
+    )
     q_count = select(func.count(SalesReturn.id))
     if branch_id is not None:
         conds.append(SalesReturn.branch_id == branch_id)
@@ -6312,6 +6372,7 @@ async def list_returns(
         q_count = q_count.where(and_(*conds))
     total = int((await db.execute(q_count)).scalar() or 0)
     rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
+    await _attach_customer_kam_names(db, [_loaded_rel(ret, "customer") for ret in rows])
     out = [_return_dict(ret, ret.line_items) for ret in rows]
     return paged(out, total, sk, lim)
 
