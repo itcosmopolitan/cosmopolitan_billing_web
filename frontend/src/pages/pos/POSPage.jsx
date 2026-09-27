@@ -1027,24 +1027,9 @@ export default function POSPage() {
               placeholder="All categories"
             />
           </div>
-          <button
-            className="btn btn-secondary btn-sm"
-            title="Focus input then scan barcode"
-            onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
-          >📷 Scan</button>
-          {can('pos.use') && can('invoices.create') && (
+          {/* {can('pos.use') && can('invoices.create') && (
             <button className="btn btn-secondary btn-sm" onClick={() => setShowRefund(true)}>↩ Refund</button>
-          )}
-          <button
-            className="btn btn-secondary btn-sm"
-            style={{ position: 'relative' }}
-            onClick={() => setShowHeld(true)}
-            disabled={!!editingInvoice}
-            title={editingInvoice ? 'Hold is unavailable while editing a saved bill' : undefined}
-          >
-            ⏸ Hold
-            {branchHeldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{branchHeldBills.length}</span>}
-          </button>
+          )} */}
           <PanelDragHandle
             panel="products"
             onDragEnd={onPanelDragEnd}
@@ -1235,6 +1220,23 @@ export default function POSPage() {
               </div>
             </div>
             <div style={{ flex: 1 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                title="Focus input then scan barcode"
+                onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
+              >📷 Scan</button>
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ position: 'relative' }}
+                onClick={() => setShowHeld(true)}
+                disabled={!!editingInvoice}
+                title={editingInvoice ? 'Hold is unavailable while editing a saved bill' : undefined}
+              >
+                ⏸ Hold
+                {branchHeldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{branchHeldBills.length}</span>}
+              </button>
+            </div>
             <AutocompleteDropdown
               value={customer?.id || ''}
               onChange={(id) => {
