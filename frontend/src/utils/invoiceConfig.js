@@ -3,6 +3,7 @@
  */
 import { useEffect, useState } from 'react'
 import { formatAmountNumber, formatQtyNumber, roundAmount } from '@/utils/decimalPrecision'
+import { settingsAPI } from '@/api'
 
 export const INVOICE_CONFIG_CHANGED_EVENT = 'invoice-template-config-changed'
 
@@ -97,7 +98,7 @@ export function useInvoiceConfig() {
 
 export function getColumnDefinitions(config) {
   const cols = [
-    { key: 'no', label: 'No.', width: '5%', align: 'left' },
+    { key: 'no', label: 'S.No', width: '5%', align: 'left' },
     { key: 'description', label: 'Description', width: '34%', align: 'left' },
   ]
   if (config.showHsn) cols.push({ key: 'hsn', label: 'HSN', width: '8%', align: 'left' })

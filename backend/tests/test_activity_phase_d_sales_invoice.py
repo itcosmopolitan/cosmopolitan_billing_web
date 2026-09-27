@@ -26,6 +26,7 @@ from src.routes.sales import (  # noqa: E402
     create_invoice,
     create_payment,
     create_return,
+    get_invoice,
     void_payment,
 )
 
@@ -41,9 +42,45 @@ async def _build_session() -> AsyncSession:
 async def _seed(db: AsyncSession) -> None:
     db.add_all([
         Branch(id="b1", name="Main", code="MAIN"),
-        Customer(id="c1", name="Acme Customer", credit_balance=0, credit_limit=10000),
+        Customer(id="c1", name="Acme Customer", gstin="CUSTOMER-GST-001", credit_balance=0, credit_limit=10000),
     ])
     await db.commit()
+
+
+async def _verify_customer_gstin_response() -> None:
+    db = await _build_session()
+    try:
+        await _seed(db)
+        actor = User(
+            id="u-gstin-test",
+            name="GST Tester",
+            email="gst-test@example.com",
+            hashed_password="x",
+            all_branches=True,
+        )
+        created = await create_invoice(
+            SaleCreate(
+                customer_id="c1",
+                customer_name="Acme Customer",
+                branch_id="b1",
+                branch_name="Main",
+                cashier="Staff",
+                items=[{"item_id": None, "name": "GST Test Item", "qty": 1, "price": 10, "tax_rate": 0}],
+                discount=0,
+                payment_mode="bank_transfer",
+            ),
+            user=actor,
+            db=db,
+        )
+        invoice = await get_invoice(created["id"], db=db, user=actor)
+        assert invoice["customerGstin"] == "CUSTOMER-GST-001"
+        assert invoice["customer_gstin"] == "CUSTOMER-GST-001"
+    finally:
+        await db.close()
+
+
+def test_invoice_detail_exposes_customer_gstin() -> None:
+    asyncio.run(_verify_customer_gstin_response())
 
 
 async def _run_sales_invoice_activity_proof() -> None:
@@ -188,6 +225,9 @@ async def _run_sales_invoice_activity_proof() -> None:
             db=db,
         )
         invoice_id_3 = created_3["id"]
+        invoice_details = await get_invoice(invoice_id_3, db=db, user=actor)
+        assert invoice_details["customerGstin"] == "CUSTOMER-GST-001"
+        assert invoice_details["customer_gstin"] == "CUSTOMER-GST-001"
 
         created_4 = await create_invoice(
             SaleCreate(

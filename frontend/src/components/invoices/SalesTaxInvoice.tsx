@@ -26,7 +26,7 @@ export interface Invoice {
     addressLines?: string[]
   }
   billToCustomerNo?: string
-  gstNo?: string
+  customerGstin?: string
   invoiceNo: string
   orderNo?: string
   purchaseOrderNo?: string
@@ -131,7 +131,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
         : sale?.addressLines || sale?.address_lines || (sale?.customerAddress ? [sale.customerAddress] : []) || (sale?.customer_address ? [sale.customer_address] : []),
     },
     billToCustomerNo: sale?.customerCode || sale?.customer_code || '',
-    gstNo: sale?.gstNo || sale?.gst_no || '',
+    customerGstin: sale?.customerGstin || sale?.customer_gstin || sale?.customer?.gstin || sale?.customer?.gst_no || '',
     invoiceNo: `${sale?.number || sale?.invoiceNo || sale?.invoice_no || ''}`,
     orderNo: sale?.orderNo || sale?.order_no || '',
     purchaseOrderNo: sale?.purchaseOrderNo || sale?.purchase_order_no || '',
@@ -285,8 +285,8 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   {!isWalkin && invoice.billToCustomerNo ? (
                     <tr><td className="label">Bill-to Customer No.</td><td>{invoice.billToCustomerNo}</td></tr>
                   ) : null}
-                  {!isWalkin && invoice.gstNo ? (
-                    <tr><td className="label">Customer GST IN</td><td>{invoice.gstNo}</td></tr>
+                  {!isWalkin && invoice.customerGstin ? (
+                    <tr><td className="label">Customer GST IN</td><td>{invoice.customerGstin}</td></tr>
                   ) : null}
                   <tr><td className="label">Invoice No.</td><td>{invoice.invoiceNo}</td></tr>
                   <tr><td className="label">Posting Date</td><td>{invoice.postingDate}</td></tr>
@@ -307,7 +307,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
             <table className="items">
               <thead>
                 <tr>
-                  <th>Product ID</th>
+                  <th>S.No</th>
                   <th>Description</th>
                   <th>Packing</th>
                   <th>Origin</th>
@@ -329,7 +329,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
 
                   return (
                     <tr key={`${item.description}-${rowIndex}`}>
-                      <td>{item.sku ?? ''}</td>
+                      <td>{pageIndex * rowsPerPage + rowIndex + 1}</td>
                       <td>{item.description}</td>
                       <td>{item.packing ?? ''}</td>
                       <td>{item.origin ?? ''}</td>
@@ -380,27 +380,13 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <div className="pcolon">:</div>
                     <div>{invoice.paymentDueDate || ''}</div>
                   </div>
-                  <div className="payment-row">
-                    <div className="plabel">Terms &amp; Conditions</div>
-                    <div className="pcolon">:</div>
-                    <div>30DAYS &nbsp; from date of invoice to our account as follows:</div>
-                  </div>
                   <div className="bank-details">
-                    A/C NAME : Cosmopolitan Champa Brothers Maldives Pvt Ltd<br />
-                    Bank Account No : 7730000519444<br />
-                    Bank Name : Bank of Maldives<br />
-                    Bank Address : Boduthakurufaanu Magu, Malé 20094<br />
-                    Swift Code : MALBMVMVXXX
+                    Bank Details : BMLMVR | Account Number : 7730000519444 | Account Name : COSMOPOLITAN CHAMPA BROTHERS MALDIVES | VIBER : 7384977
                   </div>
                 </div>
 
                 <div className="terms">
-                  <div>- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoil in transit</div>
-                  <div>- Overdue outstanding will be subject to 1% interest per overdue day.</div>
-                  <div>- Any invoice discrepancies should be made clear via e-mail/fax no later than 24 hours after receiving.</div>
-                  <div>- In case of currency fluctuations, invoices must be settled by the latest maximum legal rate as advised by the MMA.</div>
-                  <div>- By accepting COSMOPOLITAN and/or other products described in the Invoice, the customer accepts these terms and conditions</div>
-                  <div>- The above document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
+                  Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day
                 </div>
 
                 <div className="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
@@ -668,7 +654,7 @@ const styles = `
     width: 12px;
   }
   .bank-details {
-    margin-left: 172px;
+    margin-left: 0;
     line-height: 1.5;
   }
   .terms {

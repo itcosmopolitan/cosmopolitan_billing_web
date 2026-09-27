@@ -376,7 +376,7 @@
     width: 12px;
   }
   .bank-details {
-    margin-left: 172px;
+    margin-left: 0;
     line-height: 1.5;
   }
 
@@ -420,12 +420,32 @@
     body { background: #fff; }
     .page { box-shadow: none; margin: 0; width: auto; }
   }
+  body.invoice-preview #invoicePages { width: 499px; margin: 0 auto; }
+  body.invoice-preview .page { width: 100%; margin: 0; }
+  body.invoice-preview .header {
+    grid-template-columns: minmax(0, 120px) minmax(0, 1fr) minmax(0, 70px);
+    gap: 4px;
+  }
+  body.invoice-preview .logo-block { width: 120px; }
+  body.invoice-preview .company-info { min-width: 0; }
+  body.invoice-preview .company-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  body.invoice-preview .company-line {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  body.invoice-preview .gold-badge { width: 70px; }
 </style>
 </head>
 <body>
 <div id="invoicePages"></div>
 <script>
 (function(){
+  const isPreview = new URLSearchParams(window.location.search).get('preview') === '1'
+  if (isPreview) document.body.classList.add('invoice-preview')
+
   function roundNumber(value) {
     const n = Number(value || 0)
     if (Number.isNaN(n)) return 0
@@ -457,7 +477,7 @@
     return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   }
 
-  function renderRows(items) {
+  function renderRows(items, firstSerialNumber = 1) {
     return items.map((it, index) => {
       const qty = Number(it.qty || it.quantity || 0)
       const rate = Number(it.price || it.rate || 0)
@@ -467,8 +487,7 @@
       const gstAmt = gstRate > 0
         ? Math.round((amount * gstRate) / (100 + gstRate) * 100) / 100
         : 0
-      const sku = it.sku || ''
-        return `<tr>\n<td>${escapeHtml(sku)}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+        return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
   }
 
@@ -529,7 +548,7 @@
             <h2 style="margin:0 0 6px 0;">${escapeHtml(invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '')}</h2>
             <div class="addr-line">${escapeHtml(invoice.phoneNo || invoice.phone_no || invoice.customerPhone || invoice.customer_phone || '')}</div>
             <table style="margin-top:4px; width:100%;">
-              <tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || invoice.gstin || invoice.gstNo || invoice.gst_no || '')}</td></tr>
+              <tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || '')}</td></tr>
               <tr><td class="label">Invoice No.</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
               <tr><td class="label">Address</td><td>${(() => {
                 const addressParts = [
@@ -562,7 +581,7 @@
         <table class="items">
           <thead>
             <tr>
-              <th>Product ID</th>
+              <th>S.No</th>
               <th>Description</th>
               <th>Packing</th>
               <th>Units</th>
@@ -574,7 +593,7 @@
             </tr>
           </thead>
           <tbody>
-            ${renderRows(pageItems)}
+            ${renderRows(pageItems, pageIndex * 14 + 1)}
           </tbody>
         </table>
 
@@ -603,25 +622,12 @@
           </table>
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
           <div class="payment-section">
-            <div class="payment-row">
-              <div class="plabel">Terms &amp; Conditions</div><div class="pcolon">:</div>
-              <div>30DAYS &nbsp; from date of invoice to our account as follows:</div>
-            </div>
             <div class="bank-details">
-              A/C NAME : Cosmopolitan Champa Brothers Maldives Pvt Ltd<br>
-              Bank Account No : 7730000519444<br>
-              Bank Name : Bank of Maldives<br>
-              Bank Address : Boduthakurufaanu Magu, Malé 20094<br>
-              Swift Code : MALBMVMVXXX
+              Bank Details : BMLMVR | Account Number : 7730000519444 | Account Name : COSMOPOLITAN CHAMPA BROTHERS MALDIVES | VIBER : 7384977
             </div>
           </div>
           <div class="terms">
-            <div>- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoil in transit</div>
-            <div>- Overdue outstanding will be subject to 1% interest per overdue day.</div>
-            <div>- Any invoice discrepancies should be made clear via e-mail/fax no later than 24 hours after receiving.</div>
-            <div>- In case of currency fluctuations, invoices must be settled by the latest maximum legal rate as advised by the MMA.</div>
-            <div>- By accepting COSMOPOLITAN and/or other products described in the Invoice, the customer accepts these terms and conditions</div>
-            <div>- The above document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
+            Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day
           </div>
           <div class="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
           <div class="signoff">
@@ -688,7 +694,7 @@
   }
 
   function renderInvoicePayload(payload) {
-    if (hasRenderedInvoice) return
+    if (hasRenderedInvoice && !isPreview) return
     hasRenderedInvoice = true
     const sale = payload?.sale || {}
     document.title = sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || 'Tax Invoice'
@@ -728,7 +734,16 @@
     document.getElementById('invoicePages').innerHTML = allPages.map((page) => {
       return renderPage(page.pageIndex, page.totalPages, page.pageItems, sale, branch, totals, page.copyLabel)
     }).join('')
-    setTimeout(() => { window.print() }, 500)
+    setTimeout(() => {
+      if (isPreview) {
+        window.parent.postMessage({
+          type: 'invoiceRendered',
+          height: document.documentElement.scrollHeight,
+        }, window.location.origin)
+      } else {
+        window.print()
+      }
+    }, 500)
   }
 
   window.addEventListener('message', (ev) => {

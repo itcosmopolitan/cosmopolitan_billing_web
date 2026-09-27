@@ -3,10 +3,9 @@ import toast from 'react-hot-toast'
 import { fmtDate, fmtDateTime } from '@/utils/helpers'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
-import SalesTaxInvoice, { mapSaleToInvoice } from '@/components/invoices/SalesTaxInvoice'
 import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
-import openInvoicePrintWindow from '@/utils/printInvoice'
+import openInvoicePrintWindow, { prepareInvoicePayload } from '@/utils/printInvoice'
 import { exportInvoicePdf } from '@/utils/exportInvoicePdf'
 import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
@@ -27,8 +26,10 @@ const formatCurrency = (value) => formatAmountNumber(value)
 // ─── Invoice Print Component ────────────────────────────────────────────────
 export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRef) {
   const ref = useRef(null)
+  const standardPreviewRef = useRef(null)
   const thermalRef = useRef(null)
   const [invoiceFormat, setInvoiceFormat] = useState('standard') // 'standard' or 'thermal'
+  const [standardPreviewReady, setStandardPreviewReady] = useState(false)
   const [orgProfile, setOrgProfile] = useState(null)
   const config = useInvoiceConfig()
   const columns = getColumnDefinitions(config)
@@ -64,6 +65,49 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
 
     return base
   }, [branch, orgProfile])
+
+  useEffect(() => {
+    const frame = standardPreviewRef.current
+    if (!frame || !sale) return undefined
+
+    let active = true
+    let frameLoaded = frame.contentDocument?.readyState === 'complete'
+    let payload = null
+    setStandardPreviewReady(false)
+
+    const sendPayload = () => {
+      if (!active || !frameLoaded || !payload || !frame.contentWindow) return
+      frame.contentWindow.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
+    }
+    const handleLoad = () => {
+      frameLoaded = true
+      sendPayload()
+    }
+    const handleMessage = (event) => {
+      if (event.source !== frame.contentWindow || event.origin !== window.location.origin) return
+      if (event.data?.type !== 'invoiceRendered') return
+      frame.style.height = `${Math.max(900, Number(event.data.height) || 0)}px`
+      setStandardPreviewReady(true)
+    }
+
+    frame.addEventListener('load', handleLoad)
+    window.addEventListener('message', handleMessage)
+    prepareInvoicePayload(sale, branch)
+      .then((preparedPayload) => {
+        if (!active) return
+        payload = preparedPayload
+        sendPayload()
+      })
+      .catch((error) => {
+        console.error('Failed to prepare invoice preview:', error)
+      })
+
+    return () => {
+      active = false
+      frame.removeEventListener('load', handleLoad)
+      window.removeEventListener('message', handleMessage)
+    }
+  }, [sale, branch])
 
   const getItemTaxAmount = (item) => {
     const qty = Number(item.qty || item.quantity || 0)
@@ -316,28 +360,14 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
         </div>
 
         <div class="terms">
-          <strong>Terms & Conditions :</strong>
-          <div>From date of invoice to our account as follows:</div>
-          <div>A/C NAME : Cosmopolitan Champa Brothers Maldives Pvt Ltd</div>
-          <div>Bank Account No : 7730000519444</div>
-          <div>Bank Name : Bank of Maldives</div>
-          <div>Bank Address : Boduthakurufaanu Magu, Malé 20094</div>
-          <div style="margin-top:6px;">- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoil in transit</div>
-          <div>- Overdue outstanding will be subject to 1% interest per overdue day.</div>
-          <div>- Any invoice discrepancies should be made clear via e-mail/fax no later than 24 hours after receiving.</div>
-          <div>- In case of currency fluctuations, invoices must be settled by the latest maximum legal rate as advised by the MMA.</div>
-          <div>- By accepting COSMOPOLITAN and/or other products described in the Invoice, the customer accepts these terms and conditions</div>
-          <div>- The above document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
+          <div>Bank Details : BMLMVR | Account Number : 7730000519444 | Account Name : COSMOPOLITAN CHAMPA BROTHERS MALDIVES | VIBER : 7384977</div>
+          <div style="margin-top:6px;">Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day</div>
         </div>
 
         <div class="divider"></div>
         <div style="font-size:10px; margin-top:8px; text-align:center;">Thank you for choosing Cosmopolitan as your preferred partner</div>
         <div style="display:grid;grid-template-columns:1fr 1fr; gap:16px; font-size:10px; margin-top:16px;">
           <div style="text-align:right;">Received By</div>
-        </div>
-        <div style="display:flex; justify-content:space-between; font-size:10px; margin-top:2px;">
-          <div>Swift Code : MALBMVMVXXX</div>
-          <div></div>
         </div>
       </div>
       <div class="print-footer">
@@ -383,10 +413,6 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')
   }
 
-  if (!sale) return null
-
-  const invoiceData = mapSaleToInvoice(sale, mergedBranch)
-
   const handlePrint = () => {
     if (invoiceFormat === 'standard') {
       openInvoicePrintWindow(sale, branch)
@@ -396,11 +422,15 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
   }
 
   const exportPdf = async () => {
-    if (!ref.current) return false
+    if (!sale || !ref.current) return false
     try {
       const customerName = sale.customerName || sale.customer_name || 'Customer'
       const fileName = `${customerName}_${sale.number || 'invoice'}`
-      await exportInvoicePdf(ref.current, fileName)
+      const invoicePages = invoiceFormat === 'standard'
+        ? standardPreviewRef.current?.contentDocument?.getElementById('invoicePages')
+        : ref.current
+      if (!invoicePages) return false
+      await exportInvoicePdf(invoicePages, fileName)
       return true
     } catch (error) {
       console.error('Failed to export invoice PDF:', error)
@@ -409,7 +439,9 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
     }
   }
 
-  useImperativeHandle(forwardedRef, () => ({ exportPdf }), [sale])
+  useImperativeHandle(forwardedRef, () => ({ exportPdf }))
+
+  if (!sale) return null
 
   const handleExportPdf = exportPdf
 
@@ -435,7 +467,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button className="btn btn-secondary" onClick={handleExportPdf} style={{ flexShrink: 0 }}>📤 Export</button>
+          <button className="btn btn-secondary" onClick={handleExportPdf} disabled={invoiceFormat === 'standard' && !standardPreviewReady} style={{ flexShrink: 0 }}>📤 Export</button>
           <button className="btn btn-primary" onClick={handlePrint} style={{ flexShrink: 0 }}>🖨 Print</button>
         </div>
       </div>
@@ -448,11 +480,20 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
         maxWidth: invoiceFormat === 'thermal' ? 420 : 920,
         margin: '0 auto',
       }}>
-        {invoiceFormat === 'standard' ? (
-          <SalesTaxInvoice invoice={invoiceData} branch={mergedBranch} />
-        ) : (
+        <iframe
+          ref={standardPreviewRef}
+          title="Standard invoice preview"
+          src="/invoice-cosmo.html?preview=1"
+          style={{
+            width: '100%',
+            height: 900,
+            display: invoiceFormat === 'standard' ? 'block' : 'none',
+            border: 0,
+          }}
+        />
+        {invoiceFormat === 'thermal' ? (
           <ThermalReceipt ref={thermalRef} sale={sale} branch={mergedBranch} />
-        )}
+        ) : null}
       </div>
 
     </div>

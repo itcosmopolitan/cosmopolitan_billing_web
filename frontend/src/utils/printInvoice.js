@@ -25,11 +25,10 @@ function roundCurrency(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
 }
 
-export async function openInvoicePrintWindow(sale, branch) {
-  if (typeof window === 'undefined') return
+export async function prepareInvoicePayload(sale, branch) {
+  if (typeof window === 'undefined') return null
   const authToken = window.localStorage.getItem('retailos_token')
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
-  const win = window.open('/invoice-cosmo.html', '_blank')
 
   let fullSale = sale
   try {
@@ -86,6 +85,15 @@ export async function openInvoicePrintWindow(sale, branch) {
   branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
 
   const payload = { sale: saleToSend, branch: branchMerged, printedAt: new Date().toISOString() }
+  return payload
+}
+
+export async function openInvoicePrintWindow(sale, branch) {
+  if (typeof window === 'undefined') return
+  const win = window.open('/invoice-cosmo.html', '_blank')
+  const payload = await prepareInvoicePayload(sale, branch)
+  if (!payload) return
+
   const sendPayload = () => {
     try {
       if (!win || win.closed) return false
