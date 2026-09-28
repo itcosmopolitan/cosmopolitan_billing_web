@@ -33,6 +33,7 @@ def _report(
     columns: list[dict[str, Any]],
     detail_type: str | None = None,
     list_hidden: bool = False,
+    as_of_date: bool = False,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": id,
@@ -45,6 +46,8 @@ def _report(
         out["detailType"] = detail_type
     if list_hidden:
         out["listHidden"] = True
+    if as_of_date:
+        out["asOfDate"] = True
     return out
 
 
@@ -471,6 +474,48 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 ],
             ),
             _report(
+                "sales-aging",
+                "Sales Aging",
+                api="salesAging",
+                default_sort="customer",
+                as_of_date=True,
+                columns=[
+                    _col("customer", "Customer"),
+                    _col("invoice_count", "Invoice Count", align="right", format="number"),
+                    _col("balance", "Balance", align="right", format="currency"),
+                    _col("bucket_1_31", "1 - 31 Days", align="right", format="currency_blank"),
+                    _col("bucket_32_62", "32 - 62 Days", align="right", format="currency_blank"),
+                    _col("bucket_63_93", "63 - 93 Days", align="right", format="currency_blank"),
+                    _col("bucket_94_124", "94 - 124 Days", align="right", format="currency_blank"),
+                    _col("bucket_over_124", "More Than 124 Days", align="right", format="currency_blank"),
+                ],
+            ),
+            _report(
+                "sales-aging-detail",
+                "Sales Aging Detail",
+                api="salesAgingDetail",
+                default_sort="invoice_date",
+                detail_type="invoice",
+                list_hidden=True,
+                as_of_date=True,
+                columns=[
+                    _col("customer", "Customer"),
+                    _col("invoice_date", "Invoice Date", format="date"),
+                    _col("transaction_type", "Transaction Type"),
+                    _col("invoice_number", "Invoice Number"),
+                    _col("order_number", "Order No."),
+                    _col("due_date", "Due Date", format="date"),
+                    _col("original_amount", "Original Amount", align="right", format="currency"),
+                    _col("balance", "Balance", align="right", format="currency"),
+                    _col("bucket_1_31", "1 - 31 Days", align="right", format="currency_blank"),
+                    _col("bucket_32_62", "32 - 62 Days", align="right", format="currency_blank"),
+                    _col("bucket_63_93", "63 - 93 Days", align="right", format="currency_blank"),
+                    _col("bucket_94_124", "94 - 124 Days", align="right", format="currency_blank"),
+                    _col("bucket_over_124", "More Than 124 Days", align="right", format="currency_blank"),
+                    _col("aged_in_days", "Aged in Days", align="right", format="number"),
+                ],
+            ),
+            _report(
                 "outstanding-payables",
                 "Outstanding Payables",
                 api="outstandingPayables",
@@ -482,6 +527,48 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("bill_date", "Bill Date", format="date"),
                     _col("due_date", "Due Date", format="date"),
                     _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
+                ],
+            ),
+            _report(
+                "purchase-aging",
+                "Purchase Aging",
+                api="purchaseAging",
+                default_sort="vendor",
+                as_of_date=True,
+                columns=[
+                    _col("vendor", "Vendor"),
+                    _col("bill_count", "Bill Count", align="right", format="number"),
+                    _col("balance", "Balance", align="right", format="currency"),
+                    _col("bucket_1_31", "1 - 31 Days", align="right", format="currency_blank"),
+                    _col("bucket_32_62", "32 - 62 Days", align="right", format="currency_blank"),
+                    _col("bucket_63_93", "63 - 93 Days", align="right", format="currency_blank"),
+                    _col("bucket_94_124", "94 - 124 Days", align="right", format="currency_blank"),
+                    _col("bucket_over_124", "More Than 124 Days", align="right", format="currency_blank"),
+                ],
+            ),
+            _report(
+                "purchase-aging-detail",
+                "Purchase Aging Detail",
+                api="purchaseAgingDetail",
+                default_sort="bill_date",
+                detail_type="bill",
+                list_hidden=True,
+                as_of_date=True,
+                columns=[
+                    _col("vendor", "Vendor"),
+                    _col("bill_date", "Bill Date", format="date"),
+                    _col("transaction_type", "Transaction Type"),
+                    _col("bill_number", "Bill Number"),
+                    _col("po_number", "PO Number"),
+                    _col("due_date", "Due Date", format="date"),
+                    _col("original_amount", "Original Amount", align="right", format="currency"),
+                    _col("balance", "Balance", align="right", format="currency"),
+                    _col("bucket_1_31", "1 - 31 Days", align="right", format="currency_blank"),
+                    _col("bucket_32_62", "32 - 62 Days", align="right", format="currency_blank"),
+                    _col("bucket_63_93", "63 - 93 Days", align="right", format="currency_blank"),
+                    _col("bucket_94_124", "94 - 124 Days", align="right", format="currency_blank"),
+                    _col("bucket_over_124", "More Than 124 Days", align="right", format="currency_blank"),
+                    _col("aged_in_days", "Aged in Days", align="right", format="number"),
                 ],
             ),
             # _report(

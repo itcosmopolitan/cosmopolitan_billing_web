@@ -28,9 +28,11 @@ from src.models import (
     ProductSalesSummary,
     PurchaseBill,
     PurchaseLineItem,
+    PurchaseOrder,
     ReturnLineItem,
     SaleInvoice,
     SaleLineItem,
+    SalesOrder,
     SalesReturn,
     SalesReturnLineItem,
     SalesReturnStatus,
@@ -125,6 +127,17 @@ def _normalize_date_range(
         MAX_REPORT_DATE_RANGE_DAYS,
     )
     return start, end
+
+
+def _normalize_as_of_date(date_to: Optional[str]) -> date:
+    """Single cutoff date for aging reports (defaults to today)."""
+    raw = (date_to or "").strip()
+    if not raw:
+        return date.today()
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        raise HTTPException(400, "Invalid as-of date. Use YYYY-MM-DD format.")
 
 
 def _parse_selected_branch_ids(branch_id: Optional[str]) -> list[str]:
@@ -339,6 +352,86 @@ def _invoice_outstanding_expr():
         - func.coalesce(SaleInvoice.credited_amount, 0)
     )
     return case((raw < 0, literal(0.0)), else_=raw)
+
+
+# Aging buckets match the Cosmopolitan Live AR sample (31-day bands by document date).
+_AGING_BUCKET_KEYS = (
+    "bucket_1_31",
+    "bucket_32_62",
+    "bucket_63_93",
+    "bucket_94_124",
+    "bucket_over_124",
+)
+
+
+def _parse_iso_date(value) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    text = str(value).strip()[:10]
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _aging_bucket_key(aged_days: int) -> str:
+    if aged_days <= 31:
+        return "bucket_1_31"
+    if aged_days <= 62:
+        return "bucket_32_62"
+    if aged_days <= 93:
+        return "bucket_63_93"
+    if aged_days <= 124:
+        return "bucket_94_124"
+    return "bucket_over_124"
+
+
+def _empty_aging_buckets() -> dict[str, Any]:
+    return {key: None for key in _AGING_BUCKET_KEYS}
+
+
+def _apply_aging_buckets(balance: float, aged_days: int) -> dict[str, Any]:
+    buckets = _empty_aging_buckets()
+    buckets[_aging_bucket_key(aged_days)] = float(balance or 0)
+    return buckets
+
+
+def _sort_aging_rows(
+    rows: list[dict[str, Any]],
+    sort_by: Optional[str],
+    sort_order: Optional[str],
+    default_key: str,
+) -> list[dict[str, Any]]:
+    key = (sort_by or default_key).strip() or default_key
+    reverse = (sort_order or "asc").lower() != "asc"
+    numeric_keys = {
+        "balance",
+        "original_amount",
+        "aged_in_days",
+        "invoice_count",
+        "bill_count",
+        *_AGING_BUCKET_KEYS,
+    }
+
+    def key_fn(row: dict[str, Any]):
+        raw = row.get(key)
+        if raw is None or raw == "":
+            return (1, 0.0 if key in numeric_keys else "")
+        if isinstance(raw, (int, float)):
+            return (0, float(raw))
+        return (0, str(raw).lower())
+
+    return sorted(rows, key=key_fn, reverse=reverse)
+
+
+def _paginate_rows(rows: list[dict[str, Any]], skip: int, limit: int):
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    return paged(rows[sk:sk + lim], len(rows), sk, lim)
 
 
 def _cn_filters(
@@ -3751,6 +3844,298 @@ async def outstanding_payables(
     result = await db.execute(query)
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
+
+
+async def _sales_aging_detail_rows(
+    *,
+    branch_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    customer_id: Optional[str],
+    db: AsyncSession,
+) -> tuple[list[dict[str, Any]], date]:
+    # Aging uses a single as-of cutoff (date_to). date_from is ignored so older
+    # open balances still appear in later buckets.
+    as_of = _normalize_as_of_date(date_to)
+    outstanding = _invoice_outstanding_expr()
+    conds = [
+        outstanding > 0.01,
+        SaleInvoice.status != InvoiceStatus.cancelled,
+        SaleInvoice.status != InvoiceStatus.draft,
+        SaleInvoice.date <= as_of.isoformat(),
+    ]
+    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if sale_branch is not None:
+        conds.append(sale_branch)
+    if customer_id is not None and str(customer_id).strip() != "":
+        raw_customer = str(customer_id).strip()
+        if raw_customer in ("__none__",):
+            conds.append(SaleInvoice.customer_id.is_(None))
+        else:
+            conds.append(SaleInvoice.customer_id == raw_customer)
+    if search:
+        like = f"%{search}%"
+        conds.append(
+            SaleInvoice.number.ilike(like)
+            | SaleInvoice.customer_name.ilike(like)
+            | Customer.customer_code.ilike(like)
+            | SalesOrder.number.ilike(like)
+        )
+
+    query = (
+        select(
+            SaleInvoice.id.label("invoice_id"),
+            SaleInvoice.customer_id.label("customer_id"),
+            Customer.customer_code.label("customer_code"),
+            SaleInvoice.customer_name.label("customer"),
+            SaleInvoice.date.label("invoice_date"),
+            SaleInvoice.number.label("invoice_number"),
+            SalesOrder.number.label("order_number"),
+            SaleInvoice.due_date.label("due_date"),
+            SaleInvoice.total.label("original_amount"),
+            outstanding.label("balance"),
+        )
+        .select_from(SaleInvoice)
+        .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
+        .outerjoin(SalesOrder, SalesOrder.converted_invoice_id == SaleInvoice.id)
+        .where(and_(*conds))
+    )
+    result = await db.execute(query)
+    rows: list[dict[str, Any]] = []
+    for r in result.fetchall():
+        row = dict(r._mapping)
+        doc_date = _parse_iso_date(row.get("invoice_date")) or as_of
+        aged_days = max(0, (as_of - doc_date).days)
+        balance = float(row.get("balance") or 0)
+        row["transaction_type"] = "Invoice"
+        row["original_amount"] = float(row.get("original_amount") or 0)
+        row["balance"] = balance
+        row["due_date"] = row.get("due_date") or row.get("invoice_date")
+        row["aged_in_days"] = aged_days
+        row.update(_apply_aging_buckets(balance, aged_days))
+        rows.append(row)
+    return rows, as_of
+
+
+async def _purchase_aging_detail_rows(
+    *,
+    branch_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    vendor_id: Optional[str],
+    db: AsyncSession,
+) -> tuple[list[dict[str, Any]], date]:
+    as_of = _normalize_as_of_date(date_to)
+    vr_agg = _active_vendor_return_totals()
+    outstanding = _bill_outstanding_expr(vr_agg)
+    conds = [
+        outstanding > 0.01,
+        PurchaseBill.status != InvoiceStatus.cancelled,
+        PurchaseBill.status != InvoiceStatus.draft,
+        PurchaseBill.date <= as_of.isoformat(),
+    ]
+    purchase_branch = _eq_or_in(PurchaseBill.branch_id, branch_id)
+    if purchase_branch is not None:
+        conds.append(purchase_branch)
+    if vendor_id:
+        conds.append(PurchaseBill.vendor_id == vendor_id)
+    if search:
+        like = f"%{search}%"
+        conds.append(
+            PurchaseBill.number.ilike(like)
+            | PurchaseBill.vendor_name.ilike(like)
+            | PurchaseOrder.number.ilike(like)
+        )
+
+    query = (
+        select(
+            PurchaseBill.id.label("bill_id"),
+            PurchaseBill.vendor_id.label("vendor_id"),
+            PurchaseBill.vendor_name.label("vendor"),
+            PurchaseBill.date.label("bill_date"),
+            PurchaseBill.number.label("bill_number"),
+            PurchaseOrder.number.label("po_number"),
+            PurchaseBill.due_date.label("due_date"),
+            _original_bill_total(vr_agg).label("original_amount"),
+            outstanding.label("balance"),
+        )
+        .select_from(PurchaseBill)
+        .outerjoin(vr_agg, vr_agg.c.bill_id == PurchaseBill.id)
+        .outerjoin(PurchaseOrder, PurchaseOrder.converted_bill_id == PurchaseBill.id)
+        .where(and_(*conds))
+    )
+    result = await db.execute(query)
+    rows: list[dict[str, Any]] = []
+    for r in result.fetchall():
+        row = dict(r._mapping)
+        doc_date = _parse_iso_date(row.get("bill_date")) or as_of
+        aged_days = max(0, (as_of - doc_date).days)
+        balance = float(row.get("balance") or 0)
+        row["transaction_type"] = "Bill"
+        row["original_amount"] = float(row.get("original_amount") or 0)
+        row["balance"] = balance
+        row["due_date"] = row.get("due_date") or row.get("bill_date")
+        row["aged_in_days"] = aged_days
+        row.update(_apply_aging_buckets(balance, aged_days))
+        rows.append(row)
+    return rows, as_of
+
+
+def _summarize_sales_aging(detail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in detail_rows:
+        key = row.get("customer_id") or row.get("customer") or ""
+        if key not in grouped:
+            grouped[key] = {
+                "customer_id": row.get("customer_id"),
+                "customer_code": row.get("customer_code"),
+                "customer": row.get("customer"),
+                "invoice_count": 0,
+                "balance": 0.0,
+                **_empty_aging_buckets(),
+            }
+        entry = grouped[key]
+        entry["invoice_count"] += 1
+        entry["balance"] = float(entry["balance"] or 0) + float(row.get("balance") or 0)
+        for bucket in _AGING_BUCKET_KEYS:
+            val = row.get(bucket)
+            if val is None:
+                continue
+            prev = entry.get(bucket)
+            entry[bucket] = float(prev or 0) + float(val)
+    return list(grouped.values())
+
+
+def _summarize_purchase_aging(detail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in detail_rows:
+        key = row.get("vendor_id") or row.get("vendor") or ""
+        if key not in grouped:
+            grouped[key] = {
+                "vendor_id": row.get("vendor_id"),
+                "vendor": row.get("vendor"),
+                "bill_count": 0,
+                "balance": 0.0,
+                **_empty_aging_buckets(),
+            }
+        entry = grouped[key]
+        entry["bill_count"] += 1
+        entry["balance"] = float(entry["balance"] or 0) + float(row.get("balance") or 0)
+        for bucket in _AGING_BUCKET_KEYS:
+            val = row.get(bucket)
+            if val is None:
+                continue
+            prev = entry.get(bucket)
+            entry[bucket] = float(prev or 0) + float(val)
+    return list(grouped.values())
+
+
+@router.get("/sales-aging-detail", dependencies=[Depends(require_perm("reports.view"))])
+async def sales_aging_detail(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Open AR invoices aged by invoice date as of date_to."""
+    rows, _aged_as_of = await _sales_aging_detail_rows(
+        branch_id=branch_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=customer_id,
+        db=db,
+    )
+    rows = _sort_aging_rows(rows, sort_by, sort_order, "invoice_date")
+    return _paginate_rows(rows, skip, limit)
+
+
+@router.get("/sales-aging", dependencies=[Depends(require_perm("reports.view"))])
+async def sales_aging(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Customer-level AR aging totals. Row drill-down opens sales-aging-detail."""
+    detail_rows, _aged_as_of = await _sales_aging_detail_rows(
+        branch_id=branch_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=customer_id,
+        db=db,
+    )
+    rows = _summarize_sales_aging(detail_rows)
+    rows = _sort_aging_rows(rows, sort_by, sort_order, "customer")
+    return _paginate_rows(rows, skip, limit)
+
+
+@router.get("/purchase-aging-detail", dependencies=[Depends(require_perm("reports.view"))])
+async def purchase_aging_detail(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Open AP bills aged by bill date as of date_to."""
+    rows, _aged_as_of = await _purchase_aging_detail_rows(
+        branch_id=branch_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        vendor_id=vendor_id,
+        db=db,
+    )
+    rows = _sort_aging_rows(rows, sort_by, sort_order, "bill_date")
+    return _paginate_rows(rows, skip, limit)
+
+
+@router.get("/purchase-aging", dependencies=[Depends(require_perm("reports.view"))])
+async def purchase_aging(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Vendor-level AP aging totals. Row drill-down opens purchase-aging-detail."""
+    detail_rows, _aged_as_of = await _purchase_aging_detail_rows(
+        branch_id=branch_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        vendor_id=vendor_id,
+        db=db,
+    )
+    rows = _summarize_purchase_aging(detail_rows)
+    rows = _sort_aging_rows(rows, sort_by, sort_order, "vendor")
+    return _paginate_rows(rows, skip, limit)
 
 
 @router.get("/petty-cash", dependencies=[Depends(require_perm("reports.view"))])

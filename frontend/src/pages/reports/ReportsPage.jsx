@@ -58,6 +58,7 @@ const NON_SUMMABLE_KEYS = new Set([
   'average_cost',
   'tax_rate',
   'days_to_expiry',
+  'aged_in_days',
   'reorder_level',
   'sort_order',
   'margin_pct',
@@ -488,6 +489,27 @@ const DRILLDOWN_HANDLERS = {
     reportId: 'vendor-outstanding-detail',
     filters: {
       date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      vendor_id: row.vendor_id,
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.vendor,
+  } : null),
+  'sales-aging': (row, ctx) => ({
+    reportId: 'sales-aging-detail',
+    filters: {
+      // Aging is as-of only; keep from/to equal so child URLs stay consistent.
+      date_from: ctx.dateTo,
+      date_to: ctx.dateTo,
+      customer_id: row.customer_id || '__none__',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.customer || 'Walk-in',
+  }),
+  'purchase-aging': (row, ctx) => (row.vendor_id ? {
+    reportId: 'purchase-aging-detail',
+    filters: {
+      date_from: ctx.dateTo,
       date_to: ctx.dateTo,
       vendor_id: row.vendor_id,
       ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
@@ -984,6 +1006,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     from.setDate(from.getDate() - 30)
     return from.toISOString().slice(0, 10)
   }, [])
+  const isAsOfDate = Boolean(report.asOfDate)
+  const initialAsOf = searchParams.get('date_to') || today
+  const initialFrom = isAsOfDate
+    ? initialAsOf
+    : (searchParams.get('date_from') || defaultFrom)
 
   const branchOptions = useMemo(
     () => (storeBranches || []).map((b) => ({ id: b.id, label: b.name || b.code || b.id })),
@@ -995,8 +1022,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     () => TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS,
     [report.api],
   )
-  const [dateFrom, setDateFrom] = useState(() => searchParams.get('date_from') || defaultFrom)
-  const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') || today)
+  const [dateFrom, setDateFrom] = useState(() => initialFrom)
+  const [dateTo, setDateTo] = useState(() => initialAsOf)
   const [branchIds, setBranchIds] = useState(() => {
     const fromUrl = parseBranchIds(searchParams.get('branch_id'))
     return fromUrl
@@ -1005,8 +1032,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions)
   ))
   const [appliedFilters, setAppliedFilters] = useState(() => ({
-    dateFrom: searchParams.get('date_from') || defaultFrom,
-    dateTo: searchParams.get('date_to') || today,
+    dateFrom: initialFrom,
+    dateTo: initialAsOf,
     branchIds: parseBranchIds(searchParams.get('branch_id')),
     transactionTypes: parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions),
   }))
@@ -1130,8 +1157,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     // Child URLs carry drill row filters in date_from/date_to/branch_*.
     // Parent URLs (including Back from child) carry only that report's own filters —
     // never inherit child-only drill dims like item_id / payment_mode.
-    const nextFrom = urlFilters.date_from || defaultFrom
     const nextTo = urlFilters.date_to || today
+    const nextFrom = isAsOfDate ? nextTo : (urlFilters.date_from || defaultFrom)
     const urlBranchIds = parseBranchIds(urlFilters.branch_id)
     const nextBranches = urlBranchIds.length
       ? urlBranchIds
@@ -1157,7 +1184,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     // allBranchIds intentionally omitted: late branch hydration is handled below
     // so we don't wipe in-progress draft filter edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync from URL/report only
-  }, [report.id, report.defaultSort, urlFilterKey, defaultFrom, today])
+  }, [report.id, report.defaultSort, report.asOfDate, urlFilterKey, defaultFrom, today])
 
   useEffect(() => {
     let cancelled = false
@@ -1170,7 +1197,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
         const params = {
           branch_id: appliedBranchId ? appliedBranchId : null,
-          date_from: appliedFilters.dateFrom,
+          date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
           date_to: appliedFilters.dateTo,
           sort_by: sortBy,
           sort_order: sortOrder,
@@ -1215,21 +1242,26 @@ function ReportDetailPage({ report, reportMap, onBack }) {
 
   const applyFilters = () => {
     setSkip(0)
+    const nextTo = dateTo
+    const nextFrom = isAsOfDate ? nextTo : dateFrom
+    if (isAsOfDate && dateFrom !== nextTo) setDateFrom(nextTo)
     setAppliedFilters({
-      dateFrom,
-      dateTo,
+      dateFrom: nextFrom,
+      dateTo: nextTo,
       branchIds: [...branchIds],
       transactionTypes: [...transactionTypes],
     })
   }
 
   const filtersDirty = useMemo(() => {
-    const sameDates = dateFrom === appliedFilters.dateFrom && dateTo === appliedFilters.dateTo
+    const sameDates = isAsOfDate
+      ? dateTo === appliedFilters.dateTo
+      : (dateFrom === appliedFilters.dateFrom && dateTo === appliedFilters.dateTo)
     const draftKey = [...branchIds].sort().join(',')
     const appliedKey = [...(appliedFilters.branchIds || [])].sort().join(',')
     return !(sameDates && draftKey === appliedKey)
       || txnTypesDirty(transactionTypes, appliedFilters.transactionTypes)
-  }, [dateFrom, dateTo, branchIds, transactionTypes, appliedFilters])
+  }, [isAsOfDate, dateFrom, dateTo, branchIds, transactionTypes, appliedFilters])
 
   const handleSort = (key) => {
     const nextOrder = sortBy === key && sortOrder === 'asc' ? 'desc' : 'asc'
@@ -1266,19 +1298,21 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     }
     const fromLabel = formatDate(appliedFilters.dateFrom)
     const toLabel = formatDate(appliedFilters.dateTo)
-    const dateRangeLabel = fromLabel === toLabel
-      ? fromLabel
-      : `${fromLabel} – ${toLabel}`
+    const dateRangeLabel = isAsOfDate
+      ? toLabel
+      : (fromLabel === toLabel ? fromLabel : `${fromLabel} – ${toLabel}`)
     const safeName = String(report.label || 'Report').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Report'
-    const stampFrom = appliedFilters.dateFrom || 'start'
+    const stampFrom = isAsOfDate ? (appliedFilters.dateTo || 'as_of') : (appliedFilters.dateFrom || 'start')
     const stampTo = appliedFilters.dateTo || 'end'
     exportToExcel(
       exportData,
-      `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`,
+      isAsOfDate
+        ? `${safeName.replace(/\s+/g, '_')}_as_of_${stampTo}.xlsx`
+        : `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`,
       null,
       {
         title: report.label || 'Report',
-        subtitle: `Date range: ${dateRangeLabel}`,
+        subtitle: isAsOfDate ? `As of: ${dateRangeLabel}` : `Date range: ${dateRangeLabel}`,
       },
     )
     toast.success('Excel export ready')
@@ -1517,13 +1551,30 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             alignItems: 'end',
           }}>
             <div style={{ width: 220, maxWidth: '100%' }}>
-              <label className="form-label">From</label>
-              <DatePicker value={dateFrom} onChange={setDateFrom} />
+              {isAsOfDate ? (
+                <>
+                  <label className="form-label">As of</label>
+                  <DatePicker
+                    value={dateTo}
+                    onChange={(value) => {
+                      setDateTo(value)
+                      setDateFrom(value)
+                    }}
+                  />
+                </>
+              ) : (
+                <>
+                  <label className="form-label">From</label>
+                  <DatePicker value={dateFrom} onChange={setDateFrom} />
+                </>
+              )}
             </div>
-            <div style={{ width: 220, maxWidth: '100%' }}>
-              <label className="form-label">To</label>
-              <DatePicker value={dateTo} onChange={setDateTo} />
-            </div>
+            {!isAsOfDate && (
+              <div style={{ width: 220, maxWidth: '100%' }}>
+                <label className="form-label">To</label>
+                <DatePicker value={dateTo} onChange={setDateTo} />
+              </div>
+            )}
             <div style={{ width: 220, maxWidth: '100%' }}>
               <label className="form-label">Branch</label>
               <MultiSelect
