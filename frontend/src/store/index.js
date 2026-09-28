@@ -238,6 +238,9 @@ export const usePOSStore = create((set, get) => ({
   customer: null,
   discountPct: 0,
   discountAmt: 0,
+  // 'pct' | 'flat' — which input the cashier is editing for bill discount.
+  // calcCartTotals still accepts both fields; the UI keeps them mutually exclusive.
+  discountType: 'pct',
   discountReason: '',
   // Sales Phase 1 (2026-05-23): payment is now two fields — a checkbox
   // ("Payment received?") + a method dropdown (Cash / Card / UPI /
@@ -385,13 +388,18 @@ export const usePOSStore = create((set, get) => ({
   setLineDiscountFlat: (id, amt) => get().setLineDiscount(id, amt, 'flat'),
 
   clearCart: () => set({
-    cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '', notes: '',
+    cart: [], customer: null, discountPct: 0, discountAmt: 0, discountType: 'pct', discountReason: '', notes: '',
     // PR 1: reset payment fields so the next sale starts fresh + unchecked.
     paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '', applyStoreCredit: false,
   }),
 
   hydrateSession: (payload) => {
     const customer = payload.customer ?? null
+    const discountPct = Number(payload.discountPct) || 0
+    const discountAmt = Number(payload.discountAmt) || 0
+    const discountType = payload.discountType === 'flat' || payload.discountType === 'pct'
+      ? payload.discountType
+      : (discountAmt > 0 && !(discountPct > 0) ? 'flat' : 'pct')
     set({
       cart: (payload.cart || []).map((i) => {
         const item = normalizeCartItem(i)
@@ -404,15 +412,16 @@ export const usePOSStore = create((set, get) => ({
         })
       }),
       customer,
-    discountPct: Number(payload.discountPct) || 0,
-    discountAmt: Number(payload.discountAmt) || 0,
-    discountReason: payload.discountReason || '',
-    notes: payload.notes || '',
-    paymentReceived: !!payload.paymentReceived,
-    paymentMethod: payload.paymentMethod || null,
-    paymentRef: payload.paymentRef || '',
-    cashCollected: payload.cashCollected || '',
-    applyStoreCredit: !!payload.applyStoreCredit,
+      discountPct,
+      discountAmt,
+      discountType,
+      discountReason: payload.discountReason || '',
+      notes: payload.notes || '',
+      paymentReceived: !!payload.paymentReceived,
+      paymentMethod: payload.paymentMethod || null,
+      paymentRef: payload.paymentRef || '',
+      cashCollected: payload.cashCollected || '',
+      applyStoreCredit: !!payload.applyStoreCredit,
     })
   },
 
@@ -433,7 +442,19 @@ export const usePOSStore = create((set, get) => ({
       }),
     }))
   },
-  setDiscount: (pct, amt) => set({ discountPct: pct, discountAmt: amt }),
+  setDiscount: (pct, amt) => set({
+    discountPct: Number(pct) || 0,
+    discountAmt: Number(amt) || 0,
+  }),
+  setDiscountType: (type) => {
+    const next = type === 'flat' ? 'flat' : 'pct'
+    const { discountPct, discountAmt } = get()
+    const value = next === 'flat'
+      ? (Number(discountAmt) || Number(discountPct) || 0)
+      : (Number(discountPct) || Number(discountAmt) || 0)
+    if (next === 'flat') set({ discountType: 'flat', discountPct: 0, discountAmt: value })
+    else set({ discountType: 'pct', discountPct: value, discountAmt: 0 })
+  },
   setDiscountReason: (reason) => set({ discountReason: reason || '' }),
   // PR 1: dual-setter for the new payment UX. setPaymentReceived(true)
   // is harmless without a method (POSPage validates at submit); setting
@@ -462,7 +483,7 @@ export const usePOSStore = create((set, get) => ({
   setNotes: (n) => set({ notes: String(n || '').slice(0, 100) }),
 
   holdBill: (branchId) => {
-    const { cart, customer, discountPct, discountAmt, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = get()
+    const { cart, customer, discountPct, discountAmt, discountType, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = get()
     if (cart.length === 0) return
     const label = `Hold #${heldBills.length + 1}`
     set({
@@ -474,6 +495,7 @@ export const usePOSStore = create((set, get) => ({
         branchId: branchId || null,
         discountPct,
         discountAmt,
+        discountType,
         discountReason,
         notes,
         // PR 1: persist the new payment fields so resume restores the
@@ -486,7 +508,7 @@ export const usePOSStore = create((set, get) => ({
         cashCollected,
         heldAt: new Date(),
       }],
-      cart: [], customer: null, discountPct: 0, discountAmt: 0, discountReason: '', notes: '',
+      cart: [], customer: null, discountPct: 0, discountAmt: 0, discountType: 'pct', discountReason: '', notes: '',
       paymentReceived: false, paymentMethod: null, paymentRef: '', cashCollected: '', applyStoreCredit: false,
     })
   },
@@ -527,6 +549,9 @@ export const usePOSStore = create((set, get) => ({
       customer: bill.customer,
       discountPct: bill.discountPct,
       discountAmt: bill.discountAmt || 0,
+      discountType: bill.discountType === 'flat' || bill.discountType === 'pct'
+        ? bill.discountType
+        : ((Number(bill.discountAmt) || 0) > 0 && !(Number(bill.discountPct) > 0) ? 'flat' : 'pct'),
       discountReason: bill.discountReason || '',
       notes: bill.notes || '',
       paymentReceived: resumedReceived,

@@ -12,6 +12,7 @@ import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/di
 import { unwrapPaged } from '@/utils/pagination'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
+import { amountInputStep } from '@/utils/decimalPrecision'
 import { isInternalCustomer, internalGstReverseSummary } from '@/utils/pricingDiscounts'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
@@ -157,6 +158,7 @@ function invoiceToCartSession(inv, customer) {
     customer: customer || (inv.customerId ? { id: inv.customerId, name: inv.customerName } : null),
     discountPct: 0,
     discountAmt: Number(inv.discount) || 0,
+    discountType: Number(inv.discount) > 0 ? 'flat' : 'pct',
     discountReason,
     notes: userNotes.slice(0, 100),
     paymentReceived: false,
@@ -226,7 +228,7 @@ export default function POSPage() {
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
-  const { cart, customer, discountPct, discountAmt, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const { cart, customer, discountPct, discountAmt, discountType, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
 
   // Guard route changes when the cart has unsaved lines. We stash the
@@ -1439,128 +1441,317 @@ export default function POSPage() {
           )}
         </div>
 
-        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-            <label htmlFor="pos-remarks" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>
-              Remarks
-            </label>
-            <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{notes.length}/100</span>
-          </div>
-          <textarea
-            id="pos-remarks"
-            className="form-input"
-            rows={2}
-            maxLength={100}
-            value={notes}
-            onChange={(e) => store.setNotes(e.target.value)}
-            placeholder="Add a remark to show on the invoice"
-            style={{ width: '100%', resize: 'vertical', minHeight: 50, padding: '7px 10px', fontSize: 12 }}
-          />
-        </div>
-
-        {/* Discount row — gated on pos.discount; cashier role does not have it. */}
-        {can('pos.discount') && (
-          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)' }}>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input
-                className="form-input"
-                style={{ flex: 1, padding: '7px 10px', fontSize: 12, opacity: hasLineLevelDiscount ? 0.6 : 1 }}
-                placeholder={hasLineLevelDiscount ? 'Clear line-item discounts to use bill discount' : 'Bill discount % (>10% needs approval)'}
-                type="number"
-                min="0"
-                max="100"
-                value={discountPct || ''}
-                onChange={(e) => store.setDiscount(Number(e.target.value), 0)}
-                disabled={hasLineLevelDiscount}
-              />
-              <div style={{ display: 'flex', gap: 4, width: 218, minWidth: 0 }}>
-                <select
-                  className="form-input"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    padding: '7px 10px',
-                    fontSize: 12,
-                    opacity: hasAnyDiscount ? 1 : 0.6,
-                    borderColor: hasAnyDiscount && !discountReason ? 'var(--red)' : undefined,
-                  }}
-                  value={discountReason || ''}
-                  onChange={(e) => store.setDiscountReason(e.target.value)}
-                  disabled={!hasAnyDiscount}
-                  aria-label="Discount reason"
-                  aria-required={hasAnyDiscount}
-                  required={hasAnyDiscount}
-                >
-                  <option value="">Reason</option>
-                  {discountReason && !discountReasonOptions.includes(discountReason) && (
-                    <option value={discountReason}>{discountReason}</option>
-                  )}
-                  {discountReasonOptions.map((reason) => (
-                    <option key={reason} value={reason}>{reason}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={openAddDiscountReason}
-                  disabled={!hasAnyDiscount}
-                  title="Add discount reason"
-                  style={{
-                    width: 36,
-                    minWidth: 36,
-                    height: 34,
-                    padding: 0,
-                    flexShrink: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    border: '1px solid var(--green)',
-                    borderRadius: 6,
-                    background: hasAnyDiscount ? 'var(--green)' : 'var(--bg-raised)',
-                    color: hasAnyDiscount ? '#fff' : 'var(--text-muted)',
-                    fontSize: 18,
-                    fontWeight: 700,
-                    lineHeight: 1,
-                    cursor: hasAnyDiscount ? 'pointer' : 'not-allowed',
-                    opacity: hasAnyDiscount ? 1 : 0.6,
-                  }}
-                >
-                  +
-                </button>
-              </div>
-              {false && (
-                <input className="form-input" style={{ width: 90, padding: '7px 10px', fontSize: 12 }} placeholder="Coupon" />
-              )}
-            </div>
-            {(hasLineLevelDiscount || hasBillLevelDiscount) && (
-              <div style={{ fontSize: 11, color: discountReason ? 'var(--text-muted)' : 'var(--red)', marginTop: 6 }}>
-                {discountReason
-                  ? (hasLineLevelDiscount ? 'Using line-item discount mode.' : 'Using bill-level discount mode.')
-                  : 'Discount reason is required.'}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Totals + payment — compact footer: payment left, totals right */}
-        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-raised)' }}>
+        {/* Compact footer: remarks+discount | totals, then payments | Complete Sale */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-raised)', flexShrink: 0 }}>
           {taxMode === 'inclusive' && cart.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+            <div style={{ fontSize: 10.5, color: 'var(--text-muted)', padding: '6px 14px 0' }}>
               Prices include tax
             </div>
           )}
 
+          {/* Row 1: remarks + discount (70%) | calculation box (30%) */}
           <div
             style={{
-              display: 'flex',
-              alignItems: 'flex-end',
-              gap: 14,
-              marginBottom: 10,
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) 40%',
+              gap: 12,
+              alignItems: 'end',
+              padding: '8px 14px',
+              width: '100%',
+              boxSizing: 'border-box',
             }}
           >
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label htmlFor="pos-remarks" style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  Remarks
+                </label>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{notes.length}/100</span>
+              </div> */}
+              <textarea
+                id="pos-remarks"
+                className="form-input"
+                rows={2}
+                maxLength={100}
+                value={notes}
+                onChange={(e) => store.setNotes(e.target.value)}
+                placeholder="Add a remark to show on the invoice"
+                style={{ width: '100%', resize: 'vertical', minHeight: 32, padding: '6px 8px', fontSize: 12, flex: 1 }}
+              />
+
+              {/* Discount — gated on pos.discount; cashier role does not have it.
+                  % or flat (MVR) — same toggle pattern as line discounts. */}
+              {can('pos.discount') && (
+                <>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input
+                      className="form-input"
+                      style={{
+                        width: 72,
+                        flexShrink: 0,
+                        padding: '6px 8px',
+                        fontSize: 12,
+                        opacity: hasLineLevelDiscount ? 0.6 : 1,
+                      }}
+                      placeholder={
+                        hasLineLevelDiscount
+                          ? '—'
+                          : (discountType === 'flat' ? 'Amt' : '%')
+                      }
+                      type="number"
+                      min="0"
+                      max={discountType === 'flat' ? undefined : 100}
+                      step={discountType === 'flat' ? amountInputStep() : 0.5}
+                      value={(discountType === 'flat' ? discountAmt : discountPct) || ''}
+                      onChange={(e) => {
+                        const v = Number(e.target.value) || 0
+                        if (discountType === 'flat') store.setDiscount(0, v)
+                        else store.setDiscount(v, 0)
+                      }}
+                      disabled={hasLineLevelDiscount}
+                      title={
+                        hasLineLevelDiscount
+                          ? 'Clear line discounts for bill discount'
+                          : (discountType === 'flat'
+                            ? 'Bill discount amount'
+                            : 'Bill discount % (>10% needs approval)')
+                      }
+                      aria-label={discountType === 'flat' ? 'Bill discount amount' : 'Bill discount percent'}
+                    />
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        border: '1px solid var(--border-default)',
+                        borderRadius: 7,
+                        overflow: 'hidden',
+                        flexShrink: 0,
+                        opacity: hasLineLevelDiscount ? 0.6 : 1,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        disabled={hasLineLevelDiscount}
+                        onClick={() => store.setDiscountType('pct')}
+                        style={{
+                          border: 'none',
+                          borderRight: '1px solid var(--border-default)',
+                          background: discountType !== 'flat' ? 'var(--accent-bg)' : 'transparent',
+                          color: discountType !== 'flat' ? 'var(--accent)' : 'var(--text-muted)',
+                          cursor: hasLineLevelDiscount ? 'not-allowed' : 'pointer',
+                          fontSize: 11,
+                          padding: '5px 7px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        %
+                      </button>
+                      <button
+                        type="button"
+                        disabled={hasLineLevelDiscount}
+                        onClick={() => store.setDiscountType('flat')}
+                        style={{
+                          border: 'none',
+                          background: discountType === 'flat' ? 'var(--accent-bg)' : 'transparent',
+                          color: discountType === 'flat' ? 'var(--accent)' : 'var(--text-muted)',
+                          cursor: hasLineLevelDiscount ? 'not-allowed' : 'pointer',
+                          fontSize: 11,
+                          padding: '5px 7px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        MVR
+                      </button>
+                    </div>
+                    <AutocompleteDropdown
+                      value={discountReason || ''}
+                      onChange={(id) => store.setDiscountReason(id || '')}
+                      onSelectOption={(opt) => store.setDiscountReason(opt?.id || '')}
+                      options={uniqueDiscountReasons([
+                        ...discountReasonOptions,
+                        discountReason || '',
+                      ]).map((reason) => ({ id: reason, label: reason }))}
+                      isSearchFieldRequired
+                      searchPlaceholder="Search reason…"
+                      placeholder="Reason"
+                      selectedLabel={discountReason || undefined}
+                      disabled={!hasAnyDiscount}
+                      clearable={Boolean(hasAnyDiscount && discountReason)}
+                      onClear={() => store.setDiscountReason('')}
+                      footerAction={{
+                        label: '+ Add reason',
+                        onClick: openAddDiscountReason,
+                      }}
+                      emptyLabel="No reasons yet"
+                      noMatchLabel="No matching reasons"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 12,
+                        padding: '6px 8px',
+                        opacity: hasAnyDiscount ? 1 : 0.6,
+                        borderColor: hasAnyDiscount && !discountReason ? 'var(--red)' : undefined,
+                      }}
+                    />
+                  </div>
+                  {(hasLineLevelDiscount || hasBillLevelDiscount) && (
+                    <div style={{ fontSize: 10.5, color: discountReason ? 'var(--text-muted)' : 'var(--red)' }}>
+                      {discountReason
+                        ? (hasLineLevelDiscount ? 'Using line-item discount mode.' : 'Using bill-level discount mode.')
+                        : 'Discount reason is required.'}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div
+              style={{
+                width: '100%',
+                minWidth: 0,
+                textAlign: 'right',
+                boxSizing: 'border-box',
+                paddingLeft: 8,
+              }}
+            >
+              {cart.length > 0 && (
+                <div style={{ marginBottom: 4 }}>
+                  {discount > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--green)',
+                        marginBottom: 2,
+                      }}
+                    >
+                      <span>Disc</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+                    </div>
+                  )}
+                  {gstReverse.gstReversed > 0 && (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 16,
+                          fontSize: 11.5,
+                          color: 'var(--green)',
+                          marginBottom: 2,
+                        }}
+                      >
+                        <span>GST reversed</span>
+                        <span style={{ fontFamily: 'DM Mono' }}>-{fmt(gstReverse.gstReversed)}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2, lineHeight: 1.35 }}>
+                        {fmt(gstReverse.inclusive)} incl. − {fmt(gstReverse.gstReversed)} GST
+                        {gstReverse.rate != null ? ` (${gstReverse.rate}%)` : ''} = {fmt(gstReverse.exclusive)}
+                      </div>
+                    </>
+                  )}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      fontSize: 11.5,
+                      color: 'var(--text-muted)',
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span>Taxable</span>
+                    <span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      fontSize: 11.5,
+                      color: 'var(--text-muted)',
+                      marginBottom: cartMargin ? 2 : 0,
+                    }}
+                  >
+                    <span>Tax</span>
+                    <span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
+                  </div>
+                  {cartMargin && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--text-muted)',
+                        marginBottom: 4,
+                      }}
+                    >
+                      <span>Margin</span>
+                      <MarginBadge margin={cartMargin} showAmount size="sm" />
+                    </div>
+                  )}
+                  {creditAppliedPreview > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 16,
+                        fontSize: 11.5,
+                        color: 'var(--accent)',
+                        marginBottom: 2,
+                      }}
+                    >
+                      <span>Account credit</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(creditAppliedPreview)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                  gap: 16,
+                  paddingTop: cart.length > 0 ? 4 : 0,
+                  borderTop: cart.length > 0 ? '1px solid var(--border-default)' : 'none',
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {creditAppliedPreview > 0 ? 'Remaining' : 'Total'}
+                </span>
+                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 22, fontWeight: 700, color: 'var(--accent)', lineHeight: 1.1 }}>
+                  {fmt(creditAppliedPreview > 0 ? remainingDuePreview : total)}
+                </span>
+              </div>
+              {creditAppliedPreview > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, textAlign: 'right' }}>
+                  Bill total {fmt(total)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Row 2: payment methods (left) | Complete Sale under totals (30%) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) 40%',
+              gap: 12,
+              alignItems: 'center',
+              padding: '0 14px 10px',
+              borderTop: '1px solid var(--border-subtle)',
+              paddingTop: 8,
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
               {customer?.id && creditAvail > 0 && (
-                <AlertBar type="green" icon="✓" style={{ marginBottom: 8 }}>
+                <AlertBar type="green" icon="✓" style={{ marginBottom: 6 }}>
                   Account credit <strong>{fmt(creditAvail)}</strong> will be applied automatically
                   {remainingDuePreview > 0.001
                     ? <> — collect <strong>{fmt(remainingDuePreview)}</strong> remaining</>
@@ -1571,7 +1762,7 @@ export default function POSPage() {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 8,
+                  gap: 6,
                   flexWrap: 'wrap',
                 }}
               >
@@ -1592,14 +1783,14 @@ export default function POSPage() {
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        padding: '6px 10px',
-                        minHeight: 34,
+                        padding: '5px 9px',
+                        minHeight: 30,
                         border: `1.5px solid ${isSelected ? 'var(--accent)' : 'var(--border-default)'}`,
                         background: isSelected ? 'var(--accent-bg)' : 'var(--bg-surface)',
                         color: isSelected ? 'var(--accent)' : isDisabled ? 'var(--text-muted)' : 'var(--text-secondary)',
                         borderRadius: 999,
                         cursor: isDisabled ? 'not-allowed' : 'pointer',
-                        fontSize: 12,
+                        fontSize: 11.5,
                         fontWeight: 600,
                         opacity: isDisabled ? 0.6 : 1,
                         transition: 'all 0.12s ease',
@@ -1611,7 +1802,7 @@ export default function POSPage() {
                   )
                 })}
                 {paymentMethod === 'credit' && (
-                  <div style={{ width: '100%', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                  <div style={{ width: '100%', fontSize: 11, color: 'var(--text-muted)' }}>
                     Remaining credit: <strong>{fmt(accountCreditRemaining)}</strong>
                   </div>
                 )}
@@ -1632,157 +1823,30 @@ export default function POSPage() {
                   onChange={(e) => store.setPaymentRef(e.target.value)}
                   placeholder="Payment reference number"
                   aria-label="Payment reference number"
-                  style={{ width: '100%', maxWidth: 260, marginTop: 8, padding: '7px 10px', fontSize: 12 }}
+                  style={{ width: '100%', maxWidth: 240, marginTop: 6, padding: '6px 8px', fontSize: 12 }}
                 />
               )}
-              {!(paymentReceived || creditAppliedPreview > 0) && (
-                <div style={{ marginTop: 5, fontSize: 10.5, color: customerRequiresImmediatePayment(customer) ? 'var(--amber)' : 'var(--text-muted)', lineHeight: 1.4 }}>
-                  {customerRequiresImmediatePayment(customer)
-                    ? <>Payment method is <strong>required</strong> for walk-in / retail customers.</>
-                    : <>Saved as <strong>pending</strong> — collect payment later in Sales → Invoices.</>}
-                </div>
-              )}
             </div>
 
-            <div style={{ textAlign: 'right', flexShrink: 0, paddingLeft: 8, minWidth: 120 }}>
-              {cart.length > 0 && (
-                <div style={{ marginBottom: 6 }}>
-                  {discount > 0 && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        gap: 16,
-                        fontSize: 11.5,
-                        color: 'var(--green)',
-                        marginBottom: 3,
-                      }}
-                    >
-                      <span>Disc</span>
-                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
-                    </div>
-                  )}
-                  {gstReverse.gstReversed > 0 && (
-                    <>
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 16,
-                          fontSize: 11.5,
-                          color: 'var(--green)',
-                          marginBottom: 3,
-                        }}
-                      >
-                        <span>GST reversed</span>
-                        <span style={{ fontFamily: 'DM Mono' }}>-{fmt(gstReverse.gstReversed)}</span>
-                      </div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, lineHeight: 1.35 }}>
-                        {fmt(gstReverse.inclusive)} incl. − {fmt(gstReverse.gstReversed)} GST
-                        {gstReverse.rate != null ? ` (${gstReverse.rate}%)` : ''} = {fmt(gstReverse.exclusive)}
-                      </div>
-                    </>
-                  )}
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 16,
-                      fontSize: 11.5,
-                      color: 'var(--text-muted)',
-                      marginBottom: 3,
-                    }}
-                  >
-                    <span>Taxable</span>
-                    <span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 16,
-                      fontSize: 11.5,
-                      color: 'var(--text-muted)',
-                      marginBottom: cartMargin ? 3 : 0,
-                    }}
-                  >
-                    <span>Tax</span>
-                    <span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
-                  </div>
-                  {cartMargin && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: 16,
-                        fontSize: 11.5,
-                        color: 'var(--text-muted)',
-                        marginBottom: 6,
-                      }}
-                    >
-                      <span>Margin</span>
-                      <MarginBadge margin={cartMargin} showAmount size="sm" />
-                    </div>
-                  )}
-                  {creditAppliedPreview > 0 && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        gap: 16,
-                        fontSize: 11.5,
-                        color: 'var(--accent)',
-                        marginBottom: 3,
-                      }}
-                    >
-                      <span>Account credit</span>
-                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(creditAppliedPreview)}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'baseline',
-                  gap: 16,
-                  paddingTop: cart.length > 0 ? 6 : 0,
-                  borderTop: cart.length > 0 ? '1px solid var(--border-default)' : 'none',
-                }}
-              >
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {creditAppliedPreview > 0 ? 'Remaining' : 'Total'}
-                </span>
-                <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 24, fontWeight: 700, color: 'var(--accent)', lineHeight: 1.1 }}>
-                  {fmt(creditAppliedPreview > 0 ? remainingDuePreview : total)}
-                </span>
-              </div>
-              {creditAppliedPreview > 0 && (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, textAlign: 'right' }}>
-                  Bill total {fmt(total)}
-                </div>
-              )}
-            </div>
+            <button
+              className="btn btn-primary btn-xl"
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                justifyContent: 'center',
+                fontSize: 14,
+                padding: '10px 12px',
+                opacity: completing || !can('pos.use') || editLoading ? 0.6 : 1,
+                cursor: completing || !can('pos.use') || editLoading ? 'not-allowed' : 'pointer',
+              }}
+              onClick={() => handleComplete()}
+              disabled={completing || !can('pos.use') || editLoading}
+              title={!can('pos.use') ? 'POS billing requires pos.use permission' : undefined}
+            >
+              {completing ? '⏳ Saving...' : editingInvoice ? `✓ Save` : `✓ Complete Sale`}
+              <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>F8</span>
+            </button>
           </div>
-
-          <button
-            className="btn btn-primary btn-xl"
-            style={{
-              width: '100%',
-              justifyContent: 'center',
-              fontSize: 15,
-              opacity: completing || !can('pos.use') || editLoading ? 0.6 : 1,
-              cursor: completing || !can('pos.use') || editLoading ? 'not-allowed' : 'pointer',
-            }}
-            onClick={() => handleComplete()}
-            disabled={completing || !can('pos.use') || editLoading}
-            title={!can('pos.use') ? 'POS billing requires pos.use permission' : undefined}
-          >
-            {completing ? '⏳ Saving...' : editingInvoice ? `✓ Save changes — ${fmt(total)}` : `✓ Complete Sale — ${fmt(total)}`}
-            <span style={{ fontSize: 10, opacity: 0.7, marginLeft: 4 }}>F8</span>
-          </button>
         </div>
       </div>
 
