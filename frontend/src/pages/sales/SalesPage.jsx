@@ -26,7 +26,7 @@ import {
   SALES_EXPORT_FILENAMES,
   SALES_EXPORT_MAPPERS,
 } from '@/utils/listExport'
-import openInvoicePrintWindow, { openQuotePrintWindow } from '@/utils/printInvoice'
+import openInvoicePrintWindow, { openQuotePrintWindow, openSalesOrderPrintWindow } from '@/utils/printInvoice'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
@@ -778,10 +778,12 @@ export default function SalesPage() {
     }
   }
 
-  const requestInvoiceExport = async (invoice, branch) => {
+  const requestInvoiceExport = async (invoice, branch, kind = 'invoice') => {
     try {
-      const fullInvoice = invoice?.items?.length ? invoice : await salesAPI.get(invoice.id)
-      setExportInvoice({ sale: fullInvoice, branch })
+      const fullInvoice = invoice?.items?.length
+        ? invoice
+        : kind === 'order' ? await salesAPI.orders.get(invoice.id) : await salesAPI.get(invoice.id)
+      setExportInvoice({ sale: fullInvoice, branch, documentType: kind === 'order' ? 'Sales Order' : 'Tax Invoice' })
     } catch (error) {
       console.error('Failed to load invoice for export:', error)
       toast.error('Could not prepare the invoice PDF.')
@@ -2233,8 +2235,10 @@ export default function SalesPage() {
             navigate(`/sales?tab=${tab}`, { replace: true })
           }
         }}
-        onPrint={(inv, branch) => openInvoicePrintWindow(inv, branch)}
-        onExport={requestInvoiceExport}
+        onPrint={(doc, branch, kind) => kind === 'order'
+          ? openSalesOrderPrintWindow(doc, branch)
+          : openInvoicePrintWindow(doc, branch)}
+        onExport={(doc, branch, kind) => requestInvoiceExport(doc, branch, kind)}
         onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
         onRecordPayment={(inv) => setShowPayment(inv)}
         onUploadProof={(inv) => { setProofUploadInvoice(inv); setSalesDoc(null) }}
@@ -2423,7 +2427,7 @@ export default function SalesPage() {
 
       {exportInvoice && (
         <div style={{ position: 'fixed', left: '-10000px', top: 0, width: 920, pointerEvents: 'none' }} aria-hidden="true">
-          <Receipt ref={exportReceiptRef} sale={exportInvoice.sale} branch={exportInvoice.branch} />
+          <Receipt ref={exportReceiptRef} sale={exportInvoice.sale} branch={exportInvoice.branch} documentType={exportInvoice.documentType} />
         </div>
       )}
 

@@ -538,7 +538,7 @@
 
         <div class="title-row">
           ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
-          <h1 class='center'>Tax Invoice</h1>
+          <h1 class='center'>${escapeHtml(invoice.documentType || 'Tax Invoice')}</h1>
           <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
         </div>
 
@@ -549,7 +549,7 @@
             <div class="addr-line">${escapeHtml(invoice.phoneNo || invoice.phone_no || invoice.customerPhone || invoice.customer_phone || '')}</div>
             <table style="margin-top:4px; width:100%;">
               <tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || '')}</td></tr>
-              <tr><td class="label">Invoice No.</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
+              <tr><td class="label">${invoice.documentType === 'Sales Order' ? 'Sales Order No.' : 'Invoice No.'}</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
               <tr><td class="label">Address</td><td>${(() => {
                 const addressParts = [
                   invoice.customerStreet1 || invoice.customer_street1,
@@ -569,7 +569,8 @@
           </div>
           <div class="seller-addr details-box">
             <table style="width:100%;">
-              <tr><td class="label">Invoice Date</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
+              <tr><td class="label">${invoice.documentType === 'Sales Order' ? 'Order Date' : 'Invoice Date'}</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
+              ${invoice.documentType === 'Sales Order' && (invoice.expectedDate || invoice.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(invoice.expectedDate || invoice.expected_date)}</td></tr>` : ''}
               <tr><td class="label">Quotation No.</td><td>${escapeHtml(invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || '')}</td></tr>
               <tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>
               <tr><td class="label">Sales Person</td><td>${escapeHtml(invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || '')}</td></tr>
@@ -616,7 +617,7 @@
             </tr>
             <tr class="grand-row">
               <td colspan="5"></td>
-              <td class="tlabel grand">Total Payable (Inc. GST)</td>
+              <td class="tlabel grand">${invoice.documentType === 'Sales Order' ? 'Total Order Value (Inc. GST)' : 'Total Payable (Inc. GST)'}</td>
               <td class="tval grand">${formatNumber(totals.total)}</td>
             </tr>
           </table>
@@ -697,7 +698,8 @@
     if (hasRenderedInvoice && !isPreview) return
     hasRenderedInvoice = true
     const sale = payload?.sale || {}
-    document.title = sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || 'Tax Invoice'
+    sale.documentType = payload?.documentType || 'Tax Invoice'
+    document.title = `${sale.documentType} ${sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
     const branch = payload?.branch || {}
     const items = sale.items || []
     const grossAmount = items.reduce((sum, item) => sum + (Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)), 0)

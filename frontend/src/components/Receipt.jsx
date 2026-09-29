@@ -24,7 +24,7 @@ const formatNumber = (value, options = {}) => {
 const formatCurrency = (value) => formatAmountNumber(value)
 
 // ─── Invoice Print Component ────────────────────────────────────────────────
-export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRef) {
+export const Receipt = forwardRef(function Receipt({ sale, branch, documentType = 'Tax Invoice' }, forwardedRef) {
   const ref = useRef(null)
   const standardPreviewRef = useRef(null)
   const thermalRef = useRef(null)
@@ -92,7 +92,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
 
     frame.addEventListener('load', handleLoad)
     window.addEventListener('message', handleMessage)
-    prepareInvoicePayload(sale, branch)
+    prepareInvoicePayload(sale, branch, { documentType, fetchSale: documentType !== 'Sales Order' })
       .then((preparedPayload) => {
         if (!active) return
         payload = preparedPayload
@@ -107,7 +107,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch }, forwardedRe
       frame.removeEventListener('load', handleLoad)
       window.removeEventListener('message', handleMessage)
     }
-  }, [sale, branch])
+  }, [sale, branch, documentType])
 
   const getItemTaxAmount = (item) => {
     const qty = Number(item.qty || item.quantity || 0)

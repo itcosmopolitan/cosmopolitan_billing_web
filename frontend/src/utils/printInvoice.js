@@ -25,7 +25,7 @@ function roundCurrency(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
 }
 
-export async function prepareInvoicePayload(sale, branch) {
+export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax Invoice', fetchSale = true } = {}) {
   if (typeof window === 'undefined') return null
   const authToken = window.localStorage.getItem('retailos_token')
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
@@ -34,7 +34,7 @@ export async function prepareInvoicePayload(sale, branch) {
   try {
     const paymentMode = String(sale?.paymentMode || sale?.payment_mode || '').toLowerCase()
     const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
-    const needsFetch = !sale || (sale?.id && (needsCashPaymentDetails || !sale.salesperson || !sale.email || !sale.phoneNo || !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)))
+    const needsFetch = fetchSale && (!sale || (sale?.id && (needsCashPaymentDetails || !sale.salesperson || !sale.email || !sale.phoneNo || !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst))))
     if (needsFetch && sale?.id) {
       const res = await fetch(`/api/v1/sales/${sale.id}`, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) {
@@ -69,7 +69,7 @@ export async function prepareInvoicePayload(sale, branch) {
   const totalInWords = fullSale?.totalInWords || amountToWords(fullSale?.total)
   const saleToSend = {
     ...fullSale,
-    salesperson: fullSale?.salesperson || fullSale?.cashier || fullSale?.cashierName || fullSale?.salesperson_name || fullSale?.salesPerson || '',
+    salesperson: fullSale?.salesperson || fullSale?.cashier || fullSale?.cashierName || fullSale?.salesperson_name || fullSale?.salesPerson || fullSale?.createdBy || fullSale?.created_by || '',
     phoneNo: fullSale?.phoneNo || fullSale?.phone_no || branchMerged?.phone || branchMerged?.tel || org?.phone || '',
     email: fullSale?.email || branchMerged?.email || org?.email || '',
     totalInWords,
@@ -84,14 +84,14 @@ export async function prepareInvoicePayload(sale, branch) {
   branchMerged.email = branchMerged.email || branchMerged.emailAddress || branchMerged.email_address || ''
   branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
 
-  const payload = { sale: saleToSend, branch: branchMerged, printedAt: new Date().toISOString() }
+  const payload = { sale: saleToSend, branch: branchMerged, documentType, printedAt: new Date().toISOString() }
   return payload
 }
 
-export async function openInvoicePrintWindow(sale, branch) {
+async function openDocumentPrintWindow(sale, branch, documentType, fetchSale) {
   if (typeof window === 'undefined') return
   const win = window.open('/invoice-cosmo.html', '_blank')
-  const payload = await prepareInvoicePayload(sale, branch)
+  const payload = await prepareInvoicePayload(sale, branch, { documentType, fetchSale })
   if (!payload) return
 
   const sendPayload = () => {
@@ -117,6 +117,14 @@ export async function openInvoicePrintWindow(sale, branch) {
   }
 
   setTimeout(() => { try { win.focus() } catch (e) {} }, 500)
+}
+
+export function openInvoicePrintWindow(sale, branch) {
+  return openDocumentPrintWindow(sale, branch, 'Tax Invoice', true)
+}
+
+export function openSalesOrderPrintWindow(order, branch) {
+  return openDocumentPrintWindow(order, branch, 'Sales Order', false)
 }
 
 export async function openQuotePrintWindow(quote, branch) {

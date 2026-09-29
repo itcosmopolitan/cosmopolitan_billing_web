@@ -257,6 +257,26 @@ export default function SalesTxnDetailPanel({
 
       {kind === 'order' && (
         <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onPrint?.(detail, branchLookup?.(detail) || null, kind)
+              onClose?.()
+            }}
+          >
+            Print sales order
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onExport?.(detail, branchLookup?.(detail) || null, kind)
+              onClose?.()
+            }}
+          >
+            Download PDF
+          </button>
           {((detail?.status === 'draft' && can('invoices.create', 'invoices.edit'))
             || (detail?.status === 'confirmed' && can('invoices.edit'))) && (
             <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/sales/orders/${detail.id}/edit`) }}>
