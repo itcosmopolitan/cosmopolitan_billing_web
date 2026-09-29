@@ -5,7 +5,7 @@ import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
-import openInvoicePrintWindow, { prepareInvoicePayload } from '@/utils/printInvoice'
+import openInvoicePrintWindow, { prepareInvoicePayload, prepareQuotePayload } from '@/utils/printInvoice'
 import { exportInvoicePdf } from '@/utils/exportInvoicePdf'
 import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
@@ -27,6 +27,8 @@ const formatCurrency = (value) => formatAmountNumber(value)
 export const Receipt = forwardRef(function Receipt({ sale, branch, documentType = 'Tax Invoice' }, forwardedRef) {
   const ref = useRef(null)
   const standardPreviewRef = useRef(null)
+  const standardPreviewReadyRef = useRef(false)
+  const standardPreviewWaitersRef = useRef([])
   const thermalRef = useRef(null)
   const [invoiceFormat, setInvoiceFormat] = useState('standard') // 'standard' or 'thermal'
   const [standardPreviewReady, setStandardPreviewReady] = useState(false)
@@ -73,11 +75,13 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     let active = true
     let frameLoaded = frame.contentDocument?.readyState === 'complete'
     let payload = null
+    const isQuote = documentType === 'Quote'
+    standardPreviewReadyRef.current = false
     setStandardPreviewReady(false)
 
     const sendPayload = () => {
       if (!active || !frameLoaded || !payload || !frame.contentWindow) return
-      frame.contentWindow.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
+      frame.contentWindow.postMessage({ type: isQuote ? 'renderQuote' : 'renderInvoice', payload }, window.location.origin)
     }
     const handleLoad = () => {
       frameLoaded = true
@@ -85,14 +89,19 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     }
     const handleMessage = (event) => {
       if (event.source !== frame.contentWindow || event.origin !== window.location.origin) return
-      if (event.data?.type !== 'invoiceRendered') return
+      if (event.data?.type !== (isQuote ? 'quoteRendered' : 'invoiceRendered')) return
       frame.style.height = `${Math.max(900, Number(event.data.height) || 0)}px`
+      standardPreviewReadyRef.current = true
       setStandardPreviewReady(true)
+      standardPreviewWaitersRef.current.splice(0).forEach((resolve) => resolve(true))
     }
 
     frame.addEventListener('load', handleLoad)
     window.addEventListener('message', handleMessage)
-    prepareInvoicePayload(sale, branch, { documentType, fetchSale: documentType !== 'Sales Order' })
+    const preparedPayload = isQuote
+      ? prepareQuotePayload(sale, branch)
+      : prepareInvoicePayload(sale, branch, { documentType, fetchSale: documentType !== 'Sales Order' })
+    preparedPayload
       .then((preparedPayload) => {
         if (!active) return
         payload = preparedPayload
@@ -424,17 +433,29 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
   const exportPdf = async () => {
     if (!sale || !ref.current) return false
     try {
-      const customerName = sale.customerName || sale.customer_name || 'Customer'
-      const fileName = `${customerName}_${sale.number || 'invoice'}`
+      if (invoiceFormat === 'standard' && !standardPreviewReadyRef.current) {
+        const ready = await new Promise((resolve) => {
+          const timeoutId = setTimeout(() => resolve(false), 15000)
+          standardPreviewWaitersRef.current.push((result) => {
+            clearTimeout(timeoutId)
+            resolve(result)
+          })
+        })
+        if (!ready) throw new Error('The invoice preview did not finish rendering.')
+      }
+
+      const customerName = sale.customerName || sale.customer_name || sale.vendorName || 'Customer'
+      const fileName = `${customerName}_${sale.number || sale.quote_no || (documentType === 'Quote' ? 'quote' : 'invoice')}`
+      const previewContainerId = documentType === 'Quote' ? 'quotePages' : 'invoicePages'
       const invoicePages = invoiceFormat === 'standard'
-        ? standardPreviewRef.current?.contentDocument?.getElementById('invoicePages')
+        ? standardPreviewRef.current?.contentDocument?.getElementById(previewContainerId)
         : ref.current
       if (!invoicePages) return false
       await exportInvoicePdf(invoicePages, fileName)
       return true
     } catch (error) {
       console.error('Failed to export invoice PDF:', error)
-      toast.error('Could not export the invoice as PDF.')
+      toast.error('Could not export this document as PDF.')
       return false
     }
   }
@@ -482,8 +503,8 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
       }}>
         <iframe
           ref={standardPreviewRef}
-          title="Standard invoice preview"
-          src="/invoice-cosmo.html?preview=1"
+          title={documentType === 'Quote' ? 'Quote preview' : 'Standard invoice preview'}
+          src={documentType === 'Quote' ? '/quote-cosmo.html?preview=1' : '/invoice-cosmo.html?preview=1'}
           style={{
             width: '100%',
             height: 900,

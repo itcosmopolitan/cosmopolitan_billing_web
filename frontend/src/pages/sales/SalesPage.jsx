@@ -782,11 +782,14 @@ export default function SalesPage() {
     try {
       const fullInvoice = invoice?.items?.length
         ? invoice
-        : kind === 'order' ? await salesAPI.orders.get(invoice.id) : await salesAPI.get(invoice.id)
-      setExportInvoice({ sale: fullInvoice, branch, documentType: kind === 'order' ? 'Sales Order' : 'Tax Invoice' })
+        : kind === 'order'
+          ? await salesAPI.orders.get(invoice.id)
+          : kind === 'quote' ? await salesAPI.quotations.get(invoice.id) : await salesAPI.get(invoice.id)
+      const documentType = kind === 'order' ? 'Sales Order' : kind === 'quote' ? 'Quote' : 'Tax Invoice'
+      setExportInvoice({ sale: fullInvoice, branch, documentType })
     } catch (error) {
-      console.error('Failed to load invoice for export:', error)
-      toast.error('Could not prepare the invoice PDF.')
+      console.error('Failed to load document for export:', error)
+      toast.error('Could not prepare the PDF.')
     }
   }
 
@@ -794,8 +797,15 @@ export default function SalesPage() {
     if (!exportInvoice || !exportReceiptRef.current) return
     let cancelled = false
     const run = async () => {
-      await exportReceiptRef.current.exportPdf()
-      if (!cancelled) setExportInvoice(null)
+      try {
+        const exported = await exportReceiptRef.current.exportPdf()
+        if (!exported) toast.error('Could not download the PDF. Please try again.')
+      } catch (error) {
+        console.error('Failed to export document PDF:', error)
+        toast.error('Could not download the PDF. Please try again.')
+      } finally {
+        if (!cancelled) setExportInvoice(null)
+      }
     }
     run()
     return () => { cancelled = true }
@@ -1544,6 +1554,12 @@ export default function SalesPage() {
                                 hidden: false,
                                 disabled: isRowBusy(q.id),
                                 onClick: () => openQuotePrintWindow(q, branches.find((b) => b.id === q.branchId)),
+                              },
+                              {
+                                label: 'Export Quote',
+                                hidden: false,
+                                disabled: isRowBusy(q.id),
+                                onClick: () => requestInvoiceExport(q, branches.find((b) => b.id === q.branchId), 'quote'),
                               },
                               {
                                 label: 'View',

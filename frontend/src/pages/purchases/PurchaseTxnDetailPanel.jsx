@@ -38,6 +38,12 @@ export default function PurchaseTxnDetailPanel({
   onDeleteReturn,
   onVoidReturn,
   onBillFromGrn,
+  onPrintOrder,
+  onExportOrder,
+  onPrintBill,
+  onExportBill,
+  onPrintGrn,
+  onExportGrn,
 }) {
   const can = useCan()
   const navigate = useNavigate()
@@ -109,6 +115,12 @@ export default function PurchaseTxnDetailPanel({
 
       {kind === 'bill' && (
         <>
+          <button type="button" className="btn btn-secondary" onClick={() => { onPrintBill?.(detail); onClose?.() }}>
+            Print Bill
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => { onExportBill?.(detail); onClose?.() }}>
+            Export Bill
+          </button>
           {detail?.status !== 'paid' && detail?.status !== 'cancelled' && (
             <button type="button" className="btn btn-primary" onClick={() => { onRecordPayment?.(detail); onClose?.() }}>
               Record payment
@@ -134,6 +146,26 @@ export default function PurchaseTxnDetailPanel({
 
       {kind === 'order' && (
         <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onPrintOrder?.(detail)
+              onClose?.()
+            }}
+          >
+            Print Purchase Order
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onExportOrder?.(detail)
+              onClose?.()
+            }}
+          >
+            Export Purchase Order
+          </button>
           {((detail?.status === 'draft' && can('purchases.create', 'purchases.edit'))
             || (['confirmed', 'partially_received', 'approved'].includes(detail?.status) && can('purchases.edit'))) && (
             <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/purchases/orders/${detail.id}/edit`) }}>
@@ -153,10 +185,20 @@ export default function PurchaseTxnDetailPanel({
         </>
       )}
 
-      {kind === 'grn' && detail?.status === 'received' && !detail?.convertedBillId && can('purchases.create') && (
-        <button type="button" className="btn btn-primary" onClick={() => { onBillFromGrn?.(detail); onClose?.() }}>
-          Create bill
-        </button>
+      {kind === 'grn' && (
+        <>
+          <button type="button" className="btn btn-secondary" onClick={() => { onPrintGrn?.(detail); onClose?.() }}>
+            Print GRN Receipt
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => { onExportGrn?.(detail); onClose?.() }}>
+            Export GRN Receipt
+          </button>
+          {detail?.status === 'received' && !detail?.convertedBillId && can('purchases.create') && (
+            <button type="button" className="btn btn-primary" onClick={() => { onBillFromGrn?.(detail); onClose?.() }}>
+              Create bill
+            </button>
+          )}
+        </>
       )}
 
       {kind === 'return' && detail?.status !== 'void' && !detail?.voided && (

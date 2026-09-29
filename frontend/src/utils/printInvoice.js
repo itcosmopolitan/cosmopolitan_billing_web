@@ -32,23 +32,52 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
 
   let fullSale = sale
   try {
+    const isPurchaseOrder = documentType === 'Purchase Order'
+    const isPurchaseBill = documentType === 'Purchase Bill'
+    const isGrnReceipt = documentType === 'GRN Receipt'
+    const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
     const paymentMode = String(sale?.paymentMode || sale?.payment_mode || '').toLowerCase()
     const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
-    const needsFetch = fetchSale && (!sale || (sale?.id && (needsCashPaymentDetails || !sale.salesperson || !sale.email || !sale.phoneNo || !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst))))
+    const needsPurchaseOrderFetch = sale?.id && (!Array.isArray(sale?.items) || sale.items.length === 0)
+    const needsInvoiceFetch = !sale || (sale?.id && (
+      needsCashPaymentDetails || !sale.salesperson || !sale.email || !sale.phoneNo ||
+      !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)
+    ))
+    const needsFetch = fetchSale && (isPurchaseDocument ? needsPurchaseOrderFetch : needsInvoiceFetch)
     if (needsFetch && sale?.id) {
-      const res = await fetch(`/api/v1/sales/${sale.id}`, { headers: { Accept: 'application/json', ...authHeaders } })
+      const endpoint = isPurchaseOrder
+        ? `/api/v1/purchases/orders/${sale.id}`
+        : isPurchaseBill
+          ? `/api/v1/purchases/${sale.id}`
+          : isGrnReceipt ? `/api/v1/purchases/grns/${sale.id}` : `/api/v1/sales/${sale.id}`
+      const res = await fetch(endpoint, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) {
         const fetchedSale = await res.json()
-        fullSale = withCashTender({
-          ...fetchedSale,
-          cashCollected: sale.cashCollected ?? fetchedSale.cashCollected,
-          cashChange: sale.cashChange ?? fetchedSale.cashChange,
-        })
+        fullSale = isPurchaseDocument
+          ? { ...sale, ...fetchedSale }
+          : withCashTender({
+            ...fetchedSale,
+            cashCollected: sale.cashCollected ?? fetchedSale.cashCollected,
+            cashChange: sale.cashChange ?? fetchedSale.cashChange,
+          })
       }
     }
   } catch (e) { /* ignore */ }
 
   fullSale = withCashTender(fullSale)
+  if (['Purchase Order', 'Purchase Bill', 'GRN Receipt'].includes(documentType)) {
+    fullSale = {
+      ...fullSale,
+      customerName: fullSale?.vendorName || '',
+      salesperson: fullSale?.createdBy || '',
+      items: (fullSale?.items || []).map((item) => ({
+        ...item,
+        qty: documentType === 'GRN Receipt' ? item.receivedQty ?? item.qty ?? item.orderedQty ?? 0 : item.qty,
+        price: item.cost ?? item.price,
+        taxRate: item.taxRate ?? item.tax_rate ?? 0,
+      })),
+    }
+  }
 
   // fetch organisation as fallback
   let org = null
@@ -127,7 +156,19 @@ export function openSalesOrderPrintWindow(order, branch) {
   return openDocumentPrintWindow(order, branch, 'Sales Order', false)
 }
 
-export async function openQuotePrintWindow(quote, branch) {
+export function openPurchaseOrderPrintWindow(order, branch) {
+  return openDocumentPrintWindow(order, branch, 'Purchase Order', true)
+}
+
+export function openPurchaseBillPrintWindow(bill, branch) {
+  return openDocumentPrintWindow(bill, branch, 'Purchase Bill', true)
+}
+
+export function openGrnPrintWindow(grn, branch) {
+  return openDocumentPrintWindow(grn, branch, 'GRN Receipt', true)
+}
+
+export async function prepareQuotePayload(quote, branch) {
   if (typeof window === 'undefined') return
   const authToken = window.localStorage.getItem('retailos_token')
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
@@ -174,7 +215,14 @@ export async function openQuotePrintWindow(quote, branch) {
   branchMerged.email = branchMerged.email || branchMerged.emailAddress || branchMerged.email_address || ''
   branchMerged.phone = branchMerged.phone || branchMerged.tel || branchMerged.phoneNo || branchMerged.phone_no || ''
 
-  const payload = { quote: quoteToSend, branch: branchMerged, printedAt: new Date().toISOString() }
+  return { quote: quoteToSend, branch: branchMerged, printedAt: new Date().toISOString() }
+}
+
+export async function openQuotePrintWindow(quote, branch) {
+  if (typeof window === 'undefined') return
+  const payload = await prepareQuotePayload(quote, branch)
+  if (!payload) return
+  const fullQuote = payload.quote
   const quoteId = fullQuote?.id ?? quote?.id
   const printUrl = quoteId ? `/quote-cosmo.html?quote_id=${encodeURIComponent(String(quoteId))}` : '/quote-cosmo.html'
 

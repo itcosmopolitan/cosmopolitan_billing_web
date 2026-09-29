@@ -509,6 +509,8 @@
     const shipmentMethod = quote.shipmentMethod || quote.shipment_method || ''
     const pricesIncludingVat = quote.pricesIncludingVat || quote.prices_including_vat || false
     const paymentDiscountOnVat = Number(quote.paymentDiscountOnVat ?? quote.payment_discount_on_vat ?? 0)
+    const documentDiscount = Number(quote.discount ?? quote.discount_amount ?? 0)
+    const grossAmount = (quote.items || []).reduce((sum, line) => sum + quoteLineAmount(line), 0)
     const customerRemarks = quote.notes || quote.remark || quote.remarks || ''
 
     return `
@@ -614,6 +616,8 @@
 
         ${pageIndex === totalPages - 1 ? `
         <table class="totals">
+          <tr><td colspan="8"></td><td class="tlabel">Gross Amount (Inc. GST)</td><td class="tval">${formatNumber(grossAmount)}</td></tr>
+          ${documentDiscount > 0 ? `<tr><td colspan="8"></td><td class="tlabel">Document Discount</td><td class="tval">-${formatNumber(documentDiscount)}</td></tr>` : ''}
           <tr><td colspan="8"></td><td class="tlabel">Total MVR Excl. GST</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
           <tr><td colspan="8"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
           <tr><td colspan="8"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>
@@ -693,7 +697,16 @@
     }))
 
     document.getElementById('quotePages').innerHTML = allPages.map((page) => renderPage(page.pageIndex, page.totalPages, page.pageItems, quote, branch, totals, page.copyLabel)).join('')
-    setTimeout(() => { window.print() }, 500)
+    setTimeout(() => {
+      if (new URLSearchParams(window.location.search).get('preview') === '1') {
+        window.parent.postMessage({
+          type: 'quoteRendered',
+          height: document.documentElement.scrollHeight,
+        }, window.location.origin)
+      } else {
+        window.print()
+      }
+    }, 500)
   }
 
   function setStatusMessage(message) {

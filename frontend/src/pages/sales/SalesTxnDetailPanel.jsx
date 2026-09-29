@@ -237,6 +237,16 @@ export default function SalesTxnDetailPanel({
 
       {kind === 'quote' && (
         <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              onExport?.(detail, branchLookup?.(detail) || null, kind)
+              onClose?.()
+            }}
+          >
+            Export Quote
+          </button>
           {!['converted', 'accepted', 'rejected'].includes(detail?.status) && can('invoices.edit') && (
             <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/sales/quotations/${detail.id}/edit`) }}>
               Edit

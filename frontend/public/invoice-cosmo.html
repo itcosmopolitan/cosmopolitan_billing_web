@@ -14,7 +14,6 @@
     background: #e8e8e8;
   }
   .page {
-    width: 595px;
     background: #fff;
     margin: 20px auto;
     padding: 30px 40px 20px 40px;
@@ -500,10 +499,16 @@
     const branchTel = phoneParts?.[1] || branchPhone
     const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
     const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const isPurchaseOrder = invoice.documentType === 'Purchase Order'
+    const isPurchaseBill = invoice.documentType === 'Purchase Bill'
+    const isGrnReceipt = invoice.documentType === 'GRN Receipt'
+    const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
+    const documentNumberLabel = isPurchaseOrder ? 'Purchase Order No.' : isPurchaseBill ? 'Bill No.' : isGrnReceipt ? 'GRN No.' : invoice.documentType === 'Sales Order' ? 'Sales Order No.' : 'Invoice No.'
+    const purchaseOrderNumber = invoice.purchaseOrderNumber || invoice.purchase_order_number || invoice.poNumber || invoice.po_number || ''
     const paymentTerms = invoice.customerCreditTerms || invoice.customer_credit_terms || invoice.paymentTerms || invoice.payment_terms || ''
     const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
     const paymentMode = String(invoice.paymentMode || invoice.payment_mode || invoice.method || '').toLowerCase()
-    const paymentDetails = paymentMode === 'cash'
+    const paymentDetails = isPurchaseDocument ? '' : paymentMode === 'cash'
       ? `<strong>Cash Collected:</strong> ${formatNumber(invoice.cashCollected || 0)}<br/><strong>Cash Refunded:</strong> ${formatNumber(invoice.cashChange || invoice.cash_change || 0)}`
       : ['card', 'upi', 'bank_transfer'].includes(paymentMode) && (invoice.paymentRef || invoice.payment_ref)
         ? `<strong>Payment Ref:</strong> ${escapeHtml(invoice.paymentRef || invoice.payment_ref)}`
@@ -544,13 +549,13 @@
 
         <div class="parties">
           <div class="bill-to details-box">
-            <div class="details-title">Customer Details</div>
+            <div class="details-title">${isPurchaseDocument ? 'Vendor Details' : 'Customer Details'}</div>
             <h2 style="margin:0 0 6px 0;">${escapeHtml(invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '')}</h2>
-            <div class="addr-line">${escapeHtml(invoice.phoneNo || invoice.phone_no || invoice.customerPhone || invoice.customer_phone || '')}</div>
+            ${isPurchaseDocument ? '' : `<div class="addr-line">${escapeHtml(invoice.phoneNo || invoice.phone_no || invoice.customerPhone || invoice.customer_phone || '')}</div>`}
             <table style="margin-top:4px; width:100%;">
-              <tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || '')}</td></tr>
-              <tr><td class="label">${invoice.documentType === 'Sales Order' ? 'Sales Order No.' : 'Invoice No.'}</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
-              <tr><td class="label">Address</td><td>${(() => {
+              ${isPurchaseDocument ? '' : `<tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || '')}</td></tr>`}
+              <tr><td class="label">${documentNumberLabel}</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
+              ${isPurchaseDocument ? '' : `<tr><td class="label">Address</td><td>${(() => {
                 const addressParts = [
                   invoice.customerStreet1 || invoice.customer_street1,
                   invoice.customerStreet2 || invoice.customer_street2,
@@ -563,18 +568,20 @@
                 const rawAddress = invoice.customerAddress || invoice.customer_address || invoice.address || invoice.shippingAddress || invoice.address_lines || invoice.addressLines || ''
                 const address = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
                 return escapeHtml(String(address || '')).replace(/\n/g, '<br/>')
-              })()}</td></tr>
-              <tr><td class="label">Remarks</td><td>${escapeHtml(invoice.notes || invoice.remark || invoice.remarks || '')}</td></tr>
+              })()}</td></tr>`}
+              <tr><td class="label">${isPurchaseDocument ? 'Notes' : 'Remarks'}</td><td>${escapeHtml(invoice.notes || invoice.remark || invoice.remarks || '')}</td></tr>
             </table>
           </div>
           <div class="seller-addr details-box">
             <table style="width:100%;">
-              <tr><td class="label">${invoice.documentType === 'Sales Order' ? 'Order Date' : 'Invoice Date'}</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
-              ${invoice.documentType === 'Sales Order' && (invoice.expectedDate || invoice.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(invoice.expectedDate || invoice.expected_date)}</td></tr>` : ''}
-              <tr><td class="label">Quotation No.</td><td>${escapeHtml(invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || '')}</td></tr>
-              <tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>
-              <tr><td class="label">Sales Person</td><td>${escapeHtml(invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || '')}</td></tr>
-              <tr><td class="label">Cashier</td><td>${escapeHtml(invoice.cashier || invoice.cashierName || invoice.cashier_name || '')}</td></tr>
+              <tr><td class="label">${isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : invoice.documentType === 'Sales Order' ? 'Order Date' : 'Invoice Date'}</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
+              ${(invoice.documentType === 'Sales Order' || isPurchaseOrder) && (invoice.expectedDate || invoice.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(invoice.expectedDate || invoice.expected_date)}</td></tr>` : ''}
+              ${isPurchaseBill && invoice.dueDate ? `<tr><td class="label">Due Date</td><td>${formatDate(invoice.dueDate)}</td></tr>` : ''}
+              ${(isPurchaseBill || isGrnReceipt) && purchaseOrderNumber ? `<tr><td class="label">Purchase Order</td><td>${escapeHtml(purchaseOrderNumber)}</td></tr>` : ''}
+              ${isPurchaseDocument ? '' : `<tr><td class="label">Quotation No.</td><td>${escapeHtml(invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || '')}</td></tr>`}
+              ${isPurchaseDocument ? '' : `<tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>`}
+              ${isPurchaseOrder ? `<tr><td class="label">Created By</td><td>${escapeHtml(invoice.createdBy || invoice.created_by || '')}</td></tr>` : isPurchaseDocument ? '' : `<tr><td class="label">Sales Person</td><td>${escapeHtml(invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || '')}</td></tr>`}
+              ${isPurchaseDocument ? '' : `<tr><td class="label">Cashier</td><td>${escapeHtml(invoice.cashier || invoice.cashierName || invoice.cashier_name || '')}</td></tr>`}
             </table>
           </div>
         </div>
@@ -617,22 +624,22 @@
             </tr>
             <tr class="grand-row">
               <td colspan="5"></td>
-              <td class="tlabel grand">${invoice.documentType === 'Sales Order' ? 'Total Order Value (Inc. GST)' : 'Total Payable (Inc. GST)'}</td>
+              <td class="tlabel grand">${isPurchaseOrder ? 'Purchase Order Total (Inc. GST)' : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)' : isGrnReceipt ? 'Goods Receipt Total (Inc. GST)' : invoice.documentType === 'Sales Order' ? 'Total Order Value (Inc. GST)' : 'Total Payable (Inc. GST)'}</td>
               <td class="tval grand">${formatNumber(totals.total)}</td>
             </tr>
           </table>
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
-          <div class="payment-section">
+          ${isPurchaseDocument ? '' : `<div class="payment-section">
             <div class="bank-details">
               Bank Details : BMLMVR | Account Number : 7730000519444 | Account Name : COSMOPOLITAN CHAMPA BROTHERS MALDIVES | VIBER : 7384977
             </div>
-          </div>
+          </div>`}
           <div class="terms">
-            Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day
+            ${isPurchaseOrder ? 'Please quote this purchase order number on all invoices and correspondence.' : isPurchaseBill ? 'Please retain this purchase bill for your records.' : isGrnReceipt ? 'Please verify the quantities and condition of the goods received.' : 'Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day'}
           </div>
-          <div class="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
+          <div class="thankyou">${isPurchaseDocument ? 'Thank you for your partnership' : 'Thank you for choosing Cosmopolitan as your preferred partner'}</div>
           <div class="signoff">
-            <div>Recieved By</div>
+            <div>${isGrnReceipt ? 'Received By' : isPurchaseDocument ? 'Authorized By' : 'Recieved By'}</div>
           </div>
         ` : ''}
       </div>
@@ -714,7 +721,16 @@
       return sum + Number(item.lineTotal || item.total || qty * rate)
     }, 0)
     const headerDiscount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
-    const discountAmount = Math.max(0, roundNumber(grossAmount - lineNetAmount) + headerDiscount)
+    const purchaseOrderDiscount = headerDiscount + items.reduce((sum, item) => {
+      const qty = Number(item.qty || item.quantity || 0)
+      const rate = Number(item.price || item.rate || 0)
+      const lineDiscount = Number(item.discount || item.discPercent || item.disc_percent || item.discount_pct || 0)
+      return sum + (qty * rate * lineDiscount) / 100
+    }, 0)
+    const isPurchaseDocument = ['Purchase Order', 'Purchase Bill', 'GRN Receipt'].includes(sale.documentType)
+    const discountAmount = isPurchaseDocument
+      ? roundNumber(purchaseOrderDiscount)
+      : Math.max(0, roundNumber(grossAmount - lineNetAmount) + headerDiscount)
     const discountPercent = grossAmount && discountAmount ? Math.round((discountAmount / grossAmount) * 100) : 0
     const allPages = pages.map((pageItems, pageIndex) => ({
       pageItems,
