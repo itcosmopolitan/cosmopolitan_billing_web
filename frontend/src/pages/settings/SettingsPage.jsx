@@ -698,7 +698,7 @@ export default function SettingsPage() {
                   disabled={!can('settings.edit')}
                 />
                 <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                  How many decimal places to show for prices, totals, and payments. Default is 2.
+                  Decimal places for prices, totals, and payments — display and entry. Default is 2.
                 </div>
               </FormGroup>
               <FormGroup label="Quantity decimal precision">
@@ -710,7 +710,7 @@ export default function SettingsPage() {
                   disabled={!can('settings.edit')}
                 />
                 <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                  How many decimal places to show for quantities and stock. Default is 2.
+                  Decimal places for quantities and stock — display and entry. Default is 2.
                 </div>
               </FormGroup>
             </FormRow>

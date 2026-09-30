@@ -158,8 +158,8 @@ const EVENT_DEFINITIONS = {
   item_rejected:               { label: 'Rejected', bg: 'var(--red-bg)', text: 'var(--red)', icon: '✖' },
   item_branch_config_updated:  { label: 'Branch config updated', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
   item_branch_removed:         { label: 'Branch removed', bg: 'var(--red-bg)', text: 'var(--red)', icon: '✖' },
-  item_branch_cost_averaged:   { label: 'Branch cost averaged', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '💱' },
-  branch_cost_averaged:        { label: 'Branch cost averaged', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '💱' },
+  item_branch_cost_averaged:   { label: 'Branch cost (WAC)', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '💱' },
+  branch_cost_averaged:        { label: 'Branch cost (WAC)', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '💱' },
 
   // Payment recorded (neutral/blue)
   payment_recorded:  { label: 'Payment recorded', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '💳' },

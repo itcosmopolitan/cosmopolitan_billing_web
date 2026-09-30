@@ -1617,6 +1617,11 @@ h4 { font-size: 14px; font-weight: 600; }
   margin-bottom: 0 !important;
 }
 
+/* Keep Qty / Cost / Discount inputs on one baseline when Cost shows a WAC hint. */
+.bill-form-table tbody > tr > td {
+  vertical-align: top;
+}
+
 @media (max-width: 980px) {
   .order-form-grid {
     grid-template-columns: 1fr;
@@ -2071,7 +2076,10 @@ select.form-input:disabled { cursor: not-allowed; }
  * only thing visible past the truncated digits. Operators don't use
  * the spinner (faster to type the qty directly), and modern POS UIs
  * universally hide it. Both vendor-prefixed (WebKit / Blink) and
- * Firefox rules required. */
+ * Firefox rules required.
+ * Mouse-wheel nudges and excess typed decimals on number inputs are blocked
+ * in installNumberInputGuards() (main.jsx) using each field's step, which
+ * comes from org amount/qty decimal settings. */
 .form-input[type="number"]::-webkit-outer-spin-button,
 .form-input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;

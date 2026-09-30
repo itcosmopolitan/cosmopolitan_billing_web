@@ -1,9 +1,9 @@
 """GRN stock receipt + reversal helpers (Phase 3).
 
 Stock-in always lands on a GoodsReceiptNote — bills are financial only.
-On receive, each catalog item's branch cost_price is updated to the simple
-average of the prior effective branch cost and this receipt's unit cost so
-POS margin uses a blended cost rather than only the latest purchase rate.
+On receive, each catalog item's branch cost_price is updated with the moving
+weighted-average cost (on-hand value + receipt value) / total qty so POS
+margin uses WAC inventory valuation.
 """
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.batch_dates import validate_batch_dates
-from src.item_branch import averaged_unit_cost, effective_cost_price
-from src.models import AuditLog, Item, ItemBatch, ItemBranchConfig, User
+from src.item_branch import effective_cost_price, weighted_average_unit_cost
+from src.models import AuditLog, Item, ItemBatch, ItemBranchConfig, ItemStock, User
 from src.qty import as_qty
 from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked, set_batch_quantity_atomic
 from src.services.audit_service import add_audit_log
@@ -68,7 +68,26 @@ def format_branch_cost_change_detail(changes: list[dict[str, Any]]) -> str:
     preview = "; ".join(parts[:5])
     if len(parts) > 5:
         preview = f"{preview}; +{len(parts) - 5} more"
-    return f"Branch cost averaged from purchase receipt: {preview}"
+    return f"Branch cost updated (weighted average): {preview}"
+
+
+async def _load_branch_stock_qtys(
+    db: AsyncSession,
+    *,
+    branch_id: str,
+    item_ids: list[str],
+) -> dict[str, float]:
+    if not item_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(ItemStock.item_id, ItemStock.quantity).where(
+                ItemStock.branch_id == branch_id,
+                ItemStock.item_id.in_(item_ids),
+            )
+        )
+    ).all()
+    return {row[0]: as_qty(row[1] or 0) for row in rows}
 
 
 async def _apply_averaged_branch_costs(
@@ -76,11 +95,13 @@ async def _apply_averaged_branch_costs(
     *,
     branch_id: str,
     lines: list[ReceiptLine],
+    on_hand_by_item: Optional[dict[str, float]] = None,
 ) -> list[dict[str, Any]]:
-    """Upsert branch cost_price = avg(existing effective cost, receipt unit cost).
+    """Upsert branch cost_price using moving weighted-average cost (WAC).
 
-    Multiple lines for the same item use a qty-weighted purchase unit cost for
-    this receipt, then average once with the prior branch cost.
+    ``on_hand_by_item`` must be stock quantities *before* this receipt is
+    applied. Multiple lines for the same item are combined (qty-weighted
+    purchase unit) then blended once with on-hand stock.
 
     Returns a list of change dicts for activity / audit logging.
     """
@@ -118,17 +139,27 @@ async def _apply_averaged_branch_costs(
             )
         ).scalars().all()
     }
+    stock_map = on_hand_by_item if on_hand_by_item is not None else await _load_branch_stock_qtys(
+        db, branch_id=branch_id, item_ids=item_ids,
+    )
 
     changes: list[dict[str, Any]] = []
     for item_id, agg in aggregates.items():
         item = items.get(item_id)
         if item is None:
             continue
-        purchase_unit = agg["value"] / agg["qty"] if agg["qty"] else 0.0
+        purchase_qty = agg["qty"]
+        purchase_unit = agg["value"] / purchase_qty if purchase_qty else 0.0
         cfg = configs.get(item_id)
-        existing = effective_cost_price(item.cost_price, cfg.cost_price if cfg else None)
-        new_cost = averaged_unit_cost(existing, purchase_unit)
-        if abs(float(existing) - float(new_cost)) < 1e-9:
+        existing_cost = effective_cost_price(item.cost_price, cfg.cost_price if cfg else None)
+        on_hand_qty = as_qty(stock_map.get(item_id, 0))
+        new_cost = weighted_average_unit_cost(
+            on_hand_qty,
+            existing_cost,
+            purchase_qty,
+            purchase_unit,
+        )
+        if abs(float(existing_cost) - float(new_cost)) < 1e-9:
             continue
         if cfg is None:
             cfg = ItemBranchConfig(
@@ -146,9 +177,12 @@ async def _apply_averaged_branch_costs(
             "item_id": item_id,
             "item_name": names.get(item_id) or item.name,
             "sku": item.sku,
-            "old_cost": round(float(existing), 6),
+            "old_cost": round(float(existing_cost), 6),
             "new_cost": round(float(new_cost), 6),
             "purchase_unit": round(float(purchase_unit), 6),
+            "purchase_qty": round(float(purchase_qty), 6),
+            "on_hand_qty": round(float(on_hand_qty), 6),
+            "method": "weighted_average",
             "branch_id": branch_id,
         })
     return changes
@@ -163,13 +197,17 @@ def _log_branch_cost_item_activities(
     source_id: str,
     source_number: str,
     branch_id: str,
+    grn_id: Optional[str] = None,
+    grn_number: Optional[str] = None,
 ) -> None:
     """Write per-item activity rows for branch cost averages."""
+    source_label = "purchase bill" if source_type == "purchase_bill" else "purchase"
     for change in changes:
         detail = (
-            f"Branch cost updated from purchase ({source_number}): "
+            f"Branch cost updated (weighted average) from {source_label} ({source_number}): "
             f"{change['old_cost']} → {change['new_cost']} "
-            f"(avg with purchase unit {change['purchase_unit']})"
+            f"(on hand {change.get('on_hand_qty', 0)} @ {change['old_cost']}, "
+            f"received {change.get('purchase_qty', 0)} @ {change['purchase_unit']})"
         )
         db.add(AuditLog(
             id=str(uuid.uuid4()),
@@ -181,6 +219,8 @@ def _log_branch_cost_item_activities(
                 "source_type": source_type,
                 "source_id": source_id,
                 "source_number": source_number,
+                "grn_id": grn_id,
+                "grn_number": grn_number,
                 "field": "cost_price",
                 "changes": [{
                     "field": "cost_price",
@@ -213,12 +253,25 @@ async def receive_lines_to_stock(
     user: Optional[User] = None,
     source_number: Optional[str] = None,
     branch_name: Optional[str] = None,
+    activity_source_type: str = "grn",
+    activity_source_id: Optional[str] = None,
+    activity_source_number: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Add stock for each catalog line on a received GRN.
 
-    Also averages branch cost_price and writes item + global audit entries.
-    Returns the list of branch-cost changes applied.
+    Also updates branch cost_price with moving weighted-average cost and
+    writes item + global audit entries. Returns the list of branch-cost
+    changes applied.
+
+    ``activity_source_*`` controls what item activity cites (e.g. the purchase
+    bill number when stock was received by posting a bill). Defaults to GRN.
     """
+    # Capture on-hand qty *before* stock is incremented — WAC needs prior stock.
+    pre_stock_ids = [line.item_id for line in lines if line.item_id and as_qty(line.qty) > 0]
+    on_hand_by_item = await _load_branch_stock_qtys(
+        db, branch_id=branch_id, item_ids=list(dict.fromkeys(pre_stock_ids)),
+    )
+
     for line in lines:
         if not line.item_id or line.qty <= 0:
             continue
@@ -257,29 +310,40 @@ async def receive_lines_to_stock(
                 source_ref=grn_id,
             )
 
-    cost_changes = await _apply_averaged_branch_costs(db, branch_id=branch_id, lines=lines)
+    cost_changes = await _apply_averaged_branch_costs(
+        db,
+        branch_id=branch_id,
+        lines=lines,
+        on_hand_by_item=on_hand_by_item,
+    )
     if cost_changes:
         grn_number = source_number or grn_id
+        display_number = activity_source_number or grn_number
         _log_branch_cost_item_activities(
             db,
             user=user,
             changes=cost_changes,
-            source_type="grn",
-            source_id=grn_id,
-            source_number=grn_number,
+            source_type=activity_source_type,
+            source_id=activity_source_id or grn_id,
+            source_number=display_number,
             branch_id=branch_id,
+            grn_id=grn_id,
+            grn_number=grn_number,
         )
         add_audit_log(
             db,
             action="Branch Cost Averaged",
             module="Purchases",
-            reference_id=grn_number,
+            reference_id=display_number,
             detail=format_branch_cost_change_detail(cost_changes),
             user=user,
             branch_id=branch_id,
             metadata={
                 "grn_id": grn_id,
                 "grn_number": grn_number,
+                "source_type": activity_source_type,
+                "source_id": activity_source_id or grn_id,
+                "source_number": display_number,
                 "branch_id": branch_id,
                 "branch_name": branch_name,
                 "changes": cost_changes,

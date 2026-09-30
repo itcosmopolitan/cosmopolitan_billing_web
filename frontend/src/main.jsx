@@ -4,7 +4,10 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster, ToastBar, toast } from 'react-hot-toast'
 import App from './App'
+import { installNumberInputGuards } from '@/utils/decimalPrecision'
 import './styles/globals.css'
+
+installNumberInputGuards()
 
 const queryClient = new QueryClient({
   defaultOptions: {

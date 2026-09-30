@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import MarginBadge from '@/components/MarginBadge'
-import { qtyInputStep, roundQty } from '@/utils/decimalPrecision'
+import { qtyInputStep, amountInputStep, roundQty, roundAmount } from '@/utils/decimalPrecision'
 import {
   allocatableBatches,
   computeAutoAllocation,
@@ -250,9 +250,9 @@ export default function CartRow({
             className="form-input"
             type="number"
             min={0}
-            step="0.01"
+            step={amountInputStep()}
             value={item.price}
-            onChange={(e) => onPriceChange?.(Number(e.target.value))}
+            onChange={(e) => onPriceChange?.(roundAmount(Number(e.target.value) || 0))}
             style={{ width: 86, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
             aria-label={`Rate for ${item.name}`}
           />
@@ -267,9 +267,13 @@ export default function CartRow({
             type="number"
             min={0}
             max={discType === 'pct' ? 100 : undefined}
-            step={discType === 'pct' ? 0.5 : 1}
+            step={discType === 'pct' ? 0.5 : amountInputStep()}
             value={discValue || ''}
-            onChange={(e) => onDiscChange(Number(e.target.value) || 0)}
+            onChange={(e) => onDiscChange(
+              discType === 'pct'
+                ? (Number(e.target.value) || 0)
+                : roundAmount(Number(e.target.value) || 0),
+            )}
             disabled={disableDiscount}
             style={{ width: 86, padding: '4px 7px', fontSize: 12 }}
           />

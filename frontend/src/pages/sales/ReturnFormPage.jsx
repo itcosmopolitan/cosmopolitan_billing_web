@@ -570,6 +570,7 @@ export default function ReturnFormPage() {
                                                 type="number"
                                                 min={0}
                                                 max={b.consumed}
+                                                step={qtyInputStep()}
                                                 value={(batchAllocByLine[il.id]?.[b.batch_id]) ?? 0}
                                                 onChange={(e) => setBatchQtyFor(il, b, e.target.value)}
                                                 style={{ width: 90, textAlign: 'right', padding: '4px 6px' }}

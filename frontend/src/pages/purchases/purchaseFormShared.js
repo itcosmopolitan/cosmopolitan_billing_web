@@ -14,13 +14,21 @@ export function lineDiscountToPercent(line) {
   return Math.min(100, raw)
 }
 
-/** Branch cost after save: avg(current branch cost, this bill's unit cost).
- *  If there is no prior branch cost, adopt the purchase unit cost. */
-export function projectedBranchCost(currentBranchCost, purchaseCost) {
-  const existing = Number(currentBranchCost) || 0
-  const purchase = Number(purchaseCost) || 0
-  if (existing <= 0) return roundAmount(purchase)
-  return roundAmount((existing + purchase) / 2)
+/** Branch cost after save using moving weighted-average cost (WAC):
+ *  (onHandQty × currentCost + purchaseQty × purchaseCost) / (onHandQty + purchaseQty).
+ *  If there is no on-hand stock, adopt the purchase unit cost. */
+export function projectedBranchCost(
+  currentBranchCost,
+  purchaseCost,
+  { onHandQty = 0, purchaseQty = 0 } = {},
+) {
+  const onHand = Math.max(0, Number(onHandQty) || 0)
+  const recv = Math.max(0, Number(purchaseQty) || 0)
+  const onHandCost = Number(currentBranchCost) || 0
+  const recvCost = Number(purchaseCost) || 0
+  if (recv <= 0) return roundAmount(onHandCost)
+  if (onHand <= 0) return roundAmount(recvCost)
+  return roundAmount((onHand * onHandCost + recv * recvCost) / (onHand + recv))
 }
 
 export function mapPurchaseLines(items) {
@@ -31,6 +39,7 @@ export function mapPurchaseLines(items) {
     qty: it.qty ?? it.receivedQty ?? 0,
     cost: it.cost,
     branchCost: it.branchCost ?? it.branch_cost ?? null,
+    branchStock: it.branchStock ?? it.branch_stock ?? it.available_stock ?? null,
     sellingPrice: it.sellingPrice ?? it.selling_price ?? 0,
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
@@ -48,6 +57,7 @@ export const emptyPurchaseLine = () => ({
   qty: 1,
   cost: 0,
   branchCost: null,
+  branchStock: null,
   sellingPrice: 0,
   taxRate: 0,
   lineDiscount: 0,

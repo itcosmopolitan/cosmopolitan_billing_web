@@ -31,17 +31,37 @@ def effective_cost_price(
     return float(default_cost or 0)
 
 
-def averaged_unit_cost(existing_cost: float, purchase_unit_cost: float) -> float:
-    """Blend current branch cost with a new purchase unit cost.
+def weighted_average_unit_cost(
+    existing_qty: float,
+    existing_cost: float,
+    purchase_qty: float,
+    purchase_unit_cost: float,
+) -> float:
+    """Moving weighted-average cost (WAC) inventory valuation.
 
-    If there is no prior cost, adopt the purchase unit cost. Otherwise use the
-    simple mean so POS margin reflects a blended cost (e.g. 30 + 25 → 27.5).
+    ``new_cost = (on_hand_qty × on_hand_cost + recv_qty × recv_cost)
+                 / (on_hand_qty + recv_qty)``
+
+    Example: 100 on hand @ 30 + buy 50 @ 25 → (3000 + 1250) / 150 = 28.333333.
+    If there is no on-hand stock, adopt the purchase unit cost.
     """
-    existing = float(existing_cost or 0)
-    purchase = float(purchase_unit_cost or 0)
-    if existing <= 0:
-        return round(purchase, 6)
-    return round((existing + purchase) / 2, 6)
+    on_hand = max(0.0, float(existing_qty or 0))
+    recv = max(0.0, float(purchase_qty or 0))
+    on_hand_cost = float(existing_cost or 0)
+    recv_cost = float(purchase_unit_cost or 0)
+
+    if recv <= 0:
+        return round(on_hand_cost, 6)
+    if on_hand <= 0:
+        return round(recv_cost, 6)
+    total_qty = on_hand + recv
+    return round((on_hand * on_hand_cost + recv * recv_cost) / total_qty, 6)
+
+
+# Back-compat alias — prefer weighted_average_unit_cost.
+def averaged_unit_cost(existing_cost: float, purchase_unit_cost: float) -> float:
+    """Deprecated simple mean; kept for callers that lack qty context."""
+    return weighted_average_unit_cost(1.0, existing_cost, 1.0, purchase_unit_cost)
 
 
 def _normalize_category_pricing_mode(mode) -> str:

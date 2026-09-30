@@ -6,6 +6,7 @@ import { useAppStore } from '@/store'
 import { Modal, FormGroup, FormRow, AutocompleteDropdown } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_CLASSIFICATION_OPTIONS } from '@/utils/dropdownOptions'
 import { decomposeAddress } from '@/utils/address'
+import { amountInputStep } from '@/utils/decimalPrecision'
 
 const emptyForm = (branchId) => ({
   name: '',
@@ -301,7 +302,14 @@ export default function CustomerFormModal({
         </FormGroup>
         {form.customer_type !== 'retail' && (
           <FormGroup label="Account limit (MVR)">
-            <input className="form-input" type="number" value={form.credit_limit} onChange={(e) => pf('credit_limit', e.target.value)} />
+            <input
+              className="form-input"
+              type="number"
+              min="0"
+              step={amountInputStep()}
+              value={form.credit_limit}
+              onChange={(e) => pf('credit_limit', e.target.value)}
+            />
           </FormGroup>
         )}
       </FormRow>

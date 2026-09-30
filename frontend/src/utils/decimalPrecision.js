@@ -71,10 +71,58 @@ export function qtyInputStep() {
   return inputStep(getQtyDecimals())
 }
 
+/** Fraction digits implied by an input `step` (e.g. "0.01" → 2, "1" → 0). */
+export function fractionDigitsFromStep(step) {
+  if (step == null || step === '' || step === 'any') return null
+  const s = String(step).trim()
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n <= 0) return null
+  if (!s.includes('.')) return 0
+  return s.split('.')[1].length
+}
+
+/**
+ * Keep typed decimal text within `maxFractionDigits` while allowing
+ * intermediate states ("", ".", "12.").
+ */
+export function sanitizeDecimalText(raw, maxFractionDigits) {
+  if (raw == null) return ''
+  const maxFrac = clampPrecision(maxFractionDigits, 0)
+  let s = String(raw)
+  if (s === '' || s === '-' || s === '.' || s === '-.') return s
+
+  const neg = s.startsWith('-')
+  let body = (neg ? s.slice(1) : s).replace(/[^\d.]/g, '')
+  const firstDot = body.indexOf('.')
+  if (firstDot !== -1) {
+    body = body.slice(0, firstDot + 1) + body.slice(firstDot + 1).replace(/\./g, '')
+  }
+
+  const [intPart, frac] = body.split('.')
+  if (frac == null) return (neg ? '-' : '') + intPart
+  if (maxFrac <= 0) return (neg ? '-' : '') + intPart
+  return (neg ? '-' : '') + intPart + '.' + frac.slice(0, maxFrac)
+}
+
+export function sanitizeAmountText(raw) {
+  return sanitizeDecimalText(raw, getAmountDecimals())
+}
+
+export function sanitizeQtyText(raw) {
+  return sanitizeDecimalText(raw, getQtyDecimals())
+}
+
 export function formatAmountInput(n) {
   const value = Number(n)
   if (!Number.isFinite(value)) return ''
   return roundAmount(value).toFixed(getAmountDecimals())
+}
+
+export function formatQtyInput(n) {
+  const value = Number(n)
+  if (!Number.isFinite(value)) return ''
+  return roundQty(value).toFixed(getQtyDecimals())
 }
 
 export function formatQtyNumber(n, decimals) {
@@ -97,4 +145,52 @@ export function formatAmountNumber(n, decimals) {
     minimumFractionDigits: d,
     maximumFractionDigits: d,
   })
+}
+
+/**
+ * App-wide: block wheel-changing focused number inputs, and clamp typed
+ * fraction digits to the field's `step` (which should come from
+ * amountInputStep / qtyInputStep tied to org settings).
+ */
+export function installNumberInputGuards() {
+  if (typeof document === 'undefined') return
+  if (document.documentElement.dataset.numberInputGuards === '1') return
+  document.documentElement.dataset.numberInputGuards = '1'
+
+  document.addEventListener(
+    'wheel',
+    (e) => {
+      const el = e.target
+      if (!(el instanceof HTMLInputElement)) return
+      if (el.type !== 'number') return
+      if (document.activeElement !== el) return
+      e.preventDefault()
+    },
+    { passive: false },
+  )
+
+  document.addEventListener(
+    'input',
+    (e) => {
+      const el = e.target
+      if (!(el instanceof HTMLInputElement)) return
+      if (el.type !== 'number') return
+      if (el.readOnly || el.disabled) return
+      const maxFrac = fractionDigitsFromStep(el.getAttribute('step'))
+      if (maxFrac == null) return
+      const next = sanitizeDecimalText(el.value, maxFrac)
+      if (next === el.value) return
+      const start = el.selectionStart
+      el.value = next
+      if (typeof start === 'number') {
+        try {
+          const pos = Math.min(start, next.length)
+          el.setSelectionRange(pos, pos)
+        } catch {
+          /* not all input types support selection */
+        }
+      }
+    },
+    true,
+  )
 }

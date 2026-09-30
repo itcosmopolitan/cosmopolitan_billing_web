@@ -258,6 +258,9 @@ export default function QuoteFormModal({
                   <td>
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
                       <input className="form-input" type="number" disabled={readOnly || disableLineDiscount}
+                        min="0"
+                        max={type === '%' ? 100 : undefined}
+                        step={type === 'MVR' ? amountInputStep() : '0.01'}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={e => { const n = [...quoteForm.items]; n[i].lineDiscount = e.target.value; pqf('items', n) }} />

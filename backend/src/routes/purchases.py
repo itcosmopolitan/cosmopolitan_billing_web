@@ -913,6 +913,7 @@ async def create_bill(
     else:
         if direct:
             # Phase 3: stock on GRN, bill is financial only (auto-GRN for direct bill).
+            # Cite the bill number on item WAC activity — that is what the user posted.
             grn, cost_changes = await _create_grn_received(
                 db,
                 vendor_id=data.vendor_id,
@@ -925,9 +926,10 @@ async def create_bill(
                 notes=data.notes,
                 purchase_order_id=po.id if po else None,
                 po_number=po.number if po else None,
-                number=data.number,
                 tax_mode=tax_mode,
                 user=user,
+                activity_source_type="purchase_bill",
+                activity_source_number=bill_num,
             )
             bill = await _create_bill_for_grn(
                 db,
@@ -937,6 +939,7 @@ async def create_bill(
                 payment_ref=data.payment_ref or "",
                 notes=data.notes,
                 paid_amount=paid_amount,
+                number=bill_num,
             )
             bill.created_by = user.name if user else "Staff"
             _log_branch_cost_document_activity(
@@ -1318,6 +1321,9 @@ async def approve_bill(
             created_by=user.name,
             tax_mode=tax_mode,
             user=user,
+            activity_source_type="purchase_bill",
+            activity_source_id=bill.id,
+            activity_source_number=bill.number,
         )
         bill.grn_id = grn.id
         _log_branch_cost_document_activity(
@@ -3385,6 +3391,9 @@ async def _create_grn_received(
     number: Optional[str] = None,
     tax_mode: str = "inclusive",
     user: Optional[User] = None,
+    activity_source_type: str = "grn",
+    activity_source_id: Optional[str] = None,
+    activity_source_number: Optional[str] = None,
 ) -> tuple[GoodsReceiptNote, list]:
     """Create a received GRN and move stock. `line_rows` is
     [(line, line_net, line_tax), ...] where line has item_id, name, qty,
@@ -3392,6 +3401,10 @@ async def _create_grn_received(
 
     Returns ``(grn, cost_changes)`` where cost_changes lists branch cost
     averages applied during stock receive.
+
+    When stock is received because a purchase bill was posted, pass
+    ``activity_source_type="purchase_bill"`` and the bill number so item
+    activity cites the bill the user created (not the auto-GRN).
     """
     subtotal, tax_total, total = _header_totals_after_discount(line_rows, discount)
 
@@ -3462,6 +3475,9 @@ async def _create_grn_received(
             user=user,
             source_number=grn.number,
             branch_name=branch_name or branch_id,
+            activity_source_type=activity_source_type,
+            activity_source_id=activity_source_id,
+            activity_source_number=activity_source_number,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -3486,12 +3502,13 @@ async def _create_bill_for_grn(
     payment_ref: str = "",
     notes: Optional[str] = None,
     paid_amount: float = 0.0,
+    number: Optional[str] = None,
 ) -> PurchaseBill:
     """Financial bill from an already-received GRN — no stock side-effect."""
     bill_status = "paid" if paid_amount >= grn.total else "pending"
     bill = PurchaseBill(
         id=str(uuid.uuid4()),
-        number=await _next_bill_number(db),
+        number=number or await _next_bill_number(db),
         vendor_id=grn.vendor_id,
         vendor_name=grn.vendor_name,
         branch_id=grn.branch_id,
@@ -4039,6 +4056,12 @@ async def convert_order_to_bill(
         line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
+    bill_num = await resolve_number(
+        db,
+        requested=None,
+        model=PurchaseBill,
+        allocate=lambda: allocate_number(db, "purchase_bill", branch_id=po.branch_id),
+    )
     grn, cost_changes = await _create_grn_received(
         db,
         vendor_id=po.vendor_id,
@@ -4054,6 +4077,8 @@ async def convert_order_to_bill(
         created_by=user.name if user else "Staff",
         tax_mode=tax_mode,
         user=user,
+        activity_source_type="purchase_bill",
+        activity_source_number=bill_num,
     )
     bill = await _create_bill_for_grn(
         db,
@@ -4063,6 +4088,7 @@ async def convert_order_to_bill(
         payment_ref=data.payment_ref or "",
         notes=data.notes or po.notes,
         paid_amount=round(paid, 2),
+        number=bill_num,
     )
     _log_branch_cost_document_activity(
         db,
