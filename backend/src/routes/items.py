@@ -1106,6 +1106,34 @@ async def _validate_category_id(category_id: Optional[str], db: AsyncSession) ->
     result = await db.execute(select(Category).where(Category.id == category_id))
     if result.scalar_one_or_none() is None:
         raise HTTPException(400, detail=f"Invalid category_id: {category_id}")
+
+
+def _is_sku_unique_violation(error: IntegrityError) -> bool:
+    message = str(error).lower()
+    return "sku" in message and any(
+        marker in message
+        for marker in ("unique", "duplicate key", "duplicate entry")
+    )
+
+
+async def _validate_unique_sku(
+    sku: Optional[str], db: AsyncSession, *, exclude_item_id: Optional[str] = None
+) -> None:
+    normalized_sku = (sku or "").strip().lower()
+    if not normalized_sku:
+        return
+
+    query = select(Item.id).where(func.lower(func.trim(Item.sku)) == normalized_sku)
+    if exclude_item_id:
+        query = query.where(Item.id != exclude_item_id)
+    if (await db.execute(query.limit(1))).scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail=f"SKU already exists: {sku.strip()}")
+
+
+def _raise_sku_conflict(error: IntegrityError) -> None:
+    if _is_sku_unique_violation(error):
+        raise HTTPException(status_code=409, detail="SKU already exists") from error
+    raise error
     
 @router.post("/", dependencies=[Depends(require_perm("item_master.create"))])
 async def create_item(
@@ -1115,6 +1143,8 @@ async def create_item(
     user: User = Depends(current_user),
 ):
     await _validate_category_id(data.category_id, db)
+    sku = (data.sku or "").strip() or f"SKU-{uuid.uuid4().hex[:6].upper()}"
+    await _validate_unique_sku(sku, db)
     packaging = data.packaging.strip() if data.packaging else None
     is_packaging = bool(packaging) or data.is_packaging
     direct = await can_direct_commit(user, db, "item_master.approve")
@@ -1123,7 +1153,7 @@ async def create_item(
     item = Item(
         id=str(uuid.uuid4()),
         name=data.name,
-        sku=data.sku or f"SKU-{uuid.uuid4().hex[:6].upper()}",
+        sku=sku,
         barcode=data.barcode,
         country_of_origin=data.country_of_origin,
         category_id=data.category_id or None,
@@ -1152,7 +1182,11 @@ async def create_item(
         rejection_reason=None,
     )
     db.add(item)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as error:
+        await db.rollback()
+        _raise_sku_conflict(error)
 
     configs = data.branch_configs
 
@@ -1247,7 +1281,11 @@ async def create_item(
         from src.notifications.store import emit_item_pending, notify_refresh
 
         await emit_item_pending(db, item)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        _raise_sku_conflict(error)
     status = item.approval_status.value if hasattr(item.approval_status, "value") else "approved"
     await _write_post_commit_audit(
         db,
@@ -1927,6 +1965,8 @@ async def update_item(
         raise HTTPException(404, "Item not found")
 
     await _validate_category_id(data.category_id, db)
+    if data.sku and data.sku.strip():
+        await _validate_unique_sku(data.sku, db, exclude_item_id=item_id)
     packaging = data.packaging.strip() if data.packaging else None
     is_packaging = bool(packaging) or data.is_packaging
 
@@ -1945,7 +1985,7 @@ async def update_item(
         "expiry_tracking": item.expiry_tracking,
     }
     item.name = data.name
-    item.sku = data.sku or item.sku
+    item.sku = data.sku.strip() if data.sku and data.sku.strip() else item.sku
     item.barcode = data.barcode
     item.country_of_origin = data.country_of_origin
     item.category_id = data.category_id or None
@@ -2002,7 +2042,11 @@ async def update_item(
         metadata={"item_id": item.id, "sku": item.sku, "name": item.name},
     )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as error:
+        await db.rollback()
+        _raise_sku_conflict(error)
     await db.refresh(item)
     out: dict = {"id": item.id, "message": "Item updated"}
     if toggle_meta:
