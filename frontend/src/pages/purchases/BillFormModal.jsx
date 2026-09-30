@@ -16,7 +16,9 @@
  *
  * Backend stock side-effect: tracked items create a new ItemBatch
  * (auto-numbered if batch # blank); untracked items just bump aggregate.
- * That all happens server-side in create_bill.
+ * Branch cost_price is also updated to avg(current branch cost, this line's
+ * unit cost) so POS margin uses a blended cost. That all happens server-side
+ * in create_bill / GRN receive.
  */
 import { Fragment } from 'react'
 import { todayISO } from '@/utils/batchDates'
@@ -27,7 +29,7 @@ import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
-import { emptyPurchaseLine } from './purchaseFormShared'
+import { emptyPurchaseLine, projectedBranchCost } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -35,6 +37,16 @@ import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
 const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
+
+function lineBranchCostPreview(it) {
+  if (!it.item_id || it.branchCost == null) return null
+  const current = Number(it.branchCost) || 0
+  const purchase = Number(it.cost) || 0
+  const next = projectedBranchCost(current, purchase)
+  if (Math.abs(current - purchase) < 0.000001 && Math.abs(current - next) < 0.000001) return null
+  if (Math.abs(current - next) < 0.000001) return null
+  return { current, purchase, next }
+}
 
 export default function BillFormModal({
   open,
@@ -64,12 +76,14 @@ export default function BillFormModal({
     : (isGrn ? 'New Goods Receipt (GRN)' : 'New Purchase Bill')
 
   const handlePick = (i, inv) => {
+    const branchCost = Number(inv.cost_price ?? inv.costPrice ?? 0) || 0
     const next = [...billForm.items]
     next[i] = {
       ...next[i],
       item_id: inv.id,
       name: inv.name,
       cost: inv.cost_price ?? inv.selling_price ?? 0,
+      branchCost,
       sellingPrice: inv.selling_price ?? inv.sellingPrice ?? 0,
       taxRate: inv.tax_rate || 0,
       // Cache batch flags for the conditional row render below.
@@ -86,6 +100,7 @@ export default function BillFormModal({
       item_id: null,
       name: '',
       sellingPrice: 0,
+      branchCost: null,
       batchTracking: false,
       expiryTracking: false,
     }
@@ -129,6 +144,13 @@ export default function BillFormModal({
     lineGross: costLineGross,
     enforceExclusive: true,
   })
+  const costChangeLines = billForm.items
+    .map((it) => {
+      const preview = lineBranchCostPreview(it)
+      if (!preview) return null
+      return { name: it.name || 'Item', ...preview }
+    })
+    .filter(Boolean)
 
   const formBody = (
     <div className="bill-form-shell">
@@ -251,13 +273,29 @@ export default function BillFormModal({
             <div style={{ height: 10 }} />
           </>
         )}
+        {costChangeLines.length > 0 && (
+          <>
+            <AlertBar type="amber" icon="💱">
+              On save, branch cost will average with this bill&apos;s unit cost
+              (for POS margin):{' '}
+              {costChangeLines.map((row, idx) => (
+                <span key={`${row.name}-${idx}`}>
+                  {idx > 0 ? '; ' : ''}
+                  <strong>{row.name}</strong> {fmt(row.current)} → {fmt(row.next)}
+                </span>
+              ))}
+              .
+            </AlertBar>
+            <div style={{ height: 10 }} />
+          </>
+        )}
         <div className="bill-form-table-wrap">
         <table className="data-table bill-form-table" style={{ marginBottom: 12 }}>
           <thead>
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
+              <th style={{ width: 120, textAlign: 'right' }}>Cost</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total</th>
@@ -273,6 +311,7 @@ export default function BillFormModal({
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               const lineTotal = lineNetAmount(it, costLineGross)
               const margin = purchaseLineMargin(it, { entityDiscountShare: discShares[i] || 0 })
+              const costPreview = lineBranchCostPreview(it)
               return (
                 <Fragment key={i}>
                   <tr>
@@ -300,6 +339,20 @@ export default function BillFormModal({
                         style={numInputStyle}
                         value={it.cost}
                         onChange={(e) => { const n = [...billForm.items]; n[i].cost = e.target.value; pbf('items', n) }} />
+                      {costPreview && (
+                        <div
+                          style={{
+                            marginTop: 4,
+                            fontSize: 10.5,
+                            lineHeight: 1.35,
+                            color: 'var(--amber)',
+                            textAlign: 'right',
+                          }}
+                          title={`Branch cost averages with this purchase: (${fmt(costPreview.current)} + ${fmt(costPreview.purchase)}) / 2`}
+                        >
+                          Branch {fmt(costPreview.current)} → {fmt(costPreview.next)}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>

@@ -115,7 +115,7 @@ function getBadgeClass(event) {
   if (['confirmed', 'verified', 'approved', 'transit', 'sent', 'accepted', 'payment_recorded', 'refund_issued', 'quotation_sent'].includes(key)) {
     return 'activity-badge--positive'
   }
-  if (['item_changed', 'amount_changed', 'qty_changed', 'due_date_changed', 'status_changed', 'qty_received_recorded', 'stock_returned', 'expired', 'quotation_expired'].includes(key)) {
+  if (['item_changed', 'amount_changed', 'qty_changed', 'due_date_changed', 'status_changed', 'qty_received_recorded', 'stock_returned', 'expired', 'quotation_expired', 'item_updated', 'item_branch_config_updated', 'item_branch_cost_averaged', 'branch_cost_averaged'].includes(key)) {
     return 'activity-badge--warning'
   }
   return 'activity-badge--neutral'
@@ -150,6 +150,16 @@ const EVENT_DEFINITIONS = {
   qty_changed:       { label: 'Quantity changed', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
   due_date_changed:  { label: 'Due date changed', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
   status_changed:    { label: 'Status changed', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
+
+  // Item master
+  item_created:                { label: 'Created', bg: 'var(--green-bg)', text: 'var(--green)', icon: '＋' },
+  item_updated:                { label: 'Updated', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
+  item_approved:               { label: 'Approved', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
+  item_rejected:               { label: 'Rejected', bg: 'var(--red-bg)', text: 'var(--red)', icon: '✖' },
+  item_branch_config_updated:  { label: 'Branch config updated', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
+  item_branch_removed:         { label: 'Branch removed', bg: 'var(--red-bg)', text: 'var(--red)', icon: '✖' },
+  item_branch_cost_averaged:   { label: 'Branch cost averaged', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '💱' },
+  branch_cost_averaged:        { label: 'Branch cost averaged', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '💱' },
 
   // Payment recorded (neutral/blue)
   payment_recorded:  { label: 'Payment recorded', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '💳' },

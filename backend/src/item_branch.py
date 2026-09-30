@@ -31,6 +31,19 @@ def effective_cost_price(
     return float(default_cost or 0)
 
 
+def averaged_unit_cost(existing_cost: float, purchase_unit_cost: float) -> float:
+    """Blend current branch cost with a new purchase unit cost.
+
+    If there is no prior cost, adopt the purchase unit cost. Otherwise use the
+    simple mean so POS margin reflects a blended cost (e.g. 30 + 25 → 27.5).
+    """
+    existing = float(existing_cost or 0)
+    purchase = float(purchase_unit_cost or 0)
+    if existing <= 0:
+        return round(purchase, 6)
+    return round((existing + purchase) / 2, 6)
+
+
 def _normalize_category_pricing_mode(mode) -> str:
     raw = str(mode or "").strip().lower()
     return "price" if raw in {"price", "amount", "fixed", "fixed_price", "fixed price"} else "pct"

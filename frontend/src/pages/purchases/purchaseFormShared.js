@@ -1,5 +1,7 @@
 /** Shared helpers for purchase document form pages. */
 
+import { roundAmount } from '@/utils/decimalPrecision'
+
 export function lineDiscountToPercent(line) {
   const qty = Number(line.qty || 0)
   const cost = Number(line.cost || 0)
@@ -12,6 +14,15 @@ export function lineDiscountToPercent(line) {
   return Math.min(100, raw)
 }
 
+/** Branch cost after save: avg(current branch cost, this bill's unit cost).
+ *  If there is no prior branch cost, adopt the purchase unit cost. */
+export function projectedBranchCost(currentBranchCost, purchaseCost) {
+  const existing = Number(currentBranchCost) || 0
+  const purchase = Number(purchaseCost) || 0
+  if (existing <= 0) return roundAmount(purchase)
+  return roundAmount((existing + purchase) / 2)
+}
+
 export function mapPurchaseLines(items) {
   return (items || []).map((it) => ({
     ...emptyPurchaseLine(),
@@ -19,6 +30,7 @@ export function mapPurchaseLines(items) {
     name: it.name || '',
     qty: it.qty ?? it.receivedQty ?? 0,
     cost: it.cost,
+    branchCost: it.branchCost ?? it.branch_cost ?? null,
     sellingPrice: it.sellingPrice ?? it.selling_price ?? 0,
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
@@ -35,6 +47,7 @@ export const emptyPurchaseLine = () => ({
   name: '',
   qty: 1,
   cost: 0,
+  branchCost: null,
   sellingPrice: 0,
   taxRate: 0,
   lineDiscount: 0,

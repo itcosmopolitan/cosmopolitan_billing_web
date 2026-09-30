@@ -36,6 +36,7 @@ from src.models import (
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._grn_stock import (
     ReceiptLine,
+    format_branch_cost_change_detail,
     grn_batches_consumed,
     receive_lines_to_stock,
     reverse_grn_stock,
@@ -458,6 +459,52 @@ def _log_grn_history(
     ))
 
 
+def _log_branch_cost_document_activity(
+    db: AsyncSession,
+    *,
+    user: Optional[User],
+    cost_changes: list,
+    grn_id: Optional[str] = None,
+    grn_number: Optional[str] = None,
+    bill_id: Optional[str] = None,
+    bill_number: Optional[str] = None,
+) -> None:
+    """Attach branch-cost average events to GRN / purchase bill activity feeds."""
+    if not cost_changes:
+        return
+    detail = format_branch_cost_change_detail(cost_changes)
+    meta = {
+        "changes": cost_changes,
+        "change_count": len(cost_changes),
+        "grn_id": grn_id,
+        "grn_number": grn_number,
+        "bill_id": bill_id,
+        "bill_number": bill_number,
+    }
+    if grn_id and grn_number:
+        _log_grn_history(
+            db,
+            user=user,
+            grn_id=grn_id,
+            grn_number=grn_number,
+            event_type="branch_cost_averaged",
+            action="average_branch_cost",
+            detail=detail,
+            metadata=meta,
+        )
+    if bill_id and bill_number:
+        _log_purchase_bill_history(
+            db,
+            user=user,
+            bill_id=bill_id,
+            bill_number=bill_number,
+            event_type="branch_cost_averaged",
+            action="average_branch_cost",
+            detail=detail,
+            metadata=meta,
+        )
+
+
 def _log_vendor_return_history(
     db: AsyncSession,
     *,
@@ -866,7 +913,7 @@ async def create_bill(
     else:
         if direct:
             # Phase 3: stock on GRN, bill is financial only (auto-GRN for direct bill).
-            grn = await _create_grn_received(
+            grn, cost_changes = await _create_grn_received(
                 db,
                 vendor_id=data.vendor_id,
                 vendor_name=data.vendor_name,
@@ -880,6 +927,7 @@ async def create_bill(
                 po_number=po.number if po else None,
                 number=data.number,
                 tax_mode=tax_mode,
+                user=user,
             )
             bill = await _create_bill_for_grn(
                 db,
@@ -891,6 +939,13 @@ async def create_bill(
                 paid_amount=paid_amount,
             )
             bill.created_by = user.name if user else "Staff"
+            _log_branch_cost_document_activity(
+                db,
+                user=user,
+                cost_changes=cost_changes,
+                bill_id=bill.id,
+                bill_number=bill.number,
+            )
         else:
             # Draft bill: no auto-GRN yet; stock deferred to approval.
             draft_num = await _next_bill_number(db)
@@ -1250,7 +1305,7 @@ async def approve_bill(
             line_net = round(float(li.qty or 0) * float(li.cost or 0) * (1 - (li.discount or 0) / 100), 2)
             line_tax = line_tax_amount(line_net, li.tax_rate or 0, tax_mode)
             line_rows.append((li, line_net, line_tax))
-        grn = await _create_grn_received(
+        grn, cost_changes = await _create_grn_received(
             db,
             vendor_id=bill.vendor_id,
             vendor_name=bill.vendor_name or "",
@@ -1262,8 +1317,16 @@ async def approve_bill(
             notes=bill.notes,
             created_by=user.name,
             tax_mode=tax_mode,
+            user=user,
         )
         bill.grn_id = grn.id
+        _log_branch_cost_document_activity(
+            db,
+            user=user,
+            cost_changes=cost_changes,
+            bill_id=bill.id,
+            bill_number=bill.number,
+        )
         # Mark linked PO as converted if applicable
         if grn.purchase_order_id:
             po = (await db.execute(
@@ -3321,10 +3384,15 @@ async def _create_grn_received(
     po_number: Optional[str] = None,
     number: Optional[str] = None,
     tax_mode: str = "inclusive",
-) -> GoodsReceiptNote:
+    user: Optional[User] = None,
+) -> tuple[GoodsReceiptNote, list]:
     """Create a received GRN and move stock. `line_rows` is
     [(line, line_net, line_tax), ...] where line has item_id, name, qty,
-    cost, tax_rate, discount, batch_number, mfg_date, expiry_date."""
+    cost, tax_rate, discount, batch_number, mfg_date, expiry_date.
+
+    Returns ``(grn, cost_changes)`` where cost_changes lists branch cost
+    averages applied during stock receive.
+    """
     subtotal, tax_total, total = _header_totals_after_discount(line_rows, discount)
 
     async def _alloc_grn() -> str:
@@ -3384,19 +3452,29 @@ async def _create_grn_received(
             expiry_date=getattr(line, "expiry_date", None),
         ))
     try:
-        await receive_lines_to_stock(
+        cost_changes = await receive_lines_to_stock(
             db,
             grn_id=grn.id,
             branch_id=branch_id,
             vendor_id=vendor_id,
             received_date=date,
             lines=receipt_lines,
+            user=user,
+            source_number=grn.number,
+            branch_name=branch_name or branch_id,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _log_branch_cost_document_activity(
+        db,
+        user=user,
+        cost_changes=cost_changes,
+        grn_id=grn.id,
+        grn_number=grn.number,
+    )
     await db.flush()
     await db.refresh(grn, attribute_names=["line_items"])
-    return grn
+    return grn, cost_changes
 
 
 async def _create_bill_for_grn(
@@ -3961,7 +4039,7 @@ async def convert_order_to_bill(
         line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
-    grn = await _create_grn_received(
+    grn, cost_changes = await _create_grn_received(
         db,
         vendor_id=po.vendor_id,
         vendor_name=po.vendor_name or "",
@@ -3975,6 +4053,7 @@ async def convert_order_to_bill(
         po_number=po.number,
         created_by=user.name if user else "Staff",
         tax_mode=tax_mode,
+        user=user,
     )
     bill = await _create_bill_for_grn(
         db,
@@ -3984,6 +4063,13 @@ async def convert_order_to_bill(
         payment_ref=data.payment_ref or "",
         notes=data.notes or po.notes,
         paid_amount=round(paid, 2),
+    )
+    _log_branch_cost_document_activity(
+        db,
+        user=user,
+        cost_changes=cost_changes,
+        bill_id=bill.id,
+        bill_number=bill.number,
     )
 
     if data.payment_received and paid > 0:
@@ -4258,7 +4344,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
     line_rows, _, _ = _calc_po_lines(data.items, tax_mode)
 
     if direct:
-        grn = await _create_grn_received(
+        grn, _cost_changes = await _create_grn_received(
             db,
             vendor_id=data.vendor_id,
             vendor_name=data.vendor_name,
@@ -4273,6 +4359,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
             po_number=po.number if po else None,
             number=data.number,
             tax_mode=tax_mode,
+            user=user,
         )
     else:
         # Draft GRN: no stock movement until approved.
@@ -4414,9 +4501,12 @@ async def approve_grn(
             expiry_date=li.expiry_date,
         ))
     try:
-        await receive_lines_to_stock(
+        cost_changes = await receive_lines_to_stock(
             db, grn_id=grn.id, branch_id=grn.branch_id,
             vendor_id=grn.vendor_id, received_date=grn.date, lines=receipt_lines,
+            user=user,
+            source_number=grn.number,
+            branch_name=grn.branch_name,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -4439,6 +4529,13 @@ async def approve_grn(
         event_type="approved", action="approve_grn",
         detail=f"GRN {grn.number} approved by {user.name} — stock received",
         metadata={"approved_by": user.name},
+    )
+    _log_branch_cost_document_activity(
+        db,
+        user=user,
+        cost_changes=cost_changes,
+        grn_id=grn.id,
+        grn_number=grn.number,
     )
     from src.notifications.store import notify_refresh, resolve_notification
     await resolve_notification(db, f"approval.grn_pending:{grn.id}")
@@ -4553,7 +4650,7 @@ async def receive_from_po(
         tax_mode=tax_mode,
     )
     if direct:
-        grn = await _create_grn_received(db, **create_kwargs)
+        grn, _cost_changes = await _create_grn_received(db, user=user, **create_kwargs)
         po.status = PurchaseOrderStatus.partially_received
     else:
         # Draft: no stock / PO lock until GRN is submitted and approved.
