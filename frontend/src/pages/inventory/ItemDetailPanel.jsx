@@ -45,8 +45,6 @@ export default function ItemDetailPanel({
   onClose,
   mode = 'branch',
   onApprove,
-  onReject,
-  onDelete,
   actionBusy = false,
 }) {
   const can = useCan()
@@ -110,12 +108,18 @@ export default function ItemDetailPanel({
     },
   ]
 
-  const headerActions = (
+  const isPending = ['pending', 'pending_approval'].includes(detail?.status || detail?.approval_status)
+  const headerActions = isMaster ? (
     <>
-      {isMaster && can('item_master.edit') && (
+      {isPending && can('item_master.approve') && (
+        <button type="button" className="btn btn-primary btn-sm" disabled={actionBusy} onClick={() => onApprove?.(detail)}>
+          Approve item
+        </button>
+      )}
+      {can('item_master.edit') && (
         <button
           type="button"
-          className="btn btn-primary btn-sm"
+          className="btn btn-secondary btn-sm"
           disabled={actionBusy}
           onClick={() => {
             onClose?.()
@@ -125,35 +129,11 @@ export default function ItemDetailPanel({
           Edit item
         </button>
       )}
-      {!isMaster && detail?.batch_tracking && can('items.view') && (
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => setTab('batches')}
-        >
-          View batches
-        </button>
-      )}
     </>
-  )
-
-  const pending = (detail?.status || detail?.approval_status) === 'pending'
-    || (detail?.status || detail?.approval_status) === 'pending_approval'
-
-  const footer = pending && isMaster ? (
-    <>
-      {can('item_master.delete') && (
-        <button type="button" className="btn btn-secondary" style={{ color: 'var(--red)', marginRight: 'auto' }} disabled={actionBusy} onClick={() => onDelete?.(detail)}>
-          Delete
-        </button>
-      )}
-      {can('item_master.approve') && (
-        <>
-          <button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={() => onReject?.(detail)}>Reject</button>
-          <button type="button" className="btn btn-primary" disabled={actionBusy} onClick={() => onApprove?.(detail)}>Approve</button>
-        </>
-      )}
-    </>
+  ) : detail?.batch_tracking && can('items.view') ? (
+    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTab('batches')}>
+      View batches
+    </button>
   ) : null
 
   return (
@@ -169,7 +149,6 @@ export default function ItemDetailPanel({
       activeTab={tab}
       onTabChange={setTab}
       headerActions={headerActions}
-      footer={footer}
       busy={actionBusy}
     >
       {loadingExtra && (

@@ -17,7 +17,6 @@ export default function RecordDetailDrawer({
   tabs = null,
   activeTab = null,
   onTabChange = null,
-  footer = null,
   children,
   busy = false,
 }) {
@@ -35,11 +34,12 @@ export default function RecordDetailDrawer({
 
   return createPortal(
     <>
-      <div className="drawer-overlay" onClick={() => !busy && onClose?.()} />
-      <div className={`drawer ${sizeClass}`} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : 'Details'}>
+      <div className="drawer-overlay drawer-overlay--record" onClick={() => !busy && onClose?.()} />
+      <div className={`drawer drawer--record ${sizeClass}`} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : 'Details'}>
         <div className="drawer-header">
-          {icon ? <span style={{ fontSize: 22, lineHeight: 1, marginTop: 2 }}>{icon}</span> : null}
+          {icon ? <span className="drawer-header__icon" aria-hidden="true">{icon}</span> : null}
           <div className="drawer-header__main">
+            <div className="drawer-header__eyebrow">Record overview</div>
             <h3 className="drawer-header__title">{title}</h3>
             {subtitle ? <div className="drawer-header__subtitle">{subtitle}</div> : null}
           </div>
@@ -47,10 +47,9 @@ export default function RecordDetailDrawer({
             {headerActions}
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-sm drawer-close"
               onClick={onClose}
               disabled={busy}
-              style={{ padding: '4px 8px' }}
               aria-label="Close"
             >
               ✕
@@ -72,7 +71,7 @@ export default function RecordDetailDrawer({
         ) : null}
 
         {Array.isArray(tabs) && tabs.length > 0 ? (
-          <div className="drawer-tabs" role="tablist">
+          <div className="drawer-tabs" role="tablist" aria-label="Record detail sections">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
@@ -88,8 +87,7 @@ export default function RecordDetailDrawer({
           </div>
         ) : null}
 
-        <div className="drawer-body">{children}</div>
-        {footer ? <div className="drawer-footer">{footer}</div> : null}
+        <div className="drawer-body drawer-body--record">{children}</div>
       </div>
     </>,
     document.body,
@@ -98,18 +96,17 @@ export default function RecordDetailDrawer({
 
 export function DetailSection({ title, children }) {
   return (
-    <div className="drawer-section">
-      {title ? <div className="drawer-section__title">{title}</div> : null}
+    <section className="drawer-section">
+      {title ? <h4 className="drawer-section__title">{title}</h4> : null}
       {children}
-    </div>
+    </section>
   )
 }
-
 export function DetailFields({ fields = [], columns = 2 }) {
   return (
     <div className={`drawer-fields${columns === 1 ? ' drawer-fields--single' : ''}`}>
       {fields.map((f) => (
-        <div key={f.label}>
+        <div key={f.label} className="drawer-field">
           <div className="drawer-field__label">{f.label}</div>
           <div className="drawer-field__value">{f.value ?? '—'}</div>
         </div>

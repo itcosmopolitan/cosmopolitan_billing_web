@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as Icon from '@/components/ui/Icons'
 
@@ -29,21 +29,25 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
   const menuBusy = busy || !!pendingLabel
 
   const visible = (actions || []).filter((a) => !a.hidden)
-  if (visible.length === 0) return null
-
-  const updatePosition = () => {
-    const el = triggerRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    const menuW = 168
-    let left = rect.right - menuW
-    left = Math.max(VIEWPORT_PAD, Math.min(left, window.innerWidth - menuW - VIEWPORT_PAD))
-    const top = Math.min(rect.bottom + 4, window.innerHeight - 8)
-    setPos({ top, left })
-  }
 
   useEffect(() => {
     if (!open) return
+    const updatePosition = () => {
+      const el = triggerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const menuW = 200
+      const menuH = Math.min(visible.length * 38 + 8, window.innerHeight - VIEWPORT_PAD * 2)
+      let left = rect.right - menuW
+      left = Math.max(VIEWPORT_PAD, Math.min(left, window.innerWidth - menuW - VIEWPORT_PAD))
+      const availableAbove = rect.top - VIEWPORT_PAD
+      const availableBelow = window.innerHeight - rect.bottom - VIEWPORT_PAD
+      const openBelow = availableBelow >= menuH || availableBelow >= availableAbove
+      const top = openBelow
+        ? Math.min(rect.bottom + 4, window.innerHeight - menuH - VIEWPORT_PAD)
+        : Math.max(VIEWPORT_PAD, rect.top - menuH - 4)
+      setPos({ top, left })
+    }
     updatePosition()
     const onDoc = (e) => {
       if (
@@ -65,11 +69,13 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
       document.removeEventListener('keydown', onKey)
       window.removeEventListener('scroll', onScroll, true)
     }
-  }, [open, menuBusy])
+  }, [open, menuBusy, visible.length])
 
   useEffect(() => {
     if (menuBusy) setOpen(false)
   }, [menuBusy])
+
+  if (visible.length === 0) return null
 
   const runAction = async (action) => {
     if (action.disabled || menuBusy) return
@@ -88,61 +94,36 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
     <div
       ref={menuRef}
       role="menu"
+      className="row-actions-menu"
       style={{
         position: 'fixed',
         top: pos.top,
         left: pos.left,
-        minWidth: 168,
-        background: 'var(--bg-surface)',
-        border: '1px solid var(--border-default)',
-        borderRadius: 8,
-        boxShadow: 'var(--shadow-md)',
-        zIndex: 1100,
-        overflow: 'hidden',
-        padding: '4px 0',
+        maxHeight: `calc(100vh - ${VIEWPORT_PAD * 2}px)`,
       }}
     >
-      {visible.map((action) => {
+      {visible.map((action, index) => {
         const isPending = pendingLabel === action.label
         const itemDisabled = action.disabled || menuBusy
         const label = isPending
           ? (action.loadingLabel || `${action.label}…`)
           : action.label
         return (
-          <button
-            key={action.label}
-            type="button"
-            role="menuitem"
-            disabled={itemDisabled}
-            onClick={() => runAction(action)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              width: '100%',
-              padding: '8px 14px',
-              border: 'none',
-              background: 'transparent',
-              textAlign: 'left',
-              fontSize: 12.5,
-              fontWeight: 500,
-              cursor: itemDisabled ? 'not-allowed' : 'pointer',
-              color: action.danger ? 'var(--red)' : 'var(--text-secondary)',
-              opacity: itemDisabled ? 0.5 : 1,
-            }}
-            onMouseEnter={(e) => {
-              if (itemDisabled) return
-              e.currentTarget.style.background = action.danger ? 'var(--red-bg)' : 'var(--bg-hover)'
-              if (!action.danger) e.currentTarget.style.color = 'var(--text-primary)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-              e.currentTarget.style.color = action.danger ? 'var(--red)' : 'var(--text-secondary)'
-            }}
-          >
-            {isPending && <MiniSpinner size={14} />}
-            {label}
-          </button>
+          <Fragment key={action.label}>
+            {action.danger && index > 0 && !visible[index - 1].danger && (
+              <div className="row-actions-menu__separator" role="separator" />
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className={`row-actions-menu__item${action.danger ? ' is-danger' : ''}`}
+              disabled={itemDisabled}
+              onClick={() => runAction(action)}
+            >
+              {isPending && <MiniSpinner size={14} />}
+              {label}
+            </button>
+          </Fragment>
         )
       })}
     </div>,
@@ -154,7 +135,7 @@ export default function RowActionsMenu({ actions, ariaLabel = 'Row actions', bus
       <button
         ref={triggerRef}
         type="button"
-        className="btn btn-secondary btn-sm page-actions-menu__trigger"
+        className="btn btn-ghost btn-sm page-actions-menu__trigger row-actions-menu__trigger"
         aria-label={ariaLabel}
         aria-haspopup="menu"
         aria-expanded={open}

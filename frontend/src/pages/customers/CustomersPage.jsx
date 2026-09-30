@@ -558,10 +558,6 @@ export default function CustomersPage() {
                             hidden: !can('customers.edit'),
                             onClick: () => openEditCustomerModal(c),
                           },
-                          {
-                            label: 'Store credit ledger',
-                            onClick: () => openCreditLedger(c),
-                          },
                         ]}
                       />
                     </td>

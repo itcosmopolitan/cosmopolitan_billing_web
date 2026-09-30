@@ -220,10 +220,6 @@ export default function ItemsPage({ mode = 'branch' }) {
     }
   }, [items, nearExpiry, isMaster])
 
-  const openEdit = (item) => {
-    navigate(`/item-master/${item.id}/edit`)
-  }
-
   const [itemActionBusy, setItemActionBusy] = useState(null)
   const [showDetail, setShowDetail] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -763,18 +759,6 @@ export default function ItemsPage({ mode = 'branch' }) {
                                   onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
                                 },
                                 {
-                                  label: 'Edit item',
-                                  hidden: !can('item_master.edit'),
-                                  disabled: itemActionBusy === p.id,
-                                  onClick: () => navigate(`/item-master/${p.id}/edit`),
-                                },
-                                {
-                                  label: itemActionBusy === p.id && actionKind === 'approve' ? 'Approving…' : 'Approve',
-                                  hidden: !can('item_master.approve'),
-                                  disabled: itemActionBusy === p.id,
-                                  onClick: () => { setActionKind('approve'); approveItem(p) },
-                                },
-                                {
                                   label: itemActionBusy === p.id && actionKind === 'reject' ? 'Rejecting…' : 'Reject',
                                   danger: true,
                                   hidden: !can('item_master.approve'),
@@ -804,11 +788,6 @@ export default function ItemsPage({ mode = 'branch' }) {
                                 hidden: !canActivity,
                                 disabled: itemActionBusy === p.id,
                                 onClick: () => setActivityTarget({ recordType: 'item', recordId: p.id, title: `Item ${p.name || p.id}` }),
-                              },
-                              {
-                                label: 'Edit item',
-                                hidden: tab === 'pending' || !can('item_master.edit'),
-                                onClick: () => openEdit(p),
                               },
                               {
                                 label: p.active ? 'Deactivate item' : 'Reactivate item',
