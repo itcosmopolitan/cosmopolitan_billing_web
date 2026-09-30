@@ -124,7 +124,6 @@ export default function OrderFormPage({ mode = 'create' }) {
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
-        created_by: 'Staff',
         expected_date: form.expectedDate || null,
         items: form.items.map((i) => ({
           item_id: i.item_id || null,

@@ -5195,7 +5195,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         customer_name=data.customer_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
-        created_by=data.created_by or (user.name if user else None),
+        created_by=user.name,
         date=data.date or today,
         expected_date=data.expected_date,
         subtotal=round(subtotal, 2),
@@ -5307,7 +5307,6 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
     so.customer_name = data.customer_name
     so.branch_id = data.branch_id
     so.branch_name = data.branch_name or data.branch_id
-    so.created_by = data.created_by
     so.date = data.date or so.date
     so.expected_date = data.expected_date
     so.subtotal = round(subtotal, 2)
@@ -5445,7 +5444,17 @@ async def submit_sales_order(
     if so_status != SalesOrderStatus.draft.value:
         raise HTTPException(400, f"Only draft sales orders can be submitted (status={so_status})")
     if so.created_by and so.created_by != user.name and not await can_direct_commit(user, db, "invoices.approve"):
-        raise HTTPException(403, "Only the creator can submit this draft for approval")
+        creator_event = await db.execute(
+            select(AuditLog.id).where(
+                AuditLog.record_type == "sales_order",
+                AuditLog.record_id == so.id,
+                AuditLog.event_type == "created",
+                AuditLog.user_id == user.id,
+            ).limit(1)
+        )
+        if creator_event.scalar_one_or_none() is None:
+            raise HTTPException(403, "Only the creator can submit this draft for approval")
+        so.created_by = user.name
     so.status = SalesOrderStatus.pending_approval
     from src.notifications.store import emit_sales_order_pending, notify_refresh
     await emit_sales_order_pending(db, so)
