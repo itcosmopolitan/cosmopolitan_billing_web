@@ -133,28 +133,24 @@ class BatchAllocationEntry(BaseModel):
     qty: float = Field(..., gt=0)
 
 
-def _coerce_int_like(value, *, field_name: str) -> int:
-    """Accept integer-like floats / strings from POS clients (e.g. 1.0)."""
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a whole number")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        if value.is_integer():
-            return int(value)
-        raise ValueError(f"{field_name} must be a whole number")
+def _coerce_qty_value(value, *, field_name: str = "qty") -> float:
+    """Accept fractional quantities (kg, etc.) rounded to org qty precision."""
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{field_name} must be a number")
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
             raise ValueError(f"{field_name} is required")
         try:
-            numeric = float(stripped)
-        except ValueError as exc:  # pragma: no cover - runtime validation path
-            raise ValueError(f"{field_name} must be a whole number") from exc
-        if numeric.is_integer():
-            return int(numeric)
-        raise ValueError(f"{field_name} must be a whole number")
-    raise ValueError(f"{field_name} must be a whole number")
+            value = float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a number") from exc
+    if isinstance(value, (int, float)):
+        n = float(value)
+        if n != n or n in (float("inf"), float("-inf")):
+            raise ValueError(f"{field_name} must be a number")
+        return as_qty(n)
+    raise ValueError(f"{field_name} must be a number")
 
 
 class LineItemIn(BaseModel):
@@ -181,7 +177,7 @@ class LineItemIn(BaseModel):
     @field_validator("qty", mode="before")
     @classmethod
     def _coerce_qty(cls, value):
-        return _coerce_int_like(value, field_name="qty")
+        return _coerce_qty_value(value, field_name="qty")
 
 """Allowed payment methods on a SALE INVOICE.
 
