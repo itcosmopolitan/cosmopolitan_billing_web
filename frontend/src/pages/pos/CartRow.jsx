@@ -13,6 +13,29 @@ import { batchExpiryStatus } from '@/utils/batchExpiry'
 import { posLineMargin } from '@/utils/marginCalc'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 
+/** Move focus to the same column on the previous/next cart line (↑/↓). */
+function handleCartFieldArrowNav(e, field, cartIndex) {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  e.preventDefault()
+  const delta = e.key === 'ArrowDown' ? 1 : -1
+  let next = cartIndex + delta
+  while (next >= 0) {
+    const el = document.querySelector(
+      `[data-pos-cart-field="${field}"][data-pos-cart-index="${next}"]`,
+    )
+    if (!el) return
+    if (el.disabled) {
+      next += delta
+      continue
+    }
+    el.focus()
+    if (typeof el.select === 'function') {
+      try { el.select() } catch { /* text selection not always available */ }
+    }
+    return
+  }
+}
+
 /**
  * One row of the POS cart table. Extracted from POSPage to keep that file
  * navigable; the page is still the owner of all state and just hands per-row
@@ -27,6 +50,7 @@ import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
  */
 export default function CartRow({
   item,
+  cartIndex = 0,
   branchId,
   onQtyChange,
   onPriceChange,
@@ -135,6 +159,8 @@ export default function CartRow({
               <input
                 className="form-input"
                 type="text"
+                data-pos-cart-field="name"
+                data-pos-cart-index={cartIndex}
                 value={item.name ?? ''}
                 onChange={(e) => onNameChange?.(e.target.value)}
                 onBlur={() => {
@@ -144,6 +170,7 @@ export default function CartRow({
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') e.currentTarget.blur()
+                  else handleCartFieldArrowNav(e, 'name', cartIndex)
                 }}
                 aria-label={`Item name for this bill: ${item.name || ''}`}
                 title="Edit name for this bill only. Item master is unchanged."
@@ -203,11 +230,14 @@ export default function CartRow({
         <input
           className="form-input"
           type="text"
+          data-pos-cart-field="packaging"
+          data-pos-cart-index={cartIndex}
           value={item.packaging ?? ''}
           onChange={(e) => onPackagingChange?.(e.target.value)}
           onBlur={(e) => onPackagingChange?.(e.target.value.trim())}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
+            else handleCartFieldArrowNav(e, 'packaging', cartIndex)
           }}
           aria-label={`Packaging for ${item.name || 'item'}`}
           placeholder="—"
@@ -218,6 +248,8 @@ export default function CartRow({
         <input
           className="form-input"
           type="number"
+          data-pos-cart-field="qty"
+          data-pos-cart-index={cartIndex}
           min={qtyInputStep()}
           step={qtyInputStep()}
           value={qtyEditing ? qtyText : item.qty}
@@ -239,6 +271,7 @@ export default function CartRow({
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
+            else handleCartFieldArrowNav(e, 'qty', cartIndex)
           }}
           aria-label={`Quantity for ${item.name || 'item'}`}
           style={{ width: 56, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
@@ -249,10 +282,13 @@ export default function CartRow({
           <input
             className="form-input"
             type="number"
+            data-pos-cart-field="price"
+            data-pos-cart-index={cartIndex}
             min={0}
             step={amountInputStep()}
             value={item.price}
             onChange={(e) => onPriceChange?.(roundAmount(Number(e.target.value) || 0))}
+            onKeyDown={(e) => handleCartFieldArrowNav(e, 'price', cartIndex)}
             style={{ width: 86, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
             aria-label={`Rate for ${item.name}`}
           />
@@ -265,6 +301,8 @@ export default function CartRow({
           <input
             className="form-input"
             type="number"
+            data-pos-cart-field="discount"
+            data-pos-cart-index={cartIndex}
             min={0}
             max={discType === 'pct' ? 100 : undefined}
             step={discType === 'pct' ? 0.5 : amountInputStep()}
@@ -274,6 +312,7 @@ export default function CartRow({
                 ? (Number(e.target.value) || 0)
                 : roundAmount(Number(e.target.value) || 0),
             )}
+            onKeyDown={(e) => handleCartFieldArrowNav(e, 'discount', cartIndex)}
             disabled={disableDiscount}
             style={{ width: 86, padding: '4px 7px', fontSize: 12 }}
           />

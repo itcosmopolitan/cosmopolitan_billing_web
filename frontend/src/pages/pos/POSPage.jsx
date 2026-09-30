@@ -1410,6 +1410,7 @@ export default function POSPage() {
                     <CartRow
                       key={item.id}
                       item={item}
+                      cartIndex={cartIdx}
                       branchId={activeBranch?.id}
                       entityDiscountShare={lineEntityShares[cartIdx] || 0}
                       onQtyChange={(qty) => {
