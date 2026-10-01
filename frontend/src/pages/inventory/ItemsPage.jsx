@@ -1145,7 +1145,7 @@ export default function ItemsPage({ mode = 'branch' }) {
               Upload an Excel (.xlsx) file with a header row. Required/recognized columns (case-insensitive):
             </div>
             <div style={{ marginTop: 6 }}>
-              <strong>Columns:</strong> Name, SKU, Barcode, Category, Brand, Unit, Cost Price, Selling Price, Tax Rate, Reorder Level, Batch Tracking, Expiry Tracking, Active
+              <strong>Columns:</strong> Name, SKU, Barcode, Category, Brand, Unit, Packing, Cost Price, Selling Price, Wholesale Rate, Staff Rate, Tax Rate, Reorder Level, Batch Tracking, Expiry Tracking, Active
             </div>
             <div style={{ marginTop: 6 }}>
               <strong>Per-branch (optional):</strong> use "Opening Stock - &lt;Branch Name&gt;", "Opening Batch Number - &lt;Branch Name&gt;", "Cost Price - &lt;Branch Name&gt;", and "Selling Price - &lt;Branch Name&gt;" — template includes current branches.

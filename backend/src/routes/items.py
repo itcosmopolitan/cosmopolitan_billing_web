@@ -1439,10 +1439,14 @@ async def process_item_import(
         'category': 'category_id',
         'brand': 'brand',
         'unit': 'unit',
+        'packing': 'packaging',
+        'packaging': 'packaging',
         'cost': 'cost_price',
         'cost price': 'cost_price',
         'selling price': 'selling_price',
         'price': 'selling_price',
+        'wholesale rate': 'wholesale_price',
+        'staff rate': 'staff_price',
         'tax': 'tax_rate',
         'tax rate': 'tax_rate',
         'reorder': 'reorder_level',
@@ -1477,7 +1481,7 @@ async def process_item_import(
                         continue
                     continue
                 val = cell
-                if mapped in {'cost_price', 'selling_price', 'tax_rate'} and val is not None:
+                if mapped in {'cost_price', 'selling_price', 'wholesale_price', 'staff_price', 'tax_rate'} and val is not None:
                     try:
                         val = float(val)
                     except Exception:
@@ -1526,18 +1530,19 @@ async def process_item_import(
                 category_id=category_id,
                 brand=data.get('brand'),
                 unit=data.get('unit') or 'Pcs',
+                packaging=data.get('packaging') or None,
                 cost_price=float(data.get('cost_price') or 0),
                 selling_price=float(data.get('selling_price') or 0),
-                wholesale_pricing_mode="pct",
+                wholesale_pricing_mode="price" if data.get('wholesale_price') is not None else "pct",
                 wholesale_discount_pct=0,
-                wholesale_price=0,
-                staff_pricing_mode="pct",
+                wholesale_price=float(data.get('wholesale_price') or 0),
+                staff_pricing_mode="price" if data.get('staff_price') is not None else "pct",
                 staff_discount_pct=0,
-                staff_price=0,
+                staff_price=float(data.get('staff_price') or 0),
                 tax_rate=float(data.get('tax_rate') or 0),
                 hsn_code=None,
                 reorder_level=int(data.get('reorder_level') or 0),
-                is_packaging=False,
+                is_packaging=bool(data.get('packaging')),
                 packaging_quantity=None,
                 emoji='📦',
                 batch_tracking=bool(data.get('batch_tracking') or False),
@@ -1552,6 +1557,11 @@ async def process_item_import(
             # Process per-branch columns (if any)
             if branch_cells:
                 for branch_label, cols in branch_cells.items():
+                    opening_stock = cols.get('opening stock')
+                    if opening_stock is None or (
+                        isinstance(opening_stock, str) and not opening_stock.strip()
+                    ):
+                        continue
                     try:
                         # Branches were preloaded once before processing rows.
                         branch = branch_by_key.get(branch_label.lower())
@@ -1589,7 +1599,7 @@ async def process_item_import(
                         )
 
                         # Seed opening stock if provided
-                        if 'opening stock' in cols and cols.get('opening stock') not in (None, ''):
+                        if opening_stock is not None:
                             try:
                                 qty = int(cols.get('opening stock'))
                             except Exception:
@@ -1728,8 +1738,11 @@ async def download_import_template(db: AsyncSession = Depends(get_db)):
         "Category",
         "Brand",
         "Unit",
+        "Packing",
         "Cost Price",
         "Selling Price",
+        "Wholesale Rate",
+        "Staff Rate",
         "Tax Rate",
         "Reorder Level",
         "Batch Tracking",
