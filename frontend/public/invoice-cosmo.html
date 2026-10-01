@@ -483,10 +483,11 @@
       const discountPct = Number(it.discount ?? it.discPercent ?? it.disc_percent ?? it.discount_pct ?? 0)
       const gstRate = Number(it.taxRate ?? it.tax_rate ?? 0)
       const amount = Number(it.lineTotal || it.total || qty * rate)
+      const displayRate = gstRate > 0 ? rate * 100 / (100 + gstRate) : rate
       const gstAmt = gstRate > 0
         ? Math.round((amount * gstRate) / (100 + gstRate) * 100) / 100
         : 0
-        return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(rate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+        return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(displayRate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
     }).join('\n')
   }
 
