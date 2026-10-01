@@ -33,7 +33,7 @@ const TABS = [
   { id: 'users',    label: '👥 Users & Roles' },
   { id: 'tax',      label: '🧾 Tax Config' },
   { id: 'numbering',label: '🔢 Document Numbering' },
-  { id: 'invoice',  label: '🖨 Invoice Template' },
+  // { id: 'invoice',  label: '🖨 Invoice Template' },
 ]
 
 
