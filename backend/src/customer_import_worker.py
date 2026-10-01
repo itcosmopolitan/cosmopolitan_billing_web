@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 
 import openpyxl
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from src.database import get_async_session, init_schema
 from src.models import Customer, CustomerImportJob
@@ -118,6 +118,13 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
             name = _as_text(data.get("name"))
             if not name:
                 raise ValueError("Customer name is required")
+            duplicate = await db.execute(
+                select(Customer.id).where(
+                    func.lower(func.trim(Customer.name)) == name.lower()
+                ).limit(1)
+            )
+            if duplicate.scalar_one_or_none():
+                raise ValueError(f"Customer name already exists: {name}")
             city = _as_text(data.get("city"))
             if not city:
                 raise ValueError("Required field(s) missing: city")
