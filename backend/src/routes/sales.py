@@ -4092,6 +4092,8 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
         "customer_postal_code": customer.postal_code if customer else None,
         "customerGstin": customer.gstin if customer else None,
         "customer_gstin": customer.gstin if customer else None,
+        "customerPhone": customer.phone if customer else None,
+        "customer_phone": customer.phone if customer else None,
         "customerKeyAccountManager": _customer_kam_label(customer),
         "customer_key_account_manager": _customer_kam_label(customer),
         "branchId": quote.branch_id,
@@ -4470,6 +4472,8 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
         "id": so.id, "number": so.number,
         "customerId": so.customer_id,
         "customerName": so.customer_name or "Walk-in",
+        "customerPhone": customer.phone if customer else None,
+        "customer_phone": customer.phone if customer else None,
         "classification": classification or (
             (getattr(customer, "classification", None) if customer else None) or "external"
         ),

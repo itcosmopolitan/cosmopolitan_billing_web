@@ -489,6 +489,7 @@
   }
 
   function renderPage(pageIndex, totalPages, pageItems, quote, branch, totals, copyLabel) {
+    const hasValue = (value) => value != null && String(value).trim() !== ''
     const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
     const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
     const branchCountry = branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'
@@ -497,10 +498,22 @@
     const branchTel = phoneParts?.[1] || branchPhone
     const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
     const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
-    const customerPhone = quote.customerPhone || quote.customer_phone || quote.phoneNo || quote.phone_no || ''
-    const customerAddress = (quote.customerAddress || quote.customer_address || quote.address || '').toString().trim()
+    const customerPhone = quote.customerPhone || quote.customer_phone || ''
+    const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
+    const addressParts = [
+      quote.customerStreet1 || quote.customer_street1,
+      quote.customerStreet2 || quote.customer_street2,
+      quote.customerStreet3 || quote.customer_street3,
+      quote.customerCity || quote.customer_city || quote.city,
+      quote.customerStateProvince || quote.customer_state_province,
+      quote.customerCountry || quote.customer_country || quote.country,
+      quote.customerPostalCode || quote.customer_postal_code || quote.postal_code,
+    ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+    const customerAddress = (rawAddress ? (Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress) : addressParts.join(', ')).toString().trim()
     const customerCode = quote.customerCode || quote.customer_code || ''
     const customerGstin = quote.customerGstin || quote.customer_gstin || quote.gstin || quote.gstNo || quote.gst_no || ''
+    const quoteNumber = quote.number || quote.quote_no || ''
+    const quoteDate = quote.date || quote.quote_date || ''
     const customerName = (quote.customerName || quote.customer_name || quote.customer || quote.name || '').toString().trim()
     const isWalkIn = customerName.toLowerCase() === 'walkin' || customerName.toLowerCase() === 'walk-in' || customerName.toLowerCase() === 'walk in' || customerName.toLowerCase() === 'walkin customer' || customerName.toLowerCase() === 'cash customer'
     const salesperson = quote.salesperson || quote.createdBy || quote.created_by || quote.customerKeyAccountManagerName || quote.customer_key_account_manager_name || quote.customerKeyAccountManager || quote.customer_key_account_manager || ''
@@ -551,32 +564,19 @@
           <div class="bill-to details-box">
             <div class="details-title">Customer Details</div>
             <h2 style="margin:0 0 6px 0;">${escapeHtml(customerName)}</h2>
-            <div class="addr-line">${escapeHtml(customerPhone)}</div>
+            ${hasValue(customerPhone) ? `<div class="addr-line">${escapeHtml(customerPhone)}</div>` : ''}
             <table style="margin-top:4px; width:100%;">
-              ${customerCode && !isWalkIn ? `<tr><td class="label">Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''}
-              <tr><td class="label">GST Number</td><td>${escapeHtml(customerGstin)}</td></tr>
-              <tr><td class="label">Quote No.</td><td>${escapeHtml(quote.number || quote.quote_no || '')}</td></tr>
-              <tr><td class="label">Address</td><td>${(() => {
-                const addressParts = [
-                  quote.customerStreet1 || quote.customer_street1,
-                  quote.customerStreet2 || quote.customer_street2,
-                  quote.customerStreet3 || quote.customer_street3,
-                  quote.customerCity || quote.customer_city || quote.city,
-                  quote.customerStateProvince || quote.customer_state_province,
-                  quote.customerCountry || quote.customer_country || quote.country,
-                  quote.customerPostalCode || quote.customer_postal_code || quote.postal_code,
-                ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
-                const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
-                const address = rawAddress ? (Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress) : addressParts.join(', ')
-                return escapeHtml(String(address || '')).replace(/\n/g, '<br/>')
-              })()}</td></tr>
+              ${hasValue(customerCode) && !isWalkIn ? `<tr><td class="label">Customer No.</td><td>${escapeHtml(customerCode)}</td></tr>` : ''}
+              ${hasValue(customerGstin) ? `<tr><td class="label">GST Number</td><td>${escapeHtml(customerGstin)}</td></tr>` : ''}
+              ${hasValue(quoteNumber) ? `<tr><td class="label">Quote No.</td><td>${escapeHtml(quoteNumber)}</td></tr>` : ''}
+              ${hasValue(customerAddress) ? `<tr><td class="label">Address</td><td>${escapeHtml(customerAddress).replace(/\n/g, '<br/>')}</td></tr>` : ''}
             </table>
           </div>
           <div class="seller-addr details-box">
             <table style="width:100%;">
-              <tr><td class="label">Quote Date</td><td>${escapeHtml(formatDate(quote.date || quote.quote_date || ''))}</td></tr>
-              <tr><td class="label">Quotation No.</td><td>${escapeHtml(quote.number || quote.quote_no || '')}</td></tr>
-              <tr><td class="label">Sales Person</td><td>${escapeHtml(salesperson)}</td></tr>
+              ${hasValue(quoteDate) ? `<tr><td class="label">Quote Date</td><td>${escapeHtml(formatDate(quoteDate))}</td></tr>` : ''}
+              ${hasValue(quoteNumber) ? `<tr><td class="label">Quotation No.</td><td>${escapeHtml(quoteNumber)}</td></tr>` : ''}
+              ${hasValue(salesperson) ? `<tr><td class="label">Sales Person</td><td>${escapeHtml(salesperson)}</td></tr>` : ''}
             </table>
           </div>
         </div>

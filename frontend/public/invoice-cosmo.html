@@ -476,22 +476,51 @@
     return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   }
 
-  function getLineAmounts(item) {
+  function getLineAmounts(item, documentDiscountShare = 0, useInvoiceFormula = false) {
     const qty = Number(item.qty || item.quantity || 0)
     const inclusiveRate = Number(item.price || item.rate || 0)
     const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
     const gstRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    const rate = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
-    const gross = roundNumber(qty * rate)
-    const discount = roundNumber(gross * discountPct / 100)
-    const net = roundNumber(gross - discount)
-    const gst = roundNumber(net * gstRate / 100)
-    return { qty, rate, discountPct, gross, discount, net, gst }
+    const unitPrice = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
+    const rate = useInvoiceFormula
+      ? roundNumber(unitPrice - roundNumber(unitPrice * discountPct / 100))
+      : unitPrice
+    const gross = roundNumber(qty * (useInvoiceFormula ? rate : unitPrice))
+    const inclusiveGross = roundNumber(qty * inclusiveRate)
+    const inclusiveAfterLineDiscount = roundNumber(inclusiveGross * (1 - discountPct / 100))
+    if (useInvoiceFormula) {
+      const net = roundNumber(qty * rate)
+      const gst = roundNumber(qty * unitPrice * gstRate / 100)
+      const discount = roundNumber(qty * unitPrice - net)
+      return { qty, rate, discountPct, gross, net, gst, discount, inclusiveAfterLineDiscount }
+    }
+    const inclusiveNet = roundNumber(Math.max(0, inclusiveAfterLineDiscount - documentDiscountShare))
+    const gst = gstRate > 0 ? roundNumber(inclusiveNet * gstRate / (100 + gstRate)) : 0
+    const net = roundNumber(inclusiveNet - gst)
+    return { qty, rate, discountPct, gross, net, gst, inclusiveAfterLineDiscount }
   }
 
-  function renderRows(items, firstSerialNumber = 1) {
+  function allocateFlatAmount(amounts, flat) {
+    if (!amounts.length) return []
+    const normalized = amounts.map((amount) => Math.max(0, Number(amount) || 0))
+    const total = roundNumber(normalized.reduce((sum, amount) => sum + amount, 0))
+    const discount = Math.min(total, roundNumber(Math.max(0, Number(flat) || 0)))
+    if (discount <= 0 || total <= 0) return normalized.map(() => 0)
+    const lastIndex = normalized.reduce((last, amount, index) => amount > 0 ? index : last, 0)
+    const shares = normalized.map(() => 0)
+    let allocated = 0
+    normalized.forEach((amount, index) => {
+      if (index === lastIndex || amount <= 0) return
+      shares[index] = Math.min(amount, roundNumber(amount / total * discount))
+      allocated += shares[index]
+    })
+    shares[lastIndex] = Math.min(normalized[lastIndex], Math.max(0, roundNumber(discount - allocated)))
+    return shares
+  }
+
+  function renderRows(items, firstSerialNumber = 1, lineAmounts = []) {
     return items.map((it, index) => {
-      const amounts = getLineAmounts(it)
+      const amounts = lineAmounts[index] || getLineAmounts(it)
       return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(amounts.qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(amounts.rate)}</td>\n<td class="num">${amounts.discountPct ? formatNumber(amounts.discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(amounts.gst)}</td>\n<td class="num">${formatNumber(amounts.net)}</td>\n</tr>`
     }).join('\n')
   }
@@ -615,7 +644,7 @@
             </tr>
           </thead>
           <tbody>
-            ${renderRows(pageItems, pageIndex * 14 + 1)}
+            ${renderRows(pageItems, pageIndex * 14 + 1, totals.lineAmounts.slice(pageIndex * 14, (pageIndex + 1) * 14))}
           </tbody>
         </table>
 
@@ -628,11 +657,6 @@
             </tr>
             <tr>
               <td colspan="5"></td>
-              <td class="tlabel">Discount Amount</td>
-              <td class="tval">-${formatNumber(totals.discountAmount)}</td>
-            </tr>
-            <tr>
-              <td colspan="5"></td>
               <td class="tlabel">GST</td>
               <td class="tval">${formatNumber(totals.taxTotal)}</td>
             </tr>
@@ -640,6 +664,11 @@
               <td colspan="5"></td>
               <td class="tlabel grand">${isPurchaseOrder ? 'Purchase Order Total (Inc. GST)' : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)' : isGrnReceipt ? 'Goods Receipt Total (Inc. GST)' : invoice.documentType === 'Sales Order' ? 'Total Order Value (Inc. GST)' : 'Total Payable (Inc. GST)'}</td>
               <td class="tval grand">${formatNumber(totals.total)}</td>
+            </tr>
+            <tr>
+              <td colspan="5"></td>
+              <td class="tlabel grand">Discount Amount</td>
+              <td class="tval grand">${formatNumber(totals.discountAmount)}</td>
             </tr>
           </table>
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
@@ -723,11 +752,22 @@
     document.title = `${sale.documentType} ${sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
     const branch = payload?.branch || {}
     const items = sale.items || []
-    const lineAmounts = items.map(getLineAmounts)
+    const useInvoiceFormula = sale.documentType === 'Tax Invoice'
+    const baseLineAmounts = items.map((item) => getLineAmounts(item, 0, useInvoiceFormula))
+    const documentDiscountShares = useInvoiceFormula
+      ? items.map(() => 0)
+      : allocateFlatAmount(
+        baseLineAmounts.map((line) => line.inclusiveAfterLineDiscount),
+        sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0,
+      )
+    const lineAmounts = items.map((item, index) => getLineAmounts(item, documentDiscountShares[index], useInvoiceFormula))
     const grossAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gross, 0))
-    const discountAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.discount, 0))
+    const netAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
+    const discountAmount = useInvoiceFormula
+      ? roundNumber(lineAmounts.reduce((sum, line) => sum + line.discount, 0))
+      : roundNumber(grossAmount - netAmount)
     const taxtotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
-    const total = roundNumber(grossAmount - discountAmount + taxtotal)
+    const total = roundNumber(netAmount + taxtotal)
     const pages = paginateItems(items, 14)
     const allPages = pages.map((pageItems, pageIndex) => ({
       pageItems,
@@ -740,7 +780,8 @@
       taxTotal: taxtotal,
       total,
       discountAmount,
-      totalInWords: String(sale.totalInWords || '').toUpperCase(),
+      lineAmounts,
+      totalInWords: useInvoiceFormula ? String(sale.totalInWords || payload.totalInWords || '').toUpperCase() : String(sale.totalInWords || '').toUpperCase(),
     }
 
     document.getElementById('invoicePages').innerHTML = allPages.map((page) => {

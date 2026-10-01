@@ -25,6 +25,27 @@ function roundCurrency(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
 }
 
+function calculatePrintedInvoiceTotal(sale) {
+  const lines = sale?.items || []
+  const netTotal = lines.reduce((sum, item) => {
+    const qty = Number(item.qty || item.quantity || 0)
+    const price = Number(item.price || item.rate || 0)
+    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
+    const unitPrice = roundCurrency(taxRate > 0 ? price * 100 / (100 + taxRate) : price)
+    const rate = roundCurrency(unitPrice - roundCurrency(unitPrice * discountPct / 100))
+    return sum + roundCurrency(rate * qty)
+  }, 0)
+  const gstTotal = lines.reduce((sum, item) => {
+    const qty = Number(item.qty || item.quantity || 0)
+    const price = Number(item.price || item.rate || 0)
+    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    const unitPrice = roundCurrency(taxRate > 0 ? price * 100 / (100 + taxRate) : price)
+    return sum + roundCurrency(qty * unitPrice * taxRate / 100)
+  }, 0)
+  return roundCurrency(netTotal + gstTotal)
+}
+
 export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax Invoice', fetchSale = true } = {}) {
   if (typeof window === 'undefined') return null
   const authToken = window.localStorage.getItem('retailos_token')
@@ -95,7 +116,9 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     branchMerged.phone = branchMerged.phone || org.phone || ''
   }
 
-  const totalInWords = fullSale?.totalInWords || amountToWords(fullSale?.total)
+  const totalInWords = documentType === 'Tax Invoice' && Array.isArray(fullSale?.items)
+    ? amountToWords(calculatePrintedInvoiceTotal(fullSale))
+    : fullSale?.totalInWords || amountToWords(fullSale?.total)
   const saleToSend = {
     ...fullSale,
     salesperson: fullSale?.salesperson || fullSale?.cashier || fullSale?.cashierName || fullSale?.salesperson_name || fullSale?.salesPerson || fullSale?.createdBy || fullSale?.created_by || '',
@@ -177,7 +200,7 @@ export async function prepareQuotePayload(quote, branch) {
   let fullQuote = quote
   try {
     const missingCustomerAddress = !quote?.customerAddress && !quote?.customer_address && !quote?.customerStreet1 && !quote?.customer_street1 && !quote?.customerCity && !quote?.customer_country
-    const needsFetch = !quote || (quote?.id && (missingCustomerAddress || !quote.customerName || !quote.total || !quote.items || !quote.items.length))
+    const needsFetch = !quote || (quote?.id && (missingCustomerAddress || (!quote.customerPhone && !quote.customer_phone) || !quote.customerName || !quote.total || !quote.items || !quote.items.length))
     if (needsFetch && quote?.id) {
       const res = await fetch(`/api/v1/sales/quotations/${quote.id}`, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) fullQuote = await res.json()
@@ -202,6 +225,7 @@ export async function prepareQuotePayload(quote, branch) {
   const quoteToSend = {
     ...fullQuote,
     salesperson: fullQuote?.salesperson || fullQuote?.createdBy || fullQuote?.created_by || '',
+    customerPhone: fullQuote?.customerPhone || fullQuote?.customer_phone || '',
     phoneNo: fullQuote?.phoneNo || fullQuote?.phone_no || branchMerged?.phone || branchMerged?.tel || org?.phone || '',
     email: fullQuote?.email || branchMerged?.email || org?.email || '',
     totalInWords: fullQuote?.totalInWords || ''
