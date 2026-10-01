@@ -476,22 +476,28 @@
     return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   }
 
+  function getLineAmounts(item) {
+    const qty = Number(item.qty || item.quantity || 0)
+    const inclusiveRate = Number(item.price || item.rate || 0)
+    const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
+    const gstRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    const rate = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
+    const gross = roundNumber(qty * rate)
+    const discount = roundNumber(gross * discountPct / 100)
+    const net = roundNumber(gross - discount)
+    const gst = roundNumber(net * gstRate / 100)
+    return { qty, rate, discountPct, gross, discount, net, gst }
+  }
+
   function renderRows(items, firstSerialNumber = 1) {
     return items.map((it, index) => {
-      const qty = Number(it.qty || it.quantity || 0)
-      const rate = Number(it.price || it.rate || 0)
-      const discountPct = Number(it.discount ?? it.discPercent ?? it.disc_percent ?? it.discount_pct ?? 0)
-      const gstRate = Number(it.taxRate ?? it.tax_rate ?? 0)
-      const amount = Number(it.lineTotal || it.total || qty * rate)
-      const displayRate = gstRate > 0 ? rate * 100 / (100 + gstRate) : rate
-      const gstAmt = gstRate > 0
-        ? Math.round((amount * gstRate) / (100 + gstRate) * 100) / 100
-        : 0
-        return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(displayRate)}</td>\n<td class="num">${discountPct ? formatNumber(discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(gstAmt)}</td>\n<td class="num">${formatNumber(amount)}</td>\n</tr>`
+      const amounts = getLineAmounts(it)
+      return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(amounts.qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(amounts.rate)}</td>\n<td class="num">${amounts.discountPct ? formatNumber(amounts.discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(amounts.gst)}</td>\n<td class="num">${formatNumber(amounts.net)}</td>\n</tr>`
     }).join('\n')
   }
 
   function renderPage(pageIndex, totalPages, pageItems, invoice, branch, totals, copyLabel) {
+    const hasValue = (value) => value != null && String(value).trim() !== ''
     const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
     const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
     const branchCountry = branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'
@@ -508,6 +514,26 @@
     const purchaseOrderNumber = invoice.purchaseOrderNumber || invoice.purchase_order_number || invoice.poNumber || invoice.po_number || ''
     const paymentTerms = invoice.customerCreditTerms || invoice.customer_credit_terms || invoice.paymentTerms || invoice.payment_terms || ''
     const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
+    const customerPhone = invoice.customerPhone || invoice.customer_phone || ''
+    const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || ''
+    const invoiceNumber = invoice.number || invoice.invoiceNumber || invoice.invoice_no || ''
+    const rawAddress = invoice.customerAddress || invoice.customer_address || invoice.address || invoice.shippingAddress || invoice.address_lines || invoice.addressLines || ''
+    const addressParts = [
+      invoice.customerStreet1 || invoice.customer_street1,
+      invoice.customerStreet2 || invoice.customer_street2,
+      invoice.customerStreet3 || invoice.customer_street3,
+      invoice.customerCity || invoice.customer_city || invoice.city,
+      invoice.customerStateProvince || invoice.customer_state_province,
+      invoice.customerCountry || invoice.customer_country || invoice.country,
+      invoice.customerPostalCode || invoice.customer_postal_code || invoice.postal_code,
+    ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+    const customerAddress = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
+    const remarks = invoice.notes || invoice.remark || invoice.remarks || ''
+    const quotationNumber = invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || ''
+    const salesPerson = invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || ''
+    const cashier = invoice.cashier || invoice.cashierName || invoice.cashier_name || ''
+    const createdBy = invoice.createdBy || invoice.created_by || ''
+    const invoiceDate = invoice.date || invoice.invoiceDate || invoice.invoice_date || ''
     const paymentMode = String(invoice.paymentMode || invoice.payment_mode || invoice.method || '').toLowerCase()
     const paymentDetails = isPurchaseDocument ? '' : paymentMode === 'cash'
       ? `<strong>Cash Collected:</strong> ${formatNumber(invoice.cashCollected || 0)}<br/><strong>Cash Refunded:</strong> ${formatNumber(invoice.cashChange || invoice.cash_change || 0)}`
@@ -552,37 +578,24 @@
           <div class="bill-to details-box">
             <div class="details-title">${isPurchaseDocument ? 'Vendor Details' : 'Customer Details'}</div>
             <h2 style="margin:0 0 6px 0;">${escapeHtml(invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '')}</h2>
-            ${isPurchaseDocument ? '' : `<div class="addr-line">${escapeHtml(invoice.phoneNo || invoice.phone_no || invoice.customerPhone || invoice.customer_phone || '')}</div>`}
+            ${isPurchaseDocument || !hasValue(customerPhone) ? '' : `<div class="addr-line">${escapeHtml(customerPhone)}</div>`}
             <table style="margin-top:4px; width:100%;">
-              ${isPurchaseDocument ? '' : `<tr><td class="label">GST Number</td><td>${escapeHtml(invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || '')}</td></tr>`}
-              <tr><td class="label">${documentNumberLabel}</td><td>${escapeHtml(invoice.number || invoice.invoiceNumber || invoice.invoice_no || '')}</td></tr>
-              ${isPurchaseDocument ? '' : `<tr><td class="label">Address</td><td>${(() => {
-                const addressParts = [
-                  invoice.customerStreet1 || invoice.customer_street1,
-                  invoice.customerStreet2 || invoice.customer_street2,
-                  invoice.customerStreet3 || invoice.customer_street3,
-                  invoice.customerCity || invoice.customer_city || invoice.city,
-                  invoice.customerStateProvince || invoice.customer_state_province,
-                  invoice.customerCountry || invoice.customer_country || invoice.country,
-                  invoice.customerPostalCode || invoice.customer_postal_code || invoice.postal_code,
-                ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
-                const rawAddress = invoice.customerAddress || invoice.customer_address || invoice.address || invoice.shippingAddress || invoice.address_lines || invoice.addressLines || ''
-                const address = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
-                return escapeHtml(String(address || '')).replace(/\n/g, '<br/>')
-              })()}</td></tr>`}
-              <tr><td class="label">${isPurchaseDocument ? 'Notes' : 'Remarks'}</td><td>${escapeHtml(invoice.notes || invoice.remark || invoice.remarks || '')}</td></tr>
+              ${!isPurchaseDocument && hasValue(customerGstin) ? `<tr><td class="label">GST Number</td><td>${escapeHtml(customerGstin)}</td></tr>` : ''}
+              ${hasValue(invoiceNumber) ? `<tr><td class="label">${documentNumberLabel}</td><td>${escapeHtml(invoiceNumber)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(customerAddress) ? `<tr><td class="label">Address</td><td>${escapeHtml(String(customerAddress)).replace(/\n/g, '<br/>')}</td></tr>` : ''}
+              ${hasValue(remarks) ? `<tr><td class="label">${isPurchaseDocument ? 'Notes' : 'Remarks'}</td><td>${escapeHtml(remarks)}</td></tr>` : ''}
             </table>
           </div>
           <div class="seller-addr details-box">
             <table style="width:100%;">
-              <tr><td class="label">${isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : invoice.documentType === 'Sales Order' ? 'Order Date' : 'Invoice Date'}</td><td>${formatDate(invoice.date || invoice.invoiceDate || invoice.invoice_date)}</td></tr>
-              ${(invoice.documentType === 'Sales Order' || isPurchaseOrder) && (invoice.expectedDate || invoice.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(invoice.expectedDate || invoice.expected_date)}</td></tr>` : ''}
-              ${isPurchaseBill && invoice.dueDate ? `<tr><td class="label">Due Date</td><td>${formatDate(invoice.dueDate)}</td></tr>` : ''}
+              ${hasValue(invoiceDate) ? `<tr><td class="label">${isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : invoice.documentType === 'Sales Order' ? 'Order Date' : 'Invoice Date'}</td><td>${formatDate(invoiceDate)}</td></tr>` : ''}
+              ${(invoice.documentType === 'Sales Order' || isPurchaseOrder) && hasValue(invoice.expectedDate || invoice.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(invoice.expectedDate || invoice.expected_date)}</td></tr>` : ''}
+              ${isPurchaseBill && hasValue(invoice.dueDate || invoice.due_date) ? `<tr><td class="label">Due Date</td><td>${formatDate(invoice.dueDate || invoice.due_date)}</td></tr>` : ''}
               ${(isPurchaseBill || isGrnReceipt) && purchaseOrderNumber ? `<tr><td class="label">Purchase Order</td><td>${escapeHtml(purchaseOrderNumber)}</td></tr>` : ''}
-              ${isPurchaseDocument ? '' : `<tr><td class="label">Quotation No.</td><td>${escapeHtml(invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || '')}</td></tr>`}
-              ${isPurchaseDocument ? '' : `<tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>`}
-              ${isPurchaseOrder ? `<tr><td class="label">Created By</td><td>${escapeHtml(invoice.createdBy || invoice.created_by || '')}</td></tr>` : isPurchaseDocument ? '' : `<tr><td class="label">Sales Person</td><td>${escapeHtml(invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || '')}</td></tr>`}
-              ${isPurchaseDocument ? '' : `<tr><td class="label">Cashier</td><td>${escapeHtml(invoice.cashier || invoice.cashierName || invoice.cashier_name || '')}</td></tr>`}
+              ${!isPurchaseDocument && hasValue(quotationNumber) ? `<tr><td class="label">Quotation No.</td><td>${escapeHtml(quotationNumber)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(displayPaymentTerms) ? `<tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>` : ''}
+              ${isPurchaseOrder && hasValue(createdBy) ? `<tr><td class="label">Created By</td><td>${escapeHtml(createdBy)}</td></tr>` : !isPurchaseDocument && hasValue(salesPerson) ? `<tr><td class="label">Sales Person</td><td>${escapeHtml(salesPerson)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(cashier) ? `<tr><td class="label">Cashier</td><td>${escapeHtml(cashier)}</td></tr>` : ''}
             </table>
           </div>
         </div>
@@ -710,29 +723,12 @@
     document.title = `${sale.documentType} ${sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
     const branch = payload?.branch || {}
     const items = sale.items || []
-    const grossAmount = items.reduce((sum, item) => sum + (Number(item.qty || item.quantity || 0) * Number(item.price || item.rate || 0)), 0)
-    const subtotal = Number(sale.subtotal ?? (grossAmount - (Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0))))
-    const taxtotal = Number(sale.taxTotal ?? sale.tax_total ?? 0)
-    const total = Number(sale.total ?? subtotal + taxtotal)
-    const taxPercent = sale.taxPercent ?? sale.tax_percent ?? (subtotal ? Math.round((taxtotal / subtotal) * 100) : 0)
+    const lineAmounts = items.map(getLineAmounts)
+    const grossAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gross, 0))
+    const discountAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.discount, 0))
+    const taxtotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
+    const total = roundNumber(grossAmount - discountAmount + taxtotal)
     const pages = paginateItems(items, 14)
-    const lineNetAmount = items.reduce((sum, item) => {
-      const qty = Number(item.qty || item.quantity || 0)
-      const rate = Number(item.price || item.rate || 0)
-      return sum + Number(item.lineTotal || item.total || qty * rate)
-    }, 0)
-    const headerDiscount = Number(sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0)
-    const purchaseOrderDiscount = headerDiscount + items.reduce((sum, item) => {
-      const qty = Number(item.qty || item.quantity || 0)
-      const rate = Number(item.price || item.rate || 0)
-      const lineDiscount = Number(item.discount || item.discPercent || item.disc_percent || item.discount_pct || 0)
-      return sum + (qty * rate * lineDiscount) / 100
-    }, 0)
-    const isPurchaseDocument = ['Purchase Order', 'Purchase Bill', 'GRN Receipt'].includes(sale.documentType)
-    const discountAmount = isPurchaseDocument
-      ? roundNumber(purchaseOrderDiscount)
-      : Math.max(0, roundNumber(grossAmount - lineNetAmount) + headerDiscount)
-    const discountPercent = grossAmount && discountAmount ? Math.round((discountAmount / grossAmount) * 100) : 0
     const allPages = pages.map((pageItems, pageIndex) => ({
       pageItems,
       pageIndex,
@@ -740,13 +736,10 @@
     }))
 
     const totals = {
-      subtotal,
       grossAmount,
       taxTotal: taxtotal,
       total,
       discountAmount,
-      discountPercent,
-      taxLabel: `${taxPercent}% GST`,
       totalInWords: String(sale.totalInWords || '').toUpperCase(),
     }
 

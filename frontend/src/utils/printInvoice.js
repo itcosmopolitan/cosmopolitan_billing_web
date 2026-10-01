@@ -40,7 +40,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
     const needsPurchaseOrderFetch = sale?.id && (!Array.isArray(sale?.items) || sale.items.length === 0)
     const needsInvoiceFetch = !sale || (sale?.id && (
-      needsCashPaymentDetails || !sale.salesperson || !sale.email || !sale.phoneNo ||
+      needsCashPaymentDetails || (!sale.customerPhone && !sale.customer_phone) || !sale.salesperson || !sale.email || !sale.phoneNo ||
       !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)
     ))
     const needsFetch = fetchSale && (isPurchaseDocument ? needsPurchaseOrderFetch : needsInvoiceFetch)
@@ -99,6 +99,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
   const saleToSend = {
     ...fullSale,
     salesperson: fullSale?.salesperson || fullSale?.cashier || fullSale?.cashierName || fullSale?.salesperson_name || fullSale?.salesPerson || fullSale?.createdBy || fullSale?.created_by || '',
+    customerPhone: fullSale?.customerPhone || fullSale?.customer_phone || '',
     phoneNo: fullSale?.phoneNo || fullSale?.phone_no || branchMerged?.phone || branchMerged?.tel || org?.phone || '',
     email: fullSale?.email || branchMerged?.email || org?.email || '',
     totalInWords,
