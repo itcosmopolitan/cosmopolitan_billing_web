@@ -350,8 +350,15 @@
     font-weight: bold;
   }
 
-  .amount-words {
+  .discount-note {
     margin-top: 10px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+
+  .amount-words {
+    margin-top: 6px;
     font-size: 10.5px;
     font-weight: bold;
     letter-spacing: 0.5px;
@@ -637,10 +644,10 @@
               <th>Packing</th>
               <th>Units</th>
               <th class="num">Qty</th>
-              <th class="num">Rate</th>
+              <th class="num">Rate (Excl. GST)</th>
               <th class="num">Disc %</th>
               <th class="num">GST</th>
-              <th class="num">Net Amount</th>
+              <th class="num">Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -652,8 +659,8 @@
           <table class="totals">
             <tr>
               <td colspan="5" class="totals-payment">${paymentDetails}</td>
-              <td class="tlabel">Gross Amount</td>
-              <td class="tval">${formatNumber(totals.grossAmount)}</td>
+              <td class="tlabel">Subtotal</td>
+              <td class="tval">${formatNumber(totals.subtotal)}</td>
             </tr>
             <tr>
               <td colspan="5"></td>
@@ -665,12 +672,8 @@
               <td class="tlabel grand">${isPurchaseOrder ? 'Purchase Order Total (Inc. GST)' : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)' : isGrnReceipt ? 'Goods Receipt Total (Inc. GST)' : invoice.documentType === 'Sales Order' ? 'Total Order Value (Inc. GST)' : 'Total Payable (Inc. GST)'}</td>
               <td class="tval grand">${formatNumber(totals.total)}</td>
             </tr>
-            <tr>
-              <td colspan="5"></td>
-              <td class="tlabel grand">Discount Amount</td>
-              <td class="tval grand">${formatNumber(totals.discountAmount)}</td>
-            </tr>
           </table>
+          ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
           ${isPurchaseDocument ? '' : `<div class="payment-section">
             <div class="bank-details">
@@ -765,7 +768,7 @@
     const netAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
     const discountAmount = useInvoiceFormula
       ? roundNumber(lineAmounts.reduce((sum, line) => sum + line.discount, 0))
-      : roundNumber(grossAmount - netAmount)
+      : roundNumber(Math.max(0, grossAmount - netAmount))
     const taxtotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
     const total = roundNumber(netAmount + taxtotal)
     const pages = paginateItems(items, 14)
@@ -776,6 +779,7 @@
     }))
 
     const totals = {
+      subtotal: netAmount,
       grossAmount,
       taxTotal: taxtotal,
       total,

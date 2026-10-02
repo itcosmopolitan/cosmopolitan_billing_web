@@ -1383,7 +1383,7 @@ export default function POSPage() {
               <table style={{ width: '100%', minWidth: 860, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
-                    {['Item Details', 'Packaging', 'Qty', 'Rate', 'Discount', 'Margin', 'Line Total', ''].map((h) => (
+                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Line Total', ''].map((h) => (
                       <th
                         key={h}
                         style={{

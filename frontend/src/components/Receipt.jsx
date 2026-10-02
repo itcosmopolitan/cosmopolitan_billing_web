@@ -10,6 +10,7 @@ import { exportInvoicePdf } from '@/utils/exportInvoicePdf'
 import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
 import { formatSettlementLabel } from '@/utils/storeCredit'
+import { calcInvoiceSummary, displayExclusiveUnitRate, lineGstFromInclusive } from '@/utils/taxCalc'
 
 const formatNumber = (value, options = {}) => {
   const number = Number(value)
@@ -118,21 +119,12 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     }
   }, [sale, branch, documentType])
 
-  const getItemTaxAmount = (item) => {
-    const qty = Number(item.qty || item.quantity || 0)
-    const rate = Number(item.price || item.rate || 0)
-    const discountPct = Number(item.discount || item.discPercent || 0)
-    const amount = Number(item.lineTotal || item.total || qty * rate)
-    const taxable = discountPct ? amount * (1 - discountPct / 100) : amount
-    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    return Math.round((taxable * taxRate) / 100 * 100) / 100
-  }
-
   const getInvoiceCellValue = (item, key) => {
     const qty = Number(item.qty || item.quantity || 0)
-    const rate = Number(item.price || item.rate || 0)
+    const inclusiveRate = Number(item.price || item.rate || 0)
+    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
     const discountPct = Number(item.discount || item.discPercent || 0)
-    const amount = Number(item.lineTotal || item.total || qty * rate)
+    const amount = Number(item.lineTotal || item.total || qty * inclusiveRate)
     switch (key) {
       case 'description': return item.name || ''
       case 'hsn': return item.hsnCode || item.hsn_code || ''
@@ -141,9 +133,9 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
       case 'origin': return item.origin || item.country || item.manufacturer || ''
       case 'units': return item.units || item.unit || ''
       case 'qty': return qty
-      case 'rate': return rate
+      case 'rate': return displayExclusiveUnitRate(inclusiveRate, taxRate)
       case 'disc': return discountPct
-      case 'gst': return getItemTaxAmount(item)
+      case 'gst': return lineGstFromInclusive(item)
       case 'amount': return amount
       default: return ''
     }
@@ -180,7 +172,9 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     const customerId = sale.customerCode || sale.customer_code || sale.customerId || sale.customer_id || '—'
     const totalInWords = amountToWords(sale.total, '—')
 
-    const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0) || (sale.subtotal ? Math.round(((sale.taxTotal || sale.tax_total || 0) / sale.subtotal) * 100) : 0)
+    const invoiceSummary = calcInvoiceSummary(sale.items || [], sale)
+    const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0)
+      || (invoiceSummary.subtotal ? Math.round((invoiceSummary.taxTotal / invoiceSummary.subtotal) * 100) : 0)
 
     const columns = getColumnDefinitions(config)
     const html = `
@@ -299,25 +293,25 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
 
         <div class="divider"></div>
         <table class="summary">
-          ${sale.discount ? `
+          ${invoiceSummary.discountAmount ? `
           <tr>
             <td>Discount</td>
-            <td class="right">-${formatNumber(sale.discount)}</td>
+            <td class="right">-${formatNumber(invoiceSummary.discountAmount)}</td>
           </tr>
           ` : ''}
           <tr>
             <td>Total MVR Excl. GST</td>
-              <td class="right">${formatNumber(sale.subtotal || sale.items?.reduce((sum, i) => sum + (Number(i.lineTotal || i.total || (Number(i.qty || 0) * Number(i.price || i.rate || 0))) || 0), 0) || 0)}</td>
+              <td class="right">${formatNumber(invoiceSummary.subtotal)}</td>
           </tr>
           ${`
             <tr>
               <td>${taxPercent}% GST</td>
-              <td class="right">${formatNumber(sale.taxTotal || sale.tax_total || 0)}</td>
+              <td class="right">${formatNumber(invoiceSummary.taxTotal)}</td>
             </tr>
           `}
           <tr class="bold">
             <td>TOTAL</td>
-            <td class="right">${formatNumber(sale.total || 0)}</td>
+            <td class="right">${formatNumber(invoiceSummary.total)}</td>
           </tr>
         </table>
 

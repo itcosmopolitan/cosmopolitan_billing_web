@@ -26,7 +26,7 @@ import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 
 export default function QuoteFormModal({
@@ -222,8 +222,9 @@ export default function QuoteFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 95, textAlign: 'right' }}>Price</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {!readOnly && <th style={{ width: 60 }} />}
@@ -237,6 +238,7 @@ export default function QuoteFormModal({
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               const lineTotal = lineNetAmount(it)
+              const lineTax = lineTaxDisplay(it, undefined, discShares[i] || 0)
               const margin = lineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
@@ -253,7 +255,13 @@ export default function QuoteFormModal({
                   <td><input className="form-input" type="number" disabled={readOnly} min={qtyInputStep()} step={qtyInputStep()} style={numInputStyle}
                     value={it.qty} onChange={e => { const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n) }} /></td>
                   <td><input className="form-input" type="number" disabled={readOnly} min="0" step={amountInputStep()} style={numInputStyle}
-                    value={it.price} onChange={e => { const n = [...quoteForm.items]; n[i].price = e.target.value; pqf('items', n) }} />
+                    value={displayExclRate(it.price, it.taxRate)}
+                    title="Rate excl. GST"
+                    onChange={e => {
+                      const n = [...quoteForm.items]
+                      n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                      pqf('items', n)
+                    }} />
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
@@ -274,6 +282,9 @@ export default function QuoteFormModal({
                         {type}
                       </button>
                     </div>
+                  </td>
+                  <td className="text-right mono" style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                    {fmt(lineTax)}
                   </td>
                   <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
                     <MarginBadge margin={margin} />

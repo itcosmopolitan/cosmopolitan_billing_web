@@ -29,7 +29,7 @@ import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 
 // Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
@@ -224,8 +224,9 @@ export default function OrderFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 95, textAlign: 'right' }}>Price</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {!readOnly && <th style={{ width: 60 }} />}
@@ -244,6 +245,7 @@ export default function OrderFormModal({
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               const lineTotal = lineNetAmount(it)
+              const lineTax = lineTaxDisplay(it, undefined, discShares[i] || 0)
               const margin = lineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
@@ -270,8 +272,13 @@ export default function OrderFormModal({
                       min="0"
                       step={amountInputStep()}
                       style={numInputStyle}
-                      value={it.price}
-                      onChange={e => { const n = [...orderForm.items]; n[i].price = e.target.value; pof('items', n) }} />
+                      value={displayExclRate(it.price, it.taxRate)}
+                      title="Rate excl. GST"
+                      onChange={e => {
+                        const n = [...orderForm.items]
+                        n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                        pof('items', n)
+                      }} />
                   </td>
                   <td>
                     {/* Discount = input + tiny toggle. Toggle auto-converts
@@ -297,6 +304,9 @@ export default function OrderFormModal({
                         {type}
                       </button>
                     </div>
+                  </td>
+                  <td className="text-right mono" style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                    {fmt(lineTax)}
                   </td>
                   <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
                     <MarginBadge margin={margin} />

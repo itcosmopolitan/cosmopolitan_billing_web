@@ -24,7 +24,7 @@ import { emptyPurchaseLine } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
 const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
@@ -172,8 +172,9 @@ export default function PurchaseOrderFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Cost (Excl.)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {!readOnly && <th style={{ width: 60 }} />}
@@ -187,6 +188,7 @@ export default function PurchaseOrderFormModal({
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               const lineTotal = lineNetAmount(it, costLineGross)
+              const lineTax = lineTaxDisplay(it, costLineGross, discShares[i] || 0)
               const margin = purchaseLineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
@@ -213,8 +215,13 @@ export default function PurchaseOrderFormModal({
                       min="0"
                       step={amountInputStep()}
                       style={numInputStyle}
-                      value={it.cost}
-                      onChange={e => { const n = [...poForm.items]; n[i].cost = e.target.value; ppof('items', n) }} />
+                      value={displayExclRate(it.cost, it.taxRate)}
+                      title="Cost excl. GST"
+                      onChange={e => {
+                        const n = [...poForm.items]
+                        n[i].cost = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                        ppof('items', n)
+                      }} />
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
@@ -235,6 +242,9 @@ export default function PurchaseOrderFormModal({
                         {type}
                       </button>
                     </div>
+                  </td>
+                  <td className="text-right mono" style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                    {fmt(lineTax)}
                   </td>
                   <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
                     <MarginBadge margin={margin} />

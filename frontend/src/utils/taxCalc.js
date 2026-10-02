@@ -64,6 +64,55 @@ export function lineTaxAmount(lineTotal, taxRate, _mode) {
   return roundAmount(amount * rate / (100 + rate))
 }
 
+/** Taxable (excl. GST) portion of a GST-inclusive discounted line total. */
+export function lineTaxableAmount(lineTotal, taxRate, _mode) {
+  const amount = Number(lineTotal) || 0
+  return roundAmount(amount - lineTaxAmount(amount, taxRate))
+}
+
+/** GST-inclusive line total after line discount (before document discount). */
+export function lineInclusiveAfterDiscount(item) {
+  const qty = Number(item?.qty ?? item?.quantity ?? 0)
+  const unit = Number(item?.price ?? item?.rate ?? 0)
+  const gross = roundAmount(qty * unit)
+  const discountPct = Number(
+    item?.discount ?? item?.discPercent ?? item?.disc_percent ?? item?.discount_pct ?? 0,
+  )
+  const fromDisc = roundAmount(gross * (1 - Math.min(100, Math.max(0, discountPct)) / 100))
+  if (discountPct > 0) return fromDisc
+  const stored = Number(item?.lineTotal ?? item?.total ?? 0)
+  if (stored > 0) return roundAmount(stored)
+  return fromDisc
+}
+
+/**
+ * Line GST for invoice/receipt rows.
+ * When Disc% is present, recompute inclusive from qty×rate so a wrongly
+ * re-inflated stored lineTotal (270→291.60) cannot overstate GST.
+ */
+export function lineGstFromInclusive(item, entityDiscountShare = 0) {
+  const inclusive = roundAmount(Math.max(0, lineInclusiveAfterDiscount(item) - (Number(entityDiscountShare) || 0)))
+  const taxRate = Number(item?.taxRate ?? item?.tax_rate ?? 0)
+  return lineTaxAmount(inclusive, taxRate)
+}
+
+/** Taxable (excl. GST) line amount after line + document discount. */
+export function lineTaxableFromInclusive(item, entityDiscountShare = 0) {
+  const inclusive = roundAmount(Math.max(0, lineInclusiveAfterDiscount(item) - (Number(entityDiscountShare) || 0)))
+  const taxRate = Number(item?.taxRate ?? item?.tax_rate ?? 0)
+  return lineTaxableAmount(inclusive, taxRate)
+}
+
+/** Unit rate shown to cashiers — always excl. GST (stored prices remain inclusive). */
+export function displayExclusiveUnitRate(inclusiveUnitPrice, taxRate) {
+  return exclusiveFromInclusive(inclusiveUnitPrice, taxRate)
+}
+
+/** Convert a cashier-entered excl. GST unit rate back to stored inclusive. */
+export function storeInclusiveUnitRate(exclusiveUnitPrice, taxRate) {
+  return inclusiveFromExclusive(exclusiveUnitPrice, taxRate)
+}
+
 /** Split a document-level discount across inclusive line amounts. */
 export function allocateFlatShares(amounts, flat) {
   const values = (amounts || []).map((a) => Math.max(0, Number(a) || 0))
@@ -93,7 +142,7 @@ export function allocateFlatShares(amounts, flat) {
 /**
  * Cart totals for POS checkout display and sale completion.
  * Line totals already include line-item discount. Bill discount is applied
- * next; GST is extracted from the remaining inclusive amount.
+ * next; GST is then extracted from the remaining inclusive amount.
  * @param {Array<{ lineTotal: number, taxRate: number }>} cart
  */
 export function calcCartTotals(cart, { discountPct = 0, discountAmt = 0 } = {}) {
@@ -127,37 +176,72 @@ export function calcCartTotals(cart, { discountPct = 0, discountAmt = 0 } = {}) 
 
 /**
  * Invoice summary math for printed tax invoices.
- * Gross amount is the raw pre-discount calculation based on qty × price.
- * Discount is the amount stripped from that gross before GST is added back.
+ *
+ * Saved line `lineTotal` is GST-inclusive AFTER line + document discounts.
+ * GST must be extracted from that discounted base (never from pre-discount qty×rate).
+ * Taxable + GST = Total Payable.
  */
 export function calcInvoiceSummary(items = [], sale = {}) {
+  const rows = items || []
+  if (rows.length === 0) {
+    const subtotal = roundAmount(Number(sale?.subtotal ?? sale?.netSubtotal ?? 0))
+    const saleTax = roundAmount(Number(sale?.taxTotal ?? sale?.tax_total ?? 0))
+    const total = roundAmount(Number(sale?.total ?? subtotal + saleTax))
+    return {
+      grossAmount: 0,
+      subtotal,
+      taxTotal: saleTax,
+      discountAmount: roundAmount(Number(sale?.discount ?? 0)),
+      total,
+    }
+  }
+
   const grossAmount = roundAmount(
-    (items || []).reduce((sum, item) => {
+    rows.reduce((sum, item) => {
       const qty = Number(item?.qty ?? item?.quantity ?? 0)
       const price = Number(item?.price ?? item?.rate ?? 0)
       return sum + (qty * price)
     }, 0),
   )
 
-  const lineNetAmount = roundAmount(
-    (items || []).reduce((sum, item) => {
-      const qty = Number(item?.qty ?? item?.quantity ?? 0)
-      const price = Number(item?.price ?? item?.rate ?? 0)
-      const lineTotal = Number(item?.lineTotal ?? item?.total ?? qty * price)
-      return sum + lineTotal
-    }, 0),
-  )
+  const hasStoredLineTotals = rows.some((item) => Number(item?.lineTotal ?? item?.total ?? 0) > 0)
   const headerDiscount = roundAmount(Number(sale?.discount ?? sale?.discount_amount ?? sale?.discount_amt ?? 0))
-  const subtotal = roundAmount(Number(sale?.subtotal ?? sale?.netSubtotal ?? grossAmount))
-  const taxTotal = roundAmount(Number(sale?.taxTotal ?? sale?.tax_total ?? 0))
-  const total = roundAmount(Number(sale?.total ?? subtotal + taxTotal))
-  const discountAmount = roundAmount(Math.max(0, grossAmount - lineNetAmount) + headerDiscount)
+
+  const afterLineDiscount = rows.map((item) => lineInclusiveAfterDiscount(item))
+  const rates = rows.map((item) => Number(item?.taxRate ?? item?.tax_rate ?? 0))
+
+  // Saved invoices already bake document discount into lineTotal — do not subtract again.
+  // Live/partial payloads without lineTotal still need header discount applied.
+  // When any line has Disc%, line totals were recomputed from rate (pre-entity),
+  // so still apply header discount if present.
+  const anyLineDisc = rows.some((item) => Number(
+    item?.discount ?? item?.discPercent ?? item?.disc_percent ?? item?.discount_pct ?? 0,
+  ) > 0)
+  const entityShares = allocateFlatShares(
+    afterLineDiscount,
+    (hasStoredLineTotals && !anyLineDisc) ? 0 : headerDiscount,
+  )
+
+  let taxTotal = 0
+  let taxable = 0
+  let payable = 0
+  const lineDetails = afterLineDiscount.map((lineInclusive, i) => {
+    const after = roundAmount(Math.max(0, lineInclusive - (entityShares[i] || 0)))
+    const tax = lineTaxAmount(after, rates[i])
+    const lineTaxable = roundAmount(after - tax)
+    taxTotal += tax
+    taxable += lineTaxable
+    payable += after
+    return { inclusive: after, gst: tax, taxable: lineTaxable }
+  })
 
   return {
     grossAmount,
-    subtotal,
-    taxTotal,
-    discountAmount,
-    total,
+    subtotal: roundAmount(taxable),
+    taxTotal: roundAmount(taxTotal),
+    discountAmount: roundAmount(Math.max(0, grossAmount - payable)),
+    total: roundAmount(payable),
+    entityShares,
+    lineDetails,
   }
 }

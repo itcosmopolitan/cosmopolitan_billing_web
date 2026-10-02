@@ -2,6 +2,7 @@ import { useRef, forwardRef, useImperativeHandle, useEffect } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { useInvoiceConfig } from '@/utils/invoiceConfig'
 import { formatSettlementLabel } from '@/utils/storeCredit'
+import { calcInvoiceSummary } from '@/utils/taxCalc'
 
 // ─── 80mm Thermal Receipt (IFS-style layout) ──────────────────────────────
 // Paper width: 80mm → ~300px printable area at 96dpi (72mm content, 4mm margins)
@@ -37,10 +38,12 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
     return fmt(value)
   }
 
-  const grossAmount = sale.subtotal || sale.items?.reduce((sum, i) => sum + (i.lineTotal || i.qty * i.price), 0) || 0
-  const discountAmount = sale.discount || 0
-  const gstAmount = sale.taxTotal || sale.tax_total || 0
-  const payable = sale.total || 0
+  const summary = calcInvoiceSummary(sale.items || [], sale)
+  const grossAmount = summary.grossAmount || summary.subtotal || 0
+  const discountAmount = summary.discountAmount || 0
+  const gstAmount = summary.taxTotal || 0
+  const payable = summary.total || 0
+  const taxableAmount = summary.subtotal || 0
 
   const cashCollected = sale.cashCollected ?? (sale.paymentMode === 'Cash' ? payable : 0)
   const cashRefunded = sale.cashRefunded || 0
@@ -137,6 +140,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           <div class="box-title">Summary</div>
           <div class="kv"><span class="label">Gross Amount</span><span class="value">${formatCurrency(grossAmount)}</span></div>
           <div class="kv"><span class="label">Discount</span><span class="value">${formatCurrency(discountAmount)}</span></div>
+          <div class="kv"><span class="label">Taxable</span><span class="value">${formatCurrency(taxableAmount)}</span></div>
           <div class="kv"><span class="label">GST Value</span><span class="value">${formatCurrency(gstAmount)}</span></div>
           <div class="kv bold"><span class="label">Payable</span><span class="value">${formatCurrency(payable)}</span></div>
           <div class="kv bold"><span class="label">Invoice Amount (MVR)</span><span class="value">${formatCurrency(payable)}</span></div>
@@ -317,6 +321,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, borderBottom: '1px dashed #000', marginBottom: 3, paddingBottom: 2 }}>Summary</div>
           <div className="kv"><span className="label">Gross Amount</span><span className="value">{fmt(grossAmount)}</span></div>
           <div className="kv"><span className="label">Discount</span><span className="value">{fmt(discountAmount)}</span></div>
+          <div className="kv"><span className="label">Taxable</span><span className="value">{fmt(taxableAmount)}</span></div>
           <div className="kv"><span className="label">GST Value</span><span className="value">{fmt(gstAmount)}</span></div>
           <div className="kv" style={{ fontWeight: 700 }}><span className="label">Payable</span><span className="value">{fmt(payable)}</span></div>
           <div className="kv" style={{ fontWeight: 700 }}><span className="label">Invoice Amount (MVR)</span><span className="value">{fmt(payable)}</span></div>

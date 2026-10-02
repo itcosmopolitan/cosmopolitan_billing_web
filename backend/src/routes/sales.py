@@ -4315,7 +4315,7 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
                     i.qty, i.price, i.tax_rate, i.discount, i.line_total, inv.discount,
                 ),
                 "lineTotal": _inclusive_from_stored_line_total(
-                    i.qty, i.price, i.tax_rate, i.line_total,
+                    i.qty, i.price, i.tax_rate, i.line_total, i.discount,
                 ),
                 "batchAllocation": (
                     json.loads(i.batch_allocation) if getattr(i, "batch_allocation", None) else None
@@ -4548,17 +4548,36 @@ def _stored_line_discount_pct(item) -> float:
     return round(float(getattr(item, "line_discount", 0) or 0), 4)
 
 
-def _inclusive_from_stored_line_total(qty, price, tax_rate, line_total) -> float:
-    """Normalize stored line_total to GST-inclusive (taxable writes inflate)."""
+def _inclusive_from_stored_line_total(
+    qty, price, tax_rate, line_total, discount_pct: float = 0.0,
+) -> float:
+    """Normalize stored line_total to GST-inclusive.
+
+    Current writes store GST-inclusive amounts (after line discount). Legacy
+    rows sometimes stored the taxable (excl. GST) portion — inflate those
+    only when ``line_total`` matches the expected exclusive amount.
+
+    Do NOT inflate an already-inclusive discounted total. Example:
+    rate 300 incl. 8% GST, 10% discount → stored 270. Blindly doing
+    ``270 × 1.08`` yields 291.60 and overstates GST/payable.
+    """
     lt = float(line_total or 0)
     rate = float(tax_rate or 0)
     gross = round(float(qty or 0) * float(price or 0), 2)
     if lt <= 0:
         return lt
-    if rate > 0:
-        inflated = round(lt * (1 + rate / 100.0), 2)
-        if inflated <= gross + 0.05:
-            return inflated
+    if rate <= 0 or gross <= 0:
+        return round(lt, 2)
+
+    disc = max(0.0, min(100.0, float(discount_pct or 0)))
+    expected_incl = round(gross * (1.0 - disc / 100.0), 2)
+    expected_excl = round(expected_incl * 100.0 / (100.0 + rate), 2)
+    gross_excl = round(gross * 100.0 / (100.0 + rate), 2)
+
+    # Legacy taxable write — matches exclusive of the discounted (or full) inclusive.
+    if abs(lt - expected_excl) <= 0.05 or (disc <= 0 and abs(lt - gross_excl) <= 0.05):
+        return round(lt * (1.0 + rate / 100.0), 2)
+
     return round(lt, 2)
 
 
@@ -4572,7 +4591,7 @@ def _display_line_discount_pct(
     if float(header_discount or 0) > 0:
         return 0.0
     gross = round(float(qty or 0) * float(price or 0), 2)
-    inclusive = _inclusive_from_stored_line_total(qty, price, tax_rate, line_total)
+    inclusive = _inclusive_from_stored_line_total(qty, price, tax_rate, line_total, 0.0)
     if gross <= 0 or inclusive <= 0 or inclusive >= gross - 0.005:
         return 0.0
     return round(max(0.0, min(100.0, (1.0 - inclusive / gross) * 100.0)), 2)

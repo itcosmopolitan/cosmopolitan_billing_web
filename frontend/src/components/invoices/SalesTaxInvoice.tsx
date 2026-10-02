@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 import amountToWords from '@/utils/amountToWords'
-import { calcInvoiceSummary } from '@/utils/taxCalc'
+import { calcInvoiceSummary, exclusiveFromInclusive } from '@/utils/taxCalc'
 
 export interface InvoiceLineItem {
   itemNo?: string
@@ -76,16 +76,20 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   const customerName = `${sale?.customerName || sale?.customer_name || ''}`.trim()
   const isWalkin = !customerName || customerName.toLowerCase() === 'walk-in' || customerName.toLowerCase() === 'walkin'
   const rawItems = Array.isArray(sale?.items) ? sale.items : []
-  const lineItems = rawItems.map((item: any) => {
+  const summary = calcInvoiceSummary(rawItems, sale)
+  const subtotal = summary.subtotal
+  const totalGst = summary.taxTotal
+  const totalInclGst = summary.total
+  const discountAmount = summary.discountAmount
+  const discountPct = subtotal > 0 && discountAmount > 0 ? Math.round((discountAmount / (subtotal + totalGst)) * 100) : 0
+  const gstRatePercent = parseNumber(sale?.gstRatePercent ?? sale?.tax_rate_percent ?? sale?.taxRate ?? sale?.tax_rate ?? sale?.taxPercent ?? sale?.tax_percent ?? 0)
+
+  const lineItems = rawItems.map((item: any, index: number) => {
     const qty = parseNumber(item?.qty ?? item?.quantity ?? 0)
-    const rate = parseNumber(item?.price ?? item?.rate ?? 0)
-    const lineTotal = parseNumber(item?.lineTotal ?? item?.total ?? qty * rate)
+    const inclusiveRate = parseNumber(item?.price ?? item?.rate ?? 0)
     const lineTaxRate = parseNumber(item?.taxRate ?? item?.tax_rate ?? 0)
-    const gstAmount = parseNumber(
-      item?.gstAmount ?? item?.taxAmount ?? item?.tax_amount ??
-      (lineTotal * lineTaxRate) / (100 + lineTaxRate),
-    )
-    const discountPct = parseNumber(item?.discount ?? item?.discPercent ?? item?.disc_percent ?? item?.discount_pct ?? 0)
+    const discountPctLine = parseNumber(item?.discount ?? item?.discPercent ?? item?.disc_percent ?? item?.discount_pct ?? 0)
+    const detail = summary.lineDetails?.[index] ?? { taxable: 0, gst: 0 }
     const metadata = getInvoiceItemMetadata(item)
     return {
       itemNo: item?.itemNo || item?.item_no || '',
@@ -95,20 +99,12 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
       origin: metadata.origin,
       units: metadata.units,
       qty,
-      rate,
-      discountPct: discountPct || undefined,
-      gstAmount,
-      lineTotal,
+      rate: exclusiveFromInclusive(inclusiveRate, lineTaxRate),
+      discountPct: discountPctLine || undefined,
+      gstAmount: detail.gst,
+      lineTotal: detail.taxable,
     }
   })
-
-  const summary = calcInvoiceSummary(rawItems, sale)
-  const subtotal = summary.subtotal
-  const totalGst = summary.taxTotal
-  const totalInclGst = summary.total
-  const discountAmount = summary.discountAmount
-  const discountPct = subtotal > 0 && discountAmount > 0 ? Math.round((discountAmount / (subtotal + totalGst)) * 100) : 0
-  const gstRatePercent = parseNumber(sale?.gstRatePercent ?? sale?.tax_rate_percent ?? sale?.taxRate ?? sale?.tax_rate ?? sale?.taxPercent ?? sale?.tax_percent ?? 0)
   const postingDate = `${sale?.date || sale?.invoiceDate || sale?.invoice_date || ''}`.trim()
 
   const customerAddressLines = [
@@ -313,7 +309,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   <th>Origin</th>
                   <th>Units</th>
                   <th className="num">Qty</th>
-                  <th className="num">Rate</th>
+                  <th className="num">Rate (Excl. GST)</th>
                   <th className="num">Disc %</th>
                   <th className="num">GST</th>
                   <th className="num">Amount</th>
@@ -350,16 +346,9 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 <table className="totals">
                   <tr>
                     <td colSpan={6}></td>
-                    <td className="tlabel">Total MVR Excl. GST</td>
+                    <td className="tlabel">Subtotal</td>
                     <td className="tval">{formatNumber(invoice.totalExclGst)}</td>
                   </tr>
-                  {invoice.discountAmount ? (
-                    <tr>
-                      <td colSpan={6}></td>
-                      <td className="tlabel">Discount ({invoice.discountPct ?? 0}%)</td>
-                      <td className="tval">-{formatNumber(invoice.discountAmount)}</td>
-                    </tr>
-                  ) : null}
                   <tr>
                     <td colSpan={6}></td>
                     <td className="tlabel">{invoice.gstRatePercent}% GST</td>
@@ -367,11 +356,14 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   </tr>
                   <tr className="grand">
                     <td colSpan={6}></td>
-                    <td className="tlabel grand">Total MVR Incl. GST</td>
+                    <td className="tlabel grand">Total Payable (Inc. GST)</td>
                     <td className="tval grand">{formatNumber(invoice.totalInclGst)}</td>
                   </tr>
                 </table>
 
+                {invoice.discountAmount ? (
+                  <div className="discount-note">Discount Amount: -{formatNumber(invoice.discountAmount)}</div>
+                ) : null}
                 <div className="amount-words">******* {invoice.amountInWords}</div>
 
                 <div className="payment-section">
@@ -630,8 +622,14 @@ const styles = `
     border-top: 1.5px solid #1b3e6f;
     font-weight: bold;
   }
-  .amount-words {
+  .discount-note {
     margin-top: 10px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+  .amount-words {
+    margin-top: 6px;
     font-size: 10.5px;
     font-weight: bold;
     letter-spacing: 0.5px;

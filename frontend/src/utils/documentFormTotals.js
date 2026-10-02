@@ -1,5 +1,5 @@
 /** Line + document-level discount rollup for sales/purchase forms (POS parity). */
-import { allocateFlatShares, lineTaxAmount } from '@/utils/taxCalc'
+import { allocateFlatShares, lineTaxAmount, exclusiveFromInclusive, inclusiveFromExclusive } from '@/utils/taxCalc'
 import { roundAmount } from '@/utils/decimalPrecision'
 
 export function lineDiscountAmount(it, gross) {
@@ -13,6 +13,22 @@ export function lineNetAmount(it, lineGross) {
   const grossFn = lineGross || ((row) => Number(row.qty || 0) * Number(row.price || 0))
   const gross = grossFn(it)
   return roundAmount(Math.max(0, gross - lineDiscountAmount(it, gross)))
+}
+
+/** GST on the discounted inclusive line (optional entity share already removed). */
+export function lineTaxDisplay(it, lineGross, entityDiscountShare = 0) {
+  const after = roundAmount(Math.max(0, lineNetAmount(it, lineGross) - (Number(entityDiscountShare) || 0)))
+  return lineTaxAmount(after, Number(it.taxRate || 0))
+}
+
+/** Unit rate shown excl. GST (catalog/transaction prices stay inclusive). */
+export function displayExclRate(inclusiveUnit, taxRate) {
+  return exclusiveFromInclusive(inclusiveUnit, taxRate)
+}
+
+/** Persist cashier excl. GST entry as inclusive unit price. */
+export function inclusiveRateFromExclInput(exclusiveUnit, taxRate) {
+  return inclusiveFromExclusive(exclusiveUnit, taxRate)
 }
 
 export function hasLineLevelDiscount(items) {

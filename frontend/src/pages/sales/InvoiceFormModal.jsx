@@ -17,7 +17,7 @@ import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 import {
   customerRequiresImmediatePayment,
@@ -335,8 +335,9 @@ export default function InvoiceFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 95, textAlign: 'right' }}>Price</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
@@ -351,6 +352,7 @@ export default function InvoiceFormModal({
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               const lineTotal = lineNetAmount(it)
+              const lineTax = lineTaxDisplay(it, undefined, discShares[i] || 0)
               const margin = lineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
                 <tr key={i}>
@@ -381,8 +383,13 @@ export default function InvoiceFormModal({
                       min="0"
                       step={amountInputStep()}
                       style={numInputStyle}
-                      value={it.price}
-                      onChange={(e) => { const n = [...invoiceForm.items]; n[i].price = e.target.value; pif('items', n) }} />
+                      value={displayExclRate(it.price, it.taxRate)}
+                      title="Rate excl. GST"
+                      onChange={(e) => {
+                        const n = [...invoiceForm.items]
+                        n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                        pif('items', n)
+                      }} />
                   </td>
                   <td>
                     <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>
@@ -397,6 +404,9 @@ export default function InvoiceFormModal({
                         {type}
                       </button>
                     </div>
+                  </td>
+                  <td className="text-right mono" style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                    {fmt(lineTax)}
                   </td>
                   <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
                     <MarginBadge margin={margin} />

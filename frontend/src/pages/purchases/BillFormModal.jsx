@@ -33,7 +33,7 @@ import { emptyPurchaseLine, projectedBranchCost } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, formatAmountNumber, qtyInputStep, roundAmount, roundQty } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
 const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
@@ -277,8 +277,9 @@ export default function BillFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 108, textAlign: 'right' }}>Cost</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Cost (Excl.)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total</th>
               <th style={{ width: 60 }} />
@@ -292,6 +293,7 @@ export default function BillFormModal({
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
               const lineTotal = lineNetAmount(it, costLineGross)
+              const lineTax = lineTaxDisplay(it, costLineGross, discShares[i] || 0)
               const margin = purchaseLineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               const costPreview = lineBranchCostPreview(it)
               return (
@@ -319,8 +321,13 @@ export default function BillFormModal({
                         min="0"
                         step={amountInputStep()}
                         style={numInputStyle}
-                        value={it.cost}
-                        onChange={(e) => { const n = [...billForm.items]; n[i].cost = e.target.value; pbf('items', n) }} />
+                        value={displayExclRate(it.cost, it.taxRate)}
+                        title="Cost excl. GST"
+                        onChange={(e) => {
+                          const n = [...billForm.items]
+                          n[i].cost = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                          pbf('items', n)
+                        }} />
                       {costPreview && (
                         <div
                           style={{
@@ -362,6 +369,9 @@ export default function BillFormModal({
                         </button>
                       </div>
                     </td>
+                    <td className="text-right mono" style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                      {fmt(lineTax)}
+                    </td>
                     <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
                       <MarginBadge margin={margin} />
                     </td>
@@ -384,7 +394,7 @@ export default function BillFormModal({
                     <tr>
                       {/* Batch capture row spans all line-item columns. Compact
                           inputs for lot # / mfg / expiry. */}
-                      <td colSpan={7} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
+                      <td colSpan={8} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', fontSize: 12 }}>
                           <span style={{ color: 'var(--text-muted)', fontWeight: 500, minWidth: 90, paddingBottom: 8 }}>
                             🧴 Batch capture:

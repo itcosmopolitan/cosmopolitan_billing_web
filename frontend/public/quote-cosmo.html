@@ -453,15 +453,16 @@
     return Number.isFinite(amount) ? amount : 0
   }
 
-  function quoteLineVatAmount(line, pricesIncludingVat) {
+  function roundNumber(n) {
+    return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100
+  }
+
+  function quoteLineVatAmount(line, _pricesIncludingVat) {
     const amount = quoteLineAmount(line)
     const rate = Number(line.taxRate || line.tax_rate || 0)
-    if (!rate) return 0
-    const inclusive = line.pricesIncludingVat || line.prices_including_vat || pricesIncludingVat
-    if (inclusive) {
-      return amount - (amount / (1 + rate / 100))
-    }
-    return amount * rate / 100
+    if (!rate || amount <= 0) return 0
+    // Line amounts are GST-inclusive after discount — extract GST from remaining.
+    return roundNumber(amount * rate / (100 + rate))
   }
 
   function groupVatRows(items, pricesIncludingVat) {
@@ -678,9 +679,20 @@
       phone: payload?.branch?.phone || payload?.branch?.phoneNo || payload?.branch?.phone_no || payload?.branch?.tel || '',
     }
     const items = quote.items || []
-    const subtotal = Number(quote.subtotal ?? 0)
-    const taxTotal = Number(quote.taxTotal ?? quote.tax_total ?? 0)
-    const total = Number(quote.total ?? subtotal + taxTotal)
+    // Recompute GST from discounted inclusive line totals (ignore stale taxTotal).
+    let taxTotal = 0
+    let taxable = 0
+    let payable = 0
+    items.forEach((line) => {
+      const amount = quoteLineAmount(line)
+      const tax = quoteLineVatAmount(line, true)
+      taxTotal += tax
+      taxable += roundNumber(amount - tax)
+      payable += amount
+    })
+    taxTotal = roundNumber(taxTotal)
+    const subtotal = roundNumber(taxable)
+    const total = roundNumber(payable)
     const taxPercent = quote.taxPercent ?? quote.tax_percent ?? (subtotal ? Math.round((taxTotal / subtotal) * 100) : 0)
     const pages = paginateItems(items, 16)
     const totals = {

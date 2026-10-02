@@ -2,8 +2,9 @@
  * Invoice template config — persisted via GET/PUT /settings/invoice-template.
  */
 import { useEffect, useState } from 'react'
-import { formatAmountNumber, formatQtyNumber, roundAmount } from '@/utils/decimalPrecision'
+import { formatAmountNumber, formatQtyNumber } from '@/utils/decimalPrecision'
 import { settingsAPI } from '@/api'
+import { displayExclusiveUnitRate, lineGstFromInclusive } from '@/utils/taxCalc'
 
 export const INVOICE_CONFIG_CHANGED_EVENT = 'invoice-template-config-changed'
 
@@ -107,7 +108,7 @@ export function getColumnDefinitions(config) {
   cols.push({ key: 'origin', label: 'Origin', width: '7%', align: 'left' })
   cols.push({ key: 'units', label: 'Units', width: '7%', align: 'left' })
   cols.push({ key: 'qty', label: 'Qty', width: '5%', align: 'right' })
-  cols.push({ key: 'rate', label: 'Rate', width: '12%', align: 'right' })
+  cols.push({ key: 'rate', label: 'Rate (Excl. GST)', width: '12%', align: 'right' })
   if (config.showDisc) cols.push({ key: 'disc', label: 'Disc %', width: '6%', align: 'right' })
   cols.push({ key: 'gst', label: 'GST', width: '8%', align: 'right' })
   cols.push({ key: 'amount', label: 'Amount', width: '9%', align: 'right' })
@@ -136,16 +137,13 @@ export function getItemCell(item, field, config) {
   if (field === 'units') return item.units || item.unit || ''
   if (field === 'disc' && config.showDisc) return `${item.discount ?? item.discPercent ?? 0}%`
   if (field === 'qty') return formatQtyNumber(item.qty || item.quantity || 0)
-  if (field === 'rate') return formatAmountNumber(item.price ?? item.rate)
-  if (field === 'gst') {
-    const qty = Number(item.qty || item.quantity || 0)
-    const rate = Number(item.price ?? item.rate ?? 0)
-    const discountPct = Number(item.discount ?? item.discPercent ?? 0)
-    const amount = Number(item.lineTotal ?? item.total ?? qty * rate)
-    const taxable = discountPct ? amount * (1 - discountPct / 100) : amount
-    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    return formatAmountNumber(roundAmount((taxable * taxRate) / 100))
+  if (field === 'rate') {
+    return formatAmountNumber(displayExclusiveUnitRate(
+      item.price ?? item.rate,
+      item.taxRate ?? item.tax_rate,
+    ))
   }
+  if (field === 'gst') return formatAmountNumber(lineGstFromInclusive(item))
   if (field === 'amount') return formatAmountNumber(item.lineTotal || item.total || (item.qty * item.price))
   return ''
 }

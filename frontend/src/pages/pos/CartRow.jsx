@@ -12,6 +12,11 @@ import {
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import { posLineMargin } from '@/utils/marginCalc'
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
+import {
+  displayExclusiveUnitRate,
+  storeInclusiveUnitRate,
+  lineTaxAmount,
+} from '@/utils/taxCalc'
 
 /** Move focus to the same column on the previous/next cart line (↑/↓). */
 function handleCartFieldArrowNav(e, field, cartIndex) {
@@ -67,6 +72,11 @@ export default function CartRow({
   entityDiscountShare = 0,
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
+  const exclRate = displayExclusiveUnitRate(item.price, item.taxRate)
+  const lineTax = lineTaxAmount(
+    Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0))),
+    item.taxRate,
+  )
   const hsn = item.hsnCode || '—'
   const metadata = getInvoiceItemMetadata(item)
   const uom = metadata.units === '' ? '—' : metadata.units
@@ -286,14 +296,15 @@ export default function CartRow({
             data-pos-cart-index={cartIndex}
             min={0}
             step={amountInputStep()}
-            value={item.price}
-            onChange={(e) => onPriceChange?.(roundAmount(Number(e.target.value) || 0))}
+            value={exclRate}
+            onChange={(e) => onPriceChange?.(storeInclusiveUnitRate(Number(e.target.value) || 0, item.taxRate))}
             onKeyDown={(e) => handleCartFieldArrowNav(e, 'price', cartIndex)}
             style={{ width: 86, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
-            aria-label={`Rate for ${item.name}`}
+            aria-label={`Rate excl. GST for ${item.name}`}
+            title="Rate excl. GST"
           />
         ) : (
-          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }}>{fmt(item.price)}</span>
+          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">{fmt(exclRate)}</span>
         )}
       </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
@@ -323,6 +334,9 @@ export default function CartRow({
                     style={{ border: 'none', background: discType === 'flat' ? 'var(--accent-bg)' : 'transparent', color: discType === 'flat' ? 'var(--accent)' : 'var(--text-muted)', cursor: disableDiscount ? 'not-allowed' : 'pointer', fontSize: 11, padding: '4px 7px', fontWeight: 600 }}>MVR</button>
           </div>
         </div>
+      </td>
+      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', verticalAlign: 'top' }} title="GST on discounted amount">
+        {fmt(lineTax)}
       </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
         <MarginBadge margin={margin} />
