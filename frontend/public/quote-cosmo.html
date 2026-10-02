@@ -322,6 +322,12 @@
   .thankyou { margin-top: 14px; font-size: 11px; font-weight: 700; text-align: center; }
   .signoff { display: flex; justify-content: space-between; margin-top: 20px; font-size: 11px; }
   .amount-words {
+    margin-top: 6px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+  .discount-note {
     margin-top: 10px;
     font-size: 10.5px;
     font-weight: bold;
@@ -446,23 +452,43 @@
     return value ? 'Yes' : 'No'
   }
 
+  function roundNumber(n) {
+    return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100
+  }
+
   function quoteLineAmount(line) {
     const qty = Number(line.qty || 0)
     const price = Number(line.price || 0)
-    const amount = Number(line.lineTotal ?? (qty * price))
-    return Number.isFinite(amount) ? amount : 0
+    const discountPct = Math.min(100, Math.max(0, Number(line.discount || line.line_discount || line.discPercent || 0)))
+    const gross = roundNumber(qty * price)
+    const fromDisc = roundNumber(gross * (1 - discountPct / 100))
+    const stored = Number(line.lineTotal ?? line.total ?? 0)
+    if (discountPct > 0) return fromDisc
+    if (stored > 0) return roundNumber(stored)
+    return fromDisc
   }
 
-  function roundNumber(n) {
-    return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100
+  function exclusiveFromInclusive(inclusive, taxRate) {
+    const amount = Number(inclusive) || 0
+    const rate = Number(taxRate) || 0
+    if (amount <= 0) return 0
+    if (rate <= 0) return roundNumber(amount)
+    return roundNumber((amount * 100) / (100 + rate))
   }
 
   function quoteLineVatAmount(line, _pricesIncludingVat) {
     const amount = quoteLineAmount(line)
     const rate = Number(line.taxRate || line.tax_rate || 0)
     if (!rate || amount <= 0) return 0
-    // Line amounts are GST-inclusive after discount — extract GST from remaining.
     return roundNumber(amount * rate / (100 + rate))
+  }
+
+  function quoteLineTaxable(line) {
+    return roundNumber(quoteLineAmount(line) - quoteLineVatAmount(line))
+  }
+
+  function quoteExclusiveRate(line) {
+    return exclusiveFromInclusive(Number(line.price || 0), Number(line.taxRate || line.tax_rate || 0))
   }
 
   function groupVatRows(items, pricesIncludingVat) {
@@ -481,9 +507,10 @@
       }
       const amount = quoteLineAmount(line)
       const taxAmount = quoteLineVatAmount(line, pricesIncludingVat)
+      const taxable = roundNumber(amount - taxAmount)
       groups[key].lineAmount += amount
-      groups[key].invoiceDiscountBase += amount
-      groups[key].vatBase += amount
+      groups[key].invoiceDiscountBase += taxable
+      groups[key].vatBase += taxable
       groups[key].vatAmount += taxAmount
     })
     return Object.values(groups)
@@ -523,8 +550,6 @@
     const shipmentMethod = quote.shipmentMethod || quote.shipment_method || ''
     const pricesIncludingVat = quote.pricesIncludingVat || quote.prices_including_vat || false
     const paymentDiscountOnVat = Number(quote.paymentDiscountOnVat ?? quote.payment_discount_on_vat ?? 0)
-    const documentDiscount = Number(quote.discount ?? quote.discount_amount ?? 0)
-    const grossAmount = (quote.items || []).reduce((sum, line) => sum + quoteLineAmount(line), 0)
     const customerRemarks = quote.notes || quote.remark || quote.remarks || ''
 
     return `
@@ -590,7 +615,7 @@
               <th>Packaging</th>
               <th>Unit of<br>Measure</th>
               <th class="num">Quantity</th>
-              <th class="num">Unit Price</th>
+              <th class="num">Rate (Excl. GST)</th>
               <th class="num">Discount<br>%</th>
               <th>Allow<br>Invoice<br>Discount</th>
               <th>GST<br>Identifier</th>
@@ -605,11 +630,11 @@
                 <td>${escapeHtml(line.packing ?? '')}</td>
                 <td>${escapeHtml(line.unit || line.units || '')}</td>
                 <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
-                <td class="num">${formatNumber(line.price)}</td>
+                <td class="num">${formatNumber(quoteExclusiveRate(line))}</td>
                 <td class="num">${escapeHtml(Number(line.discount || line.line_discount || 0).toFixed(2))}</td>
                 <td>${escapeHtml(line.allowInvoiceDiscount || line.allow_invoice_discount ? 'Yes' : 'No')}</td>
                 <td>${escapeHtml(line.vatIdentifier || line.vat_identifier || 'GST')}</td>
-                <td class="num">${formatNumber(quoteLineAmount(line))}</td>
+                <td class="num">${formatNumber(quoteLineTaxable(line))}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -617,13 +642,12 @@
 
         ${pageIndex === totalPages - 1 ? `
         <table class="totals">
-          <tr><td colspan="8"></td><td class="tlabel">Gross Amount (Inc. GST)</td><td class="tval">${formatNumber(grossAmount)}</td></tr>
-          ${documentDiscount > 0 ? `<tr><td colspan="8"></td><td class="tlabel">Document Discount</td><td class="tval">-${formatNumber(documentDiscount)}</td></tr>` : ''}
-          <tr><td colspan="8"></td><td class="tlabel">Total MVR Excl. GST</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
+          <tr><td colspan="8"></td><td class="tlabel">Subtotal</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
           <tr><td colspan="8"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
-          <tr><td colspan="8"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>
-          <tr class="grand"><td colspan="8"></td><td class="tlabel">Total MVR Incl. GST</td><td class="tval">${formatNumber(totals.total)}</td></tr>
+          ${paymentDiscountOnVat > 0 ? `<tr><td colspan="8"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>` : ''}
+          <tr class="grand"><td colspan="8"></td><td class="tlabel">Total Payable (Inc. GST)</td><td class="tval">${formatNumber(totals.total)}</td></tr>
         </table>
+        ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
         <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
         <div class="quote-terms-box">
           <div class="payment-row">
@@ -693,12 +717,18 @@
     taxTotal = roundNumber(taxTotal)
     const subtotal = roundNumber(taxable)
     const total = roundNumber(payable)
+    const exclGross = roundNumber(items.reduce((sum, line) => {
+      const qty = Number(line.qty || 0)
+      return sum + qty * quoteExclusiveRate(line)
+    }, 0))
+    const discountAmount = roundNumber(Math.max(0, exclGross - subtotal))
     const taxPercent = quote.taxPercent ?? quote.tax_percent ?? (subtotal ? Math.round((taxTotal / subtotal) * 100) : 0)
     const pages = paginateItems(items, 16)
     const totals = {
       subtotal,
       taxTotal,
       total,
+      discountAmount,
       taxLabel: `${taxPercent}% GST`,
     }
     const allPages = pages.map((pageItems, pageIndex) => ({

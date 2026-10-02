@@ -10,7 +10,7 @@ import { exportInvoicePdf } from '@/utils/exportInvoicePdf'
 import amountToWords from '@/utils/amountToWords'
 import { settingsAPI } from '@/api'
 import { formatSettlementLabel } from '@/utils/storeCredit'
-import { calcInvoiceSummary, displayExclusiveUnitRate, lineGstFromInclusive } from '@/utils/taxCalc'
+import { calcInvoiceSummary, displayExclusiveUnitRate, lineGstFromInclusive, lineTaxableFromInclusive } from '@/utils/taxCalc'
 
 const formatNumber = (value, options = {}) => {
   const number = Number(value)
@@ -124,7 +124,6 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     const inclusiveRate = Number(item.price || item.rate || 0)
     const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
     const discountPct = Number(item.discount || item.discPercent || 0)
-    const amount = Number(item.lineTotal || item.total || qty * inclusiveRate)
     switch (key) {
       case 'description': return item.name || ''
       case 'hsn': return item.hsnCode || item.hsn_code || ''
@@ -136,7 +135,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
       case 'rate': return displayExclusiveUnitRate(inclusiveRate, taxRate)
       case 'disc': return discountPct
       case 'gst': return lineGstFromInclusive(item)
-      case 'amount': return amount
+      case 'amount': return lineTaxableFromInclusive(item)
       default: return ''
     }
   }
@@ -170,9 +169,8 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     const dueDate = sale.dueDate || sale.due_date || null
     const paymentTerms = sale.paymentTerms || sale.payment_terms || '30 DAYS'
     const customerId = sale.customerCode || sale.customer_code || sale.customerId || sale.customer_id || '—'
-    const totalInWords = amountToWords(sale.total, '—')
-
     const invoiceSummary = calcInvoiceSummary(sale.items || [], sale)
+    const totalInWords = amountToWords(invoiceSummary.total, '—')
     const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0)
       || (invoiceSummary.subtotal ? Math.round((invoiceSummary.taxTotal / invoiceSummary.subtotal) * 100) : 0)
 
@@ -293,14 +291,8 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
 
         <div class="divider"></div>
         <table class="summary">
-          ${invoiceSummary.discountAmount ? `
           <tr>
-            <td>Discount</td>
-            <td class="right">-${formatNumber(invoiceSummary.discountAmount)}</td>
-          </tr>
-          ` : ''}
-          <tr>
-            <td>Total MVR Excl. GST</td>
+            <td>Subtotal</td>
               <td class="right">${formatNumber(invoiceSummary.subtotal)}</td>
           </tr>
           ${`
@@ -314,6 +306,13 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
             <td class="right">${formatNumber(invoiceSummary.total)}</td>
           </tr>
         </table>
+
+        ${invoiceSummary.discountAmount ? `
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:8px;font-weight:700;">
+            <div>Discount Amount</div>
+            <div style="text-align:right">-${formatNumber(invoiceSummary.discountAmount)}</div>
+          </div>
+        ` : ''}
 
         ${config.showPayment ? `
           <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:8px;">
@@ -391,16 +390,20 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
   }
 
   const shareWhatsApp = () => {
-    const items = (sale.items || []).map(i => `• ${i.name} x${i.qty} = MVR${i.lineTotal || i.qty * i.price}`).join('\n')
+    const summary = calcInvoiceSummary(sale.items || [], sale)
+    const items = (sale.items || []).map((item) => {
+      const net = lineTaxableFromInclusive(item)
+      return `• ${item.name} x${item.qty} = MVR${net}`
+    }).join('\n')
     const msg = `*Cosmopolitan — ${branch?.name}*\n` +
       `Invoice: *${sale.number}*\n` +
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
       `─────────────────\n` +
-      `Taxable amount: MVR${(sale.subtotal || 0).toLocaleString('en-MV')}\n` +
-      (sale.discount ? `Discount: -MVR${sale.discount.toLocaleString('en-MV')}\n` : '') +
-      `Tax amount: MVR${(sale.taxTotal || sale.tax_total || 0).toLocaleString('en-MV')}\n` +
-      `*TOTAL: MVR${(sale.total || 0).toLocaleString('en-MV')}*\n` +
+      `Subtotal: MVR${summary.subtotal.toLocaleString('en-MV')}\n` +
+      (summary.discountAmount ? `Discount: -MVR${summary.discountAmount.toLocaleString('en-MV')}\n` : '') +
+      `GST: MVR${summary.taxTotal.toLocaleString('en-MV')}\n` +
+      `*TOTAL: MVR${summary.total.toLocaleString('en-MV')}*\n` +
       `Payment: ${formatSettlementLabel({
         paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
         storeCreditApplied: sale.storeCreditApplied,

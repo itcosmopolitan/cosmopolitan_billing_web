@@ -100,8 +100,8 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     branchMerged.phone = branchMerged.phone || org.phone || ''
   }
 
-  const totalInWords = documentType === 'Tax Invoice' && Array.isArray(fullSale?.items)
-    ? amountToWords(calculatePrintedInvoiceTotal(fullSale))
+  const totalInWords = Array.isArray(fullSale?.items) && fullSale.items.length > 0
+    ? amountToWords(calcInvoiceSummary(fullSale.items, fullSale).total)
     : fullSale?.totalInWords || amountToWords(fullSale?.total)
   const saleToSend = {
     ...fullSale,

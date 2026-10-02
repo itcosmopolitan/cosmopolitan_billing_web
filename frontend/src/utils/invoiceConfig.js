@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { formatAmountNumber, formatQtyNumber } from '@/utils/decimalPrecision'
 import { settingsAPI } from '@/api'
-import { displayExclusiveUnitRate, lineGstFromInclusive } from '@/utils/taxCalc'
+import { displayExclusiveUnitRate, lineGstFromInclusive, lineTaxableFromInclusive } from '@/utils/taxCalc'
 
 export const INVOICE_CONFIG_CHANGED_EVENT = 'invoice-template-config-changed'
 
@@ -144,6 +144,6 @@ export function getItemCell(item, field, config) {
     ))
   }
   if (field === 'gst') return formatAmountNumber(lineGstFromInclusive(item))
-  if (field === 'amount') return formatAmountNumber(item.lineTotal || item.total || (item.qty * item.price))
+  if (field === 'amount') return formatAmountNumber(lineTaxableFromInclusive(item))
   return ''
 }

@@ -479,6 +479,37 @@
     return `${day}/${month}/${year}`
   }
 
+  function amountToWords(value, invalidFallback = 'ZERO RUFIYAA AND ZERO LAARI ONLY') {
+    const number = Number(value ?? 0)
+    if (Number.isNaN(number)) return invalidFallback
+    const rupees = Math.floor(number)
+    const laari = Math.round((number - rupees) * 100)
+    const ones = [
+      'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
+      'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN',
+      'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN',
+    ]
+    const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY']
+    const chunk = (n) => {
+      if (n < 20) return ones[n]
+      if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ` ${ones[n % 10]}` : '')
+      const remainder = n % 100
+      return `${ones[Math.floor(n / 100)]} HUNDRED${remainder ? ` ${chunk(remainder)}` : ''}`
+    }
+    if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
+    const parts = []
+    let remaining = rupees
+    let scaleIndex = 0
+    const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
+    while (remaining > 0) {
+      const part = remaining % 1000
+      if (part > 0) parts.unshift(`${chunk(part)}${scale[scaleIndex] ? ` ${scale[scaleIndex]}` : ''}`)
+      remaining = Math.floor(remaining / 1000)
+      scaleIndex += 1
+    }
+    return `${parts.join(' ') || 'ZERO'} RUFIYAA AND ${laari === 0 ? 'ZERO' : chunk(laari)} LAARI ONLY`
+  }
+
   function escapeHtml(value) {
     return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   }
@@ -667,7 +698,7 @@
               <td class="tval grand">${formatNumber(totals.total)}</td>
             </tr>
           </table>
-          ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
+          ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: -${formatNumber(totals.discountAmount)}</div>` : ''}
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
           ${isPurchaseDocument ? '' : `<div class="payment-section">
             <div class="bank-details">
@@ -774,7 +805,7 @@
       total,
       discountAmount,
       lineAmounts,
-      totalInWords: String(sale.totalInWords || payload.totalInWords || '').toUpperCase(),
+      totalInWords: amountToWords(total),
     }
 
     document.getElementById('invoicePages').innerHTML = allPages.map((page) => {

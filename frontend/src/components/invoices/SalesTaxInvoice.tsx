@@ -145,7 +145,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     totalInclGst,
     discountAmount: discountAmount || undefined,
     discountPct: discountPct || undefined,
-    amountInWords: `${sale?.amountInWords || amountToWords(totalInclGst)}`,
+    amountInWords: amountToWords(totalInclGst),
   }
 }
 
@@ -362,7 +362,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 </table>
 
                 {invoice.discountAmount ? (
-                  <div className="discount-note">Discount Amount: -{formatNumber(invoice.discountAmount)}</div>
+                  <div className="discount-note">Discount Amount: {formatNumber(invoice.discountAmount)}</div>
                 ) : null}
                 <div className="amount-words">******* {invoice.amountInWords}</div>
 
