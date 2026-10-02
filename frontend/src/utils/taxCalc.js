@@ -204,6 +204,16 @@ export function calcInvoiceSummary(items = [], sale = {}) {
     }, 0),
   )
 
+  // Excl. GST gross (before discount) — matches Rate × Qty shown on templates.
+  const exclGrossAmount = roundAmount(
+    rows.reduce((sum, item) => {
+      const qty = Number(item?.qty ?? item?.quantity ?? 0)
+      const price = Number(item?.price ?? item?.rate ?? 0)
+      const taxRate = Number(item?.taxRate ?? item?.tax_rate ?? 0)
+      return sum + qty * exclusiveFromInclusive(price, taxRate)
+    }, 0),
+  )
+
   const hasStoredLineTotals = rows.some((item) => Number(item?.lineTotal ?? item?.total ?? 0) > 0)
   const headerDiscount = roundAmount(Number(sale?.discount ?? sale?.discount_amount ?? sale?.discount_amt ?? 0))
 
@@ -235,11 +245,14 @@ export function calcInvoiceSummary(items = [], sale = {}) {
     return { inclusive: after, gst: tax, taxable: lineTaxable }
   })
 
+  const taxableRounded = roundAmount(taxable)
   return {
     grossAmount,
-    subtotal: roundAmount(taxable),
+    exclGrossAmount,
+    subtotal: taxableRounded,
     taxTotal: roundAmount(taxTotal),
-    discountAmount: roundAmount(Math.max(0, grossAmount - payable)),
+    // Discount in excl. GST terms so it matches Rate×Qty − Net Amt on the template.
+    discountAmount: roundAmount(Math.max(0, exclGrossAmount - taxableRounded)),
     total: roundAmount(payable),
     entityShares,
     lineDetails,

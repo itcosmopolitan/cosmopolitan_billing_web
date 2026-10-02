@@ -26,7 +26,7 @@ describe('calcInvoiceSummary', () => {
     )
 
     expect(result.grossAmount).toBe(300)
-    expect(result.discountAmount).toBe(30)
+    expect(result.discountAmount).toBe(27.78)
     expect(result.subtotal).toBe(250)
     expect(result.taxTotal).toBe(20)
     expect(result.total).toBe(270)
@@ -42,7 +42,7 @@ describe('calcInvoiceSummary', () => {
     expect(result.subtotal).toBe(250)
     expect(result.taxTotal).toBe(20)
     expect(result.total).toBe(270)
-    expect(result.discountAmount).toBe(30)
+    expect(result.discountAmount).toBe(27.78)
   })
 
   it('treats inclusive line discounts as before-tax discounts', () => {
@@ -52,7 +52,8 @@ describe('calcInvoiceSummary', () => {
     )
 
     expect(result.grossAmount).toBe(165.49)
-    expect(result.discountAmount).toBe(9.93)
+    // Discount = excl. gross (Rate×Qty) − taxable subtotal
+    expect(result.discountAmount).toBe(9.23)
     expect(result.taxTotal).toBe(11.52)
     expect(result.total).toBe(155.56)
     expect(result.subtotal).toBe(144.04)

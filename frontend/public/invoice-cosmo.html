@@ -483,28 +483,22 @@
     return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   }
 
-  function getLineAmounts(item, documentDiscountShare = 0, useInvoiceFormula = false) {
+  function getLineAmounts(item, documentDiscountShare = 0) {
     const qty = Number(item.qty || item.quantity || 0)
     const inclusiveRate = Number(item.price || item.rate || 0)
-    const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
+    const discountPct = Math.min(100, Math.max(0, Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)))
     const gstRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    const unitPrice = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
-    const rate = useInvoiceFormula
-      ? roundNumber(unitPrice - roundNumber(unitPrice * discountPct / 100))
-      : unitPrice
-    const gross = roundNumber(qty * (useInvoiceFormula ? rate : unitPrice))
+    // Display rate excl. GST (before discount). GST is extracted from the
+    // discounted inclusive amount — never from the pre-discount base.
+    const rate = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
+    const gross = roundNumber(qty * rate)
     const inclusiveGross = roundNumber(qty * inclusiveRate)
     const inclusiveAfterLineDiscount = roundNumber(inclusiveGross * (1 - discountPct / 100))
-    if (useInvoiceFormula) {
-      const net = roundNumber(qty * rate)
-      const gst = roundNumber(qty * unitPrice * gstRate / 100)
-      const discount = roundNumber(qty * unitPrice - net)
-      return { qty, rate, discountPct, gross, net, gst, discount, inclusiveAfterLineDiscount }
-    }
     const inclusiveNet = roundNumber(Math.max(0, inclusiveAfterLineDiscount - documentDiscountShare))
     const gst = gstRate > 0 ? roundNumber(inclusiveNet * gstRate / (100 + gstRate)) : 0
     const net = roundNumber(inclusiveNet - gst)
-    return { qty, rate, discountPct, gross, net, gst, inclusiveAfterLineDiscount }
+    const discount = roundNumber(Math.max(0, gross - net))
+    return { qty, rate, discountPct, gross, net, gst, discount, inclusiveAfterLineDiscount }
   }
 
   function allocateFlatAmount(amounts, flat) {
@@ -755,20 +749,15 @@
     document.title = `${sale.documentType} ${sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
     const branch = payload?.branch || {}
     const items = sale.items || []
-    const useInvoiceFormula = sale.documentType === 'Tax Invoice'
-    const baseLineAmounts = items.map((item) => getLineAmounts(item, 0, useInvoiceFormula))
-    const documentDiscountShares = useInvoiceFormula
-      ? items.map(() => 0)
-      : allocateFlatAmount(
-        baseLineAmounts.map((line) => line.inclusiveAfterLineDiscount),
-        sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0,
-      )
-    const lineAmounts = items.map((item, index) => getLineAmounts(item, documentDiscountShares[index], useInvoiceFormula))
+    const baseLineAmounts = items.map((item) => getLineAmounts(item, 0))
+    const documentDiscountShares = allocateFlatAmount(
+      baseLineAmounts.map((line) => line.inclusiveAfterLineDiscount),
+      sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0,
+    )
+    const lineAmounts = items.map((item, index) => getLineAmounts(item, documentDiscountShares[index]))
     const grossAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gross, 0))
     const netAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
-    const discountAmount = useInvoiceFormula
-      ? roundNumber(lineAmounts.reduce((sum, line) => sum + line.discount, 0))
-      : roundNumber(Math.max(0, grossAmount - netAmount))
+    const discountAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + (line.discount || 0), 0))
     const taxtotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
     const total = roundNumber(netAmount + taxtotal)
     const pages = paginateItems(items, 14)
@@ -785,7 +774,7 @@
       total,
       discountAmount,
       lineAmounts,
-      totalInWords: useInvoiceFormula ? String(sale.totalInWords || payload.totalInWords || '').toUpperCase() : String(sale.totalInWords || '').toUpperCase(),
+      totalInWords: String(sale.totalInWords || payload.totalInWords || '').toUpperCase(),
     }
 
     document.getElementById('invoicePages').innerHTML = allPages.map((page) => {

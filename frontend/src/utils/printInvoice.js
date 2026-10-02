@@ -1,4 +1,5 @@
 import amountToWords from '@/utils/amountToWords'
+import { calcInvoiceSummary } from '@/utils/taxCalc'
 
 function withCashTender(sale) {
   if (!sale) return sale
@@ -26,24 +27,7 @@ function roundCurrency(value) {
 }
 
 function calculatePrintedInvoiceTotal(sale) {
-  const lines = sale?.items || []
-  const netTotal = lines.reduce((sum, item) => {
-    const qty = Number(item.qty || item.quantity || 0)
-    const price = Number(item.price || item.rate || 0)
-    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    const discountPct = Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)
-    const unitPrice = roundCurrency(taxRate > 0 ? price * 100 / (100 + taxRate) : price)
-    const rate = roundCurrency(unitPrice - roundCurrency(unitPrice * discountPct / 100))
-    return sum + roundCurrency(rate * qty)
-  }, 0)
-  const gstTotal = lines.reduce((sum, item) => {
-    const qty = Number(item.qty || item.quantity || 0)
-    const price = Number(item.price || item.rate || 0)
-    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    const unitPrice = roundCurrency(taxRate > 0 ? price * 100 / (100 + taxRate) : price)
-    return sum + roundCurrency(qty * unitPrice * taxRate / 100)
-  }, 0)
-  return roundCurrency(netTotal + gstTotal)
+  return calcInvoiceSummary(sale?.items || [], sale).total
 }
 
 export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax Invoice', fetchSale = true } = {}) {

@@ -2,7 +2,12 @@ import { useRef, forwardRef, useImperativeHandle, useEffect } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { useInvoiceConfig } from '@/utils/invoiceConfig'
 import { formatSettlementLabel } from '@/utils/storeCredit'
-import { calcInvoiceSummary } from '@/utils/taxCalc'
+import {
+  calcInvoiceSummary,
+  displayExclusiveUnitRate,
+  lineGstFromInclusive,
+  lineTaxableFromInclusive,
+} from '@/utils/taxCalc'
 
 // ─── 80mm Thermal Receipt (IFS-style layout) ──────────────────────────────
 // Paper width: 80mm → ~300px printable area at 96dpi (72mm content, 4mm margins)
@@ -39,11 +44,22 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
   }
 
   const summary = calcInvoiceSummary(sale.items || [], sale)
-  const grossAmount = summary.grossAmount || summary.subtotal || 0
   const discountAmount = summary.discountAmount || 0
   const gstAmount = summary.taxTotal || 0
   const payable = summary.total || 0
   const taxableAmount = summary.subtotal || 0
+  const lineDetails = summary.lineDetails || []
+
+  const getLineDisplay = (item, idx) => {
+    const detail = lineDetails[idx]
+    const share = summary.entityShares?.[idx] || 0
+    return {
+      rate: displayExclusiveUnitRate(item.price ?? item.rate, item.taxRate ?? item.tax_rate),
+      disc: Number(item.discount ?? item.discPercent ?? item.disc_percent ?? 0),
+      gst: detail?.gst ?? lineGstFromInclusive(item, share),
+      netAmt: detail?.taxable ?? lineTaxableFromInclusive(item, share),
+    }
+  }
 
   const cashCollected = sale.cashCollected ?? (sale.paymentMode === 'Cash' ? payable : 0)
   const cashRefunded = sale.cashRefunded || 0
@@ -113,9 +129,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           </thead>
           <tbody>
             ${(sale.items || []).map((item, idx) => {
-              const netAmt = item.lineTotal || item.qty * item.price
-              const disc = item.discount ?? item.discPercent ?? 0
-              const gstVal = item.gstValue ?? item.taxAmount ?? 0
+              const line = getLineDisplay(item, idx)
               return `
                 <tr class="item-row">
                   <td colspan="3">
@@ -126,7 +140,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
                   <td colspan="3">
                     <table style="width:100%;font-size:9px;">
                       <tr class="bold"><td>UOM</td><td class="right">Qty</td><td class="right">Rate</td><td class="right">Disc.</td><td class="right">GST</td><td class="right">Net Amt</td></tr>
-                      <tr><td>${item.unit || item.size || item.package || '1/1'}</td><td class="right">${item.qty || 0}</td><td class="right">${formatCurrency(item.price)}</td><td class="right">${disc}%</td><td class="right">${formatCurrency(gstVal)}</td><td class="right">${formatCurrency(netAmt)}</td></tr>
+                      <tr><td>${item.unit || item.size || item.package || '1/1'}</td><td class="right">${item.qty || 0}</td><td class="right">${formatCurrency(line.rate)}</td><td class="right">${line.disc}%</td><td class="right">${formatCurrency(line.gst)}</td><td class="right">${formatCurrency(line.netAmt)}</td></tr>
                     </table>
                   </td>
                 </tr>
@@ -138,13 +152,12 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
 
         <div class="box">
           <div class="box-title">Summary</div>
-          <div class="kv"><span class="label">Gross Amount</span><span class="value">${formatCurrency(grossAmount)}</span></div>
-          <div class="kv"><span class="label">Discount</span><span class="value">${formatCurrency(discountAmount)}</span></div>
-          <div class="kv"><span class="label">Taxable</span><span class="value">${formatCurrency(taxableAmount)}</span></div>
+          <div class="kv"><span class="label">Subtotal</span><span class="value">${formatCurrency(taxableAmount)}</span></div>
           <div class="kv"><span class="label">GST Value</span><span class="value">${formatCurrency(gstAmount)}</span></div>
           <div class="kv bold"><span class="label">Payable</span><span class="value">${formatCurrency(payable)}</span></div>
           <div class="kv bold"><span class="label">Invoice Amount (MVR)</span><span class="value">${formatCurrency(payable)}</span></div>
         </div>
+        ${discountAmount > 0 ? `<div class="kv" style="margin:4px 0;"><span class="label">Discount Amount</span><span class="value">-${formatCurrency(discountAmount)}</span></div>` : ''}
 
         ${config.showPayment !== false ? `
           <div class="box">
@@ -214,13 +227,16 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
   }
 
   const shareWhatsApp = () => {
-    const items = (sale.items || []).map(i => `• ${i.name} x${i.qty} = MVR${i.lineTotal || i.qty * i.price}`).join('\n')
+    const items = (sale.items || []).map((item, idx) => {
+      const line = getLineDisplay(item, idx)
+      return `• ${item.name} x${item.qty} = MVR${line.netAmt}`
+    }).join('\n')
     const msg = `*${company} — ${branchLabel}*\n` +
       `Invoice: *${docNo}*\n` +
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
       `─────────────────\n` +
-      `Gross amount: MVR${grossAmount.toLocaleString('en-MV')}\n` +
+      `Subtotal: MVR${taxableAmount.toLocaleString('en-MV')}\n` +
       (discountAmount ? `Discount: -MVR${discountAmount.toLocaleString('en-MV')}\n` : '') +
       `GST value: MVR${gstAmount.toLocaleString('en-MV')}\n` +
       `*Payable: MVR${payable.toLocaleString('en-MV')}*\n` +
@@ -289,9 +305,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
           <div style={{ flex: 1 }}>Product Description</div>
         </div>
         {(sale.items || []).map((item, idx) => {
-          const netAmt = item.lineTotal || item.qty * item.price
-          const disc = item.discount ?? item.discPercent ?? 0
-          const gstVal = item.gstValue ?? item.taxAmount ?? 0
+          const line = getLineDisplay(item, idx)
           return (
             <div key={idx}>
               <div style={{ display: 'flex', fontSize: 9.5, marginTop: 4 }}>
@@ -307,10 +321,10 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
                 <div style={{ fontWeight: 700, textAlign: 'right' }}>Net Amt</div>
                 <div>{item.unit || item.size || item.package || '1/1'}</div>
                 <div style={{ textAlign: 'right' }}>{item.qty || 0}</div>
-                <div style={{ textAlign: 'right' }}>{fmt(item.price)}</div>
-                <div style={{ textAlign: 'right' }}>{disc}%</div>
-                <div style={{ textAlign: 'right' }}>{fmt(gstVal)}</div>
-                <div style={{ textAlign: 'right' }}>{fmt(netAmt)}</div>
+                <div style={{ textAlign: 'right' }}>{fmt(line.rate)}</div>
+                <div style={{ textAlign: 'right' }}>{line.disc}%</div>
+                <div style={{ textAlign: 'right' }}>{fmt(line.gst)}</div>
+                <div style={{ textAlign: 'right' }}>{fmt(line.netAmt)}</div>
               </div>
               <div style={{ borderTop: '1px dashed #999', margin: '5px 0' }} />
             </div>
@@ -319,13 +333,17 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
 
         <div style={{ border: '1px solid #000', padding: '4px 6px', margin: '6px 0' }}>
           <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, borderBottom: '1px dashed #000', marginBottom: 3, paddingBottom: 2 }}>Summary</div>
-          <div className="kv"><span className="label">Gross Amount</span><span className="value">{fmt(grossAmount)}</span></div>
-          <div className="kv"><span className="label">Discount</span><span className="value">{fmt(discountAmount)}</span></div>
-          <div className="kv"><span className="label">Taxable</span><span className="value">{fmt(taxableAmount)}</span></div>
+          <div className="kv"><span className="label">Subtotal</span><span className="value">{fmt(taxableAmount)}</span></div>
           <div className="kv"><span className="label">GST Value</span><span className="value">{fmt(gstAmount)}</span></div>
           <div className="kv" style={{ fontWeight: 700 }}><span className="label">Payable</span><span className="value">{fmt(payable)}</span></div>
           <div className="kv" style={{ fontWeight: 700 }}><span className="label">Invoice Amount (MVR)</span><span className="value">{fmt(payable)}</span></div>
         </div>
+        {discountAmount > 0 ? (
+          <div className="kv" style={{ margin: '4px 0' }}>
+            <span className="label">Discount Amount</span>
+            <span className="value">-{fmt(discountAmount)}</span>
+          </div>
+        ) : null}
 
         {config.showPayment !== false && (
           <div style={{ border: '1px solid #000', padding: '4px 6px', margin: '6px 0' }}>
