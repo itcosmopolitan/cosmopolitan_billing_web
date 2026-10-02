@@ -73,6 +73,8 @@ const normalizeCartItem = (raw) => {
     costPrice: Number(raw.costPrice) || 0,
     hsnCode: raw.hsnCode || raw.hsn_code || '',
     availableStock: Number(raw.availableStock ?? raw.available_stock) || 0,
+    branchStock: Number(raw.branchStock ?? raw.availableStock ?? raw.available_stock) || 0,
+    poolStock: Number(raw.poolStock ?? raw.pool_stock) || 0,
     taxRate: Number(raw.taxRate ?? raw.tax_rate) || 0,
     // Batch-tracking metadata. `*_tracking` flags drive whether CartRow
     // renders the picker at all. `batchAllocation` is the per-line split
@@ -319,6 +321,14 @@ export const usePOSStore = create((set, get) => ({
     cart: s.cart.map((i) => (
       i.id === id
         ? { ...i, batchAllocation: allocation || [], batchAllocationCustom: !!custom }
+        : i
+    )),
+  })),
+
+  setLineStockAvailability: (id, { availableStock, branchStock, poolStock }) => set((s) => ({
+    cart: s.cart.map((i) => (
+      i.id === id
+        ? { ...i, availableStock, branchStock, poolStock }
         : i
     )),
   })),

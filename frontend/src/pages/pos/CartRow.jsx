@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import MarginBadge from '@/components/MarginBadge'
@@ -70,6 +70,7 @@ export default function CartRow({
   disableDiscount,
   allowPriceEditing = false,
   entityDiscountShare = 0,
+  stockMode = 'branch',
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
   const exclRate = displayExclusiveUnitRate(item.price, item.taxRate)
@@ -80,8 +81,25 @@ export default function CartRow({
   const hsn = item.hsnCode || '—'
   const metadata = getInvoiceItemMetadata(item)
   const uom = metadata.units === '' ? '—' : metadata.units
+  const [batches, setBatches] = useState([])
+  const [loadingBatches, setLoadingBatches] = useState(false)
   const hasStock = item.availableStock != null || item.available_stock != null
   const stockQty = hasStock ? Number(item.availableStock ?? item.available_stock) || 0 : null
+  const branchStockQty = Math.max(0, Number(item.branchStock ?? stockQty ?? 0) || 0)
+  const tracked = Boolean(item.batchTracking || item.batch_tracking)
+  const expiryTracked = Boolean(item.expiryTracking || item.expiry_tracking)
+  const sellableBatches = useMemo(
+    () => stockMode === 'clubbed' && expiryTracked
+      ? batches.filter((batch) => !batchExpiryStatus(batch).expired)
+      : batches,
+    [batches, stockMode, expiryTracked],
+  )
+  const localBatchStock = sellableBatches.reduce((total, batch) => (
+    total + Math.max(0, Number(batch.quantity ?? batch.remaining) || 0)
+  ), 0)
+  const localBatchQtyNeeded = stockMode === 'clubbed'
+    ? Math.min(item.qty, tracked ? localBatchStock : branchStockQty)
+    : item.qty
   const stockExceeded = stockQty != null && item.qty > stockQty
   const discType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
   const discValue = Number(item.lineDiscountValue ?? item.lineDiscountPct ?? item.lineDiscountFlat ?? 0) || 0
@@ -100,11 +118,6 @@ export default function CartRow({
     }
     onQtyChange(roundQty(lastPositiveQtyRef.current || qtyInputStep()))
   }
-
-  const tracked = Boolean(item.batchTracking || item.batch_tracking)
-  const expiryTracked = Boolean(item.expiryTracking || item.expiry_tracking)
-  const [batches, setBatches] = useState([])
-  const [loadingBatches, setLoadingBatches] = useState(false)
 
   // Stash the callbacks in refs so their identity (recreated on every
   // POSPage render as inline arrows) doesn't retrigger the effects below.
@@ -145,15 +158,15 @@ export default function CartRow({
   useEffect(() => {
     if (!tracked) return
     if (item.batchAllocationCustom) return
-    if (batches.length === 0) return
-    const auto = computeAutoAllocation(batches, item.qty)
+    if (sellableBatches.length === 0) return
+    const auto = computeAutoAllocation(sellableBatches, localBatchQtyNeeded)
     const same = JSON.stringify(auto) === JSON.stringify(allocationRef.current || [])
     if (!same) onAllocationChangeRef.current?.(auto, /* custom */ false)
-  }, [batches, item.qty, item.batchAllocationCustom, tracked])
+  }, [sellableBatches, item.qty, localBatchQtyNeeded, item.batchAllocationCustom, tracked])
 
   const strategyLabel = expiryTracked ? 'FEFO' : 'FIFO'
   const allocation = Array.isArray(item.batchAllocation) ? item.batchAllocation : []
-  const allocValid = isAllocationValid(allocation, item.qty)
+  const allocValid = isAllocationValid(allocation, localBatchQtyNeeded)
   const allocated = allocationSum(allocation)
 
   return (
@@ -209,11 +222,20 @@ export default function CartRow({
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 10, rowGap: 2, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
               <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>UOM: {uom}</span>
-              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty != null ? fmtQty(stockQty) : '—'}</span>
+              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>
+                {stockMode === 'clubbed'
+                  ? `Pool: ${stockQty != null ? fmtQty(stockQty) : '—'} · Here: ${fmtQty(branchStockQty)}`
+                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : '—'}`}
+              </span>
               {stockExceeded && (
                 <span title="Stock exceeded" style={{ color: 'var(--amber)', cursor: 'help', fontSize: 12, lineHeight: 1 }} aria-label="Stock exceeded">⚠️</span>
               )}
             </div>
+            {stockMode === 'clubbed' && item.qty > branchStockQty && (
+              <div style={{ marginTop: 3, fontSize: 10.5, color: 'var(--accent)' }}>
+                {fmtQty(item.qty - branchStockQty)} to be fulfilled from pool branches
+              </div>
+            )}
             {tracked && (
               <div style={{ marginTop: 4 }}>
                 {loadingBatches ? (
@@ -226,9 +248,9 @@ export default function CartRow({
                     expiryTracked={expiryTracked}
                     valid={allocValid}
                     allocated={allocated}
-                    qtyNeeded={item.qty}
+                    qtyNeeded={localBatchQtyNeeded}
                     custom={!!item.batchAllocationCustom}
-                    onEdit={() => onEditAllocation && onEditAllocation({ item, batches, allocation })}
+                    onEdit={() => onEditAllocation && onEditAllocation({ item, batches: sellableBatches, allocation, qty: localBatchQtyNeeded })}
                   />
                 )}
               </div>

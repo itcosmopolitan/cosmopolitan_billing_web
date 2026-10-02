@@ -72,11 +72,12 @@ async def record_stock_movement(
     batch_id: Optional[str] = None,
     notes: Optional[str] = None,
     created_by: Optional[str] = None,
+    movement_id: Optional[str] = None,
 ) -> None:
     if as_qty(delta) == 0:
         return
     db.add(StockMovement(
-        id=str(uuid.uuid4()),
+        id=movement_id or str(uuid.uuid4()),
         item_id=item_id,
         branch_id=branch_id,
         delta=as_qty(delta),

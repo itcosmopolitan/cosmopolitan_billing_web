@@ -26,10 +26,11 @@ PERMISSIONS: dict[str, list[str]] = {
     # Branch Items & Stock — view stock, batches; qty changes go via adjustments.*
     "items":       ["view", "export", "adjust"],
     "invoices":  ["view", "create", "edit", "delete", "cancel", "export", "approve"],
-    "pos":       ["use", "discount", "override_price", "refund", "approve_refund",
+    "pos":       ["use", "use_pool_stock", "discount", "override_price", "refund", "approve_refund",
                   "hold_bill", "split_payment", "open_till", "close_till"],
     "purchases": ["view", "create", "edit", "delete", "export", "approve"],
     "transfers":   ["view", "create", "approve", "receive", "delete"],
+    "stock_pools": ["view", "manage"],
     "adjustments": ["view", "create", "approve", "delete"],
     "customers": ["view", "create", "edit", "delete"],
     "vendors":   ["view", "create", "edit", "delete"],

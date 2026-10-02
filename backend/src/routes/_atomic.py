@@ -87,6 +87,7 @@ async def adjust_stock_atomic(
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
     created_by: Optional[str] = None,
+    movement_id: Optional[str] = None,
 ) -> float:
     """Apply `delta` to the (item_id, branch_id) stock row and return the new
     quantity. Creates the row if it doesn't exist (delta becomes the opening
@@ -169,6 +170,7 @@ async def adjust_stock_atomic(
         source_type=source_type,
         source_ref=source_ref,
         created_by=created_by,
+        movement_id=movement_id,
     )
     try:
         from src.notifications.stock_alerts import refresh_stock_alerts_for_item
@@ -249,6 +251,10 @@ async def add_batch_atomic(
     source_ref: Optional[str] = None,
     received_date: Optional[str] = None,
     notes: Optional[str] = None,
+    movement_type: Optional[str] = None,
+    movement_id: Optional[str] = None,
+    movement_source_type: Optional[str] = None,
+    created_by: Optional[str] = None,
 ) -> Optional[ItemBatch]:
     """Create a new batch row AND bump item_stock atomically. Returns the
     persisted ItemBatch (or None if qty <= 0). Caller must `await db.commit()`.
@@ -312,9 +318,11 @@ async def add_batch_atomic(
         item_id=item_id,
         branch_id=branch_id,
         delta=qty,
-        movement_type=mt,
-        source_type=st,
+        movement_type=movement_type or mt,
+        source_type=movement_source_type or st,
         source_ref=source_ref,
+        movement_id=movement_id,
+        created_by=created_by,
     )
     return batch
 
@@ -354,6 +362,7 @@ async def consume_batches_atomic(
     source_type: Optional[str] = None,
     source_ref: Optional[str] = None,
     created_by: Optional[str] = None,
+    movement_id: Optional[str] = None,
 ) -> list[dict]:
     """Deduct `qty` units across batches at (item_id, branch_id).
 
@@ -464,6 +473,7 @@ async def consume_batches_atomic(
             source_type=source_type,
             source_ref=source_ref,
             created_by=created_by,
+            movement_id=movement_id,
         )
         return consumed
 
@@ -531,6 +541,7 @@ async def consume_batches_atomic(
         source_type=source_type,
         source_ref=source_ref,
         created_by=created_by,
+        movement_id=movement_id,
     )
     return consumed
 

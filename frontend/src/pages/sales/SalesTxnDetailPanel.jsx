@@ -95,17 +95,33 @@ export default function SalesTxnDetailPanel({
   const [detail, setDetail] = useState(doc)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState('overview')
+  const [poolAllocations, setPoolAllocations] = useState([])
+  const [poolAllocationsError, setPoolAllocationsError] = useState(false)
 
   useEffect(() => {
     if (!open || !doc?.id) return
     setTab('overview')
     setDetail(doc)
+    setPoolAllocations([])
+    setPoolAllocationsError(false)
     let cancelled = false
     ;(async () => {
       setLoading(true)
       try {
         const full = await meta.fetch(doc.id)
-        if (!cancelled) setDetail({ ...doc, ...full })
+        let allocations = []
+        if (kind === 'invoice' && (full?.poolDrawn || full?.pool_drawn)) {
+          try {
+            allocations = await salesAPI.poolAllocations(doc.id)
+          } catch (error) {
+            console.error('Failed to load invoice stock-pool allocations:', error)
+            if (!cancelled) setPoolAllocationsError(true)
+          }
+        }
+        if (!cancelled) {
+          setDetail({ ...doc, ...full })
+          setPoolAllocations(Array.isArray(allocations) ? allocations : [])
+        }
       } catch {
         /* list row may already include lines */
       } finally {
@@ -336,6 +352,9 @@ export default function SalesTxnDetailPanel({
       tabs={[
         { id: 'overview', label: `${meta.label} details` },
         { id: 'lines', label: `Line items (${lineCount})` },
+        ...(kind === 'invoice' && (detail?.poolDrawn || detail?.pool_drawn)
+          ? [{ id: 'pool-stock', label: `Pool stock (${poolAllocations.length})` }]
+          : []),
         { id: 'totals', label: 'Totals' },
         ...(kind === 'invoice' ? [{ id: 'payments', label: `Payments (${paymentCount})` }] : []),
       ]}
@@ -517,6 +536,48 @@ export default function SalesTxnDetailPanel({
               ))}
             </tbody>
           </table>
+        </DetailSection>
+      )}
+
+      {tab === 'pool-stock' && kind === 'invoice' && (
+        <DetailSection title="Cross-branch stock allocation">
+          <div style={{ marginBottom: 10, color: 'var(--text-muted)', fontSize: 12 }}>
+            This invoice and its tax remain with {detail?.branchName || 'the selling branch'}. The rows below show inventory consumed from owning branches.
+          </div>
+          {poolAllocationsError ? (
+            <div style={{ color: 'var(--red)', fontSize: 12.5 }}>Stock-pool allocation details could not be loaded. Check the activity log for the transaction evidence.</div>
+          ) : poolAllocations.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>No cross-branch allocation rows are available.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Owning branch</th>
+                    <th className="text-right">Quantity</th>
+                    <th>Batch</th>
+                    <th>Expiry</th>
+                    <th className="text-right">Unit cost</th>
+                    <th className="text-right">Total cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {poolAllocations.map((allocation) => (
+                    <tr key={allocation.id}>
+                      <td>{allocation.item_name || allocation.item_id}</td>
+                      <td>{allocation.owner_branch_name || allocation.owner_branch_id}</td>
+                      <td className="text-right">{fmtQty(allocation.qty)}</td>
+                      <td>{allocation.source_batch_no || '—'}</td>
+                      <td>{allocation.expiry_date || '—'}</td>
+                      <td className="text-right">{fmt(allocation.unit_cost)}</td>
+                      <td className="text-right">{fmt(allocation.total_cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </DetailSection>
       )}
 

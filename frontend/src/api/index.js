@@ -281,6 +281,7 @@ export const itemsAPI = {
 export const salesAPI = {
   list:    (params) => api.get('/sales/',             { params }),
   get:     (id)     => api.get(`/sales/${id}`),
+  poolAllocations: (id) => api.get(`/sales/${id}/pool-allocations`),
   create:  (data)   => api.post('/sales/', data, { timeout: 30_000 }),
   update:  (id, data) => api.put(`/sales/${id}`, data),
   presignPaymentProof: (id, data) => api.post(`/sales/${id}/payment-proof/presign`, data),
@@ -374,6 +375,17 @@ export const salesAPI = {
     convertToOrder: (id)         => api.post(`/sales/quotations/${id}/convert-to-order`),
     convertToInvoice: (id, body) => api.post(`/sales/quotations/${id}/convert-to-invoice`, body),
   },
+}
+
+export const stockPoolsAPI = {
+  list:       () => api.get('/stock-pools/'),
+  get:        (id) => api.get(`/stock-pools/${id}`),
+  create:     (data) => api.post('/stock-pools/', data),
+  update:     (id, data) => api.patch(`/stock-pools/${id}`, data),
+  delete:     (id) => api.delete(`/stock-pools/${id}`),
+  addBranch:  (id, branch_id) => api.post(`/stock-pools/${id}/branches`, { branch_id }),
+  removeBranch: (id, branchId) => api.delete(`/stock-pools/${id}/branches/${branchId}`),
+  forBranch:  (branchId) => api.get(`/stock-pools/for-branch/${branchId}`),
 }
 
 // ─── Purchases ────────────────────────────────────────────────────────────────
@@ -563,6 +575,7 @@ export const reportsAPI = {
   taxSummary:      (params) => api.get('/reports/tax-summary',      { params }),
   taxSummaryDetail:(params) => api.get('/reports/tax-summary-detail', { params }),
   stockMovement:   (params) => api.get('/reports/stock-movement',   { params }),
+  poolIssues:      (params) => api.get('/reports/pool-issues',       { params }),
   salesRegister:         (params) => api.get('/reports/sales-register',     { params }),
   salesLines:            (params) => api.get('/reports/sales-lines',        { params }),
   dailySales:            (params) => api.get('/reports/daily-sales',        { params }),

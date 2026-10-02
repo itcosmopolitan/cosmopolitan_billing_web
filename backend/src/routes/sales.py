@@ -10,6 +10,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, inspect as sa_inspect, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +20,7 @@ from src.document_numbering import allocate_customer_payment_number, allocate_nu
 from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
 from src.models import (
     AuditLog,
+    Branch,
     Customer,
     CustomerPayment,
     CustomerPaymentAllocation,
@@ -27,6 +29,8 @@ from src.models import (
     Organisation,
     ItemBatch,
     Item,
+    ItemBranchConfig,
+    PoolSaleAllocation,
     Quotation,
     QuotationLineItem,
     QuotationStatus,
@@ -76,6 +80,13 @@ from src.routes._atomic import (
     is_tracked,
     set_batch_quantity_atomic,
 )
+from src.pool_sales import (
+    consume_clubbed_sale_line,
+    reverse_pool_allocations_for_cancel,
+    reverse_pool_allocations_for_return,
+    undo_pool_allocations_for_return,
+)
+from src.stock_pools import active_pool_for_branch, active_pool_members, user_has_permission
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
 from src.routes._serializers import _build_customer_code, get_user_branch_ids
 from src.routes._approval import (
@@ -92,7 +103,7 @@ from src.security import (
     get_allowed_branch_ids,
     require_perm,
 )
-from src.services.audit_service import build_audit_entry
+from src.services.audit_service import add_audit_log, build_audit_entry
 
 router = APIRouter()
 
@@ -512,6 +523,8 @@ class SaleCreate(BaseModel):
     source_order_lines: Optional[List["SourceOrderLineIn"]] = None
     # POS confirmation allows an authorized operator to exceed the account limit.
     allow_credit_over_limit: bool = False
+    stock_mode: Literal["branch", "clubbed"] = "branch"
+    client_request_id: Optional[str] = Field(None, min_length=1, max_length=64)
 
     @field_validator("payment_mode", mode="before")
     @classmethod
@@ -1151,6 +1164,56 @@ async def update_quotation_status(quote_id: str, status: str, db: AsyncSession =
 # See ../cosmopolitan_billing_web_notes/SALES_PHASE_1.md for the rationale.
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
+async def _pool_allocations_for_invoice(db: AsyncSession, invoice_id: str) -> list[dict]:
+    rows = (await db.execute(
+        select(PoolSaleAllocation, Branch.name, Item.name)
+        .join(Branch, Branch.id == PoolSaleAllocation.owner_branch_id)
+        .join(Item, Item.id == PoolSaleAllocation.item_id)
+        .where(PoolSaleAllocation.invoice_id == invoice_id)
+        .order_by(PoolSaleAllocation.created_at, PoolSaleAllocation.id)
+    )).all()
+    return [
+        {
+            "id": allocation.id,
+            "invoice_id": allocation.invoice_id,
+            "invoice_line_id": allocation.invoice_line_id,
+            "pool_id": allocation.pool_id,
+            "sale_branch_id": allocation.sale_branch_id,
+            "owner_branch_id": allocation.owner_branch_id,
+            "owner_branch_name": owner_name,
+            "item_id": allocation.item_id,
+            "item_name": item_name,
+            "qty": allocation.qty,
+            "unit_cost": allocation.unit_cost,
+            "total_cost": round(float(allocation.qty or 0) * float(allocation.unit_cost or 0), 4),
+            "cost_source": allocation.cost_source,
+            "source_batch_id": allocation.source_batch_id,
+            "source_batch_no": allocation.source_batch_no,
+            "expiry_date": allocation.expiry_date,
+            "dest_batch_id": allocation.dest_batch_id,
+            "out_movement_id": allocation.out_movement_id,
+            "in_movement_id": allocation.in_movement_id,
+            "created_at": allocation.created_at,
+        }
+        for allocation, owner_name, item_name in rows
+    ]
+
+
+@router.get("/{invoice_id}/pool-allocations", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+async def get_invoice_pool_allocations(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    invoice = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id == invoice_id)
+    )).scalar_one_or_none()
+    if invoice is None:
+        raise HTTPException(404, "Invoice not found")
+    await _resolve_branch_scope(user, db, invoice.branch_id)
+    return await _pool_allocations_for_invoice(db, invoice.id)
+
+
 @router.get("/{invoice_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(
@@ -1231,6 +1294,11 @@ async def update_invoice(
     if not inv:
         raise HTTPException(404, "Invoice not found")
     await enforce_branch_access(inv.branch_id, user=user, db=db)
+    if inv.pool_drawn:
+        raise HTTPException(
+            409,
+            "Invoices with cross-branch stock allocations cannot be edited; cancel the invoice and create a replacement",
+        )
     await _assert_invoice_editable(db, inv)
 
     inv_status = inv.status.value if hasattr(inv.status, "value") else str(inv.status)
@@ -1380,6 +1448,27 @@ async def create_invoice(
     elif data.sales_order_id:
         inv_origin_early = "sales_order"
 
+    await _resolve_branch_scope(user, db, data.branch_id)
+    if data.client_request_id and inv_origin_early != "pos":
+        raise HTTPException(400, "client_request_id is supported for direct POS checkouts only")
+    if data.client_request_id:
+        existing = (await db.execute(
+            select(SaleInvoice).where(
+                SaleInvoice.branch_id == data.branch_id,
+                SaleInvoice.client_request_id == data.client_request_id,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            response = {
+                "id": existing.id,
+                "number": existing.number,
+                "total": round(float(existing.total or 0), 2),
+                "status": existing.status.value if hasattr(existing.status, "value") else existing.status,
+            }
+            if existing.pool_drawn:
+                response["pool_allocations"] = await _pool_allocations_for_invoice(db, existing.id)
+            return response
+
     # POS live counter: direct commit via pos.use (not invoices.approve).
     # Regular invoices still require invoices.approve for direct commit.
     if inv_origin_early == "pos":
@@ -1392,6 +1481,22 @@ async def create_invoice(
             )
     else:
         direct = await can_direct_commit(user, db, "invoices.approve")
+
+    stock_pool = None
+    pool_members = []
+    if data.stock_mode == "clubbed":
+        if inv_origin_early != "pos":
+            raise HTTPException(400, "Clubbed stock is available only for direct POS checkout")
+        if not await user_has_permission(db, user, "pos.use_pool_stock"):
+            raise HTTPException(403, "Missing permission: pos.use_pool_stock")
+        stock_pool = await active_pool_for_branch(db, data.branch_id, lock=True)
+        if stock_pool is None:
+            raise HTTPException(409, detail={"code": "branch_not_in_active_pool"})
+        if not stock_pool.allow_cross_branch_sales:
+            raise HTTPException(409, detail={"code": "pool_sales_disabled"})
+        pool_members = await active_pool_members(db, stock_pool.id, lock=True)
+        if len(pool_members) < 2:
+            raise HTTPException(409, detail={"code": "branch_not_in_active_pool"})
     # Line amount after line discount; document discount is applied next,
     # then GST is extracted from the remaining inclusive amount.
     await _apply_internal_customer_gst(db, data.customer_id, data.items)
@@ -1477,8 +1582,6 @@ async def create_invoice(
         if remaining_due > 0.001 and not (is_credit_sale and data.allow_credit_over_limit):
             await _validate_unpaid_account_limit(db, data.customer_id, remaining_due)
 
-    await _resolve_branch_scope(user, db, data.branch_id)
-
     inv_origin = (data.origin or "invoice").strip().lower() or "invoice"
     if data.quotation_id:
         inv_origin = "quotation"
@@ -1533,6 +1636,8 @@ async def create_invoice(
         pending_order_id=(data.sales_order_id if not direct else None),
         pending_quote_id=(data.quotation_id if not direct else None),
         quotation_number_snapshot=quotation_number_snapshot,
+        client_request_id=data.client_request_id,
+        pool_drawn=False,
         **invoice_customer_snapshot,
     )
     db.add(inv)
@@ -1541,6 +1646,7 @@ async def create_invoice(
     item_map = await _load_items_by_id(db, item_ids)
     allow_oversell = await get_allow_overselling(db)
 
+    invoice_lines = []
     for item, line_amount, _line_taxable, _line_tax in line_rows:
         item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
@@ -1553,7 +1659,31 @@ async def create_invoice(
             **_snapshot_item_metadata(item_obj, packaging=item.packaging),
         )
         db.add(li)
-        if direct and item.item_id:
+        invoice_lines.append((item, li))
+
+    pool_allocations = []
+    for item, li in sorted(
+        invoice_lines,
+        key=lambda pair: (pair[0].item_id or "", pair[1].id),
+    ):
+        if direct and item.item_id and stock_pool is not None:
+            item_obj = item_map.get(item.item_id)
+            if item_obj is None:
+                raise HTTPException(404, f"Item not found: {item.item_id}")
+            pool_allocations.extend(await consume_clubbed_sale_line(
+                db,
+                item=item_obj,
+                line_input=item,
+                line=li,
+                pool=stock_pool,
+                member_branches=pool_members,
+                sale_branch_id=data.branch_id,
+                invoice_id=inv.id,
+                invoice_number=inv.number,
+                created_by=user.name,
+                allow_oversell=allow_oversell,
+            ))
+        elif direct and item.item_id:
             await _consume_sale_line_stock(
                 db,
                 item=item,
@@ -1607,8 +1737,93 @@ async def create_invoice(
                 db, data.sales_order_id, inv, data.source_order_lines, user=user,
             )
 
+    if pool_allocations:
+        inv.pool_drawn = True
+        pool_id = stock_pool.id
+        pool_name = stock_pool.name
+        allocation_metadata = [
+            {key: value for key, value in allocation.items() if key != "source_manifest"}
+            for allocation in pool_allocations
+        ]
+        allocation_details = "; ".join(
+            (
+                f"{allocation['qty']} x {allocation['item_name']} taken from "
+                f"{allocation['owner_branch_name']}"
+                + (
+                    f" (batch {allocation['source_batch_no']}"
+                    + (f", exp {allocation['expiry_date']}" if allocation["expiry_date"] else "")
+                    + f", cost ₹{float(allocation['unit_cost']):.2f}/unit)"
+                    if allocation["source_batch_no"]
+                    else f" (cost ₹{float(allocation['unit_cost']):.2f}/unit)"
+                )
+            )
+            for allocation in pool_allocations
+        )
+        proof_detail = (
+            f"Stock drawn from other branches (pool \"{pool_name}\"): {allocation_details}. "
+            f"Transferred to {data.branch_name or data.branch_id} to fulfil this sale. "
+            f"Invoice, price and tax remain with the selling branch."
+        )
+        proof_metadata = {
+            "event_type": "pool_stock_draw",
+            "pool_id": pool_id,
+            "pool_name": pool_name,
+            "invoice_id": inv.id,
+            "invoice_number": inv.number,
+            "sale_branch_id": data.branch_id,
+            "allocations": allocation_metadata,
+            "acting_user_id": user.id,
+            "acting_user_name": user.name,
+        }
+        _log_sales_invoice_history(
+            db,
+            user=user,
+            invoice_id=inv.id,
+            invoice_number=inv.number,
+            event_type="pool_stock_draw",
+            detail=proof_detail,
+            metadata=proof_metadata,
+            branch_id=data.branch_id,
+        )
+        audit_branches = {data.branch_id} | {
+            allocation["owner_branch_id"] for allocation in pool_allocations
+        }
+        for audit_branch_id in sorted(audit_branches):
+            add_audit_log(
+                db,
+                action="pool_stock_draw",
+                module="Sales",
+                reference_id=inv.number,
+                detail=proof_detail,
+                user=user,
+                request=request,
+                branch_id=audit_branch_id,
+                metadata={**proof_metadata, "audit_branch_id": audit_branch_id},
+            )
+
     # Draft create stays private — notification fires on submit, not create.
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        if data.client_request_id:
+            existing = (await db.execute(
+                select(SaleInvoice).where(
+                    SaleInvoice.branch_id == data.branch_id,
+                    SaleInvoice.client_request_id == data.client_request_id,
+                )
+            )).scalar_one_or_none()
+            if existing is not None:
+                response = {
+                    "id": existing.id,
+                    "number": existing.number,
+                    "total": round(float(existing.total or 0), 2),
+                    "status": existing.status.value if hasattr(existing.status, "value") else existing.status,
+                }
+                if existing.pool_drawn:
+                    response["pool_allocations"] = await _pool_allocations_for_invoice(db, existing.id)
+                return response
+        raise
 
     # Record a lightweight `created` activity for catalogue expectations
     _log_sales_invoice_history(db, user=user,
@@ -1679,7 +1894,10 @@ async def create_invoice(
         )
     invalidate_dashboard_cache_for_user(user.id)
     await db.refresh(inv)
-    return {"id": inv.id, "number": inv_num, "total": round(total, 2), "status": status}
+    response = {"id": inv.id, "number": inv_num, "total": round(total, 2), "status": status}
+    if pool_allocations:
+        response["pool_allocations"] = await _pool_allocations_for_invoice(db, inv.id)
+    return response
 
 
 def _payment_proof_s3_client(settings):
@@ -3808,6 +4026,13 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
     """Undo stock + invoice + customer-credit side-effects of a processed return.
     Returns credit_balance revoked (MVR). Caller sets status=void or deletes row."""
     credit_revoked = 0.0
+    pool_returned = await undo_pool_allocations_for_return(
+        db,
+        return_id=ret.id,
+        invoice_number=ret.invoice_number or ret.invoice_id,
+        created_by=ret.created_by or "system",
+        undo=True,
+    )
     for rl in ret.line_items:
         if rl.batch_allocation:
             try:
@@ -3818,6 +4043,10 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
                 bid = entry.get("batch_id")
                 qty = as_qty(entry.get("restored") or 0)
                 if not bid or qty <= 0:
+                    continue
+                pool_qty = min(qty, as_qty(pool_returned.get(bid, 0)))
+                qty = as_qty(qty - pool_qty)
+                if qty <= 0:
                     continue
                 b = (await db.execute(
                     select(ItemBatch).where(ItemBatch.id == bid)
@@ -3837,10 +4066,19 @@ async def _reverse_sales_return_effects(db: AsyncSession, ret: SalesReturn) -> f
                     except ValueError:
                         pass
         elif rl.item_id:
+            local_qty = max(
+                0.0,
+                as_qty(
+                    as_qty(rl.return_qty or 0)
+                    - as_qty(pool_returned.get(f"__untracked__:{rl.invoice_line_id}", 0))
+                ),
+            )
+            if local_qty <= 0:
+                continue
             try:
                 await adjust_stock_atomic(
                     db, item_id=rl.item_id, branch_id=ret.branch_id,
-                    delta=-as_qty(rl.return_qty or 0),
+                    delta=-local_qty,
                 )
             except ValueError:
                 pass
@@ -3932,6 +4170,12 @@ async def cancel_invoice(
             "Cannot cancel an invoice with active payment allocations. Void or delete payments first.",
         )
     stock_restored = await _restock_invoice_lines(db, inv, inv.line_items)
+    pool_reversals = await reverse_pool_allocations_for_cancel(
+        db,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        created_by=user.name,
+    )
     prev_status = str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)
     inv.status = "cancelled"
     if inv.customer_id:
@@ -3945,7 +4189,11 @@ async def cancel_invoice(
         event_type="voided",
         action="cancel_invoice",
         detail=f"Voided invoice {inv.number}",
-        metadata={"invoice_id": inv.id, "stock_restored": stock_restored},
+        metadata={
+            "invoice_id": inv.id,
+            "stock_restored": stock_restored,
+            "pool_reversals": len(pool_reversals),
+        },
         risk="high",
         branch_id=inv.branch_id,
     )
@@ -3968,7 +4216,13 @@ async def cancel_invoice(
         user=user,
         request=request,
         branch_id=inv.branch_id,
-        metadata={"invoice_id": inv.id, "status_from": prev_status, "status_to": "cancelled", "stock_restored": stock_restored},
+        metadata={
+            "invoice_id": inv.id,
+            "status_from": prev_status,
+            "status_to": "cancelled",
+            "stock_restored": stock_restored,
+            "pool_reversals": len(pool_reversals),
+        },
     )
     return {"status": "cancelled", "stock_restored": stock_restored}
 
@@ -4288,6 +4542,8 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "creditedAmount": float(getattr(inv, "credited_amount", 0) or 0),
         "returnStatus": getattr(inv, "return_status", None) or "none",
         "origin": getattr(inv, "origin", None) or "invoice",
+        "poolDrawn": bool(getattr(inv, "pool_drawn", False)),
+        "pool_drawn": bool(getattr(inv, "pool_drawn", False)),
         "notes": inv.notes,
         "salesOrderId": sales_order_id or getattr(inv, "pending_order_id", None) or None,
         "salesOrderNumber": sales_order_number or None,
@@ -6573,6 +6829,13 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
         )
     # ── End pre-flight ─────────────────────────────────────────────────────────
 
+    pool_returned = await undo_pool_allocations_for_return(
+        db,
+        return_id=ret.id,
+        invoice_number=ret.invoice_number or ret.invoice_id,
+        created_by=user.name,
+        undo=False,
+    )
     # Re-apply stock effects (inverse of void's _reverse_sales_return_effects).
     for rl in ret.line_items:
         if rl.batch_allocation:
@@ -6582,8 +6845,12 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
                 ledger = []
             for entry in ledger:
                 bid = entry.get("batch_id")
-                qty = int(entry.get("restored") or 0)
+                qty = as_qty(entry.get("restored") or 0)
                 if not bid or qty <= 0:
+                    continue
+                pool_qty = min(qty, as_qty(pool_returned.get(bid, 0)))
+                qty = as_qty(qty - pool_qty)
+                if qty <= 0:
                     continue
                 b = (await db.execute(
                     select(ItemBatch).where(ItemBatch.id == bid)
@@ -6599,10 +6866,19 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
                     except ValueError:
                         pass
         elif rl.item_id:
+            local_qty = max(
+                0.0,
+                as_qty(
+                    as_qty(rl.return_qty or 0)
+                    - as_qty(pool_returned.get(f"__untracked__:{rl.invoice_line_id}", 0))
+                ),
+            )
+            if local_qty <= 0:
+                continue
             try:
                 await adjust_stock_atomic(
                     db, item_id=rl.item_id, branch_id=ret.branch_id,
-                    delta=int(rl.return_qty or 0),
+                    delta=local_qty,
                 )
             except ValueError:
                 pass
@@ -7099,6 +7375,16 @@ async def _apply_sales_return(
                     source_type="sales_return",
                     source_ref=ret.id,
                 )
+                await reverse_pool_allocations_for_return(
+                    db,
+                    invoice_id=inv.id,
+                    invoice_line_id=inv_line.id,
+                    return_id=ret.id,
+                    requested_by_batch={},
+                    untracked_qty=r.return_qty,
+                    invoice_number=inv.number,
+                    created_by=user.name,
+                )
             else:
                 src = []
                 if getattr(inv_line, "batch_allocation", None):
@@ -7191,6 +7477,16 @@ async def _apply_sales_return(
                                 source_ref=ret.id,
                             )
                         applied.append({"batch_id": bid, "restored": qty})
+                    await reverse_pool_allocations_for_return(
+                        db,
+                        invoice_id=inv.id,
+                        invoice_line_id=inv_line.id,
+                        return_id=ret.id,
+                        requested_by_batch=plan,
+                        untracked_qty=0,
+                        invoice_number=inv.number,
+                        created_by=user.name,
+                    )
                     restore_ledger = json.dumps(applied)
 
         db.add(SalesReturnLineItem(
@@ -7740,6 +8036,11 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
         .where(CustomerPaymentAllocation.invoice_id.in_(found_ids))
         .group_by(CustomerPaymentAllocation.invoice_id)
     )).all()) if found_ids else {}
+    pool_allocation_counts = dict((await db.execute(
+        select(PoolSaleAllocation.invoice_id, func.count(PoolSaleAllocation.id))
+        .where(PoolSaleAllocation.invoice_id.in_(found_ids))
+        .group_by(PoolSaleAllocation.invoice_id)
+    )).all()) if found_ids else {}
 
     for inv in invoices:
         if return_counts.get(inv.id):
@@ -7751,6 +8052,12 @@ async def bulk_delete_invoices(data: BulkDeleteIn, db: AsyncSession = Depends(ge
             blocked.append({
                 "id": inv.id, "number": inv.number,
                 "reason": "Cannot delete invoice with linked payment record(s). Delete the payment(s) first.",
+            })
+        if pool_allocation_counts.get(inv.id):
+            blocked.append({
+                "id": inv.id,
+                "number": inv.number,
+                "reason": "Invoice has cross-branch stock allocations — cancel the invoice to restore exact source stock",
             })
     if blocked:
         raise HTTPException(400, {"blocked": blocked, "message": "Some invoices can't be deleted"})
