@@ -2362,7 +2362,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   from { transform: translateX(100%); }
   to   { transform: translateX(0); }
 }
-.drawer-header { position: relative; isolation: isolate; padding: 25px 28px 21px; display: flex; align-items: center; gap: 15px; min-height: 104px; overflow: hidden; background: #17483f; }
+.drawer-header { color: #fff; position: relative; isolation: isolate; padding: 25px 28px 21px; display: flex; align-items: center; gap: 15px; min-height: 104px; overflow: hidden; background: #17483f; }
 .drawer-header::after { content: ''; position: absolute; z-index: -1; inset: 0 0 0 auto; width: 34%; opacity: 0.55; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 11px, rgba(255,255,255,0.07) 11px 12px); clip-path: polygon(38% 0, 100% 0, 100% 100%, 0 100%); }
 .drawer-header__icon { width: 50px; height: 50px; flex: 0 0 50px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; background: rgba(255,255,255,0.09); color: #fff; font-size: 24px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,0.12); }
 .drawer-header__main { flex: 1; min-width: 0; }
