@@ -3,14 +3,14 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import Branch, ItemStock, User, UserBranch, UserRole
 from src.pagination import normalize_limit, normalize_skip, paged_list, pagination_from_page, resolve_sort
-from src.routes._serializers import get_user_branch_ids, serialize_branch
+from src.routes._serializers import get_user_branch_ids, normalize_child_counters, serialize_branch
 from src.security import current_user, enforce_branch_access, require_perm
 from src.services.audit_service import add_audit_log
 
@@ -62,6 +62,19 @@ def _build_branch_code(name: str, existing_codes: Optional[list[str]] = None, ex
     return "ZZ"
 
 
+class ChildCounterIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+    street1: Optional[str] = None
+    street2: Optional[str] = None
+    street3: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
+    address: Optional[str] = None
+
+
 class BranchCreate(BaseModel):
     name: str
     code: str
@@ -74,6 +87,8 @@ class BranchCreate(BaseModel):
     state_province: Optional[str] = None
     country: Optional[str] = None
     postal_code: Optional[str] = None
+    has_child_counters: bool = False
+    child_counters: list[ChildCounterIn] = Field(default_factory=list)
     gstin: Optional[str] = None
     active: bool = True
 
@@ -91,6 +106,8 @@ class BranchUpdate(BaseModel):
     state_province: Optional[str] = None
     country: Optional[str] = None
     postal_code: Optional[str] = None
+    has_child_counters: Optional[bool] = None
+    child_counters: Optional[list[ChildCounterIn]] = None
     gstin: Optional[str] = None
     active: Optional[bool] = None
 
@@ -159,11 +176,21 @@ async def create_branch(
 ):
     existing_codes = [row[0] for row in (await db.execute(select(Branch.code))).all() if row[0]]
     code = _build_branch_code(data.name, existing_codes=existing_codes)
-    b = Branch(id=str(uuid.uuid4()), name=data.name, code=code,
+    branch_id = str(uuid.uuid4())
+    b = Branch(id=branch_id, name=data.name, code=code,
                phone=data.phone, address=data.address,
                street1=data.street1, street2=data.street2, street3=data.street3,
                city=data.city, state_province=data.state_province,
                country=data.country, postal_code=data.postal_code,
+               has_child_counters=data.has_child_counters,
+               child_counters=(
+                   normalize_child_counters(
+                       branch_id,
+                       [counter.model_dump(exclude_none=True) for counter in data.child_counters],
+                   )
+                   if data.has_child_counters
+                   else []
+               ),
                gstin=data.gstin, active=data.active)
     db.add(b)
     await db.flush()
@@ -202,6 +229,8 @@ async def create_branch(
             "state_province": b.state_province,
             "country": b.country,
             "postal_code": b.postal_code,
+            "has_child_counters": b.has_child_counters,
+            "child_counters": b.child_counters,
             "gstin": b.gstin,
             "active": b.active,
         },
@@ -224,6 +253,10 @@ async def update_branch(
     payload = data.model_dump(exclude_unset=True)
     if "code" in payload:
         payload.pop("code")
+    if payload.get("has_child_counters") is False:
+        payload["child_counters"] = []
+    elif "child_counters" in payload and payload["child_counters"] is not None:
+        payload["child_counters"] = normalize_child_counters(b.id, payload["child_counters"])
     if "name" in payload:
         b.name = payload.pop("name")
     for k, v in payload.items():

@@ -2,6 +2,7 @@ import { useRef, forwardRef, useImperativeHandle, useEffect } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { useInvoiceConfig } from '@/utils/invoiceConfig'
 import { formatSettlementLabel } from '@/utils/storeCredit'
+import { childCounterInvoiceAddress } from '@/utils/address'
 import {
   calcInvoiceSummary,
   displayExclusiveUnitRate,
@@ -22,7 +23,10 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
   const tagline = branch?.tagline || 'Wholesales & Retail'
   const shopName = branch?.name || 'C.Shop'
   const branchLabel = branch?.branchLabel || branch?.name || 'Shop 1 / Male\''
-  const address = branch?.address || 'Boduthakurufanu Magu, Male'
+  const counterAddress = childCounterInvoiceAddress(branch, sale)
+  const address = counterAddress === null
+    ? branch?.address || 'Boduthakurufanu Magu, Male'
+    : counterAddress.join(', ')
   const phone = branch?.phone || '304 3313'
   const mobile = branch?.mobile || '738 4977'
   const email = branch?.email || 'shop-male@cosmopolitan.com.mv'

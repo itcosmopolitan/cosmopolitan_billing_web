@@ -116,6 +116,11 @@ export default function InvoiceFormPage() {
       toast.error('Each item must have name, qty, and price')
       return
     }
+    const selectedBranch = branches.find((branch) => branch.id === form.branchId)
+    if (selectedBranch?.has_child_counters && !form.childCounterId) {
+      toast.error('Select a child counter for this invoice')
+      return
+    }
 
     const due = computeDocumentTotals(form.items, {
       entityDiscount: form.discount,
@@ -201,6 +206,8 @@ export default function InvoiceFormPage() {
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
+        child_counter_id: form.childCounterId || null,
+        child_counter_name: form.childCounterName || null,
         cashier: 'Staff',
         date: form.invoiceDate,
         items: form.items.map((i) => ({

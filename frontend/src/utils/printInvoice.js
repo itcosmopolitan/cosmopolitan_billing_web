@@ -1,5 +1,6 @@
 import amountToWords from '@/utils/amountToWords'
 import { calcInvoiceSummary } from '@/utils/taxCalc'
+import { childCounterInvoiceAddress } from '@/utils/address'
 
 function withCashTender(sale) {
   if (!sale) return sale
@@ -92,6 +93,11 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
   } catch (e) { /* ignore */ }
 
   const branchMerged = { ...(branch || {}) }
+  const counterAddress = childCounterInvoiceAddress(branchMerged, fullSale)
+  if (documentType === 'Tax Invoice' && counterAddress !== null) {
+    branchMerged.invoiceAddressUsesCounter = true
+    branchMerged.invoiceAddressLines = counterAddress
+  }
   if (org) {
     branchMerged.gstin = branchMerged.gstin || org.gstin || org.gstin
     branchMerged.website = branchMerged.website || org.website

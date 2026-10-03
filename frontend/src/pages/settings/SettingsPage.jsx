@@ -95,7 +95,7 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [credentialsAcknowledged, setCredentialsAcknowledged] = useState(false)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'' })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[] })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -386,6 +386,34 @@ export default function SettingsPage() {
     setEditBranchForm(prev => ({ ...prev, [k]: v }))
   }
 
+  const renderChildCounterFields = ({ enabled, counters, onToggle, onChange, onAdd, onRemove }) => (
+    <div style={{marginTop:12}}>
+      <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}>
+        <input type="checkbox" checked={enabled} onChange={onToggle} />
+        This branch has child counters, having different Address
+      </label>
+      {enabled && (
+        <div style={{display:'flex',flexDirection:'column',gap:12,marginTop:12}}>
+          {counters.map((counter, index) => (
+            <div key={index} style={{border:'1px solid var(--border-subtle)',borderRadius:8,padding:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <strong style={{fontSize:12}}>Child Counter {index + 1}</strong>
+                <button type="button" className="btn btn-secondary btn-xs" onClick={() => onRemove(index)}>Remove</button>
+              </div>
+              <FormGroup label="Child Counter Name" required>
+                <input className="form-input" value={counter.name || ''} onChange={e => onChange(index, 'name', e.target.value)} placeholder="e.g. Shop 01 Male'" />
+              </FormGroup>
+              {renderBranchAddressFields(counter, (key, value) => onChange(index, key, value))}
+            </div>
+          ))}
+          <div>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={onAdd}>+ Add Child Counter</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   const [orgForm, setOrgForm] = useState(EMPTY_ORG_FORM)
   const [orgSaving, setOrgSaving] = useState(false)
   const pof = (k,v) => setOrgForm(f=>({...f,[k]:v}))
@@ -662,8 +690,50 @@ export default function SettingsPage() {
     return parts.join(', ')
   }
 
+  const renderBranchAddressFields = (form, onChange, keys = {}) => {
+    const field = (key) => keys[key] || key
+    return (
+      <>
+        <FormGroup label="Street 1" required>
+          <input className="form-input" value={form[field('street1')] || ''} onChange={e => onChange(field('street1'), e.target.value)} placeholder="Street address line 1" />
+        </FormGroup>
+        <FormRow>
+          <FormGroup label="Street 2"><input className="form-input" value={form[field('street2')] || ''} onChange={e => onChange(field('street2'), e.target.value)} placeholder="Street address line 2" /></FormGroup>
+          <FormGroup label="Street 3"><input className="form-input" value={form[field('street3')] || ''} onChange={e => onChange(field('street3'), e.target.value)} placeholder="Street address line 3" /></FormGroup>
+        </FormRow>
+        <FormRow>
+          <FormGroup label="City" required><input className="form-input" value={form[field('city')] || ''} onChange={e => onChange(field('city'), e.target.value)} placeholder="City" /></FormGroup>
+          <FormGroup label="State / Province"><input className="form-input" value={form[field('state_province')] || ''} onChange={e => onChange(field('state_province'), e.target.value)} placeholder="State or province" /></FormGroup>
+        </FormRow>
+        <FormRow>
+          <FormGroup label="Country" required><input className="form-input" value={form[field('country')] || ''} onChange={e => onChange(field('country'), e.target.value)} placeholder="Country" /></FormGroup>
+          <FormGroup label="Postal Code / Zipcode"><input className="form-input" value={form[field('postal_code')] || ''} onChange={e => onChange(field('postal_code'), e.target.value)} placeholder="Postal code or zipcode" /></FormGroup>
+        </FormRow>
+      </>
+    )
+  }
+
   const saveBranch = async () => {
+    if (branchForm.hasChildCounters && (!branchForm.childCounters.length || branchForm.childCounters.some(counter => (
+      !counter.name.trim() || !counter.street1.trim() || !counter.city.trim() || !counter.country.trim()
+    )))) {
+      toast.error('Enter a name, Street 1, city, and country for each child counter')
+      return
+    }
     try {
+      const childCounters = branchForm.hasChildCounters ? branchForm.childCounters.map(counter => ({
+        ...counter,
+        name: counter.name.trim(),
+        address: buildAddressString({
+          street1: counter.street1,
+          street2: counter.street2,
+          street3: counter.street3,
+          city: counter.city,
+          stateProvince: counter.state_province,
+          country: counter.country,
+          postalCode: counter.postal_code,
+        }),
+      })) : []
       await branchesAPI.create({
         name: branchForm.name,
         code: branchForm.code,
@@ -676,6 +746,8 @@ export default function SettingsPage() {
         state_province: branchForm.stateProvince,
         country: branchForm.country,
         postal_code: branchForm.postalCode,
+        has_child_counters: branchForm.hasChildCounters,
+        child_counters: childCounters,
         gstin: '',
         active: true,
       })
@@ -690,6 +762,13 @@ export default function SettingsPage() {
   }
 
   const updateBranch = async () => {
+    const childCounters = editBranchForm.child_counters || []
+    if (editBranchForm.has_child_counters && (!childCounters.length || childCounters.some(counter => (
+      !counter.name?.trim() || !counter.street1?.trim() || !counter.city?.trim() || !counter.country?.trim()
+    )))) {
+      toast.error('Enter a name, Street 1, city, and country for each child counter')
+      return
+    }
     try {
       const addressForm = {
         street1: editBranchForm.street1,
@@ -712,6 +791,22 @@ export default function SettingsPage() {
         state_province: editBranchForm.state_province,
         country: editBranchForm.country,
         postal_code: editBranchForm.postal_code,
+        has_child_counters: Boolean(editBranchForm.has_child_counters),
+        child_counters: editBranchForm.has_child_counters
+          ? childCounters.map(counter => ({
+            ...counter,
+            name: counter.name.trim(),
+            address: buildAddressString({
+              street1: counter.street1,
+              street2: counter.street2,
+              street3: counter.street3,
+              city: counter.city,
+              stateProvince: counter.state_province,
+              country: counter.country,
+              postalCode: counter.postal_code,
+            }),
+          }))
+          : [],
         gstin: editBranchForm.gstin || '',
         active: editBranchForm.active ?? true,
       })
@@ -876,7 +971,19 @@ export default function SettingsPage() {
                         <div style={{display:'flex',gap:2}}>
                           {can('settings.edit') && (
                             <button className="btn btn-secondary btn-xs" onClick={() => {
-                                setEditBranchForm(b)
+                                setEditBranchForm({
+                                  ...b,
+                                  child_counters: (b.child_counters || []).map(counter => ({
+                                    ...counter,
+                                    street1: counter.street1 || counter.address || '',
+                                    street2: counter.street2 || '',
+                                    street3: counter.street3 || '',
+                                    city: counter.city || '',
+                                    state_province: counter.state_province || '',
+                                    country: counter.country || '',
+                                    postal_code: counter.postal_code || '',
+                                  })),
+                                })
                                 setShowEditBranch(true)
                                 }}>Edit</button>
                           )}
@@ -1029,21 +1136,30 @@ export default function SettingsPage() {
               <FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)} placeholder="Branch name"/></FormGroup>
               <FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)} placeholder="Phone number"/></FormGroup>
             </FormRow>
-            <FormGroup label="Street 1" required>
-              <input className="form-input" value={branchForm.street1} onChange={e=>pbf('street1',e.target.value)} placeholder="Street address line 1"/>
-            </FormGroup>
-            <FormRow>
-              <FormGroup label="Street 2"><input className="form-input" value={branchForm.street2} onChange={e=>pbf('street2',e.target.value)} placeholder="Street address line 2"/></FormGroup>
-              <FormGroup label="Street 3"><input className="form-input" value={branchForm.street3} onChange={e=>pbf('street3',e.target.value)} placeholder="Street address line 3"/></FormGroup>
-            </FormRow>
-            <FormRow>
-              <FormGroup label="City" required><input className="form-input" value={branchForm.city} onChange={e=>pbf('city',e.target.value)} placeholder="City"/></FormGroup>
-              <FormGroup label="State / Province"><input className="form-input" value={branchForm.stateProvince} onChange={e=>pbf('stateProvince',e.target.value)} placeholder="State or province"/></FormGroup>
-            </FormRow>
-            <FormRow>
-              <FormGroup label="Country" required><input className="form-input" value={branchForm.country} onChange={e=>pbf('country',e.target.value)} placeholder="Country"/></FormGroup>
-              <FormGroup label="Postal Code / Zipcode"><input className="form-input" value={branchForm.postalCode} onChange={e=>pbf('postalCode',e.target.value)} placeholder="Postal code or zipcode"/></FormGroup>
-            </FormRow>
+            {!branchForm.hasChildCounters && renderBranchAddressFields(branchForm, pbf, {
+              street1: 'street1',
+              street2: 'street2',
+              street3: 'street3',
+              city: 'city',
+              state_province: 'stateProvince',
+              country: 'country',
+              postal_code: 'postalCode',
+            })}
+            {renderChildCounterFields({
+              enabled: branchForm.hasChildCounters,
+              counters: branchForm.childCounters,
+              onToggle: e => setBranchForm(form => ({
+                ...form,
+                hasChildCounters: e.target.checked,
+                childCounters: e.target.checked && !form.childCounters.length ? [{ name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] : form.childCounters,
+              })),
+              onChange: (index, key, value) => setBranchForm(form => ({
+                ...form,
+                childCounters: form.childCounters.map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
+              })),
+              onAdd: () => setBranchForm(form => ({ ...form, childCounters: [...form.childCounters, { name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
+              onRemove: index => setBranchForm(form => ({ ...form, childCounters: form.childCounters.filter((_, i) => i !== index) })),
+            })}
           </Modal>
           <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="lg"
               footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
@@ -1051,19 +1167,24 @@ export default function SettingsPage() {
                 <FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)} placeholder="Branch name"/></FormGroup>
                 <FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)} placeholder="Phone number"/></FormGroup>
               </FormRow>
-              <FormGroup label="Street 1" required><input className="form-input" value={editBranchForm.street1 || ""} onChange={e => pbfEdit('street1', e.target.value)} placeholder="Street address line 1"/></FormGroup>
-              <FormRow>
-                <FormGroup label="Street 2"><input className="form-input" value={editBranchForm.street2 || ""} onChange={e => pbfEdit('street2', e.target.value)} placeholder="Street address line 2"/></FormGroup>
-                <FormGroup label="Street 3"><input className="form-input" value={editBranchForm.street3 || ""} onChange={e => pbfEdit('street3', e.target.value)} placeholder="Street address line 3"/></FormGroup>
-              </FormRow>
-              <FormRow>
-                <FormGroup label="City" required><input className="form-input" value={editBranchForm.city || ""} onChange={e => pbfEdit('city', e.target.value)} placeholder="City"/></FormGroup>
-                <FormGroup label="State / Province"><input className="form-input" value={editBranchForm.state_province || ""} onChange={e => pbfEdit('state_province', e.target.value)} placeholder="State or province"/></FormGroup>
-              </FormRow>
-              <FormRow>
-                <FormGroup label="Country" required><input className="form-input" value={editBranchForm.country || ""} onChange={e => pbfEdit('country', e.target.value)} placeholder="Country"/></FormGroup>
-                <FormGroup label="Postal Code / Zipcode"><input className="form-input" value={editBranchForm.postal_code || ""} onChange={e => pbfEdit('postal_code', e.target.value)} placeholder="Postal code or zipcode"/></FormGroup>
-              </FormRow>
+              {!editBranchForm.has_child_counters && renderBranchAddressFields(editBranchForm, pbfEdit)}
+              {renderChildCounterFields({
+                enabled: Boolean(editBranchForm.has_child_counters),
+                counters: editBranchForm.child_counters || [],
+                onToggle: e => setEditBranchForm(form => ({
+                  ...form,
+                  has_child_counters: e.target.checked,
+                  child_counters: e.target.checked && !(form.child_counters || []).length
+                    ? [{ name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }]
+                    : (form.child_counters || []),
+                })),
+                onChange: (index, key, value) => setEditBranchForm(form => ({
+                  ...form,
+                  child_counters: (form.child_counters || []).map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
+                })),
+                onAdd: () => setEditBranchForm(form => ({ ...form, child_counters: [...(form.child_counters || []), { name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
+                onRemove: index => setEditBranchForm(form => ({ ...form, child_counters: (form.child_counters || []).filter((_, i) => i !== index) })),
+              })}
           </Modal>
         </>
       )}

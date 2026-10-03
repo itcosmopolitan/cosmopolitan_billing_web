@@ -411,6 +411,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("sale_invoices", "payment_proof_size", "INTEGER"),
     ("sale_invoices", "payment_proof_uploaded_at", "TIMESTAMP"),
     ("sale_invoices", "payment_proof_uploaded_by", "VARCHAR"),
+    ("sale_invoices", "child_counter_id", "VARCHAR"),
+    ("sale_invoices", "child_counter_name", "VARCHAR"),
     # 2026-06-09: soft void for payments (audit trail vs hard delete).
     ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("customer_payments", "voided_at", "VARCHAR"),
@@ -445,6 +447,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("branches", "state_province", "VARCHAR(100)"),
     ("branches", "country", "VARCHAR(100)"),
     ("branches", "postal_code", "VARCHAR(20)"),
+    ("branches", "has_child_counters", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("branches", "child_counters", "JSON DEFAULT '[]' NOT NULL"),
     # Cash Control (2026-06-14): per-branch petty cash settings.
     ("branches", "cash_opening_mode",       "VARCHAR DEFAULT 'carry_forward'"),
     ("branches", "cash_fixed_float",        "FLOAT DEFAULT 0"),

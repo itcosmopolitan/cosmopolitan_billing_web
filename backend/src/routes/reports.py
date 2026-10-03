@@ -205,6 +205,7 @@ def _sale_filters(
     customer_id: Optional[str] = None,
     item_id: Optional[str] = None,
     category_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
 ):
     conds = [SaleInvoice.status != InvoiceStatus.cancelled]
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, allowed_branch_ids)
@@ -214,6 +215,8 @@ def _sale_filters(
         conds.append(SaleInvoice.date >= (date_from.isoformat() if hasattr(date_from, 'isoformat') else date_from))
     if date_to:
         conds.append(SaleInvoice.date <= (date_to.isoformat() if hasattr(date_to, 'isoformat') else date_to))
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     if search:
         conds.append(
             SaleInvoice.number.ilike(f"%{search}%")
@@ -448,6 +451,7 @@ def _cn_filters(
     customer_id: Optional[str] = None,
     item_id: Optional[str] = None,
     category_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
 ):
     """Filters for active credit notes. Cashier / payment_mode follow the source invoice
     so parent aggregations and sales-register drilldowns stay aligned.
@@ -460,6 +464,12 @@ def _cn_filters(
         conds.append(SalesReturn.date >= _iso_date(date_from))
     if date_to:
         conds.append(SalesReturn.date <= _iso_date(date_to))
+    if child_counter_id:
+        conds.append(
+            SalesReturn.invoice_id.in_(
+                select(SaleInvoice.id).where(SaleInvoice.child_counter_id == child_counter_id)
+            )
+        )
     if search:
         conds.append(
             SalesReturn.number.ilike(f"%{search}%")
@@ -537,6 +547,7 @@ def _sales_register_union_query(inv_conds, cn_conds):
             SaleInvoice.customer_name.label("customer"),
             SaleInvoice.branch_name.label("branch"),
             SaleInvoice.cashier.label("cashier"),
+            SaleInvoice.child_counter_name.label("child_counter"),
             func.coalesce(inv_qty.c.qty, 0).label("quantity_sold"),
             SaleInvoice.subtotal.label("taxable_amount"),
             SaleInvoice.tax_total.label("tax_amount"),
@@ -563,6 +574,7 @@ def _sales_register_union_query(inv_conds, cn_conds):
             SalesReturn.customer_name.label("customer"),
             SalesReturn.branch_name.label("branch"),
             SaleInvoice.cashier.label("cashier"),
+            SaleInvoice.child_counter_name.label("child_counter"),
             (-func.coalesce(cn_qty.c.qty, 0)).label("quantity_sold"),
             (-func.coalesce(SalesReturn.subtotal, 0)).label("taxable_amount"),
             (-func.coalesce(SalesReturn.tax_total, 0)).label("tax_amount"),
@@ -674,6 +686,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds):
             SaleInvoice.customer_name.label("customer"),
             SaleInvoice.branch_name.label("branch"),
             SaleInvoice.cashier.label("cashier"),
+            SaleInvoice.child_counter_name.label("child_counter"),
             SaleLineItem.qty.label("quantity"),
             SaleLineItem.price.label("unit_price"),
             SaleLineItem.discount.label("discount"),
@@ -710,6 +723,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds):
             SalesReturn.customer_name.label("customer"),
             SalesReturn.branch_name.label("branch"),
             SaleInvoice.cashier.label("cashier"),
+            SaleInvoice.child_counter_name.label("child_counter"),
             (-func.coalesce(SalesReturnLineItem.return_qty, 0)).label("quantity"),
             SalesReturnLineItem.price.label("unit_price"),
             literal(0.0).label("discount"),
@@ -1594,6 +1608,7 @@ async def tax_summary_detail(
 @router.get("/sales-register", dependencies=[Depends(require_perm("reports.view"))])
 async def sales_register(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -1623,6 +1638,7 @@ async def sales_register(
         customer_id=customer_id,
         item_id=item_id,
         category_id=category_id,
+        child_counter_id=child_counter_id,
     )
     inv_conds = _sale_filters(**filter_kwargs)
     cn_conds = _cn_filters(**filter_kwargs)
@@ -1660,6 +1676,7 @@ async def sales_register(
 @router.get("/sales-lines", dependencies=[Depends(require_perm("reports.view"))])
 async def sales_lines(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -1696,9 +1713,17 @@ async def sales_lines(
     branch_cond = _branch_condition(SaleInvoice.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
         inv_conds.append(branch_cond)
+    if child_counter_id:
+        inv_conds.append(SaleInvoice.child_counter_id == child_counter_id)
     cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
     if cn_branch is not None:
         cn_conds.append(cn_branch)
+    if child_counter_id:
+        cn_conds.append(
+            SalesReturn.invoice_id.in_(
+                select(SaleInvoice.id).where(SaleInvoice.child_counter_id == child_counter_id)
+            )
+        )
     if search:
         inv_conds.append(
             SaleInvoice.number.ilike(f"%{search}%")

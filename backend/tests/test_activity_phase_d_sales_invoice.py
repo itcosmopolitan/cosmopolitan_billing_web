@@ -42,9 +42,62 @@ async def _build_session() -> AsyncSession:
 async def _seed(db: AsyncSession) -> None:
     db.add_all([
         Branch(id="b1", name="Main", code="MAIN"),
+        Branch(
+            id="b-counters",
+            name="Counter Branch",
+            code="COUNTERS",
+            has_child_counters=True,
+            child_counters=[{"id": "counter-1", "name": "Shop 01 Male'"}],
+        ),
         Customer(id="c1", name="Acme Customer", gstin="CUSTOMER-GST-001", credit_balance=0, credit_limit=10000),
     ])
     await db.commit()
+
+
+async def _verify_invoice_child_counter_required_and_saved() -> None:
+    db = await _build_session()
+    try:
+        await _seed(db)
+        actor = User(
+            id="u-counter-invoice",
+            name="Counter Invoice Tester",
+            email="counter-invoice@example.com",
+            hashed_password="x",
+            all_branches=True,
+        )
+        base = {
+            "customer_name": "Walk-in",
+            "branch_id": "b-counters",
+            "branch_name": "Counter Branch",
+            "items": [{"name": "Test item", "qty": 1, "price": 10}],
+            "payment_mode": "cash",
+        }
+        try:
+            await create_invoice(SaleCreate(**base), user=actor, db=db)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "child counter" in str(exc.detail).lower()
+        else:
+            raise AssertionError("regular invoices must require a child counter")
+
+        created = await create_invoice(
+            SaleCreate(
+                **base,
+                child_counter_id="counter-1",
+                child_counter_name="Shop 01 Male'",
+            ),
+            user=actor,
+            db=db,
+        )
+        invoice = await get_invoice(created["id"], db=db, user=actor)
+        assert invoice["childCounterId"] == "counter-1"
+        assert invoice["childCounterName"] == "Shop 01 Male'"
+    finally:
+        await db.close()
+
+
+def test_regular_invoice_requires_and_saves_child_counter() -> None:
+    asyncio.run(_verify_invoice_child_counter_required_and_saved())
 
 
 async def _verify_customer_gstin_response() -> None:

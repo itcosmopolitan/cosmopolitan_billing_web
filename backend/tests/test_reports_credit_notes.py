@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -26,6 +27,7 @@ from src.models import (  # noqa: E402
     User,
 )
 from src.routes.reports import daily_sales, product_sales, sales_lines, sales_register  # noqa: E402
+from src.routes.sales import _validate_child_counter  # noqa: E402
 
 
 async def _build_session() -> AsyncSession:
@@ -47,7 +49,13 @@ async def _seed(db: AsyncSession) -> User:
     )
     db.add_all([
         actor,
-        Branch(id="b1", name="Main", code="MAIN"),
+        Branch(
+            id="b1",
+            name="Main",
+            code="MAIN",
+            has_child_counters=True,
+            child_counters=[{"id": "counter-1", "name": "Shop 01 Male'"}],
+        ),
         Item(id="item-1", name="Rice 5kg", sku="RICE-5", cost_price=40, selling_price=80),
     ])
     inv = SaleInvoice(
@@ -56,6 +64,8 @@ async def _seed(db: AsyncSession) -> User:
         customer_name="Acme Customer",
         branch_id="b1",
         branch_name="Main",
+        child_counter_id="counter-1",
+        child_counter_name="Shop 01 Male'",
         cashier="Report Tester",
         date=today,
         subtotal=160,
@@ -134,6 +144,16 @@ async def _run() -> None:
     try:
         actor = await _seed(db)
         today = date.today().isoformat()
+        assert await _validate_child_counter(db, "b1", "counter-1", None) == (
+            "counter-1",
+            "Shop 01 Male'",
+        )
+        try:
+            await _validate_child_counter(db, "b1", None, None)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+        else:
+            raise AssertionError("child counter selection should be required")
 
         register = await sales_register(
             date_from=today,
@@ -159,6 +179,26 @@ async def _run() -> None:
         assert credit_note["document_id"] == "cn-1"
         assert credit_note["status"] == "processed"
         assert float(invoice["remaining_amount"]) == 0
+        assert invoice["child_counter"] == "Shop 01 Male'"
+        assert credit_note["child_counter"] == "Shop 01 Male'"
+
+        counter_register = await sales_register(
+            date_from=today,
+            date_to=today,
+            child_counter_id="counter-1",
+            db=db,
+            user=actor,
+        )
+        assert counter_register["total"] == 2
+
+        other_counter_register = await sales_register(
+            date_from=today,
+            date_to=today,
+            child_counter_id="different-counter",
+            db=db,
+            user=actor,
+        )
+        assert other_counter_register["total"] == 0
 
         invoices_only = await sales_register(
             date_from=today,
@@ -191,6 +231,14 @@ async def _run() -> None:
         qty_by_kind = {row["detail_kind"]: float(row["quantity"]) for row in line_rows}
         assert qty_by_kind["invoice"] == 2
         assert qty_by_kind["credit_note"] == -1
+        counter_lines = await sales_lines(
+            date_from=today,
+            date_to=today,
+            child_counter_id="counter-1",
+            db=db,
+            user=actor,
+        )
+        assert len(counter_lines["items"]) == 2
 
         products = await product_sales(
             date_from=today,

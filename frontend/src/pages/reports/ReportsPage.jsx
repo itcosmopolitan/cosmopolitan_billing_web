@@ -113,6 +113,7 @@ const DRILLDOWN_PARAM_KEYS = [
   'date_to',
   'branch_id',
   'branch_label',
+  'child_counter_id',
   'payment_mode',
   'cashier_id',
   'customer_id',
@@ -136,6 +137,7 @@ const PARENT_FILTER_PARAM_KEYS = [
   'parent_date_to',
   'parent_branch_id',
   'parent_branch_label',
+  'parent_child_counter_id',
   'parent_transaction_type',
   'parent_sort_by',
   'parent_sort_order',
@@ -219,12 +221,13 @@ function txnTypesDirty(draftIds, appliedIds) {
   return draftKey !== appliedKey
 }
 
-function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, transactionType, sortBy, sortOrder, skip }) {
+function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, childCounterId, transactionType, sortBy, sortOrder, skip }) {
   return {
     parent_date_from: dateFrom || '',
     parent_date_to: dateTo || '',
     ...(branchId ? { parent_branch_id: branchId } : {}),
     ...(branchLabel ? { parent_branch_label: branchLabel } : {}),
+    ...(childCounterId ? { parent_child_counter_id: childCounterId } : {}),
     ...(transactionType ? { parent_transaction_type: transactionType } : {}),
     ...(sortBy ? { parent_sort_by: sortBy } : {}),
     ...(sortOrder ? { parent_sort_order: sortOrder } : {}),
@@ -244,6 +247,7 @@ function restoreParentFilters(urlFilters, fallbacks = {}) {
           ...(urlFilters.parent_branch_label
             ? { branch_label: urlFilters.parent_branch_label }
             : {}),
+    ...(urlFilters.parent_child_counter_id ? { child_counter_id: urlFilters.parent_child_counter_id } : {}),
         }
       : {}),
     ...(urlFilters.parent_sort_by ? { sort_by: urlFilters.parent_sort_by } : {}),
@@ -263,6 +267,7 @@ function drilldownChipLabel(filters) {
   if (filters.category_id) return 'Selected category'
   if (filters.item_id) return 'Selected product'
   if (filters.branch_id) return 'Selected branch'
+  if (filters.child_counter_id) return 'Selected child counter'
   return 'Filtered view'
 }
 
@@ -1017,6 +1022,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     [storeBranches],
   )
   const allBranchIds = useMemo(() => branchOptions.map((b) => b.id), [branchOptions])
+  const supportsChildCounterFilter = ['salesRegister', 'salesLines'].includes(report.api)
 
   const txnTypeOptions = useMemo(
     () => TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS,
@@ -1031,12 +1037,23 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const [transactionTypes, setTransactionTypes] = useState(() => (
     parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions)
   ))
+  const [childCounterId, setChildCounterId] = useState(() => searchParams.get('child_counter_id') || '')
   const [appliedFilters, setAppliedFilters] = useState(() => ({
     dateFrom: initialFrom,
     dateTo: initialAsOf,
     branchIds: parseBranchIds(searchParams.get('branch_id')),
     transactionTypes: parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions),
+    childCounterId: searchParams.get('child_counter_id') || '',
   }))
+  const childCounterOptions = useMemo(() => {
+    const selectedBranchIds = new Set(branchIds)
+    return (storeBranches || [])
+      .filter((branch) => !selectedBranchIds.size || selectedBranchIds.has(branch.id))
+      .flatMap((branch) => (branch.child_counters || []).map((counter) => ({
+        id: counter.id,
+        label: `${counter.name} (${branch.name})`,
+      })))
+  }, [storeBranches, branchIds])
   const [sortBy, setSortBy] = useState(
     () => searchParams.get('sort_by') || report.defaultSort || report.columns[0]?.key,
   )
@@ -1119,6 +1136,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       parent_date_to: _pdt,
       parent_branch_id: _pbid,
       parent_branch_label: _pbl,
+      parent_child_counter_id: _pcounter,
       parent_sort_by: _psb,
       parent_sort_order: _pso,
       parent_skip: _psk,
@@ -1164,15 +1182,18 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       ? urlBranchIds
       : (allBranchIds.length ? allBranchIds : [])
     const nextTxn = parseTxnTypeIds(urlFilters.transaction_type, txnTypeOptions)
+    const nextCounterId = urlFilters.child_counter_id || ''
     setDateFrom(nextFrom)
     setDateTo(nextTo)
     setBranchIds(nextBranches)
     setTransactionTypes(nextTxn)
+    setChildCounterId(nextCounterId)
     setAppliedFilters({
       dateFrom: nextFrom,
       dateTo: nextTo,
       branchIds: nextBranches,
       transactionTypes: nextTxn,
+      childCounterId: nextCounterId,
     })
     setSortBy(urlFilters.sort_by || report.defaultSort || report.columns[0]?.key)
     setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
@@ -1206,6 +1227,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           limit: report.id === 'profit-loss' ? Math.max(limit, 100) : limit,
           ...drillFilters,
           ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
+          ...(supportsChildCounterFilter && appliedFilters.childCounterId
+            ? { child_counter_id: appliedFilters.childCounterId }
+            : {}),
         }
         const response = await reportsAPI[report.api](params)
         const payload = response?.data ?? response
@@ -1231,6 +1255,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     appliedFilters.dateFrom,
     appliedFilters.dateTo,
     appliedFilters.transactionTypes,
+    appliedFilters.childCounterId,
     sortBy,
     sortOrder,
     skip,
@@ -1239,6 +1264,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     drillFilters,
     urlFilters.branch_id,
     txnTypeOptions,
+    supportsChildCounterFilter,
   ])
 
   const applyFilters = () => {
@@ -1251,6 +1277,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       dateTo: nextTo,
       branchIds: [...branchIds],
       transactionTypes: [...transactionTypes],
+      childCounterId,
     })
   }
 
@@ -1260,9 +1287,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       : (dateFrom === appliedFilters.dateFrom && dateTo === appliedFilters.dateTo)
     const draftKey = [...branchIds].sort().join(',')
     const appliedKey = [...(appliedFilters.branchIds || [])].sort().join(',')
-    return !(sameDates && draftKey === appliedKey)
+    return !(sameDates && draftKey === appliedKey && childCounterId === appliedFilters.childCounterId)
       || txnTypesDirty(transactionTypes, appliedFilters.transactionTypes)
-  }, [isAsOfDate, dateFrom, dateTo, branchIds, transactionTypes, appliedFilters])
+  }, [isAsOfDate, dateFrom, dateTo, branchIds, transactionTypes, childCounterId, appliedFilters])
 
   const handleSort = (key) => {
     const nextOrder = sortBy === key && sortOrder === 'asc' ? 'desc' : 'asc'
@@ -1332,6 +1359,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     if (appliedTxnParam && !filters.transaction_type) {
       filters.transaction_type = appliedTxnParam
     }
+    if (appliedFilters.childCounterId && !filters.child_counter_id) {
+      filters.child_counter_id = appliedFilters.childCounterId
+    }
     // Always carry the selected Branch filter into the drill-down register.
     // Row-level branch (branch-wise sales) wins when already present.
     if (appliedBranchIdParam && !filters.branch_id) {
@@ -1356,6 +1386,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         dateTo: appliedFilters.dateTo,
         branchId: appliedBranchIdParam,
         branchLabel: appliedBranchLabel,
+        childCounterId: appliedFilters.childCounterId,
         transactionType: appliedTxnParam,
         sortBy,
         sortOrder,
@@ -1383,6 +1414,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             ...(appliedBranchLabel ? { branch_label: appliedBranchLabel } : {}),
           }
         : {}),
+      ...(appliedFilters.childCounterId ? { child_counter_id: appliedFilters.childCounterId } : {}),
       ...(txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
         ? { transaction_type: txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions) }
         : {}),
@@ -1586,6 +1618,15 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 placeholder="All Branches"
               />
             </div>
+            {supportsChildCounterFilter && (
+              <div style={{ width: 220, maxWidth: '100%' }}>
+                <label className="form-label">Child Counter</label>
+                <select className="form-input" value={childCounterId} onChange={(e) => setChildCounterId(e.target.value)}>
+                  <option value="">All counters</option>
+                  {childCounterOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+              </div>
+            )}
             {txnTypeOptions.length > 0 && (
               <div style={{ width: 220, maxWidth: '100%' }}>
                 <label className="form-label">Transaction Type</label>
@@ -1792,4 +1833,3 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     </div>
   )
 }
-

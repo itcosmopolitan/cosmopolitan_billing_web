@@ -5,6 +5,37 @@ export function composeAddress({ street1, street2, street3, city, stateProvince,
   return parts.join(', ')
 }
 
+export function childCounterInvoiceAddress(branch, sale) {
+  const counterId = sale?.childCounterId || sale?.child_counter_id
+  const counterName = sale?.childCounterName || sale?.child_counter_name
+  if (!counterId && !counterName) return null
+
+  const counters = branch?.child_counters || branch?.childCounters
+  const counter = (Array.isArray(counters) ? counters : []).find((candidate) => (
+    (counterId && candidate.id === counterId) ||
+    (!counterId && counterName && candidate.name === counterName)
+  ))
+  if (!counter) return []
+
+  const street = [
+    counter.street1 || counter.street_1,
+    counter.street2 || counter.street_2,
+    counter.street3 || counter.street_3,
+  ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim()).join(', ')
+  const locality = [
+    counter.city,
+    counter.stateProvince || counter.state_province,
+    counter.country || counter.country_name || counter.countryName,
+    counter.postalCode || counter.postal_code,
+  ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim()).join(', ')
+  const addressLines = [street, locality].filter(Boolean)
+  if (addressLines.length) return addressLines
+
+  return typeof counter.address === 'string' && counter.address.trim()
+    ? [counter.address.trim()]
+    : []
+}
+
 export function decomposeAddress(address) {
   if (!address || typeof address !== 'string') {
     return {

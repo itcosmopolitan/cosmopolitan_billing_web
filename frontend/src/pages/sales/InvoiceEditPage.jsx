@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, itemsAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import InvoiceFormModal from './InvoiceFormModal'
@@ -47,6 +48,7 @@ export default function InvoiceEditPage() {
   const can = useCan()
 
   const [form, setForm] = useState(null)
+  const branches = useAppStore((s) => s.branches)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -106,6 +108,11 @@ export default function InvoiceEditPage() {
       toast.error('Each item must have name, qty, and price')
       return
     }
+    const selectedBranch = branches.find((branch) => branch.id === form.branchId)
+    if (selectedBranch?.has_child_counters && !form.childCounterId) {
+      toast.error('Select a child counter for this invoice')
+      return
+    }
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
       toast.error('Enter the payment reference for UPI or Bank Transfer')
       return
@@ -127,6 +134,8 @@ export default function InvoiceEditPage() {
       const payload = {
         customer_id: form.customerId || null,
         customer_name: form.customerName,
+        child_counter_id: form.childCounterId || null,
+        child_counter_name: form.childCounterName || null,
         date: form.invoiceDate,
         due_date: form.dueDate || null,
         items: form.items.map((i) => ({

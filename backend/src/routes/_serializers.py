@@ -9,6 +9,7 @@ follow-up.
 """
 from __future__ import annotations
 
+import uuid
 from collections import defaultdict
 from typing import Any, List, Optional
 
@@ -25,6 +26,22 @@ def _build_customer_code(customer_id: Optional[str]) -> str:
     for char in value:
         digest = (digest * 31 + ord(char)) % 100000000
     return f"{digest:08d}"
+
+
+def normalize_child_counters(branch_id: str, counters: Optional[list[dict]]) -> list[dict]:
+    normalized = []
+    for index, counter in enumerate(counters or []):
+        if not isinstance(counter, dict):
+            continue
+        row = dict(counter)
+        row["id"] = row.get("id") or str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"branch:{branch_id}:child-counter:{index}:{row.get('name', '')}",
+            )
+        )
+        normalized.append(row)
+    return normalized
 
 
 def _enum_value(v: Any) -> Any:
@@ -89,6 +106,8 @@ def serialize_branch(b) -> dict:
         "state_province": b.state_province,
         "country": b.country,
         "postal_code": b.postal_code,
+        "has_child_counters": bool(getattr(b, "has_child_counters", False)),
+        "child_counters": normalize_child_counters(b.id, getattr(b, "child_counters", None)),
         "gstin": b.gstin,
         "gst": b.gstin,
         "homepage": getattr(b, "homepage", None) or getattr(b, "website", None),

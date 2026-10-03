@@ -215,6 +215,7 @@ export default function POSPage() {
   const [stockModeByBranch, setStockModeByBranch] = useState({})
   const [stockPool, setStockPool] = useState(null)
   const clientRequestRef = useRef(null)
+  const [selectedChildCounter, setSelectedChildCounter] = useState('')
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -234,6 +235,11 @@ export default function POSPage() {
   const { cart, customer, discountPct, discountAmt, discountType, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
   const stockMode = activeBranch?.id ? (stockModeByBranch[activeBranch.id] || 'branch') : 'branch'
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
+  const childCounters = Array.isArray(activeBranch?.child_counters) ? activeBranch.child_counters : []
+
+  useEffect(() => {
+    setSelectedChildCounter('')
+  }, [activeBranch?.id])
 
   // Guard route changes when the cart has unsaved lines. We stash the
   // resume-callback in state so a custom Modal (rather than window.confirm)
@@ -278,6 +284,13 @@ export default function POSPage() {
           const match = (branches || []).find((b) => b.id === inv.branchId)
           if (match) setActiveBranch(match)
         }
+        const invoiceBranch = (branches || []).find((branch) => branch.id === inv.branchId)
+        const savedCounterId = inv.childCounterId || inv.child_counter_id
+        const savedCounterName = inv.childCounterName || inv.child_counter_name
+        const invoiceCounter = (invoiceBranch?.child_counters || []).find((counter) => (
+          counter.id === savedCounterId || counter.name === savedCounterName
+        ))
+        setSelectedChildCounter(invoiceCounter?.id || savedCounterId || '')
         let customer = null
         if (inv.customerId) {
           try {
@@ -288,6 +301,7 @@ export default function POSPage() {
         }
         if (cancelled) return
         store.hydrateSession(invoiceToCartSession(inv, customer))
+        setSelectedChildCounter(inv.childCounterName || inv.child_counter_name || '')
         setEditingInvoice({ id: inv.id, number: inv.number })
       } catch {
         if (!cancelled) {
@@ -563,6 +577,10 @@ export default function POSPage() {
   const handleComplete = async (allowCreditOverLimit = false) => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
+    if (activeBranch?.has_child_counters && !selectedChildCounter) {
+      toast.error('Select a child counter for this sale')
+      return
+    }
     const submitTotals = calcCartTotals(cart, { discountPct, discountAmt })
     const submitTotal = submitTotals.total
     const creditAppliedNow = paymentMethod === 'credit'
@@ -659,6 +677,8 @@ export default function POSPage() {
         branch_id: activeBranch.id,
         branch_name: activeBranch.name,
         stock_mode: poolCheckout ? 'clubbed' : 'branch',
+        child_counter_id: selectedChildCounter || null,
+        child_counter_name: childCounters.find((counter) => counter.id === selectedChildCounter)?.name || null,
         cashier: 'Staff',
         items: cart.map((i) => {
           const gross = i.qty * i.price
@@ -752,6 +772,7 @@ export default function POSPage() {
         store.setCustomer({ ...customer, credit_balance: newBalance })
       }
       store.clearCart()
+      setSelectedChildCounter('')
       setEditingInvoice(null)
       clientRequestRef.current = null
       if (editInvoiceId) navigate('/pos', { replace: true })

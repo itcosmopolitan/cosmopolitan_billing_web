@@ -88,7 +88,7 @@ from src.pool_sales import (
 )
 from src.stock_pools import active_pool_for_branch, active_pool_members, user_has_permission
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
-from src.routes._serializers import _build_customer_code, get_user_branch_ids
+from src.routes._serializers import _build_customer_code, get_user_branch_ids, normalize_child_counters
 from src.routes._approval import (
     assert_may_edit_document,
     can_direct_commit,
@@ -498,6 +498,8 @@ class SaleCreate(BaseModel):
     customer_name: str = "Walk-in"
     branch_id: str
     branch_name: str = ""
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     cashier: str = "Staff"
     date: Optional[str] = None          # defaults to today
     items: List[LineItemIn]
@@ -541,6 +543,8 @@ class InvoiceUpdate(BaseModel):
     """
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     date: Optional[str] = None
     due_date: Optional[str] = None
     items: List[LineItemIn]
@@ -554,6 +558,45 @@ class InvoiceUpdate(BaseModel):
     @classmethod
     def _coerce_payment_mode(cls, v):
         return _coerce_payment_mode_value(v)
+
+
+async def _validate_child_counter(
+    db: AsyncSession,
+    branch_id: str,
+    child_counter_id: Optional[str],
+    child_counter_name: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == branch_id))
+    ).scalar_one_or_none()
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+
+    counters = getattr(branch, "child_counters", None) or []
+    if not getattr(branch, "has_child_counters", False):
+        if child_counter_id or child_counter_name:
+            raise HTTPException(400, "This branch does not have child counters")
+        return None, None
+
+    normalized = normalize_child_counters(branch.id, counters)
+    selected_id = (child_counter_id or "").strip()
+    selected_name = (child_counter_name or "").strip()
+    if not selected_id and not selected_name:
+        raise HTTPException(400, "Select a valid child counter for this branch")
+    selected = next(
+        (
+            counter for counter in normalized
+            if (
+                counter["id"] == selected_id
+                if selected_id
+                else counter.get("name") == selected_name
+            )
+        ),
+        None,
+    )
+    if not selected:
+        raise HTTPException(400, "Select a valid child counter for this branch")
+    return selected["id"], str(selected.get("name") or "")
 
 
 class SourceOrderLineIn(BaseModel):
@@ -670,6 +713,8 @@ async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optiona
 @router.get("/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_invoices(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
+    child_counter_id: Optional[str] = None,
+    child_counter_name: Optional[str] = None,
     status: Optional[str] = None,
     payment_mode: Optional[str] = None,
     customer_id: Optional[str] = None,
@@ -691,6 +736,10 @@ async def list_invoices(
     await refresh_sale_overdue(db, branch_id)
     await db.commit()
     conds = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to, origin)
+    if child_counter_name:
+        conds.append(SaleInvoice.child_counter_name == child_counter_name)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     # Payment method filter
     if payment_mode:
         conds.append(SaleInvoice.payment_mode == payment_mode)
@@ -1323,6 +1372,12 @@ async def update_invoice(
     for i in data.items:
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
+    inv.child_counter_id, inv.child_counter_name = await _validate_child_counter(
+        db,
+        inv.branch_id,
+        data.child_counter_id or inv.child_counter_id,
+        data.child_counter_name or inv.child_counter_name,
+    )
 
     next_customer_id = inv.customer_id
     if data.customer_id:
@@ -1619,6 +1674,9 @@ async def create_invoice(
         inv_origin = "quotation"
     elif data.sales_order_id:
         inv_origin = "sales_order"
+    child_counter_id, child_counter_name = await _validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
     inv_doc_type = "pos_receipt" if inv_origin == "pos" else "sales_invoice"
     inv_num = await resolve_number(
         db,
@@ -1647,6 +1705,8 @@ async def create_invoice(
         customer_name=data.customer_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         cashier=(user.name if user is not None else data.cashier),
         created_by=(user.name if user is not None else data.cashier),
         date=data.date or today,
@@ -4540,6 +4600,10 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "email": customer.email if customer else None,
         "branchId": inv.branch_id,
         "branchName": inv.branch_name,
+        "childCounterName": getattr(inv, "child_counter_name", None),
+        "child_counter_name": getattr(inv, "child_counter_name", None),
+        "childCounterId": getattr(inv, "child_counter_id", None),
+        "child_counter_id": getattr(inv, "child_counter_id", None),
         "cashier": inv.cashier,
         "date": inv.date,
         "paymentTerms": getattr(inv, "customer_credit_terms_snapshot", None) or getattr(inv, "payment_terms", None),
