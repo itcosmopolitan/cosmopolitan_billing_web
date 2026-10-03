@@ -11,6 +11,7 @@ import {
   canShowDeleteBillPayment,
   canShowDeleteBillReturn,
 } from './purchaseFormShared'
+import { displayExclusiveUnitRate, lineTaxableFromInclusive, lineGstFromInclusive } from '@/utils/taxCalc'
 
 function displayPaymentMode(raw) {
   if (!raw) return '—'
@@ -346,55 +347,81 @@ export default function PurchaseTxnDetailPanel({
                 {kind === 'return' ? (
                   <>
                     <th className="text-right">Return qty</th>
-                    <th className="text-right">Cost</th>
-                    <th className="text-right">Total</th>
+                    <th className="text-right">Cost (Excl.)</th>
+                    <th className="text-right">GST</th>
+                    <th className="text-right">Total (Excl.)</th>
                   </>
                 ) : kind === 'grn' ? (
                   <>
                     <th className="text-right">Ordered</th>
                     <th className="text-right">Received</th>
-                    <th className="text-right">Cost</th>
+                    <th className="text-right">Cost (Excl.)</th>
                     <th>Batch</th>
-                    <th className="text-right">Total</th>
+                    <th className="text-right">GST</th>
+                    <th className="text-right">Total (Excl.)</th>
                   </>
                 ) : (
                   <>
                     <th className="text-right">Qty</th>
-                    <th className="text-right">Cost</th>
+                    <th className="text-right">Cost (Excl.)</th>
                     <th className="text-right">Discount %</th>
-                    <th className="text-right">Total</th>
+                    <th className="text-right">GST</th>
+                    <th className="text-right">Total (Excl.)</th>
                   </>
                 )}
               </tr>
             </thead>
             <tbody>
-              {(detail?.items || []).map((item, i) => (
+              {(detail?.items || []).map((item, i) => {
+                const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+                const cost = Number(item.cost ?? item.price ?? 0)
+                const qty = Number(
+                  kind === 'return'
+                    ? (item.returnQty ?? item.qty ?? 0)
+                    : kind === 'grn'
+                      ? (item.receivedQty ?? item.qty ?? 0)
+                      : (item.qty ?? 0),
+                )
+                const taxItem = {
+                  ...item,
+                  price: cost,
+                  qty,
+                  taxRate,
+                }
+                const costExcl = displayExclusiveUnitRate(cost, taxRate)
+                const lineExcl = lineTaxableFromInclusive(taxItem)
+                const lineGst = lineGstFromInclusive(taxItem)
+                return (
                 <tr key={item.id || i}>
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
                   {kind === 'return' ? (
                     <>
                       <td className="text-right mono">{fmtQty(item.returnQty)}</td>
-                      <td className="text-right mono">{fmt(item.cost)}</td>
-                      <td className="text-right mono">{fmt(item.lineTotal || item.returnQty * item.cost)}</td>
+                      <td className="text-right mono">{fmt(costExcl)}</td>
+                      <td className="text-right mono">{fmt(lineGst)}</td>
+                      <td className="text-right mono">{fmt(lineExcl)}</td>
                     </>
                   ) : kind === 'grn' ? (
                     <>
                       <td className="text-right mono">{item.orderedQty != null ? fmtQty(item.orderedQty) : '—'}</td>
                       <td className="text-right mono">{fmtQty(item.receivedQty ?? item.qty)}</td>
-                      <td className="text-right mono">{fmt(item.cost)}</td>
+                      <td className="text-right mono">{fmt(costExcl)}</td>
                       <td className="mono" style={{ fontSize: 12 }}>{item.batchNumber || '—'}</td>
-                      <td className="text-right mono">{fmt(item.lineTotal || (item.receivedQty || item.qty || 0) * (item.cost || 0))}</td>
+                      <td className="text-right mono">{fmt(lineGst)}</td>
+                      <td className="text-right mono">{fmt(lineExcl)}</td>
                     </>
                   ) : (
                     <>
                       <td className="text-right mono">{fmtQty(item.qty)}</td>
-                      <td className="text-right mono">{fmt(item.cost)}</td>
+                      <td className="text-right mono">{fmt(costExcl)}</td>
                       <td className="text-right mono">{item.discount || 0}%</td>
-                      <td className="text-right mono">{fmt(item.lineTotal || item.qty * item.cost)}</td>
+                      <td className="text-right mono">{fmt(lineGst)}</td>
+                      <td className="text-right mono">{fmt(lineExcl)}</td>
                     </>
                   )}
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </DetailSection>

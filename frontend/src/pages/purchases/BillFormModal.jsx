@@ -33,7 +33,7 @@ import { emptyPurchaseLine, projectedBranchCost } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, formatAmountNumber, qtyInputStep, roundAmount, roundQty } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
 const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
@@ -281,7 +281,7 @@ export default function BillFormModal({
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
               <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Total</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.)</th>
               <th style={{ width: 60 }} />
             </tr>
           </thead>
@@ -292,7 +292,7 @@ export default function BillFormModal({
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
-              const lineTotal = lineNetAmount(it, costLineGross)
+              const lineTotal = lineTaxableDisplay(it, costLineGross, discShares[i] || 0)
               const lineTax = lineTaxDisplay(it, costLineGross, discShares[i] || 0)
               const margin = purchaseLineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               const costPreview = lineBranchCostPreview(it)

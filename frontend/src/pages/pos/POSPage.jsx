@@ -873,6 +873,7 @@ export default function POSPage() {
     netSubtotal: subtotal,
     taxTotal: tax,
     discount,
+    discountAmount,
     total,
     mode: taxMode,
   } = cartTotals
@@ -894,7 +895,7 @@ export default function POSPage() {
   const paymentMethodOptions = [
     { id: 'cash', label: '💵 Cash' },
     { id: 'card', label: '💳 Card' },
-    { id: 'upi', label: '📱 UPI' },
+    // { id: 'upi', label: '📱 UPI' },
     { id: 'bank_transfer', label: '🏦 Bank Transfer' },
     ...(canUseCredit ? [{ id: 'credit', label: '💳 Credit' }] : []),
   ]
@@ -1335,151 +1336,138 @@ export default function POSPage() {
         }}
       >
 
-        {/* Cart header */}
-        <div style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-          <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <PanelDragHandle
-              panel="cart"
-              onDragEnd={onPanelDragEnd}
-              title="Drag onto the other column to swap sides"
-            />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.2 }}>
-                {editingInvoice ? `Editing ${editingInvoice.number}` : '🧾 Cart'}
-              </div>
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
-                {editLoading
-                  ? 'Loading bill…'
-                  : cart.length === 0
-                    ? 'Add items from the catalog'
-                    : `${cart.length} line${cart.length === 1 ? '' : 's'}${editingInvoice ? ' · save to update' : ''}`}
-              </div>
-            </div>
-            <div style={{ flex: 1 }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-              <button
-                className="btn btn-secondary btn-sm"
-                title="Focus input then scan barcode"
-                onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
-              >📷 Scan</button>
-              <button
-                className="btn btn-secondary btn-sm"
-                style={{ position: 'relative' }}
-                onClick={() => setShowHeld(true)}
-                disabled={!!editingInvoice}
-                title={editingInvoice ? 'Hold is unavailable while editing a saved bill' : undefined}
-              >
-                ⏸ Hold
-                {branchHeldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{branchHeldBills.length}</span>}
-              </button>
-            </div>
-            <AutocompleteDropdown
-              value={customer?.id || ''}
-              onChange={(id) => {
-                if (!id) store.setCustomer(null)
-              }}
-              onSelectOption={async (opt) => {
-                if (!opt?.id) {
-                  store.setCustomer(null)
-                  return
-                }
-                try {
-                  const c = await customersAPI.get(opt.id)
-                  store.setCustomer(c)
-                } catch {
-                  store.setCustomer({
-                    id: opt.id,
-                    name: opt.label,
-                    phone: opt.description || opt.raw?.phone || '',
-                  })
-                }
-              }}
-              fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
-              fetchParams={{ branch_id: null, limit: 2000 }}
-              isSearchFieldRequired
-              prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
-              footerAction={addCustomerAction}
-              selectedLabel={customer?.name}
-              placeholder="Walk-in Customer"
-              style={{ width: 148, maxWidth: '36vw' }}
-            />
-            {customer && isInternalCustomer(customer) && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  padding: '3px 8px',
-                  borderRadius: 10,
-                  background: 'rgba(46,184,92,0.12)',
-                  color: 'var(--green)',
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                }}
-                title="Internal customer — GST is subtracted from item amounts"
-              >
-                GST reversed
-              </span>
-            )}
-            {customer?.id && Number(customer.credit_balance || 0) > 0 && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  padding: '3px 8px',
-                  borderRadius: 10,
-                  background: 'rgba(46,184,92,0.12)',
-                  color: 'var(--green)',
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                }}
-                title="Account credit available (from returns / overpayments)"
-              >
-                {fmt(Number(customer.credit_balance || 0))}
-              </span>
-            )}
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => {
-                store.clearCart()
-                if (editingInvoice) {
-                  setEditingInvoice(null)
-                  navigate('/sales?tab=invoices')
-                }
-              }}
-              style={{ padding: '4px 8px', color: 'var(--text-muted)' }}
-              title={editingInvoice ? 'Cancel edit' : 'Clear cart'}
-            >
-              ✕
-            </button>
+        {/* Cart header — single compact toolbar */}
+        <div
+          style={{
+            borderBottom: '1px solid var(--border-subtle)',
+            padding: '5px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            minWidth: 0,
+            flexShrink: 0,
+          }}
+        >
+          <PanelDragHandle
+            panel="cart"
+            onDragEnd={onPanelDragEnd}
+            title="Drag onto the other column to swap sides"
+          />
+          <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', minWidth: 0 }}>
+            {editingInvoice ? `Editing ${editingInvoice.number}` : 'Cart'}
+            <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 500, color: 'var(--text-muted)' }}>
+              {editLoading
+                ? 'Loading…'
+                : cart.length === 0
+                  ? 'Empty'
+                  : `${cart.length} line${cart.length === 1 ? '' : 's'}${editingInvoice ? ' · save to update' : ''}`}
+            </span>
           </div>
+          <button
+            className="btn btn-secondary btn-sm"
+            title="Focus input then scan barcode"
+            onClick={() => { searchRef.current?.focus(); searchRef.current?.select(); toast('Ready to scan — point your barcode scanner now', { duration: 2000 }) }}
+          >📷 Scan</button>
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ position: 'relative' }}
+            onClick={() => setShowHeld(true)}
+            disabled={!!editingInvoice}
+            title={editingInvoice ? 'Hold is unavailable while editing a saved bill' : undefined}
+          >
+            ⏸ Hold
+            {branchHeldBills.length > 0 && <span style={{ position: 'absolute', top: -4, right: -4, background: 'var(--amber)', color: '#000', fontSize: 9, fontWeight: 800, borderRadius: '50%', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{branchHeldBills.length}</span>}
+          </button>
+          <AutocompleteDropdown
+            value={customer?.id || ''}
+            onChange={(id) => {
+              if (!id) store.setCustomer(null)
+            }}
+            onSelectOption={async (opt) => {
+              if (!opt?.id) {
+                store.setCustomer(null)
+                return
+              }
+              try {
+                const c = await customersAPI.get(opt.id)
+                store.setCustomer(c)
+              } catch {
+                store.setCustomer({
+                  id: opt.id,
+                  name: opt.label,
+                  phone: opt.description || opt.raw?.phone || '',
+                })
+              }
+            }}
+            fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
+            fetchParams={{ branch_id: null, limit: 2000 }}
+            isSearchFieldRequired
+            prependOptions={[{ id: '', label: 'Walk-in Customer' }]}
+            footerAction={addCustomerAction}
+            selectedLabel={customer?.name}
+            placeholder="Walk-in Customer"
+            style={{ width: 148, maxWidth: '28vw', flexShrink: 0 }}
+          />
+          {customer && isInternalCustomer(customer) && (
+            <span
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 8,
+                background: 'rgba(46,184,92,0.12)',
+                color: 'var(--green)',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+              title="Internal customer — GST is subtracted from item amounts"
+            >
+              GST reversed
+            </span>
+          )}
+          {customer?.id && Number(customer.credit_balance || 0) > 0 && (
+            <span
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 8,
+                background: 'rgba(46,184,92,0.12)',
+                color: 'var(--green)',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+              title="Account credit available (from returns / overpayments)"
+            >
+              {fmt(Number(customer.credit_balance || 0))}
+            </span>
+          )}
+          <div style={{ flex: 1, minWidth: 8 }} />
           <div
             style={{
-              padding: '6px 14px 8px',
               display: 'flex',
               alignItems: 'center',
-              gap: 6,
-              flexWrap: 'wrap',
-              background: 'var(--bg-raised)',
-              borderTop: '1px solid var(--border-subtle)',
+              gap: 4,
+              flexShrink: 0,
+              padding: '2px 4px 2px 8px',
+              borderLeft: '1px solid var(--border-subtle)',
             }}
+            title={displayConnected ? 'Customer screen connected' : 'Customer screen'}
           >
-            <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
-              CUSTOMER SCREEN
-            </span>
             <span
               style={{
                 fontFamily: 'DM Mono, monospace',
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: 700,
-                letterSpacing: '0.1em',
+                letterSpacing: '0.08em',
                 color: displayConnected ? 'var(--green)' : 'var(--text-primary)',
-                padding: '2px 8px',
-                borderRadius: 6,
-                background: 'var(--bg-surface)',
+                padding: '1px 6px',
+                borderRadius: 4,
+                background: 'var(--bg-raised)',
                 border: '1px solid var(--border-subtle)',
               }}
             >
               {displayCode}
             </span>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={copyDisplayCode} style={{ padding: '2px 8px', fontSize: 11 }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={copyDisplayCode} style={{ padding: '2px 6px', fontSize: 11 }} title="Copy customer screen code">
               Copy
             </button>
             <button
@@ -1487,21 +1475,35 @@ export default function POSPage() {
               className="btn btn-ghost btn-sm"
               onClick={onRegenerateDisplayCode}
               title="Generate a new code for this terminal"
-              style={{ padding: '2px 8px', fontSize: 11 }}
+              style={{ padding: '2px 6px', fontSize: 11 }}
             >
-              ↻ New code
+              ↻
             </button>
             <a
               href={`/customer-view/${encodeURIComponent(displayCode)}`}
               target="_blank"
               rel="noreferrer"
               className="btn btn-ghost btn-sm"
-              title="Open customer screen with this terminal's code"
-              style={{ padding: '2px 8px', fontSize: 11, marginLeft: 'auto' }}
+              title="Open customer screen"
+              style={{ padding: '2px 6px', fontSize: 11 }}
             >
-              Open screen ↗
+              ↗
             </a>
           </div>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              store.clearCart()
+              if (editingInvoice) {
+                setEditingInvoice(null)
+                navigate('/sales?tab=invoices')
+              }
+            }}
+            style={{ padding: '4px 6px', color: 'var(--text-muted)' }}
+            title={editingInvoice ? 'Cancel edit' : 'Clear cart'}
+          >
+            ✕
+          </button>
         </div>
 
         {/* Cart items */}
@@ -1517,7 +1519,7 @@ export default function POSPage() {
               <table style={{ width: '100%', minWidth: 860, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
-                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Line Total', ''].map((h) => (
+                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Total (Excl.)', ''].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -1525,7 +1527,7 @@ export default function POSPage() {
                           fontSize: 11,
                           fontWeight: 600,
                           color: 'var(--text-muted)',
-                          padding: '9px 8px',
+                          padding: '6px 8px',
                           borderBottom: '1px solid var(--border-subtle)',
                           position: 'sticky',
                           top: 0,
@@ -1751,7 +1753,7 @@ export default function POSPage() {
             >
               {cart.length > 0 && (
                 <div style={{ marginBottom: 4 }}>
-                  {discount > 0 && (
+                  {discountAmount > 0 && (
                     <div
                       style={{
                         display: 'flex',
@@ -1762,8 +1764,8 @@ export default function POSPage() {
                         marginBottom: 2,
                       }}
                     >
-                      <span>Disc</span>
-                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+                      <span>Discount</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discountAmount)}</span>
                     </div>
                   )}
                   {gstReverse.gstReversed > 0 && (

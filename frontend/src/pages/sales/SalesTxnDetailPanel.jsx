@@ -15,6 +15,7 @@ import {
 } from './salesFormShared'
 
 import { formatSettlementLabel } from '@/utils/storeCredit'
+import { displayExclusiveUnitRate, lineTaxableFromInclusive, lineGstFromInclusive } from '@/utils/taxCalc'
 
 function displayPaymentMode(raw, detail) {
   if (detail) {
@@ -496,44 +497,50 @@ export default function SalesTxnDetailPanel({
                   <>
                     <th className="text-right">Original qty</th>
                     <th className="text-right">Return qty</th>
-                    <th className="text-right">Price</th>
+                    <th className="text-right">Price (Excl.)</th>
                     <th className="text-right">GST</th>
-                    <th className="text-right">Total</th>
+                    <th className="text-right">Total (Excl.)</th>
                   </>
                 ) : (
                   <>
                     <th className="text-right">Qty</th>
-                    <th className="text-right">Price</th>
+                    <th className="text-right">Price (Excl.)</th>
                     <th className="text-right">Disc %</th>
                     <th className="text-right">GST</th>
-                    <th className="text-right">Total</th>
+                    <th className="text-right">Total (Excl.)</th>
                   </>
                 )}
               </tr>
             </thead>
             <tbody>
-              {(detail?.items || []).map((item, i) => (
+              {(detail?.items || []).map((item, i) => {
+                const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+                const priceExcl = displayExclusiveUnitRate(item.price, taxRate)
+                const lineExcl = lineTaxableFromInclusive(item)
+                const lineGst = lineGstFromInclusive(item)
+                return (
                 <tr key={item.id || i}>
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{item.name}</td>
                   {kind === 'return' ? (
                     <>
                       <td className="text-right mono">{fmtQty(item.originalQty ?? item.qty)}</td>
                       <td className="text-right mono">{fmtQty(item.returnQty)}</td>
-                      <td className="text-right mono">{fmt(item.price)}</td>
-                      <td className="text-right mono">{item.taxRate || 0}%</td>
-                      <td className="text-right mono">{fmt(item.lineTotal || (item.returnQty * item.price))}</td>
+                      <td className="text-right mono">{fmt(priceExcl)}</td>
+                      <td className="text-right mono">{fmt(lineGst)}</td>
+                      <td className="text-right mono">{fmt(lineExcl)}</td>
                     </>
                   ) : (
                     <>
                       <td className="text-right mono">{fmtQty(item.qty)}</td>
-                      <td className="text-right mono">{fmt(item.price)}</td>
+                      <td className="text-right mono">{fmt(priceExcl)}</td>
                       <td className="text-right mono">{formatDiscPct(item)}</td>
-                      <td className="text-right mono">{item.taxRate || 0}%</td>
-                      <td className="text-right mono">{fmt(item.lineTotal || (item.qty * item.price))}</td>
+                      <td className="text-right mono">{fmt(lineGst)}</td>
+                      <td className="text-right mono">{fmt(lineExcl)}</td>
                     </>
                   )}
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </DetailSection>

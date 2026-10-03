@@ -116,7 +116,7 @@ export function buildPosDisplayPayload(
     items,
     subtotal: totals.netSubtotal,
     tax: totals.taxTotal,
-    discount: totals.discount,
+    discount: totals.discountAmount || totals.discount,
     total: totals.total,
     taxMode: totals.mode,
     cashCollected: tender.collected,

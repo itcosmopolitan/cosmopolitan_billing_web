@@ -86,7 +86,7 @@ export function Drawer({ open, onClose, title, children, footer, icon, size, foo
         <div className="drawer-header">
           {icon && <span style={{ fontSize: 20 }}>{icon}</span>}
           <h3 style={{ flex: 1 }}>{title}</h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose} style={{ padding: '4px 8px' }}>✕</button>
+          <button className="btn btn-sm" onClick={onClose} style={{ padding: '4px 8px' }}>✕</button>
         </div>
         <div className="drawer-body">{children}</div>
         {footer && <div className={`drawer-footer${footerClassName ? ` ${footerClassName}` : ''}`}>{footer}</div>}

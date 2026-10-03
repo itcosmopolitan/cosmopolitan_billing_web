@@ -17,7 +17,7 @@ import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineNetAmount, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 import {
   customerRequiresImmediatePayment,
@@ -339,7 +339,7 @@ export default function InvoiceFormModal({
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
               <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Total</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.)</th>
               {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
               <th style={{ width: 60 }} />
             </tr>
@@ -351,7 +351,7 @@ export default function InvoiceFormModal({
                 : (it.name ? { id: null, name: it.name } : null)
               const otherPickedIds = pickedIds.filter((id) => id !== it.item_id)
               const type = it.lineDiscountType === 'MVR' ? 'MVR' : '%'
-              const lineTotal = lineNetAmount(it)
+              const lineTotal = lineTaxableDisplay(it, undefined, discShares[i] || 0)
               const lineTax = lineTaxDisplay(it, undefined, discShares[i] || 0)
               const margin = lineMargin(it, { entityDiscountShare: discShares[i] || 0 })
               return (
