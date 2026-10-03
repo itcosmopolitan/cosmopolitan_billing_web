@@ -159,84 +159,94 @@ export default function CartRow({
   return (
     <tr
       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-raised)' }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = tracked ? 'var(--accent-bg)' : 'transparent' }}
+      style={{
+        background: tracked ? 'var(--accent-bg)' : 'transparent',
+        boxShadow: tracked ? 'inset 3px 0 0 var(--accent)' : 'none',
+      }}
+      title={tracked ? `${strategyLabel} batch-tracked item` : undefined}
     >
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', minWidth: 240, verticalAlign: 'top' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 18, lineHeight: 1.3 }}>{item.emoji || '📦'}</span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <input
-                className="form-input"
-                type="text"
-                data-pos-cart-field="name"
-                data-pos-cart-index={cartIndex}
-                value={item.name ?? ''}
-                onChange={(e) => onNameChange?.(e.target.value)}
-                onBlur={() => {
-                  const trimmed = String(item.name || '').trim()
-                  if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
-                  else if (trimmed !== item.name) onNameChange?.(trimmed)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur()
-                  else handleCartFieldArrowNav(e, 'name', cartIndex)
-                }}
-                aria-label={`Item name for this bill: ${item.name || ''}`}
-                title="Edit name for this bill only. Item master is unchanged."
-                style={{
-                  flex: '1 1 140px',
-                  minWidth: 120,
-                  width: 'auto',
-                  padding: '3px 7px',
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  lineHeight: 1.35,
-                  color: 'var(--text-primary)',
-                }}
-              />
-              {tracked && (
-                <span style={{
-                  fontSize: 9.5, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
-                  background: expiryTracked ? 'rgba(245, 158, 11, 0.15)' : 'rgba(99, 102, 241, 0.15)',
-                  color: expiryTracked ? 'var(--amber)' : 'var(--accent)',
-                  letterSpacing: 0.3,
-                }}>
-                  {strategyLabel}
-                </span>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 10, rowGap: 2, fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>HSN: {hsn}</span>
-              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>UOM: {uom}</span>
-              <span style={{ flex: '0 0 calc(50% - 5px)', fontFamily: 'DM Mono, monospace' }}>Stock: {stockQty != null ? fmtQty(stockQty) : '—'}</span>
-              {stockExceeded && (
-                <span title="Stock exceeded" style={{ color: 'var(--amber)', cursor: 'help', fontSize: 12, lineHeight: 1 }} aria-label="Stock exceeded">⚠️</span>
-              )}
-            </div>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', minWidth: 280, verticalAlign: 'middle' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>{item.emoji || '📦'}</span>
+          <input
+            className="form-input"
+            type="text"
+            data-pos-cart-field="name"
+            data-pos-cart-index={cartIndex}
+            value={item.name ?? ''}
+            onChange={(e) => onNameChange?.(e.target.value)}
+            onBlur={() => {
+              const trimmed = String(item.name || '').trim()
+              if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
+              else if (trimmed !== item.name) onNameChange?.(trimmed)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              else handleCartFieldArrowNav(e, 'name', cartIndex)
+            }}
+            aria-label={`Item name for this bill: ${item.name || ''}`}
+            title="Edit name for this bill only. Item master is unchanged."
+            style={{
+              flex: '1 1 140px',
+              minWidth: 110,
+              width: 'auto',
+              padding: '3px 7px',
+              fontSize: 12.5,
+              fontWeight: 600,
+              lineHeight: 1.3,
+              color: 'var(--text-primary)',
+            }}
+          />
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10.5,
+              color: 'var(--text-muted)',
+              fontFamily: 'DM Mono, monospace',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
             {tracked && (
-              <div style={{ marginTop: 4 }}>
-                {loadingBatches ? (
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>Batch: loading…</span>
-                ) : batches.length === 0 ? (
-                  <span style={{ fontSize: 11, color: 'var(--amber)' }}>Batch: none available</span>
-                ) : (
-                  <BatchSummary
-                    allocation={allocation}
-                    expiryTracked={expiryTracked}
-                    valid={allocValid}
-                    allocated={allocated}
-                    qtyNeeded={item.qty}
-                    custom={!!item.batchAllocationCustom}
-                    onEdit={() => onEditAllocation && onEditAllocation({ item, batches, allocation })}
-                  />
-                )}
-              </div>
+              <span style={{
+                fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                background: expiryTracked ? 'rgba(245, 158, 11, 0.18)' : 'rgba(99, 102, 241, 0.18)',
+                color: expiryTracked ? 'var(--amber)' : 'var(--accent)',
+                letterSpacing: 0.3,
+              }}>
+                {strategyLabel}
+              </span>
             )}
-          </div>
+            <span title="HSN">HSN {hsn}</span>
+            <span title="Unit of measure">· {uom}</span>
+            <span title="Available stock" style={{ color: stockExceeded ? 'var(--amber)' : undefined }}>
+              · Stk {stockQty != null ? fmtQty(stockQty) : '—'}
+              {stockExceeded ? ' ⚠' : ''}
+            </span>
+          </span>
+          {tracked && (
+            loadingBatches ? (
+              <span style={{ fontSize: 10.5, color: 'var(--text-muted)', fontStyle: 'italic', whiteSpace: 'nowrap' }}>lots…</span>
+            ) : batches.length === 0 ? (
+              <span style={{ fontSize: 10.5, color: 'var(--amber)', whiteSpace: 'nowrap' }}>no lots</span>
+            ) : (
+              <BatchSummary
+                allocation={allocation}
+                expiryTracked={expiryTracked}
+                valid={allocValid}
+                allocated={allocated}
+                qtyNeeded={item.qty}
+                custom={!!item.batchAllocationCustom}
+                onEdit={() => onEditAllocation && onEditAllocation({ item, batches, allocation })}
+              />
+            )
+          )}
         </div>
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
         <input
           className="form-input"
           type="text"
@@ -254,7 +264,7 @@ export default function CartRow({
           style={{ width: 120, padding: '4px 7px', fontSize: 12 }}
         />
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
         <input
           className="form-input"
           type="number"
@@ -287,7 +297,7 @@ export default function CartRow({
           style={{ width: 56, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
         {allowPriceEditing ? (
           <input
             className="form-input"
@@ -307,7 +317,7 @@ export default function CartRow({
           <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">{fmt(exclRate)}</span>
         )}
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'top' }}>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: disableDiscount ? 0.6 : 1 }}>
           <input
             className="form-input"
@@ -335,16 +345,16 @@ export default function CartRow({
           </div>
         </div>
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', verticalAlign: 'top' }} title="GST on discounted amount">
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="GST on discounted amount">
         {fmt(lineTax)}
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
         <MarginBadge margin={margin} />
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'top' }} title="Line total excl. GST">
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="Line total excl. GST">
         {fmt(lineTotalExcl)}
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'center', verticalAlign: 'top' }}>
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'center', verticalAlign: 'middle' }}>
         <button type="button" onClick={onRemove} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 2px' }} aria-label="Remove line">✕</button>
       </td>
     </tr>
@@ -363,10 +373,9 @@ export default function CartRow({
  */
 function BatchSummary({ allocation, expiryTracked, valid, allocated, qtyNeeded, custom, onEdit }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'DM Sans, sans-serif' }}>Batch:</span>
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-muted)', flexWrap: 'nowrap', minWidth: 0, overflow: 'hidden' }}>
       {allocation.length === 0 ? (
-        <span style={{ color: 'var(--amber)' }}>nothing allocated</span>
+        <span style={{ color: 'var(--amber)', whiteSpace: 'nowrap' }}>no lot</span>
       ) : (
         allocation.map((e) => {
           const expInfo = batchExpiryStatus({
@@ -378,7 +387,7 @@ function BatchSummary({ allocation, expiryTracked, valid, allocated, qtyNeeded, 
           const tone = expInfo.expired ? 'var(--red)' : expInfo.nearExpiry ? 'var(--amber)' : 'var(--accent)'
           const bg = expInfo.expired
             ? 'rgba(245,72,92,0.10)'
-            : expInfo.nearExpiry ? 'rgba(245,158,11,0.12)' : 'var(--accent-bg)'
+            : expInfo.nearExpiry ? 'rgba(245,158,11,0.12)' : 'var(--bg-surface)'
           const title = e.expiryDate
             ? `Take ${e.qty} from ${e.batchNumber} · ${expInfo.title}`
             : `Take ${e.qty} from ${e.batchNumber}`
@@ -387,30 +396,32 @@ function BatchSummary({ allocation, expiryTracked, valid, allocated, qtyNeeded, 
               key={e.id}
               title={title}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                padding: '1px 6px', borderRadius: 999, background: bg, color: tone,
-                fontFamily: 'DM Mono, monospace', fontSize: 10.5, fontWeight: 500,
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                padding: '0 6px', borderRadius: 999, background: bg, color: tone,
+                fontFamily: 'DM Mono, monospace', fontSize: 10, fontWeight: 500,
+                border: `1px solid ${tone}`,
+                whiteSpace: 'nowrap',
               }}
             >
-              <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ maxWidth: 72, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {e.batchNumber}
               </span>
-              <span style={{ color: tone, fontWeight: 700 }}>({e.qty})</span>
+              <span style={{ fontWeight: 700 }}>({e.qty})</span>
               {expiryTracked && expInfo.showUrgentIcon && (
-                <span aria-hidden style={{ fontSize: 10 }} title={expInfo.title}>{expInfo.expired ? '⚠️' : '📅'}</span>
+                <span aria-hidden style={{ fontSize: 9 }} title={expInfo.title}>{expInfo.expired ? '⚠' : '📅'}</span>
               )}
             </span>
           )
         })
       )}
       {custom && (
-        <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: 'var(--bg-raised)', color: 'var(--text-secondary)', letterSpacing: 0.4 }}>
+        <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'var(--bg-raised)', color: 'var(--text-secondary)', letterSpacing: 0.3, whiteSpace: 'nowrap' }}>
           CUSTOM
         </span>
       )}
       {!valid && allocation.length > 0 && (
-        <span title={`Allocated ${allocated} of ${qtyNeeded}`} style={{ fontSize: 10.5, color: 'var(--red)' }}>
-          ⚠ {allocated} / {qtyNeeded}
+        <span title={`Allocated ${allocated} of ${qtyNeeded}`} style={{ fontSize: 10, color: 'var(--red)', whiteSpace: 'nowrap' }}>
+          ⚠ {allocated}/{qtyNeeded}
         </span>
       )}
       <button
@@ -420,11 +431,10 @@ function BatchSummary({ allocation, expiryTracked, valid, allocated, qtyNeeded, 
         aria-label="Edit batch split"
         style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 20, height: 20, borderRadius: 4, border: 'none', background: 'transparent',
-          color: 'var(--text-muted)', cursor: 'pointer', padding: 0,
-          transition: 'background 0.12s, color 0.12s',
+          width: 18, height: 18, borderRadius: 4, border: 'none', background: 'transparent',
+          color: 'var(--text-muted)', cursor: 'pointer', padding: 0, flexShrink: 0,
         }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-bg)'; e.currentTarget.style.color = 'var(--accent)' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)'; e.currentTarget.style.color = 'var(--accent)' }}
         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)' }}
       >
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden>
