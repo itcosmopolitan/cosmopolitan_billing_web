@@ -698,7 +698,7 @@
               <td class="tval grand">${formatNumber(totals.total)}</td>
             </tr>
           </table>
-          ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: -${formatNumber(totals.discountAmount)}</div>` : ''}
+          ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
           <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
           ${isPurchaseDocument ? '' : `<div class="payment-section">
             <div class="bank-details">

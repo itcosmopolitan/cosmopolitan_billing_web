@@ -16,6 +16,7 @@ import {
   displayExclusiveUnitRate,
   storeInclusiveUnitRate,
   lineTaxAmount,
+  lineTaxableAmount,
 } from '@/utils/taxCalc'
 
 /** Move focus to the same column on the previous/next cart line (↑/↓). */
@@ -73,10 +74,9 @@ export default function CartRow({
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
   const exclRate = displayExclusiveUnitRate(item.price, item.taxRate)
-  const lineTax = lineTaxAmount(
-    Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0))),
-    item.taxRate,
-  )
+  const afterEntity = Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0)))
+  const lineTax = lineTaxAmount(afterEntity, item.taxRate)
+  const lineTotalExcl = lineTaxableAmount(afterEntity, item.taxRate)
   const hsn = item.hsnCode || '—'
   const metadata = getInvoiceItemMetadata(item)
   const uom = metadata.units === '' ? '—' : metadata.units
@@ -341,8 +341,8 @@ export default function CartRow({
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
         <MarginBadge margin={margin} />
       </td>
-      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'top' }}>
-        {fmt(item.lineTotal)}
+      <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'top' }} title="Line total excl. GST">
+        {fmt(lineTotalExcl)}
       </td>
       <td style={{ padding: '9px 8px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'center', verticalAlign: 'top' }}>
         <button type="button" onClick={onRemove} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 2px' }} aria-label="Remove line">✕</button>

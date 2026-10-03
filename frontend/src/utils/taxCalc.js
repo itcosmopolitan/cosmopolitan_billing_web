@@ -143,12 +143,19 @@ export function allocateFlatShares(amounts, flat) {
  * Cart totals for POS checkout display and sale completion.
  * Line totals already include line-item discount. Bill discount is applied
  * next; GST is then extracted from the remaining inclusive amount.
- * @param {Array<{ lineTotal: number, taxRate: number }>} cart
+ * @param {Array<{ qty?: number, price?: number, lineTotal: number, taxRate: number }>} cart
  */
 export function calcCartTotals(cart, { discountPct = 0, discountAmt = 0 } = {}) {
-  const lineTotals = (cart || []).map((item) => Number(item.lineTotal) || 0)
-  const rates = (cart || []).map((item) => Number(item.taxRate) || 0)
+  const rows = cart || []
+  const lineTotals = rows.map((item) => Number(item.lineTotal) || 0)
+  const rates = rows.map((item) => Number(item.taxRate) || 0)
   const grossSubtotal = roundAmount(lineTotals.reduce((s, n) => s + n, 0))
+  const exclGross = roundAmount(rows.reduce((sum, item) => {
+    const qty = Number(item.qty) || 0
+    const price = Number(item.price) || 0
+    const taxRate = Number(item.taxRate) || 0
+    return sum + qty * exclusiveFromInclusive(price, taxRate)
+  }, 0))
 
   const discount = roundAmount(
     (Number(discountAmt) || 0) + grossSubtotal * ((Number(discountPct) || 0) / 100),
@@ -164,12 +171,17 @@ export function calcCartTotals(cart, { discountPct = 0, discountAmt = 0 } = {}) 
     netSubtotal += roundAmount(after - tax)
   })
 
+  const taxable = roundAmount(netSubtotal)
   return {
     mode: 'inclusive',
-    netSubtotal: roundAmount(netSubtotal),
+    netSubtotal: taxable,
     grossSubtotal,
+    exclGross,
     taxTotal: roundAmount(taxTotal),
+    // Bill-level only — used for API `discount` field.
     discount,
+    // Line + bill discount in excl. GST terms (Rate×Qty − Taxable).
+    discountAmount: roundAmount(Math.max(0, exclGross - taxable)),
     total: Math.max(0, roundAmount(grossSubtotal - discount)),
   }
 }

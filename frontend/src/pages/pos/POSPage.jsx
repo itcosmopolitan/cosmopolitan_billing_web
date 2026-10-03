@@ -776,6 +776,7 @@ export default function POSPage() {
     netSubtotal: subtotal,
     taxTotal: tax,
     discount,
+    discountAmount,
     total,
     mode: taxMode,
   } = cartTotals
@@ -1383,7 +1384,7 @@ export default function POSPage() {
               <table style={{ width: '100%', minWidth: 860, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
-                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Line Total', ''].map((h) => (
+                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Total (Excl.)', ''].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -1616,7 +1617,7 @@ export default function POSPage() {
             >
               {cart.length > 0 && (
                 <div style={{ marginBottom: 4 }}>
-                  {discount > 0 && (
+                  {discountAmount > 0 && (
                     <div
                       style={{
                         display: 'flex',
@@ -1627,8 +1628,8 @@ export default function POSPage() {
                         marginBottom: 2,
                       }}
                     >
-                      <span>Disc</span>
-                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discount)}</span>
+                      <span>Discount</span>
+                      <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discountAmount)}</span>
                     </div>
                   )}
                   {gstReverse.gstReversed > 0 && (

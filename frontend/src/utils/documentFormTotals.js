@@ -21,6 +21,12 @@ export function lineTaxDisplay(it, lineGross, entityDiscountShare = 0) {
   return lineTaxAmount(after, Number(it.taxRate || 0))
 }
 
+/** Taxable (excl. GST) line amount after line + optional document discount share. */
+export function lineTaxableDisplay(it, lineGross, entityDiscountShare = 0) {
+  const after = roundAmount(Math.max(0, lineNetAmount(it, lineGross) - (Number(entityDiscountShare) || 0)))
+  return roundAmount(after - lineTaxAmount(after, Number(it.taxRate || 0)))
+}
+
 /** Unit rate shown excl. GST (catalog/transaction prices stay inclusive). */
 export function displayExclRate(inclusiveUnit, taxRate) {
   return exclusiveFromInclusive(inclusiveUnit, taxRate)
