@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { humanizeLabel, roleColors } from '@/utils/helpers'
-import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI } from '@/api'
+import { usersAPI, branchesAPI, rolesAPI, permissionsAPI, settingsAPI, stockPoolsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow, Tag, AlertBar, Avatar, PaginationBar, SortableHeader, SegmentedToggle, MultiSelect, TruncatedChipList, TablePanel, TableLoadingPanel, AutocompleteDropdown, RowActionsMenu } from '@/components/ui'
@@ -74,6 +74,12 @@ export default function SettingsPage() {
   const [branchSortBy, setBranchSortBy] = useState('name')
   const [branchSortOrder, setBranchSortOrder] = useState('asc')
   const [showBranch, setShowBranch] = useState(false)
+  const [stockPools, setStockPools] = useState([])
+  const [stockPoolsLoading, setStockPoolsLoading] = useState(false)
+  const [stockPoolVersion, setStockPoolVersion] = useState(0)
+  const [newStockPoolName, setNewStockPoolName] = useState('')
+  const [newStockPoolAllowsSales, setNewStockPoolAllowsSales] = useState(false)
+  const [stockPoolBranchChoices, setStockPoolBranchChoices] = useState({})
   // Auto-generated temp password — admin can override. Re-rolled by the
   // useEffect below whenever the Add User modal opens, so two consecutive
   // creates don't share a password if the admin happens to forget to copy.
@@ -146,6 +152,86 @@ export default function SettingsPage() {
       console.error(err)
       toast.error('Failed to load branches')
       return []
+    }
+  }
+
+  const stockPoolError = (error, fallback) => {
+    const detail = error?.response?.data?.detail
+    toast.error(typeof detail === 'string' ? detail : detail?.message || fallback)
+  }
+
+  useEffect(() => {
+    if (tab !== 'branches' || (!can('stock_pools.view') && !can('stock_pools.manage'))) return undefined
+    let cancelled = false
+    setStockPoolsLoading(true)
+    stockPoolsAPI.list()
+      .then((rows) => { if (!cancelled) setStockPools(Array.isArray(rows) ? rows : []) })
+      .catch((error) => {
+        console.error('Failed to load stock pools:', error)
+        if (!cancelled) {
+          setStockPools([])
+          stockPoolError(error, 'Failed to load stock pools')
+        }
+      })
+      .finally(() => { if (!cancelled) setStockPoolsLoading(false) })
+    return () => { cancelled = true }
+  }, [tab, tabVisit, stockPoolVersion, can])
+
+  const createStockPool = async () => {
+    const name = newStockPoolName.trim()
+    if (!name) {
+      toast.error('Enter a stock pool name')
+      return
+    }
+    try {
+      await stockPoolsAPI.create({
+        name,
+        active: false,
+        allow_cross_branch_sales: newStockPoolAllowsSales,
+      })
+      setNewStockPoolName('')
+      setNewStockPoolAllowsSales(false)
+      setStockPoolVersion((version) => version + 1)
+      toast.success('Stock pool created')
+    } catch (error) {
+      console.error('Failed to create stock pool:', error)
+      stockPoolError(error, 'Failed to create stock pool')
+    }
+  }
+
+  const updateStockPool = async (pool, changes) => {
+    try {
+      const updated = await stockPoolsAPI.update(pool.id, changes)
+      setStockPools((current) => current.map((row) => row.id === pool.id ? updated : row))
+      toast.success('Stock pool updated')
+    } catch (error) {
+      console.error('Failed to update stock pool:', error)
+      stockPoolError(error, 'Failed to update stock pool')
+    }
+  }
+
+  const addStockPoolBranch = async (pool) => {
+    const branchId = stockPoolBranchChoices[pool.id]
+    if (!branchId) return
+    try {
+      const updated = await stockPoolsAPI.addBranch(pool.id, branchId)
+      setStockPools((current) => current.map((row) => row.id === pool.id ? updated : row))
+      setStockPoolBranchChoices((current) => ({ ...current, [pool.id]: '' }))
+      toast.success('Branch added to stock pool')
+    } catch (error) {
+      console.error('Failed to add branch to stock pool:', error)
+      stockPoolError(error, 'Failed to add branch to stock pool')
+    }
+  }
+
+  const removeStockPoolBranch = async (pool, branch) => {
+    try {
+      await stockPoolsAPI.removeBranch(pool.id, branch.id)
+      setStockPoolVersion((version) => version + 1)
+      toast.success(`${branch.name} removed from stock pool`)
+    } catch (error) {
+      console.error('Failed to remove branch from stock pool:', error)
+      stockPoolError(error, 'Failed to remove branch from stock pool')
     }
   }
 
@@ -811,6 +897,132 @@ export default function SettingsPage() {
               />
             </TablePanel>
           </Card>
+          {(can('stock_pools.view') || can('stock_pools.manage')) && (
+            <section style={{ marginTop: 22 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                <div style={{ opacity: 0.55 }}>
+                  <h3 style={{ margin: 0, fontSize: 15 }}>Stock pools</h3>
+                  <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-muted)' }}>
+                    Group active branches so POS can optionally fulfill a sale from pooled inventory. The invoice and tax branch remain unchanged.
+                  </div>
+                </div>
+              </div>
+              {can('stock_pools.manage') && (
+                <Card style={{ marginBottom: 12 }}>
+                  <fieldset disabled style={{ border: 0, margin: 0, padding: 0, minWidth: 0, opacity: 0.45 }}>
+                    <div style={{ display: 'flex', alignItems: 'end', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 220px' }}>
+                        <FormGroup label="New pool name">
+                          <input
+                            className="form-input"
+                            value={newStockPoolName}
+                            onChange={(event) => setNewStockPoolName(event.target.value)}
+                            placeholder="e.g. North region stores"
+                            maxLength={120}
+                          />
+                        </FormGroup>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, paddingBottom: 8, color: 'var(--text-secondary)' }}>
+                        <input
+                          type="checkbox"
+                          checked={newStockPoolAllowsSales}
+                          onChange={(event) => setNewStockPoolAllowsSales(event.target.checked)}
+                        />
+                        Allow POS cross-branch sales
+                      </label>
+                      <button className="btn btn-primary btn-sm" onClick={createStockPool}>Create pool</button>
+                    </div>
+                  </fieldset>
+                  <div role="note" style={{ marginTop: 12, padding: '9px 11px', borderRadius: 7, background: 'var(--bg-raised)', color: 'var(--text-secondary)', fontSize: 12 }}>
+                    <strong>Stock Pools is currently locked.</strong> Contact support to request access. Once enabled, you can group branches and let POS fulfill sales from shared stock; the selling branch keeps the invoice, prices, and tax.
+                  </div>
+                </Card>
+              )}
+              {stockPoolsLoading ? (
+                <div style={{ padding: 18, color: 'var(--text-muted)', fontSize: 13 }}>Loading stock pools…</div>
+              ) : stockPools.length === 0 ? (
+                <Card>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No stock pools configured.</div>
+                </Card>
+              ) : stockPools.map((pool) => {
+                const memberIds = new Set((pool.branches || []).map((branch) => branch.id))
+                const assignedElsewhere = new Set(stockPools
+                  .filter((candidate) => candidate.id !== pool.id)
+                  .flatMap((candidate) => (candidate.branches || []).map((branch) => branch.id)))
+                const candidates = (storeBranches || []).filter((branch) =>
+                  branch.active && !memberIds.has(branch.id) && !assignedElsewhere.has(branch.id))
+                return (
+                  <Card key={pool.id} style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 240px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <strong style={{ fontSize: 14 }}>{pool.name}</strong>
+                          <Chip status={pool.active ? 'active' : 'inactive'} />
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 11.5, color: 'var(--text-muted)' }}>
+                          {pool.branches?.length || 0} member branch{pool.branches?.length === 1 ? '' : 'es'}
+                        </div>
+                      </div>
+                      {can('stock_pools.manage') && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5 }}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(pool.allow_cross_branch_sales)}
+                              onChange={(event) => updateStockPool(pool, { allow_cross_branch_sales: event.target.checked })}
+                            />
+                            Allow cross-branch POS sales
+                          </label>
+                          <button
+                            className="btn btn-secondary btn-xs"
+                            onClick={() => updateStockPool(pool, { active: !pool.active })}
+                          >{pool.active ? 'Deactivate' : 'Activate'}</button>
+                        </div>
+                      )}
+                    </div>
+                    {pool.gstin_mismatch && (
+                      <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 6, background: 'rgba(245, 158, 11, 0.12)', color: 'var(--amber)', fontSize: 11.5 }}>
+                        Member branches have different GSTIN values. Cross-branch stock does not change the selling branch tax registration.
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                      {(pool.branches || []).map((branch) => (
+                        <span key={branch.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 8px', border: '1px solid var(--border-subtle)', borderRadius: 16, fontSize: 11.5 }}>
+                          {branch.name}
+                          {!branch.active && <span style={{ color: 'var(--amber)' }}>(inactive)</span>}
+                          {can('stock_pools.manage') && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              title={`Remove ${branch.name} from pool`}
+                              onClick={() => removeStockPoolBranch(pool, branch)}
+                            >×</button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                    {can('stock_pools.manage') && (
+                      <div style={{ display: 'flex', gap: 8, maxWidth: 460, marginTop: 14 }}>
+                        <select
+                          className="form-input"
+                          value={stockPoolBranchChoices[pool.id] || ''}
+                          onChange={(event) => setStockPoolBranchChoices((current) => ({ ...current, [pool.id]: event.target.value }))}
+                        >
+                          <option value="">Choose active branch…</option>
+                          {candidates.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                        </select>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          disabled={!stockPoolBranchChoices[pool.id]}
+                          onClick={() => addStockPoolBranch(pool)}
+                        >Add branch</button>
+                      </div>
+                    )}
+                  </Card>
+                )
+              })}
+            </section>
+          )}
           <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="lg"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
             <FormRow>

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { usePOSStore, useAppStore } from '@/store'
-import { itemsAPI, customersAPI, salesAPI, settingsAPI } from '@/api'
+import { itemsAPI, customersAPI, salesAPI, settingsAPI, stockPoolsAPI } from '@/api'
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
 import { useNavigationBlocker } from '@/hooks/useNavigationBlocker'
@@ -212,6 +212,9 @@ export default function POSPage() {
   const [newDiscountReason, setNewDiscountReason] = useState('')
   const [editingInvoice, setEditingInvoice] = useState(null)
   const [editLoading, setEditLoading] = useState(false)
+  const [stockModeByBranch, setStockModeByBranch] = useState({})
+  const [stockPool, setStockPool] = useState(null)
+  const clientRequestRef = useRef(null)
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -229,6 +232,7 @@ export default function POSPage() {
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, discountType, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const stockMode = activeBranch?.id ? (stockModeByBranch[activeBranch.id] || 'branch') : 'branch'
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
 
   // Guard route changes when the cart has unsaved lines. We stash the
@@ -319,6 +323,33 @@ export default function POSPage() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    setStockPool(null)
+    if (!activeBranch?.id) return undefined
+    if (!can('pos.use_pool_stock')) {
+      setStockModeByBranch((current) => ({ ...current, [activeBranch.id]: 'branch' }))
+      return undefined
+    }
+    stockPoolsAPI.forBranch(activeBranch.id)
+      .then((pool) => {
+        if (!cancelled) {
+          setStockPool(pool || null)
+          if (!pool?.allow_cross_branch_sales) {
+            setStockModeByBranch((current) => ({ ...current, [activeBranch.id]: 'branch' }))
+          }
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setStockPool(null)
+          setStockModeByBranch((current) => ({ ...current, [activeBranch.id]: 'branch' }))
+          console.error('Failed to load stock pool for POS branch:', error)
+        }
+      })
+    return () => { cancelled = true }
+  }, [activeBranch?.id, can])
+
+  useEffect(() => {
     const branchId = activeBranch?.id || 'default'
     // Fetch discount reasons from API
     fetchBranchDiscountReasons(branchId).then((reasons) => {
@@ -359,6 +390,7 @@ export default function POSPage() {
       sort_by: 'name',
       sort_order: 'asc',
       pos_mode: true,
+      stock_mode: stockMode,
       include_total: false,
     })
     const data = unwrapPaged(raw)
@@ -428,6 +460,7 @@ export default function POSPage() {
       sort_by: 'name',
       sort_order: 'asc',
       pos_mode: true,
+      stock_mode: stockMode,
       include_total: false,
     }
     try {
@@ -445,6 +478,7 @@ export default function POSPage() {
           return {
             ...p,
             available_stock: fresh.available_stock,
+            pool_stock: fresh.pool_stock,
             batches_count: fresh.batches_count,
             nearest_expiry: fresh.nearest_expiry,
           }
@@ -453,7 +487,7 @@ export default function POSPage() {
     } catch (err) {
       console.error('Failed to refresh stock after sale:', err)
     }
-  }, [activeBranch?.id, debouncedSearch, activeCat, productPageNo])
+  }, [activeBranch?.id, debouncedSearch, activeCat, productPageNo, stockMode])
 
   useEffect(() => {
     const branchId = activeBranch?.id || 'br-001'
@@ -472,7 +506,29 @@ export default function POSPage() {
     const branchId = activeBranch?.id || 'br-001'
     resetProducts(branchId, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, activeCat])
+  }, [debouncedSearch, activeCat, stockMode])
+
+  useEffect(() => {
+    const lineStock = new Map(products.map((product) => [
+      product.id,
+      {
+        availableStock: Number(
+          stockMode === 'clubbed'
+            ? (product.pool_stock ?? product.available_stock)
+            : product.available_stock,
+        ) || 0,
+        branchStock: Number(product.available_stock) || 0,
+        poolStock: Number(product.pool_stock) || 0,
+      },
+    ]))
+    const currentCart = usePOSStore.getState().cart
+    currentCart.forEach((line) => {
+      const availability = lineStock.get(line.id)
+      if (availability) {
+        usePOSStore.getState().setLineStockAvailability(line.id, availability)
+      }
+    })
+  }, [products, stockMode])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -493,6 +549,16 @@ export default function POSPage() {
   }, [cart, paymentMethod, customer])
 
   const filtered = products
+
+  const changeStockMode = (nextMode) => {
+    if (nextMode === stockMode || !activeBranch?.id) return
+    setStockModeByBranch((current) => ({ ...current, [activeBranch.id]: nextMode }))
+    cart.forEach((line) => {
+      if (line.batchTracking || line.batch_tracking) {
+        store.setLineBatchAllocation(line.id, [], false)
+      }
+    })
+  }
 
   const handleComplete = async (allowCreditOverLimit = false) => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
@@ -524,13 +590,14 @@ export default function POSPage() {
       return
     }
 
-    if (!paymentMethod) {
+    const poolCheckout = stockMode === 'clubbed' && !editingInvoice
+    if (!paymentMethod && !poolCheckout) {
       toast.error('Pick a payment method to complete the sale')
       return
     }
 
     const mustPay = customerRequiresImmediatePayment(customer)
-    if (mustPay && !settling) {
+    if (mustPay && !settling && !poolCheckout) {
       toast.error(
         customer?.id
           ? 'Retail customers must pay at sale — select a payment method'
@@ -538,13 +605,18 @@ export default function POSPage() {
       )
       return
     }
-    if (mustPay && remainingDue > 0.001 && !paymentMethod) {
+    if (mustPay && remainingDue > 0.001 && !paymentMethod && !poolCheckout) {
       toast.error('Pick a payment method (Cash / Card / UPI / Bank Transfer)')
       return
     }
 
     // When settling with a remainder, a tender method MUST be picked.
-    if (settling && remainingDue > 0.001 && !paymentMethod) {
+    if (
+      settling
+      && remainingDue > 0.001
+      && !paymentMethod
+      && !(poolCheckout && !paymentReceived)
+    ) {
       toast.error('Pick a payment method for the remaining amount (Cash / Card / UPI / Bank Transfer)')
       return
     }
@@ -562,7 +634,7 @@ export default function POSPage() {
       return
     }
 
-    if (!allowOverselling && !editingInvoice) {
+    if (!allowOverselling && stockMode !== 'clubbed' && !editingInvoice) {
       for (const line of cart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
         if (line.qty > stock) {
@@ -586,6 +658,7 @@ export default function POSPage() {
         customer_name: customer?.name || 'Walk-in',
         branch_id: activeBranch.id,
         branch_name: activeBranch.name,
+        stock_mode: poolCheckout ? 'clubbed' : 'branch',
         cashier: 'Staff',
         items: cart.map((i) => {
           const gross = i.qty * i.price
@@ -618,6 +691,20 @@ export default function POSPage() {
         salePayload.payment_mode = paymentMethod
       } else if (!settling) {
         salePayload.payment_mode = null
+      }
+      if (!editingInvoice) {
+        const requestSignature = JSON.stringify(salePayload)
+        if (!clientRequestRef.current || clientRequestRef.current.signature !== requestSignature) {
+          clientRequestRef.current = {
+            signature: requestSignature,
+            id: globalThis.crypto?.randomUUID?.()
+              || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+                const random = Math.floor(Math.random() * 16)
+                return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16)
+              }),
+          }
+        }
+        salePayload.client_request_id = clientRequestRef.current.id
       }
 
       const result = editingInvoice
@@ -666,6 +753,7 @@ export default function POSPage() {
       }
       store.clearCart()
       setEditingInvoice(null)
+      clientRequestRef.current = null
       if (editInvoiceId) navigate('/pos', { replace: true })
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
@@ -693,7 +781,10 @@ export default function POSPage() {
     if (!term) return
     const inMemory = products.find((p) => p.barcode === term || p.sku === term)
     if (inMemory) {
-      const stock = inMemory.available_stock ?? 0
+      const stock = stockMode === 'clubbed'
+        ? (inMemory.pool_stock ?? inMemory.available_stock ?? 0)
+        : (inMemory.available_stock ?? 0)
+      const branchStock = inMemory.available_stock ?? 0
       const inCart = cart.find((i) => i.id === inMemory.id)?.qty ?? 0
       if (!allowOverselling && stock <= 0) {
         toast.error(`${inMemory.name} is out of stock`)
@@ -704,7 +795,8 @@ export default function POSPage() {
           id: inMemory.id, name: inMemory.name, price: inMemory.selling_price,
           taxRate: inMemory.tax_rate || 0, sku: inMemory.sku, emoji: inMemory.emoji,
           costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
-          availableStock: stock, batchTracking: Boolean(inMemory.batch_tracking),
+          availableStock: stock, branchStock, poolStock: inMemory.pool_stock,
+          batchTracking: Boolean(inMemory.batch_tracking),
           expiryTracking: Boolean(inMemory.expiry_tracking),
           packaging: inMemory.packaging || '',
           is_packaging: Boolean(inMemory.is_packaging),
@@ -730,12 +822,16 @@ export default function POSPage() {
         search: term,
         per_page: 10,
         pos_mode: true,
+        stock_mode: stockMode,
       })
       const rows = unwrapPaged(raw).items || []
       const exact = rows.find((p) => p.barcode === term || p.sku === term)
       const hit = exact || (rows.length === 1 ? rows[0] : null)
       if (hit) {
-        const stock = hit.available_stock ?? 0
+        const stock = stockMode === 'clubbed'
+          ? (hit.pool_stock ?? hit.available_stock ?? 0)
+          : (hit.available_stock ?? 0)
+        const branchStock = hit.available_stock ?? 0
         const inCart = cart.find((i) => i.id === hit.id)?.qty ?? 0
         if (!allowOverselling && stock <= 0) {
           toast.error(`${hit.name} is out of stock`)
@@ -746,7 +842,8 @@ export default function POSPage() {
             id: hit.id, name: hit.name, price: hit.selling_price,
             taxRate: hit.tax_rate || 0, sku: hit.sku, emoji: hit.emoji,
             costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
-            availableStock: stock, batchTracking: Boolean(hit.batch_tracking),
+            availableStock: stock, branchStock, poolStock: hit.pool_stock,
+            batchTracking: Boolean(hit.batch_tracking),
             expiryTracking: Boolean(hit.expiry_tracking),
             packaging: hit.packaging || '',
             is_packaging: Boolean(hit.is_packaging),
@@ -769,7 +866,7 @@ export default function POSPage() {
     } catch {
       toast.error('Barcode lookup failed')
     }
-  }, [products, activeBranch?.id, allowOverselling, cart, store])
+  }, [products, activeBranch?.id, allowOverselling, cart, store, stockMode])
 
   const cartTotals = calcCartTotals(cart, { discountPct, discountAmt })
   const {
@@ -1040,6 +1137,38 @@ export default function POSPage() {
           />
         </div>
 
+        {stockPool?.allow_cross_branch_sales && can('pos.use_pool_stock') && !editingInvoice && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'var(--bg-surface)' }}>
+            <span style={{ fontSize: 11.5, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Stock source</span>
+            <div style={{ display: 'inline-flex', border: '1px solid var(--border-default)', borderRadius: 7, overflow: 'hidden' }}>
+              {[
+                { id: 'branch', label: 'This branch' },
+                { id: 'clubbed', label: `Pool · ${stockPool.name}` },
+              ].map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => changeStockMode(option.id)}
+                  aria-pressed={stockMode === option.id}
+                  className="btn btn-sm"
+                  style={{
+                    border: 0,
+                    borderRadius: 0,
+                    background: stockMode === option.id ? 'var(--accent-bg)' : 'transparent',
+                    color: stockMode === option.id ? 'var(--accent)' : 'var(--text-secondary)',
+                    fontSize: 11,
+                  }}
+                >{option.label}</button>
+              ))}
+            </div>
+            {stockMode === 'clubbed' && (
+              <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
+                Prices, tax and invoice remain on {activeBranch?.name || 'this branch'}.
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Products grid */}
         <div style={{ position: 'relative', minHeight: 120 }}>
           {loadingProducts && (
@@ -1075,7 +1204,8 @@ export default function POSPage() {
             transition: 'opacity 0.15s ease',
           }}>
             {filtered.map((p) => {
-            const stock = p.available_stock ?? 0
+            const branchStock = p.available_stock ?? 0
+            const stock = stockMode === 'clubbed' ? (p.pool_stock ?? branchStock) : branchStock
             const inCart = cart.find((i) => i.id === p.id)?.qty ?? 0
             const isOut = !allowOverselling && stock <= 0
             const wouldExceed = !allowOverselling && inCart + 1 > stock
@@ -1097,6 +1227,8 @@ export default function POSPage() {
                       costPrice: p.cost_price ?? 0,
                       hsnCode: p.hsn_code || '',
                       availableStock: stock,
+                      branchStock,
+                      poolStock: p.pool_stock,
                       packaging: p.packaging || '',
                       is_packaging: Boolean(p.is_packaging),
                       packaging_quantity: p.packaging_quantity ?? null,
@@ -1127,7 +1259,9 @@ export default function POSPage() {
                 <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginTop: 7, lineHeight: 1.3 }}>{p.name}</div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}>{fmt(p.selling_price)}</div>
                 <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {isOut ? 'Out of stock' : `${fmtQty(stock)} in stock${inCart > 0 ? ` (${fmtQty(inCart)} in cart)` : ''}`}
+                  {isOut ? 'Out of stock' : stockMode === 'clubbed'
+                    ? `${fmtQty(stock)} pool · ${fmtQty(branchStock)} here${inCart > 0 ? ` · ${fmtQty(inCart)} in cart` : ''}`
+                    : `${fmtQty(stock)} in stock${inCart > 0 ? ` (${fmtQty(inCart)} in cart)` : ''}`}
                 </div>
               </div>
             )
@@ -1414,9 +1548,10 @@ export default function POSPage() {
                       item={item}
                       cartIndex={cartIdx}
                       branchId={activeBranch?.id}
+                      stockMode={stockMode}
                       entityDiscountShare={lineEntityShares[cartIdx] || 0}
                       onQtyChange={(qty) => {
-                        if (!allowOverselling) {
+                        if (!allowOverselling && stockMode !== 'clubbed') {
                           const stock = Number(item.availableStock ?? item.available_stock ?? 0)
                           if (qty > stock) {
                             toast.error(`Only ${stock} available for ${item.name}`)
@@ -1920,7 +2055,7 @@ export default function POSPage() {
           emoji: allocEditor.item.emoji,
           expiry_tracking: allocEditor.item.expiryTracking || allocEditor.item.expiry_tracking,
         } : null}
-        qty={allocEditor?.item?.qty || 0}
+        qty={allocEditor?.qty ?? allocEditor?.item?.qty ?? 0}
         batches={allocEditor?.batches || (allocEditor ? batchListByItem[allocEditor.item.id] || [] : [])}
         allocation={allocEditor?.allocation || []}
         strategyLabel={

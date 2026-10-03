@@ -115,7 +115,7 @@ function getBadgeClass(event) {
   if (['confirmed', 'verified', 'approved', 'transit', 'sent', 'accepted', 'payment_recorded', 'refund_issued', 'quotation_sent'].includes(key)) {
     return 'activity-badge--positive'
   }
-  if (['item_changed', 'amount_changed', 'qty_changed', 'due_date_changed', 'status_changed', 'qty_received_recorded', 'stock_returned', 'expired', 'quotation_expired', 'item_updated', 'item_branch_config_updated', 'item_branch_cost_averaged', 'branch_cost_averaged'].includes(key)) {
+  if (['item_changed', 'amount_changed', 'qty_changed', 'due_date_changed', 'status_changed', 'qty_received_recorded', 'stock_returned', 'pool_stock_draw', 'expired', 'quotation_expired', 'item_updated', 'item_branch_config_updated', 'item_branch_cost_averaged', 'branch_cost_averaged'].includes(key)) {
     return 'activity-badge--warning'
   }
   return 'activity-badge--neutral'
@@ -166,6 +166,7 @@ const EVENT_DEFINITIONS = {
 
   // GRN / stock / returns / quotations
   // GRN / stock / returns / quotations
+  pool_stock_draw:       { label: 'Pool stock draw', bg: 'var(--purple-bg)', text: 'var(--purple)', icon: '⇄' },
   qty_received_recorded: { label: 'Quantity received', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
   // Use a short verb so combined labels don't duplicate ("Sales return returned" -> "Sales return")
   stock_returned:        { label: 'Returned', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '↺' },

@@ -2,7 +2,7 @@ import type { AuditLog } from "../../types/audit";
 import { useAppStore } from "../../store";
 import { ModuleTag } from "./ModuleTag";
 import { RiskBadge } from "./RiskBadge";
-import { humanizeLabel, humanizeValue } from "@/utils/helpers";
+import { humanizeLabel } from "@/utils/helpers";
 
 interface Props {
   logs: AuditLog[];
@@ -134,7 +134,7 @@ export function AuditTable({ logs, selected, onSelect, onClearFilters }: Props) 
                   <span className="font-mono text-[11px] font-semibold text-[var(--accent)]">{log.reference_id || "-"}</span>
                 </td>
                 <td className="max-w-[360px] truncate text-[var(--text-secondary)]">
-                  {detailIsJson ? <span className="text-[var(--text-muted)]">See full detail ↓</span> : humanizeValue(log.detail)}
+                  {detailIsJson ? <span className="text-[var(--text-muted)]">See full detail ↓</span> : log.detail}
                 </td>
                 <td>
                   <RiskBadge risk={log.risk} />

@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, and_, case, cast, func, literal, select, Numeric
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, ConfigDict, Field
 from src import config
@@ -25,6 +26,8 @@ from src.models import (
     ItemBatch,
     ItemStock,
     PaymentSummary,
+    PoolSaleAllocation,
+    PoolSaleAllocationReversal,
     ProductSalesSummary,
     PurchaseBill,
     PurchaseLineItem,
@@ -4389,7 +4392,93 @@ async def stock_movement(
     if transfer_conds:
         transfer_q = transfer_q.where(and_(*transfer_conds))
 
-    union_query = sale_q.union_all(purchase_q, transfer_q).subquery()
+    pool_branch_filter = None
+    selected_branch_ids = _parse_selected_branch_ids(branch_id)
+    if selected_branch_ids:
+        pool_branch_filter = or_(
+            PoolSaleAllocation.owner_branch_id.in_(selected_branch_ids),
+            PoolSaleAllocation.sale_branch_id.in_(selected_branch_ids),
+        )
+    pool_search_filter = None
+    if search:
+        pool_search_filter = SaleLineItem.name.ilike(f"%{search}%")
+    pool_issue_q = (
+        select(
+            SaleInvoice.date.label("date"),
+            SaleLineItem.name.label("product"),
+            literal("Pool issue").label("movement_type"),
+            (-PoolSaleAllocation.qty).label("quantity"),
+            SaleInvoice.number.label("reference_number"),
+            Branch.name.label("branch"),
+        )
+        .select_from(PoolSaleAllocation)
+        .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)
+        .join(SaleLineItem, SaleLineItem.id == PoolSaleAllocation.invoice_line_id)
+        .join(Branch, Branch.id == PoolSaleAllocation.owner_branch_id)
+    )
+    pool_receipt_q = (
+        select(
+            SaleInvoice.date.label("date"),
+            SaleLineItem.name.label("product"),
+            literal("Pool receipt").label("movement_type"),
+            PoolSaleAllocation.qty.label("quantity"),
+            SaleInvoice.number.label("reference_number"),
+            Branch.name.label("branch"),
+        )
+        .select_from(PoolSaleAllocation)
+        .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)
+        .join(SaleLineItem, SaleLineItem.id == PoolSaleAllocation.invoice_line_id)
+        .join(Branch, Branch.id == PoolSaleAllocation.sale_branch_id)
+    )
+    pool_reversal_out_q = (
+        select(
+            func.date(PoolSaleAllocationReversal.created_at).label("date"),
+            SaleLineItem.name.label("product"),
+            literal("Pool reversal out").label("movement_type"),
+            (-PoolSaleAllocationReversal.qty_delta).label("quantity"),
+            SaleInvoice.number.label("reference_number"),
+            Branch.name.label("branch"),
+        )
+        .select_from(PoolSaleAllocationReversal)
+        .join(PoolSaleAllocation, PoolSaleAllocation.id == PoolSaleAllocationReversal.allocation_id)
+        .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocationReversal.invoice_id)
+        .join(SaleLineItem, SaleLineItem.id == PoolSaleAllocation.invoice_line_id)
+        .join(Branch, Branch.id == PoolSaleAllocation.sale_branch_id)
+    )
+    pool_reversal_in_q = (
+        select(
+            func.date(PoolSaleAllocationReversal.created_at).label("date"),
+            SaleLineItem.name.label("product"),
+            literal("Pool reversal in").label("movement_type"),
+            PoolSaleAllocationReversal.qty_delta.label("quantity"),
+            SaleInvoice.number.label("reference_number"),
+            Branch.name.label("branch"),
+        )
+        .select_from(PoolSaleAllocationReversal)
+        .join(PoolSaleAllocation, PoolSaleAllocation.id == PoolSaleAllocationReversal.allocation_id)
+        .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocationReversal.invoice_id)
+        .join(SaleLineItem, SaleLineItem.id == PoolSaleAllocation.invoice_line_id)
+        .join(Branch, Branch.id == PoolSaleAllocation.owner_branch_id)
+    )
+    if pool_branch_filter is not None:
+        pool_issue_q = pool_issue_q.where(pool_branch_filter)
+        pool_receipt_q = pool_receipt_q.where(pool_branch_filter)
+        pool_reversal_out_q = pool_reversal_out_q.where(pool_branch_filter)
+        pool_reversal_in_q = pool_reversal_in_q.where(pool_branch_filter)
+    if pool_search_filter is not None:
+        pool_issue_q = pool_issue_q.where(pool_search_filter)
+        pool_receipt_q = pool_receipt_q.where(pool_search_filter)
+        pool_reversal_out_q = pool_reversal_out_q.where(pool_search_filter)
+        pool_reversal_in_q = pool_reversal_in_q.where(pool_search_filter)
+
+    union_query = sale_q.union_all(
+        purchase_q,
+        transfer_q,
+        pool_issue_q,
+        pool_receipt_q,
+        pool_reversal_out_q,
+        pool_reversal_in_q,
+    ).subquery()
     order_expr = union_query.c.date
     if sort_by == "product":
         order_expr = union_query.c.product
@@ -4410,6 +4499,101 @@ async def stock_movement(
     result = await db.execute(select(union_query).order_by(ordered).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
+
+
+@router.get("/pool-issues", dependencies=[Depends(require_perm("reports.view"))])
+async def pool_issues(
+    branch_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    allowed_branch_ids = await _resolve_branch_scope(user, db, branch_id)
+    selected = _parse_selected_branch_ids(branch_id)
+    if selected and allowed_branch_ids is not None and any(
+        bid not in allowed_branch_ids for bid in selected
+    ):
+        raise HTTPException(403, "Branch is outside your report scope")
+    if selected:
+        scope = or_(
+            PoolSaleAllocation.owner_branch_id.in_(selected),
+            PoolSaleAllocation.sale_branch_id.in_(selected),
+        )
+    elif allowed_branch_ids is not None:
+        scope = (
+            or_(
+                PoolSaleAllocation.owner_branch_id.in_(allowed_branch_ids),
+                PoolSaleAllocation.sale_branch_id.in_(allowed_branch_ids),
+            )
+            if allowed_branch_ids
+            else literal(False)
+        )
+    else:
+        scope = None
+    start, end = _normalize_date_range(date_from, date_to)
+    owner_branch = aliased(Branch)
+    query = (
+        select(
+            SaleInvoice.date.label("date"),
+            SaleInvoice.number.label("invoice_number"),
+            SaleInvoice.id.label("invoice_id"),
+            Branch.name.label("selling_branch"),
+            PoolSaleAllocation.owner_branch_id.label("owner_branch_id"),
+            owner_branch.name.label("stock_branch"),
+            PoolSaleAllocation.item_id.label("item_id"),
+            SaleLineItem.name.label("item_name"),
+            PoolSaleAllocation.source_batch_no.label("batch_number"),
+            PoolSaleAllocation.expiry_date.label("expiry_date"),
+            PoolSaleAllocation.qty.label("quantity"),
+            PoolSaleAllocation.unit_cost.label("unit_cost"),
+            (PoolSaleAllocation.qty * PoolSaleAllocation.unit_cost).label("total_cost"),
+        )
+        .select_from(PoolSaleAllocation)
+        .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)
+        .join(SaleLineItem, SaleLineItem.id == PoolSaleAllocation.invoice_line_id)
+        .join(Branch, Branch.id == PoolSaleAllocation.sale_branch_id)
+        .join(owner_branch, owner_branch.id == PoolSaleAllocation.owner_branch_id)
+        .where(SaleInvoice.date >= start.isoformat(), SaleInvoice.date <= end.isoformat())
+    )
+    if scope is not None:
+        query = query.where(scope)
+    if search:
+        query = query.where(
+            or_(
+                SaleInvoice.number.ilike(f"%{search}%"),
+                SaleLineItem.name.ilike(f"%{search}%"),
+                PoolSaleAllocation.source_batch_no.ilike(f"%{search}%"),
+            )
+        )
+    columns = {
+        "date": query.selected_columns.date,
+        "invoice_number": query.selected_columns.invoice_number,
+        "selling_branch": query.selected_columns.selling_branch,
+        "stock_branch": query.selected_columns.stock_branch,
+        "item_name": query.selected_columns.item_name,
+        "quantity": query.selected_columns.quantity,
+        "unit_cost": query.selected_columns.unit_cost,
+        "total_cost": query.selected_columns.total_cost,
+    }
+    sort_key = sort_by if sort_by in columns else "date"
+    sort_expr = columns[sort_key]
+    if (sort_order or "desc").lower() == "desc":
+        sort_expr = sort_expr.desc()
+    else:
+        sort_expr = sort_expr.asc()
+    total = int((await db.execute(
+        select(func.count()).select_from(query.subquery())
+    )).scalar_one() or 0)
+    rows = (await db.execute(
+        query.order_by(sort_expr, SaleInvoice.number).offset(normalize_skip(skip)).limit(normalize_limit(limit))
+    )).all()
+    return paged([dict(row._mapping) for row in rows], total, normalize_skip(skip), normalize_limit(limit))
 
 
 @router.get("/branch-comparison", dependencies=[Depends(require_perm("reports.view"))])

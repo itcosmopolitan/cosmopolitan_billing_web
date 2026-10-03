@@ -318,7 +318,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         <div className="mb-4">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Description</div>
           <div className="whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-4 text-sm text-[var(--text-secondary)]">
-            {humanizeValue(log.detail) || '—'}
+            {log.detail || '—'}
           </div>
         </div>
 

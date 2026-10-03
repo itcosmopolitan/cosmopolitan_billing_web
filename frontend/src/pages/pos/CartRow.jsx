@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import MarginBadge from '@/components/MarginBadge'
@@ -71,6 +71,7 @@ export default function CartRow({
   disableDiscount,
   allowPriceEditing = false,
   entityDiscountShare = 0,
+  stockMode = 'branch',
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
   const exclRate = displayExclusiveUnitRate(item.price, item.taxRate)
@@ -80,8 +81,25 @@ export default function CartRow({
   const hsn = item.hsnCode || '—'
   const metadata = getInvoiceItemMetadata(item)
   const uom = metadata.units === '' ? '—' : metadata.units
+  const [batches, setBatches] = useState([])
+  const [loadingBatches, setLoadingBatches] = useState(false)
   const hasStock = item.availableStock != null || item.available_stock != null
   const stockQty = hasStock ? Number(item.availableStock ?? item.available_stock) || 0 : null
+  const branchStockQty = Math.max(0, Number(item.branchStock ?? stockQty ?? 0) || 0)
+  const tracked = Boolean(item.batchTracking || item.batch_tracking)
+  const expiryTracked = Boolean(item.expiryTracking || item.expiry_tracking)
+  const sellableBatches = useMemo(
+    () => stockMode === 'clubbed' && expiryTracked
+      ? batches.filter((batch) => !batchExpiryStatus(batch).expired)
+      : batches,
+    [batches, stockMode, expiryTracked],
+  )
+  const localBatchStock = sellableBatches.reduce((total, batch) => (
+    total + Math.max(0, Number(batch.quantity ?? batch.remaining) || 0)
+  ), 0)
+  const localBatchQtyNeeded = stockMode === 'clubbed'
+    ? Math.min(item.qty, tracked ? localBatchStock : branchStockQty)
+    : item.qty
   const stockExceeded = stockQty != null && item.qty > stockQty
   const discType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
   const discValue = Number(item.lineDiscountValue ?? item.lineDiscountPct ?? item.lineDiscountFlat ?? 0) || 0
@@ -100,11 +118,6 @@ export default function CartRow({
     }
     onQtyChange(roundQty(lastPositiveQtyRef.current || qtyInputStep()))
   }
-
-  const tracked = Boolean(item.batchTracking || item.batch_tracking)
-  const expiryTracked = Boolean(item.expiryTracking || item.expiry_tracking)
-  const [batches, setBatches] = useState([])
-  const [loadingBatches, setLoadingBatches] = useState(false)
 
   // Stash the callbacks in refs so their identity (recreated on every
   // POSPage render as inline arrows) doesn't retrigger the effects below.
@@ -145,15 +158,15 @@ export default function CartRow({
   useEffect(() => {
     if (!tracked) return
     if (item.batchAllocationCustom) return
-    if (batches.length === 0) return
-    const auto = computeAutoAllocation(batches, item.qty)
+    if (sellableBatches.length === 0) return
+    const auto = computeAutoAllocation(sellableBatches, localBatchQtyNeeded)
     const same = JSON.stringify(auto) === JSON.stringify(allocationRef.current || [])
     if (!same) onAllocationChangeRef.current?.(auto, /* custom */ false)
-  }, [batches, item.qty, item.batchAllocationCustom, tracked])
+  }, [sellableBatches, item.qty, localBatchQtyNeeded, item.batchAllocationCustom, tracked])
 
   const strategyLabel = expiryTracked ? 'FEFO' : 'FIFO'
   const allocation = Array.isArray(item.batchAllocation) ? item.batchAllocation : []
-  const allocValid = isAllocationValid(allocation, item.qty)
+  const allocValid = isAllocationValid(allocation, localBatchQtyNeeded)
   const allocated = allocationSum(allocation)
 
   return (
@@ -167,37 +180,38 @@ export default function CartRow({
       title={tracked ? `${strategyLabel} batch-tracked item` : undefined}
     >
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', minWidth: 280, verticalAlign: 'middle' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
           <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>{item.emoji || '📦'}</span>
-          <input
-            className="form-input"
-            type="text"
-            data-pos-cart-field="name"
-            data-pos-cart-index={cartIndex}
-            value={item.name ?? ''}
-            onChange={(e) => onNameChange?.(e.target.value)}
-            onBlur={() => {
-              const trimmed = String(item.name || '').trim()
-              if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
-              else if (trimmed !== item.name) onNameChange?.(trimmed)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-              else handleCartFieldArrowNav(e, 'name', cartIndex)
-            }}
-            aria-label={`Item name for this bill: ${item.name || ''}`}
-            title="Edit name for this bill only. Item master is unchanged."
-            style={{
-              flex: '1 1 140px',
-              minWidth: 110,
-              width: 'auto',
-              padding: '3px 7px',
-              fontSize: 12.5,
-              fontWeight: 600,
-              lineHeight: 1.3,
-              color: 'var(--text-primary)',
-            }}
-          />
+          <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+            <input
+              className="form-input"
+              type="text"
+              data-pos-cart-field="name"
+              data-pos-cart-index={cartIndex}
+              value={item.name ?? ''}
+              onChange={(e) => onNameChange?.(e.target.value)}
+              onBlur={() => {
+                const trimmed = String(item.name || '').trim()
+                if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
+                else if (trimmed !== item.name) onNameChange?.(trimmed)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                else handleCartFieldArrowNav(e, 'name', cartIndex)
+              }}
+              aria-label={`Item name for this bill: ${item.name || ''}`}
+              title="Edit name for this bill only. Item master is unchanged."
+              style={{
+                width: '100%',
+                minWidth: 0,
+                padding: '3px 7px',
+                fontSize: 12.5,
+                fontWeight: 600,
+                lineHeight: 1.3,
+                color: 'var(--text-primary)',
+              }}
+            />
+          </div>
           <span
             style={{
               display: 'inline-flex',
@@ -223,7 +237,11 @@ export default function CartRow({
             <span title="HSN">HSN {hsn}</span>
             <span title="Unit of measure">· {uom}</span>
             <span title="Available stock" style={{ color: stockExceeded ? 'var(--amber)' : undefined }}>
-              · Stk {stockQty != null ? fmtQty(stockQty) : '—'}
+                {stockMode === 'clubbed'
+                  ? `Pool: ${stockQty != null ? fmtQty(stockQty) : '—'} · Here: ${fmtQty(branchStockQty)}`
+                  : `
+              · Stk ${stockQty != null ? fmtQty(stockQty) : '—'}`}
+              
               {stockExceeded ? ' ⚠' : ''}
             </span>
           </span>
@@ -238,9 +256,9 @@ export default function CartRow({
                 expiryTracked={expiryTracked}
                 valid={allocValid}
                 allocated={allocated}
-                qtyNeeded={item.qty}
+                qtyNeeded={localBatchQtyNeeded}
                 custom={!!item.batchAllocationCustom}
-                onEdit={() => onEditAllocation && onEditAllocation({ item, batches, allocation })}
+                onEdit={() => onEditAllocation && onEditAllocation({ item, batches: sellableBatches, allocation, qty: localBatchQtyNeeded })}
               />
             )
           )}

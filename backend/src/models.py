@@ -256,6 +256,38 @@ class Branch(Base):
     cash_entries = relationship("CashEntry", back_populates="branch")
 
 
+class StockPool(Base):
+    __tablename__ = "stock_pools"
+    __table_args__ = (UniqueConstraint("name", name="uq_stock_pools_name"),)
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    active = Column(Boolean, default=False, nullable=False)
+    allow_cross_branch_sales = Column(Boolean, default=False, nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    branches = relationship("StockPoolBranch", back_populates="pool", cascade="all, delete-orphan")
+
+
+class StockPoolBranch(Base):
+    __tablename__ = "stock_pool_branches"
+    __table_args__ = (
+        UniqueConstraint("branch_id", name="uq_stock_pool_branches_branch_id"),
+        Index("ix_stock_pool_branches_pool_id", "pool_id"),
+    )
+
+    id = Column(String, primary_key=True)
+    pool_id = Column(String, ForeignKey("stock_pools.id", ondelete="CASCADE"), nullable=False)
+    branch_id = Column(String, ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    pool = relationship("StockPool", back_populates="branches")
+    branch = relationship("Branch")
+
+
 # ─── Tax Rate ─────────────────────────────────────────────────────────────────
 class TaxRate(Base):
     __tablename__ = "tax_rates"
@@ -566,6 +598,14 @@ class Vendor(Base):
 # ─── Sale Invoice ─────────────────────────────────────────────────────────────
 class SaleInvoice(Base):
     __tablename__ = "sale_invoices"
+    __table_args__ = (
+        Index(
+            "uq_sale_invoices_branch_client_request",
+            "branch_id",
+            "client_request_id",
+            unique=True,
+        ),
+    )
     id            = Column(String, primary_key=True)
     number        = Column(String, unique=True, nullable=False)
     customer_id   = Column(String, ForeignKey("customers.id"), nullable=True)
@@ -613,6 +653,8 @@ class SaleInvoice(Base):
     pending_order_id = Column(String, nullable=True)
     pending_quote_id = Column(String, nullable=True)
     quotation_number_snapshot = Column(String, nullable=True)
+    client_request_id = Column(String(64), nullable=True)
+    pool_drawn = Column(Boolean, default=False, nullable=False)
 
     customer  = relationship("Customer", back_populates="invoices")
     line_items = relationship("SaleLineItem", back_populates="invoice", cascade="all, delete-orphan")
@@ -1311,6 +1353,57 @@ class StockMovement(Base):
     notes          = Column(Text)
     created_by     = Column(String)
     created_at     = Column(DateTime, default=datetime.utcnow)
+
+
+class PoolSaleAllocation(Base):
+    __tablename__ = "pool_sale_allocations"
+    __table_args__ = (
+        Index("ix_pool_sale_allocations_invoice_id", "invoice_id"),
+        Index("ix_pool_sale_allocations_owner_created", "owner_branch_id", "created_at"),
+        Index("ix_pool_sale_allocations_sale_created", "sale_branch_id", "created_at"),
+    )
+
+    id = Column(String, primary_key=True)
+    invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
+    invoice_line_id = Column(String, ForeignKey("sale_line_items.id"), nullable=False)
+    pool_id = Column(String, ForeignKey("stock_pools.id"), nullable=False)
+    sale_branch_id = Column(String, ForeignKey("branches.id"), nullable=False)
+    owner_branch_id = Column(String, ForeignKey("branches.id"), nullable=False)
+    item_id = Column(String, ForeignKey("items.id"), nullable=False)
+    qty = Column(Float, nullable=False)
+    unit_cost = Column(Float, default=0, nullable=False)
+    cost_source = Column(String, nullable=False)
+    source_batch_id = Column(String, ForeignKey("item_batches.id"), nullable=True)
+    source_batch_no = Column(String, nullable=True)
+    expiry_date = Column(String, nullable=True)
+    dest_batch_id = Column(String, ForeignKey("item_batches.id"), nullable=True)
+    out_movement_id = Column(String, ForeignKey("stock_movements.id"), nullable=False)
+    in_movement_id = Column(String, ForeignKey("stock_movements.id"), nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    invoice = relationship("SaleInvoice")
+    invoice_line = relationship("SaleLineItem")
+    pool = relationship("StockPool")
+
+
+class PoolSaleAllocationReversal(Base):
+    __tablename__ = "pool_sale_allocation_reversals"
+    __table_args__ = (
+        Index("ix_pool_sale_allocation_reversals_allocation", "allocation_id"),
+        Index("ix_pool_sale_allocation_reversals_return", "return_id"),
+    )
+
+    id = Column(String, primary_key=True)
+    allocation_id = Column(String, ForeignKey("pool_sale_allocations.id"), nullable=False)
+    invoice_id = Column(String, ForeignKey("sale_invoices.id"), nullable=False)
+    return_id = Column(String, ForeignKey("sales_returns.id", ondelete="SET NULL"), nullable=True)
+    operation = Column(String, nullable=False)
+    qty_delta = Column(Float, nullable=False)
+    sale_movement_id = Column(String, ForeignKey("stock_movements.id"), nullable=True)
+    owner_movement_id = Column(String, ForeignKey("stock_movements.id"), nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 # ─── Stock Reservations (Phase 0 — when allow_overselling=False) ─────────────

@@ -331,6 +331,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("items", "country_of_origin", "VARCHAR"),
     ("items", "is_packaging", "BOOLEAN DEFAULT 0"),
     ("items", "packaging_quantity", "FLOAT"),
+    ("sale_invoices", "client_request_id", "VARCHAR(64)"),
+    ("sale_invoices", "pool_drawn", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("items", "packaging", "VARCHAR"),
     # Sales Phase 1 (2026-05-23): money we owe the customer. Separate from
     # `outstanding` so the two intents don't sign-flip on each other.
@@ -556,6 +558,7 @@ async def init_schema() -> None:
             await _promote_qty_columns_to_float(conn)
             await _backfill_user_account_status(conn, added_columns)
             await _ensure_audit_log_indexes(conn)
+            await _ensure_stock_pool_indexes(conn)
             await _ensure_nullable_columns(conn)
             await _ensure_user_identity_schema(conn)
             await _bootstrap_system_roles(conn)
@@ -948,6 +951,16 @@ async def _ensure_audit_log_indexes(conn) -> None:
                 else:
                     logger.warning(f"Failed to create audit index after {max_retries} retries: {e}")
             raise
+
+
+async def _ensure_stock_pool_indexes(conn) -> None:
+    """Add indexes required for idempotent POS checkout on upgraded schemas."""
+    await conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_sale_invoices_branch_client_request "
+            "ON sale_invoices (branch_id, client_request_id)"
+        )
+    )
 
 
 # PostgreSQL enums are created at first table migration; new Python enum

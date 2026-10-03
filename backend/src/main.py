@@ -34,6 +34,7 @@ from src.routes import (
     sales,
     settings as settings_routes,
     setup,
+    stock_pools,
     taxes,
     transfers,
     adjustments,
@@ -130,6 +131,7 @@ app.include_router(vendors.router,    prefix=f"{PREFIX}/vendors",   tags=["Vendo
 app.include_router(sales.router,      prefix=f"{PREFIX}/sales",     tags=["Sales"])
 app.include_router(purchases.router,  prefix=f"{PREFIX}/purchases", tags=["Purchases"])
 app.include_router(transfers.router,  prefix=f"{PREFIX}/transfers", tags=["Transfers"])
+app.include_router(stock_pools.router, prefix=f"{PREFIX}/stock-pools", tags=["Stock Pools"])
 app.include_router(adjustments.router, prefix=f"{PREFIX}/adjustments", tags=["Adjustments"])
 app.include_router(summaries.router,    prefix=f"{PREFIX}/summaries",    tags=["Summaries"])
 app.include_router(notifications.router, prefix=f"{PREFIX}/notifications", tags=["Notifications"])

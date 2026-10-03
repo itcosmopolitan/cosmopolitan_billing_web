@@ -81,6 +81,12 @@ from src.security import (
     get_allowed_branch_ids,
     require_perm,
 )
+from src.stock_pools import (
+    active_pool_for_branch,
+    active_pool_members,
+    pooled_item_quantities,
+    user_has_permission,
+)
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -874,11 +880,15 @@ async def list_items(
     limit: Optional[int] = Query(None, ge=1, le=500),
     include_total: bool = True,
     pos_mode: bool = False,
+    stock_mode: str = "branch",
     master_mode: bool = False,
     listed_only: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    stock_mode = (stock_mode or "branch").strip().lower()
+    if stock_mode not in {"branch", "clubbed"}:
+        raise HTTPException(400, detail="stock_mode must be 'branch' or 'clubbed'")
     if page_no is not None or per_page is not None:
         pn, pp, sk, lim = pagination_from_page(page_no, per_page)
     else:
@@ -894,6 +904,20 @@ async def list_items(
         if not branch_ids:
             return paged([], 0, sk, lim)
         branch_id = branch_ids[0]
+
+    stock_pool = None
+    if stock_mode == "clubbed":
+        if not pos_mode or not branch_id:
+            raise HTTPException(400, detail="Clubbed stock is available only for a branch-scoped POS item list")
+        if not await user_has_permission(db, user, "pos.use_pool_stock"):
+            raise HTTPException(403, detail="Missing permission: pos.use_pool_stock")
+        stock_pool = await active_pool_for_branch(db, branch_id)
+        if stock_pool is None:
+            raise HTTPException(409, detail={"code": "branch_not_in_active_pool"})
+        if len(await active_pool_members(db, stock_pool.id)) < 2:
+            raise HTTPException(409, detail={"code": "branch_not_in_active_pool"})
+        if not stock_pool.allow_cross_branch_sales:
+            raise HTTPException(409, detail={"code": "pool_sales_disabled"})
 
     q = select(Item).options(selectinload(Item.category))
     cq = select(func.count(Item.id))
@@ -999,6 +1023,11 @@ async def list_items(
         has_more = len(items) > lim
         items = items[:lim]
     ids = [it.id for it in items]
+    pool_stock_by_item = (
+        await pooled_item_quantities(db, item_ids=ids, pool_id=stock_pool.id)
+        if stock_pool and ids
+        else {}
+    )
     stock_by_item = {}
     if ids and branch_id:
         sr = await db.execute(
@@ -1069,6 +1098,11 @@ async def list_items(
             "batch_tracking": item.batch_tracking,
             "expiry_tracking": item.expiry_tracking,
             "available_stock": stock_by_item.get(item.id, 0),
+            "pool_id": stock_pool.id if stock_pool else None,
+            "pool_stock": pool_stock_by_item.get(item.id) if stock_pool else None,
+            "pool_sellable": (
+                pool_stock_by_item.get(item.id, 0) > 0 if stock_pool else None
+            ),
             "batches_count":   batch_counts.get(item.id, 0),
             "nearest_expiry":  nearest_expiry.get(item.id),
             "is_available": bool(cfg.is_available) if cfg else False,
