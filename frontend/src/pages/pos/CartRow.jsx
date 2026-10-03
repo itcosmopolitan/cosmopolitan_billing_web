@@ -180,37 +180,38 @@ export default function CartRow({
       title={tracked ? `${strategyLabel} batch-tracked item` : undefined}
     >
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', minWidth: 280, verticalAlign: 'middle' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
           <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>{item.emoji || '📦'}</span>
-          <input
-            className="form-input"
-            type="text"
-            data-pos-cart-field="name"
-            data-pos-cart-index={cartIndex}
-            value={item.name ?? ''}
-            onChange={(e) => onNameChange?.(e.target.value)}
-            onBlur={() => {
-              const trimmed = String(item.name || '').trim()
-              if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
-              else if (trimmed !== item.name) onNameChange?.(trimmed)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-              else handleCartFieldArrowNav(e, 'name', cartIndex)
-            }}
-            aria-label={`Item name for this bill: ${item.name || ''}`}
-            title="Edit name for this bill only. Item master is unchanged."
-            style={{
-              flex: '1 1 140px',
-              minWidth: 110,
-              width: 'auto',
-              padding: '3px 7px',
-              fontSize: 12.5,
-              fontWeight: 600,
-              lineHeight: 1.3,
-              color: 'var(--text-primary)',
-            }}
-          />
+          <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+            <input
+              className="form-input"
+              type="text"
+              data-pos-cart-field="name"
+              data-pos-cart-index={cartIndex}
+              value={item.name ?? ''}
+              onChange={(e) => onNameChange?.(e.target.value)}
+              onBlur={() => {
+                const trimmed = String(item.name || '').trim()
+                if (!trimmed) onNameChange?.(lastNonEmptyNameRef.current)
+                else if (trimmed !== item.name) onNameChange?.(trimmed)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                else handleCartFieldArrowNav(e, 'name', cartIndex)
+              }}
+              aria-label={`Item name for this bill: ${item.name || ''}`}
+              title="Edit name for this bill only. Item master is unchanged."
+              style={{
+                width: '100%',
+                minWidth: 0,
+                padding: '3px 7px',
+                fontSize: 12.5,
+                fontWeight: 600,
+                lineHeight: 1.3,
+                color: 'var(--text-primary)',
+              }}
+            />
+          </div>
           <span
             style={{
               display: 'inline-flex',
@@ -244,11 +245,6 @@ export default function CartRow({
               {stockExceeded ? ' ⚠' : ''}
             </span>
           </span>
-            {stockMode === 'clubbed' && item.qty > branchStockQty && (
-              <div style={{ marginTop: 3, fontSize: 10.5, color: 'var(--accent)' }}>
-                {fmtQty(item.qty - branchStockQty)} to be fulfilled from pool branches
-              </div>
-            )}
           {tracked && (
             loadingBatches ? (
               <span style={{ fontSize: 10.5, color: 'var(--text-muted)', fontStyle: 'italic', whiteSpace: 'nowrap' }}>lots…</span>

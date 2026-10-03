@@ -300,18 +300,27 @@ For **every invoice with a pool draw**, write these **before the sale commit, in
 **Invoice Activity log** (`record_type='sales_invoice'`, via `_log_sales_invoice_history`) — one event, human-readable `detail`:
 
 ```text
-Stock drawn from other branches (pool "Chennai Combined"):
-5 × Premium Shirt taken from Branch B (batch LOT-22, exp 2027-03-31, cost ₹600.00/unit)
-and transferred to Branch A to fulfil this sale. Transfer-out recorded at Branch B,
-transfer-in at Branch A. Invoice, price and tax remain with Branch A.
+Stock for this sale was sourced from the "Chennai Combined" pool: 5 × Premium Shirt
+from Branch B (batch LOT-22, expires 2027-03-31; stock cost ₹600.00 per unit).
+Transferred to Branch A to fulfil this sale. Branch A is the selling branch;
+the invoice, selling price and tax remain with this branch.
 ```
 
 Structured `event_metadata` JSON: pool id/name, per-allocation owner branch, batch, qty, `unit_cost`, `cost_source`, movement ids, acting user.
 
 **Audit log** (`AuditLog`) — two entries, event type `pool_stock_draw`:
 
-1. `branch = A`, linked to the invoice (selling branch view).
-2. `branch = B`, same invoice reference (owning branch can see why its stock fell).
+1. `branch = A`, linked to the invoice.
+2. `branch = B`, same invoice reference.
+
+Both audit entries use the exact same `detail` sentence as the invoice Activity log:
+
+```text
+Stock for this sale was sourced from the "Chennai Combined" pool: 5 × Premium Shirt
+from Branch B (batch LOT-22, expires 2027-03-31; stock cost ₹600.00 per unit).
+Transferred to Branch A to fulfil this sale. Branch A is the selling branch;
+the invoice, selling price and tax remain with this branch.
+```
 
 **Implementation notes**
 

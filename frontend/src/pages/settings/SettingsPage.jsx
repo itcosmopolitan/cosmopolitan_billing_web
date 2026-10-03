@@ -900,7 +900,7 @@ export default function SettingsPage() {
           {(can('stock_pools.view') || can('stock_pools.manage')) && (
             <section style={{ marginTop: 22 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-                <div>
+                <div style={{ opacity: 0.55 }}>
                   <h3 style={{ margin: 0, fontSize: 15 }}>Stock pools</h3>
                   <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-muted)' }}>
                     Group active branches so POS can optionally fulfill a sale from pooled inventory. The invoice and tax branch remain unchanged.
@@ -909,27 +909,32 @@ export default function SettingsPage() {
               </div>
               {can('stock_pools.manage') && (
                 <Card style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'end', gap: 10, flexWrap: 'wrap' }}>
-                    <div style={{ flex: '1 1 220px' }}>
-                      <FormGroup label="New pool name">
+                  <fieldset disabled style={{ border: 0, margin: 0, padding: 0, minWidth: 0, opacity: 0.45 }}>
+                    <div style={{ display: 'flex', alignItems: 'end', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 220px' }}>
+                        <FormGroup label="New pool name">
+                          <input
+                            className="form-input"
+                            value={newStockPoolName}
+                            onChange={(event) => setNewStockPoolName(event.target.value)}
+                            placeholder="e.g. North region stores"
+                            maxLength={120}
+                          />
+                        </FormGroup>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, paddingBottom: 8, color: 'var(--text-secondary)' }}>
                         <input
-                          className="form-input"
-                          value={newStockPoolName}
-                          onChange={(event) => setNewStockPoolName(event.target.value)}
-                          placeholder="e.g. North region stores"
-                          maxLength={120}
+                          type="checkbox"
+                          checked={newStockPoolAllowsSales}
+                          onChange={(event) => setNewStockPoolAllowsSales(event.target.checked)}
                         />
-                      </FormGroup>
+                        Allow POS cross-branch sales
+                      </label>
+                      <button className="btn btn-primary btn-sm" onClick={createStockPool}>Create pool</button>
                     </div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, paddingBottom: 8, color: 'var(--text-secondary)' }}>
-                      <input
-                        type="checkbox"
-                        checked={newStockPoolAllowsSales}
-                        onChange={(event) => setNewStockPoolAllowsSales(event.target.checked)}
-                      />
-                      Allow POS cross-branch sales
-                    </label>
-                    <button className="btn btn-primary btn-sm" onClick={createStockPool}>Create pool</button>
+                  </fieldset>
+                  <div role="note" style={{ marginTop: 12, padding: '9px 11px', borderRadius: 7, background: 'var(--bg-raised)', color: 'var(--text-secondary)', fontSize: 12 }}>
+                    <strong>Stock Pools is currently locked.</strong> Contact support to request access. Once enabled, you can group branches and let POS fulfill sales from shared stock; the selling branch keeps the invoice, prices, and tax.
                   </div>
                 </Card>
               )}

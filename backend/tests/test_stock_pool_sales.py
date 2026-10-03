@@ -23,6 +23,7 @@ from src.models import (
 from src.pool_sales import consume_clubbed_sale_line, reverse_pool_allocations_for_cancel
 from src.routes._atomic import set_batch_quantity_atomic
 from src.routes.reports import stock_movement
+from src.routes.sales import _pool_draw_description
 from src.stock_pools import pooled_item_quantities
 
 
@@ -91,6 +92,30 @@ async def _verify_pooled_quantities_filter_expiry_only_when_tracked() -> None:
 
 def test_pooled_quantities_respect_expiry_tracking() -> None:
     asyncio.run(_verify_pooled_quantities_filter_expiry_only_when_tracked())
+
+
+def test_pool_draw_description_is_clear_and_reusable_for_audit_and_activity() -> None:
+    detail = _pool_draw_description(
+        pool_name="Male Shop 12",
+        allocations=[{
+            "qty": 2,
+            "item_name": "Broccoli Frozen",
+            "owner_branch_name": "Shop 01 - Male",
+            "source_batch_no": "LOT-22",
+            "expiry_date": "2027-03-31",
+            "unit_cost": 18.31,
+        }],
+        sale_branch_name="Shop 02 - Male",
+    )
+
+    assert detail == (
+        'Stock for this sale was sourced from the "Male Shop 12" pool: '
+        "2 x Broccoli Frozen from Shop 01 - Male "
+        "(batch LOT-22, expires 2027-03-31; stock cost ₹18.31 per unit). "
+        "Transferred to Shop 02 - Male to fulfil this sale. "
+        "Shop 02 - Male is the selling branch; the invoice, selling price and tax "
+        "remain with this branch."
+    )
 
 
 async def _verify_untracked_draw_uses_branch_first_then_largest_owner() -> None:

@@ -1427,6 +1427,38 @@ async def update_invoice(
         quotation_number=linked["quotation_number"],
     )
 
+def _pool_allocation_description(allocation: dict) -> str:
+    detail = (
+        f"{allocation['qty']} x {allocation['item_name']} from "
+        f"{allocation['owner_branch_name']}"
+    )
+    if allocation["source_batch_no"]:
+        expiry = f", expires {allocation['expiry_date']}" if allocation["expiry_date"] else ""
+        return (
+            f"{detail} (batch {allocation['source_batch_no']}{expiry}; "
+            f"stock cost ₹{float(allocation['unit_cost']):.2f} per unit)"
+        )
+    return f"{detail} (stock cost ₹{float(allocation['unit_cost']):.2f} per unit)"
+
+
+def _pool_draw_description(
+    *,
+    pool_name: str,
+    allocations: list[dict],
+    sale_branch_name: str,
+) -> str:
+    allocation_details = "; ".join(
+        _pool_allocation_description(allocation) for allocation in allocations
+    )
+    return (
+        f"Stock for this sale was sourced from the \"{pool_name}\" pool: "
+        f"{allocation_details}. "
+        f"Transferred to {sale_branch_name} to fulfil this sale. "
+        f"{sale_branch_name} is the selling branch; "
+        f"the invoice, selling price and tax remain with this branch."
+    )
+
+
 # ─── CREATE ───────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
 async def create_invoice(
@@ -1745,24 +1777,10 @@ async def create_invoice(
             {key: value for key, value in allocation.items() if key != "source_manifest"}
             for allocation in pool_allocations
         ]
-        allocation_details = "; ".join(
-            (
-                f"{allocation['qty']} x {allocation['item_name']} taken from "
-                f"{allocation['owner_branch_name']}"
-                + (
-                    f" (batch {allocation['source_batch_no']}"
-                    + (f", exp {allocation['expiry_date']}" if allocation["expiry_date"] else "")
-                    + f", cost ₹{float(allocation['unit_cost']):.2f}/unit)"
-                    if allocation["source_batch_no"]
-                    else f" (cost ₹{float(allocation['unit_cost']):.2f}/unit)"
-                )
-            )
-            for allocation in pool_allocations
-        )
-        proof_detail = (
-            f"Stock drawn from other branches (pool \"{pool_name}\"): {allocation_details}. "
-            f"Transferred to {data.branch_name or data.branch_id} to fulfil this sale. "
-            f"Invoice, price and tax remain with the selling branch."
+        proof_detail = _pool_draw_description(
+            pool_name=pool_name,
+            allocations=pool_allocations,
+            sale_branch_name=data.branch_name or data.branch_id,
         )
         proof_metadata = {
             "event_type": "pool_stock_draw",
