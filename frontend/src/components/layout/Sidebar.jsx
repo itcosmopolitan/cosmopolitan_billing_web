@@ -149,6 +149,7 @@ function applyHoverHandlers(isActive, softActiveBg) {
 export default function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { pathname } = location
   const userMenuRef = useRef(null)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [openGroups, setOpenGroups] = useState(() => {
@@ -178,22 +179,28 @@ export default function Sidebar() {
 
   // Keep expandable groups open while on their routes.
   useEffect(() => {
+    const activeGroup = navItems.find(
+      (item) => item.children?.length
+        && (pathname === item.path || pathname.startsWith(`${item.path}/`)),
+    )
+    if (!activeGroup) return
+
     setOpenGroups((prev) => {
-      let changed = false
-      const next = { ...prev }
-      for (const item of navItems) {
-        if (!item.children?.length) continue
-        if (isGroupActive(item, location) && !next[item.path]) {
-          next[item.path] = true
-          changed = true
-        }
-      }
-      return changed ? next : prev
+      const next = Object.fromEntries(
+        navItems
+          .filter((item) => item.children?.length)
+          .map((item) => [item.path, item.path === activeGroup.path]),
+      )
+      return Object.keys(next).every((path) => next[path] === prev[path]) ? prev : next
     })
-  }, [location.pathname, location.search])
+  }, [pathname])
 
   const toggleGroup = (path) => {
-    setOpenGroups((prev) => ({ ...prev, [path]: !prev[path] }))
+    setOpenGroups((prev) => Object.fromEntries(
+      navItems
+        .filter((item) => item.children?.length)
+        .map((item) => [item.path, item.path === path && !prev[path]]),
+    ))
   }
 
   // Click-outside dismissal for the profile dropdown — feels broken without it.
