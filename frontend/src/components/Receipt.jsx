@@ -362,7 +362,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
         </div>
 
         <div class="terms">
-          <div>Bank Details : BMLMVR | Account Number : 7730000519444 | Account Name : COSMOPOLITAN CHAMPA BROTHERS MALDIVES | VIBER : 7384977</div>
+          <div>Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977</div>
           <div style="margin-top:6px;">Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day</div>
         </div>
 

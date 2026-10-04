@@ -373,7 +373,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <div>{invoice.paymentDueDate || ''}</div>
                   </div>
                   <div className="bank-details">
-                    Bank Details : BMLMVR | Account Number : 7730000519444 | Account Name : COSMOPOLITAN CHAMPA BROTHERS MALDIVES | VIBER : 7384977
+                    Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
                   </div>
                 </div>
 
