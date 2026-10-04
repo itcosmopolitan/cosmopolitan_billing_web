@@ -18,6 +18,7 @@ export default function RecordDetailDrawer({
   activeTab = null,
   onTabChange = null,
   children,
+  footer = null,
   busy = false,
 }) {
   useEffect(() => {
@@ -88,6 +89,7 @@ export default function RecordDetailDrawer({
         ) : null}
 
         <div className="drawer-body drawer-body--record">{children}</div>
+        {footer ? <div className="drawer-footer">{footer}</div> : null}
       </div>
     </>,
     document.body,
