@@ -11,7 +11,7 @@ import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing } from './salesFormShared'
+import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing, WALK_IN_CUSTOMER_OPTION, WALK_IN_CUSTOMER_NAME } from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
@@ -176,9 +176,9 @@ export default function InvoiceFormModal({
             <AutocompleteDropdown
               value={invoiceForm.customerId || ''}
               onSelectOption={async (opt) => {
-                if (!opt) {
+                if (!opt?.id) {
                   pif('customerId', '')
-                  pif('customerName', '')
+                  pif('customerName', WALK_IN_CUSTOMER_NAME)
                   pif('customerType', 'retail')
                   pif('customerClassification', 'external')
                   pif('customerCreditBalance', 0)
@@ -210,8 +210,9 @@ export default function InvoiceFormModal({
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
               isSearchFieldRequired
-              selectedLabel={invoiceForm.customerName || undefined}
-              placeholder="Search customers…"
+              prependOptions={[WALK_IN_CUSTOMER_OPTION]}
+              selectedLabel={invoiceForm.customerName || WALK_IN_CUSTOMER_OPTION.label}
+              placeholder="Walk-in Customer"
               footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />

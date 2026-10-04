@@ -1372,14 +1372,17 @@ export default function POSPage() {
 
         {/* Cart header — single compact toolbar */}
         <div
+          className="pos-cart-toolbar"
           style={{
             borderBottom: '1px solid var(--border-subtle)',
-            padding: '5px 10px',
+            padding: '6px 10px',
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            gap: 6,
             minWidth: 0,
             flexShrink: 0,
+            height: 40,
+            boxSizing: 'border-box',
           }}
         >
           <PanelDragHandle
@@ -1440,14 +1443,19 @@ export default function POSPage() {
             footerAction={addCustomerAction}
             selectedLabel={customer?.name}
             placeholder="Walk-in Customer"
-            style={{ width: 148, maxWidth: '28vw', flexShrink: 0 }}
+            size="sm"
+            style={{ width: 168, maxWidth: '28vw', flexShrink: 0 }}
           />
           {customer && isInternalCustomer(customer) && (
             <span
+              className="pos-cart-toolbar__chip"
               style={{
                 fontSize: 10,
-                padding: '2px 6px',
-                borderRadius: 8,
+                padding: '0 7px',
+                height: 28,
+                display: 'inline-flex',
+                alignItems: 'center',
+                borderRadius: 6,
                 background: 'rgba(46,184,92,0.12)',
                 color: 'var(--green)',
                 fontWeight: 600,
@@ -1460,10 +1468,14 @@ export default function POSPage() {
           )}
           {customer?.id && Number(customer.credit_balance || 0) > 0 && (
             <span
+              className="pos-cart-toolbar__chip"
               style={{
                 fontSize: 10,
-                padding: '2px 6px',
-                borderRadius: 8,
+                padding: '0 7px',
+                height: 28,
+                display: 'inline-flex',
+                alignItems: 'center',
+                borderRadius: 6,
                 background: 'rgba(46,184,92,0.12)',
                 color: 'var(--green)',
                 fontWeight: 600,
@@ -1481,7 +1493,8 @@ export default function POSPage() {
               alignItems: 'center',
               gap: 4,
               flexShrink: 0,
-              padding: '2px 4px 2px 8px',
+              height: 28,
+              padding: '0 4px 0 8px',
               borderLeft: '1px solid var(--border-subtle)',
             }}
             title={displayConnected ? 'Customer screen connected' : 'Customer screen'}
@@ -1493,10 +1506,14 @@ export default function POSPage() {
                 fontWeight: 700,
                 letterSpacing: '0.08em',
                 color: displayConnected ? 'var(--green)' : 'var(--text-primary)',
-                padding: '1px 6px',
-                borderRadius: 4,
+                padding: '0 6px',
+                height: 28,
+                display: 'inline-flex',
+                alignItems: 'center',
+                borderRadius: 6,
                 background: 'var(--bg-raised)',
                 border: '1px solid var(--border-subtle)',
+                boxSizing: 'border-box',
               }}
             >
               {displayCode}

@@ -125,10 +125,6 @@ export default function InvoiceFormPage() {
 
   const save = async (allowCreditOverLimit = false) => {
     if (saving) return
-    if (!form.customerId) {
-      toast.error('Pick a customer (or add one via the Customers page)')
-      return
-    }
     if (form.items.length === 0) {
       toast.error('Add at least one item')
       return
@@ -156,6 +152,7 @@ export default function InvoiceFormPage() {
     let creditAvail = Number(form.customerCreditBalance || 0)
     let creditLimit = Number(form.customerCreditLimit || 0)
     let outstanding = Number(form.customerOutstanding || 0)
+    if (form.customerId) {
     try {
       const cust = await customersAPI.get(form.customerId)
       creditAvail = Number(cust?.credit_balance || 0)
@@ -169,6 +166,7 @@ export default function InvoiceFormPage() {
       }))
     } catch {
       /* keep form balance */
+    }
     }
     // Always auto-apply account credit when settling (or when it covers the bill).
     const settling = form.paymentReceived || creditAvail > 0
@@ -227,7 +225,7 @@ export default function InvoiceFormPage() {
     setSaving(true)
     try {
       const payload = {
-        customer_name: form.customerName,
+        customer_name: form.customerName || 'Walk-in',
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',

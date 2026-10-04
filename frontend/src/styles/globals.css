@@ -2096,6 +2096,25 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   min-height: 38px;
   box-sizing: border-box;
 }
+.autocomplete-dropdown-trigger--sm {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.pos-cart-toolbar .btn.btn-sm {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  box-sizing: border-box;
+}
+.pos-cart-toolbar .btn.btn-ghost.btn-sm {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+}
 .date-picker-trigger--disabled,
 .autocomplete-dropdown-trigger--disabled {
   opacity: 0.65;

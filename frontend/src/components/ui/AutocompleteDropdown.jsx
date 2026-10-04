@@ -91,6 +91,7 @@ export default function AutocompleteDropdown({
   footerAction = null,
   style,
   className = 'form-input',
+  size = 'md',
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -427,7 +428,7 @@ export default function AutocompleteDropdown({
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
-        className={`autocomplete-dropdown-trigger ${className}${disabled ? ' autocomplete-dropdown-trigger--disabled' : ''}`}
+        className={`autocomplete-dropdown-trigger ${className}${size === 'sm' ? ' autocomplete-dropdown-trigger--sm' : ''}${disabled ? ' autocomplete-dropdown-trigger--disabled' : ''}`}
         onClick={() => !disabled && setOpen((v) => !v)}
         style={{
           display: 'flex',

@@ -67,10 +67,6 @@ export default function QuoteFormPage({ mode = 'create' }) {
 
   const save = async () => {
     if (saving || readOnly) return
-    if (!form.customerId) {
-      toast.error('Pick a customer (or add one via the Customers page)')
-      return
-    }
     if (form.items.length === 0) {
       toast.error('Add at least one item')
       return
@@ -82,7 +78,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
     setSaving(true)
     try {
       const payload = {
-        customer_name: form.customerName,
+        customer_name: form.customerName || 'Walk-in',
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',

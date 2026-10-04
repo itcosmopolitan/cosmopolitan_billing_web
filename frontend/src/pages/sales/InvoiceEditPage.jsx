@@ -107,10 +107,6 @@ export default function InvoiceEditPage() {
 
   const save = async () => {
     if (saving || !form) return
-    if (!form.customerId) {
-      toast.error('Pick a customer')
-      return
-    }
     if (form.items.length === 0) {
       toast.error('Add at least one item')
       return
@@ -148,7 +144,7 @@ export default function InvoiceEditPage() {
     try {
       const payload = {
         customer_id: form.customerId || null,
-        customer_name: form.customerName,
+        customer_name: form.customerName || 'Walk-in',
         child_counter_id: selectedCounter?.id || null,
         child_counter_name: selectedCounter?.name || null,
         date: form.invoiceDate,

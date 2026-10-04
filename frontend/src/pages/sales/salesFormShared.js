@@ -78,8 +78,11 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
   }))
 }
 
+export const WALK_IN_CUSTOMER_NAME = 'Walk-in'
+export const WALK_IN_CUSTOMER_OPTION = { id: '', label: 'Walk-in Customer' }
+
 export const emptyQuoteForm = (branchId) => ({
-  customerName: '',
+  customerName: WALK_IN_CUSTOMER_NAME,
   customerId: '',
   customerType: 'retail',
   customerClassification: 'external',
@@ -98,7 +101,7 @@ export const emptyQuoteForm = (branchId) => ({
 })
 
 export const emptyOrderForm = (branchId) => ({
-  customerName: '',
+  customerName: WALK_IN_CUSTOMER_NAME,
   customerId: '',
   customerType: 'retail',
   customerClassification: 'external',
@@ -112,7 +115,7 @@ export const emptyOrderForm = (branchId) => ({
 })
 
 export const emptyInvoiceForm = (branchId) => ({
-  customerName: '',
+  customerName: WALK_IN_CUSTOMER_NAME,
   customerId: '',
   customerType: 'retail',
   customerClassification: 'external',
