@@ -1556,7 +1556,7 @@ export default function POSPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', minWidth: 860, borderCollapse: 'separate', borderSpacing: 0 }}>
+              <table style={{ width: '100%', minWidth: 980, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
                     {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Total (Excl.)', ''].map((h) => (
@@ -1574,6 +1574,7 @@ export default function POSPage() {
                           zIndex: 1,
                           background: 'var(--bg-raised)',
                           whiteSpace: 'nowrap',
+                          ...(h === 'Item Details' ? { minWidth: 320, width: '32%' } : null),
                         }}
                       >
                         {h}

@@ -50,9 +50,9 @@ function handleCartFieldArrowNav(e, field, cartIndex) {
  * For batch-tracked items the row owns the lazy fetch of the active batch
  * list for (item, branch), auto-derives the per-line allocation when not
  * locked by the operator (`batchAllocationCustom: false`), and renders the
- * resulting split as inline metadata below HSN/Stock. A single ✎ button
- * delegates editing back to the parent (POSPage opens the shared
- * BatchAllocationModal).
+ * resulting split on a second meta line under the item name (with HSN /
+ * UOM / stock). A single ✎ button delegates editing back to the parent
+ * (POSPage opens the shared BatchAllocationModal).
  */
 export default function CartRow({
   item,
@@ -179,10 +179,10 @@ export default function CartRow({
       }}
       title={tracked ? `${strategyLabel} batch-tracked item` : undefined}
     >
-      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', minWidth: 280, verticalAlign: 'middle' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>{item.emoji || '📦'}</span>
-          <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+      <td style={{ padding: '4px 8px 5px', borderBottom: '1px solid var(--border-subtle)', minWidth: 320, width: '32%', verticalAlign: 'middle' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
+          <span style={{ fontSize: 15, lineHeight: '26px', flexShrink: 0 }}>{item.emoji || '📦'}</span>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <input
               className="form-input"
               type="text"
@@ -204,64 +204,80 @@ export default function CartRow({
               style={{
                 width: '100%',
                 minWidth: 0,
-                padding: '3px 7px',
+                padding: '2px 6px',
                 fontSize: 12.5,
                 fontWeight: 600,
-                lineHeight: 1.3,
+                lineHeight: 1.25,
                 color: 'var(--text-primary)',
               }}
             />
-          </div>
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 10.5,
-              color: 'var(--text-muted)',
-              fontFamily: 'DM Mono, monospace',
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
-            }}
-          >
-            {tracked && (
-              <span style={{
-                fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
-                background: expiryTracked ? 'rgba(245, 158, 11, 0.18)' : 'rgba(99, 102, 241, 0.18)',
-                color: expiryTracked ? 'var(--amber)' : 'var(--accent)',
-                letterSpacing: 0.3,
-              }}>
-                {strategyLabel}
-              </span>
-            )}
-            <span title="HSN">HSN {hsn}</span>
-            <span title="Unit of measure">· {uom}</span>
-            <span title="Available stock" style={{ color: stockExceeded ? 'var(--amber)' : undefined }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                flexWrap: 'nowrap',
+                gap: 5,
+                minWidth: 0,
+                overflow: 'hidden',
+                paddingLeft: 2,
+                fontSize: 10,
+                color: 'var(--text-muted)',
+                fontFamily: 'DM Mono, monospace',
+                lineHeight: 1.3,
+                whiteSpace: 'nowrap',
+              }}
+              title={[
+                tracked ? strategyLabel : null,
+                `HSN ${hsn}`,
+                `UOM ${uom}`,
+                stockMode === 'clubbed'
+                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : '—'} · Here ${fmtQty(branchStockQty)}`
+                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : '—'}`,
+              ].filter(Boolean).join(' · ')}
+              aria-label={`Details for ${item.name || 'item'}: HSN, unit, stock${tracked ? ', batches' : ''}`}
+            >
+              {tracked && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: '0 4px', borderRadius: 3, flexShrink: 0,
+                  background: expiryTracked ? 'rgba(245, 158, 11, 0.18)' : 'rgba(99, 102, 241, 0.18)',
+                  color: expiryTracked ? 'var(--amber)' : 'var(--accent)',
+                  letterSpacing: 0.3,
+                }}>
+                  {strategyLabel}
+                </span>
+              )}
+              <span title="HSN" style={{ flexShrink: 0 }}>HSN {hsn}</span>
+              <span aria-hidden style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+              <span title="Unit of measure" style={{ flexShrink: 0 }}>{uom}</span>
+              <span aria-hidden style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+              <span title="Available stock" style={{ color: stockExceeded ? 'var(--amber)' : undefined, flexShrink: 0 }}>
                 {stockMode === 'clubbed'
-                  ? `Pool: ${stockQty != null ? fmtQty(stockQty) : '—'} · Here: ${fmtQty(branchStockQty)}`
-                  : `
-              · Stk ${stockQty != null ? fmtQty(stockQty) : '—'}`}
-              
-              {stockExceeded ? ' ⚠' : ''}
-            </span>
-          </span>
-          {tracked && (
-            loadingBatches ? (
-              <span style={{ fontSize: 10.5, color: 'var(--text-muted)', fontStyle: 'italic', whiteSpace: 'nowrap' }}>lots…</span>
-            ) : batches.length === 0 ? (
-              <span style={{ fontSize: 10.5, color: 'var(--amber)', whiteSpace: 'nowrap' }}>no lots</span>
-            ) : (
-              <BatchSummary
-                allocation={allocation}
-                expiryTracked={expiryTracked}
-                valid={allocValid}
-                allocated={allocated}
-                qtyNeeded={localBatchQtyNeeded}
-                custom={!!item.batchAllocationCustom}
-                onEdit={() => onEditAllocation && onEditAllocation({ item, batches: sellableBatches, allocation, qty: localBatchQtyNeeded })}
-              />
-            )
-          )}
+                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : '—'} · Here ${fmtQty(branchStockQty)}`
+                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : '—'}`}
+                {stockExceeded ? ' ⚠' : ''}
+              </span>
+              {tracked && (
+                <>
+                  <span aria-hidden style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+                  {loadingBatches ? (
+                    <span style={{ fontStyle: 'italic', flexShrink: 0 }}>lots…</span>
+                  ) : batches.length === 0 ? (
+                    <span style={{ color: 'var(--amber)', flexShrink: 0 }}>no lots</span>
+                  ) : (
+                    <BatchSummary
+                      allocation={allocation}
+                      expiryTracked={expiryTracked}
+                      valid={allocValid}
+                      allocated={allocated}
+                      qtyNeeded={localBatchQtyNeeded}
+                      custom={!!item.batchAllocationCustom}
+                      onEdit={() => onEditAllocation && onEditAllocation({ item, batches: sellableBatches, allocation, qty: localBatchQtyNeeded })}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
@@ -332,7 +348,7 @@ export default function CartRow({
             title="Rate excl. GST"
           />
         ) : (
-          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">{fmt(exclRate)}</span>
+          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">{exclRate}</span>
         )}
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
@@ -364,13 +380,13 @@ export default function CartRow({
         </div>
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="GST on discounted amount">
-        {fmt(lineTax)}
+        {lineTax}
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
         <MarginBadge margin={margin} />
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="Line total excl. GST">
-        {fmt(lineTotalExcl)}
+        {lineTotalExcl}
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'center', verticalAlign: 'middle' }}>
         <button type="button" onClick={onRemove} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 2px' }} aria-label="Remove line">✕</button>
@@ -380,7 +396,7 @@ export default function CartRow({
 }
 
 /**
- * Inline batch breakdown that lives below HSN/Stock. Renders every batch the
+ * Inline batch breakdown on the cart meta line. Renders every batch the
  * line will draw from (`GR-A (10), GR-B (3)`) as small lot pills, with a
  * single ✎ button that delegates to POSPage to open the allocation modal.
  *
@@ -390,72 +406,80 @@ export default function CartRow({
  * operator-saved split fell out of sync (qty bumped before they re-edited).
  */
 function BatchSummary({ allocation, expiryTracked, valid, allocated, qtyNeeded, custom, onEdit }) {
+  const primary = allocation[0]
+  const extraCount = Math.max(0, allocation.length - 1)
+  const fullTitle = allocation.length === 0
+    ? 'No lot allocated'
+    : allocation.map((e) => `${e.batchNumber} (${e.qty})`).join(', ')
+  const expInfo = primary
+    ? batchExpiryStatus({
+      expiryDate: primary.expiryDate,
+      mfgDate: primary.mfgDate,
+      receivedDate: primary.receivedDate,
+      quantity: primary.qty,
+    })
+    : null
+  const tone = !expInfo
+    ? 'var(--accent)'
+    : expInfo.expired ? 'var(--red)' : expInfo.nearExpiry ? 'var(--amber)' : 'var(--accent)'
+
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-muted)', flexWrap: 'nowrap', minWidth: 0, overflow: 'hidden' }}>
+    <div
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--text-muted)', flexWrap: 'nowrap', minWidth: 0, overflow: 'hidden' }}
+      title={fullTitle}
+    >
       {allocation.length === 0 ? (
-        <span style={{ color: 'var(--amber)', whiteSpace: 'nowrap' }}>no lot</span>
+        <span style={{ color: 'var(--amber)', whiteSpace: 'nowrap', flexShrink: 0 }}>no lot</span>
       ) : (
-        allocation.map((e) => {
-          const expInfo = batchExpiryStatus({
-            expiryDate: e.expiryDate,
-            mfgDate: e.mfgDate,
-            receivedDate: e.receivedDate,
-            quantity: e.qty,
-          })
-          const tone = expInfo.expired ? 'var(--red)' : expInfo.nearExpiry ? 'var(--amber)' : 'var(--accent)'
-          const bg = expInfo.expired
-            ? 'rgba(245,72,92,0.10)'
-            : expInfo.nearExpiry ? 'rgba(245,158,11,0.12)' : 'var(--bg-surface)'
-          const title = e.expiryDate
-            ? `Take ${e.qty} from ${e.batchNumber} · ${expInfo.title}`
-            : `Take ${e.qty} from ${e.batchNumber}`
-          return (
-            <span
-              key={e.id}
-              title={title}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 3,
-                padding: '0 6px', borderRadius: 999, background: bg, color: tone,
-                fontFamily: 'DM Mono, monospace', fontSize: 10, fontWeight: 500,
-                border: `1px solid ${tone}`,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              <span style={{ maxWidth: 72, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {e.batchNumber}
-              </span>
-              <span style={{ fontWeight: 700 }}>({e.qty})</span>
-              {expiryTracked && expInfo.showUrgentIcon && (
-                <span aria-hidden style={{ fontSize: 9 }} title={expInfo.title}>{expInfo.expired ? '⚠' : '📅'}</span>
-              )}
+        <>
+          <span
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 2,
+              padding: '0 5px', borderRadius: 999, color: tone,
+              fontFamily: 'DM Mono, monospace', fontSize: 10, fontWeight: 500,
+              border: `1px solid ${tone}`,
+              whiteSpace: 'nowrap', maxWidth: 110, overflow: 'hidden',
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {primary.batchNumber}
             </span>
-          )
-        })
+            <span style={{ fontWeight: 700, flexShrink: 0 }}>({primary.qty})</span>
+            {expiryTracked && expInfo?.showUrgentIcon && (
+              <span aria-hidden style={{ fontSize: 9, flexShrink: 0 }}>{expInfo.expired ? '⚠' : '📅'}</span>
+            )}
+          </span>
+          {extraCount > 0 && (
+            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-secondary)', flexShrink: 0 }}>
+              +{extraCount}
+            </span>
+          )}
+        </>
       )}
       {custom && (
-        <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'var(--bg-raised)', color: 'var(--text-secondary)', letterSpacing: 0.3, whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 9, padding: '0 3px', borderRadius: 3, background: 'var(--bg-raised)', color: 'var(--text-secondary)', letterSpacing: 0.3, whiteSpace: 'nowrap', flexShrink: 0 }}>
           CUSTOM
         </span>
       )}
       {!valid && allocation.length > 0 && (
-        <span title={`Allocated ${allocated} of ${qtyNeeded}`} style={{ fontSize: 10, color: 'var(--red)', whiteSpace: 'nowrap' }}>
-          ⚠ {allocated}/{qtyNeeded}
+        <span title={`Allocated ${allocated} of ${qtyNeeded}`} style={{ fontSize: 10, color: 'var(--red)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          ⚠
         </span>
       )}
       <button
         type="button"
         onClick={onEdit}
-        title="Edit batch split"
+        title={`Edit batch split${fullTitle ? `: ${fullTitle}` : ''}`}
         aria-label="Edit batch split"
         style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 18, height: 18, borderRadius: 4, border: 'none', background: 'transparent',
+          width: 16, height: 16, borderRadius: 4, border: 'none', background: 'transparent',
           color: 'var(--text-muted)', cursor: 'pointer', padding: 0, flexShrink: 0,
         }}
         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)'; e.currentTarget.style.color = 'var(--accent)' }}
         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)' }}
       >
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden>
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden>
           <path d="M11.5 1.5l3 3-9 9H2.5v-3l9-9z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" fill="none" />
           <path d="M10 3l3 3" stroke="currentColor" strokeWidth="1.4" />
         </svg>
