@@ -11,10 +11,10 @@ export const EMPTY_LINE = {
   batchAllocationCustom: false,
 }
 
-export function emptyTransfer(defaultFromId = 'br-001', defaultToId = 'br-002') {
+export function emptyTransfer(defaultFromId = '', defaultToId = '') {
   return {
-    from_branch_id: defaultFromId,
-    to_branch_id: defaultToId,
+    from_branch_id: defaultFromId || '',
+    to_branch_id: defaultToId || '',
     priority: 'Normal',
     expected_date: '',
     notes: '',

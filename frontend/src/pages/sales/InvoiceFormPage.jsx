@@ -6,13 +6,15 @@ import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
-import { ConfirmDialog } from '@/components/ui'
+import { ConfirmDialog, Modal } from '@/components/ui'
 import InvoiceFormModal from './InvoiceFormModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import {
   emptyInvoiceForm,
   invoiceFromRow,
   lineDiscountToPercent,
+  findUnlistedItemsAtBranch,
+  unlistedItemsFromError,
 } from './salesFormShared'
 import { cashTenderError } from '@/utils/cashTender'
 import {
@@ -67,6 +69,7 @@ export default function InvoiceFormPage() {
   const [loading, setLoading] = useState(!!fromQuoteId || !!fromOrderId)
   const [saving, setSaving] = useState(false)
   const [showCreditWarning, setShowCreditWarning] = useState(false)
+  const [unlistedConvertItems, setUnlistedConvertItems] = useState([])
 
   const goBack = () => navigate(fromOrderId ? '/sales?tab=orders' : fromQuoteId ? '/sales?tab=quotes' : '/sales?tab=invoices')
 
@@ -107,6 +110,16 @@ export default function InvoiceFormPage() {
         } else if (fromQuoteId) {
           const q = await salesAPI.quotations.get(fromQuoteId)
           if (cancelled) return
+          const unlisted = await findUnlistedItemsAtBranch(
+            q.items || [],
+            q.branchId || q.branch_id || activeBranchId,
+          )
+          if (cancelled) return
+          if (unlisted.length) {
+            setUnlistedConvertItems(unlisted)
+            setConversionLabel(q.number)
+            return
+          }
           const base = invoiceFromRow(q, activeBranchId)
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
@@ -222,6 +235,13 @@ export default function InvoiceFormPage() {
         return
       }
     }
+    if (fromQuoteId) {
+      const unlisted = await findUnlistedItemsAtBranch(form.items, form.branchId)
+      if (unlisted.length) {
+        setUnlistedConvertItems(unlisted)
+        return
+      }
+    }
     setSaving(true)
     try {
       const payload = {
@@ -283,6 +303,8 @@ export default function InvoiceFormPage() {
       navigate('/sales?tab=invoices')
     } catch (err) {
       console.error('Failed to save invoice:', err)
+      const unlisted = unlistedItemsFromError(err)
+      if (unlisted.length) setUnlistedConvertItems(unlisted)
     } finally {
       setSaving(false)
     }
@@ -293,6 +315,17 @@ export default function InvoiceFormPage() {
       <div className="page-container">
         <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
       </div>
+    )
+  }
+
+  if (unlistedConvertItems.length > 0) {
+    return (
+      <UnlistedQuoteConvertModal
+        open
+        items={unlistedConvertItems}
+        quoteLabel={conversionLabel}
+        onClose={goBack}
+      />
     )
   }
 
@@ -341,5 +374,35 @@ export default function InvoiceFormPage() {
         danger
       />
     </DocumentFormShell>
+  )
+}
+
+function UnlistedQuoteConvertModal({ open, items, quoteLabel, onClose }) {
+  const many = items.length > 1
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Cannot convert to invoice"
+      size="sm"
+      icon="⚠️"
+      footer={
+        <button type="button" className="btn btn-primary" onClick={onClose}>
+          OK
+        </button>
+      }
+    >
+      <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 12 }}>
+        {quoteLabel ? `Quotation ${quoteLabel} cannot be converted. ` : ''}
+        You can't convert this quotation to an invoice because
+        {many ? ' these items are' : ' this item is'} not configured for this
+        branch in item master.
+      </p>
+      <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--text-primary)', fontSize: 14 }}>
+        {items.map((name) => (
+          <li key={name} style={{ marginBottom: 4 }}>{name}</li>
+        ))}
+      </ul>
+    </Modal>
   )
 }

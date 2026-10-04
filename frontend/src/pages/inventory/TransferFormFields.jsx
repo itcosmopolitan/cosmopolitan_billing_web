@@ -12,6 +12,7 @@ import { qtyInputStep } from '@/utils/decimalPrecision'
 export default function TransferFormFields({
   form,
   patchForm,
+  branchLabels = new Map(),
   items = [],
   itemsLoading = false,
   batchOptions = {},
@@ -23,10 +24,8 @@ export default function TransferFormFields({
   disabled = false,
   refNumber = null,
 }) {
-  const compactSelectStyle = {
-    width: '100%',
-    maxWidth: 320,
-  }
+  const fromLabel = branchLabels.get(form.from_branch_id)?.name
+  const toLabel = branchLabels.get(form.to_branch_id)?.name
 
   return (
     <div className="transfer-form">
@@ -53,25 +52,29 @@ export default function TransferFormFields({
                 onSelectOption={(opt) => patchForm('from_branch_id', opt?.id || '')}
                 fetchUrl={AUTOCOMPLETE_BRANCH_URL}
                 fetchParams={{ retail_only: true }}
-                isSearchFieldRequired={false}
-                placeholder="Select source…"
+                isSearchFieldRequired
+                searchPlaceholder="Search branch…"
+                selectedLabel={fromLabel}
+                placeholder="Select source branch"
                 disabled={disabled}
-                style={compactSelectStyle}
+                style={{ width: '100%' }}
               />
             </FormGroup>
 
-            <div className="transfer-form__route-arrow transfer-form__route-arrow--inputs">→</div>
+            <div className="transfer-form__route-arrow transfer-form__route-arrow--inputs" aria-hidden>→</div>
 
             <FormGroup label="To Branch" required>
               <AutocompleteDropdown
                 value={form.to_branch_id || ''}
                 onSelectOption={(opt) => patchForm('to_branch_id', opt?.id || '')}
                 fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-                fetchParams={{ retail_only: true, exclude_id: form.from_branch_id }}
-                isSearchFieldRequired={false}
-                placeholder="Select destination"
-                disabled={disabled || !form.from_branch_id}
-                style={compactSelectStyle}
+                fetchParams={{ retail_only: true, exclude_id: form.from_branch_id || undefined }}
+                isSearchFieldRequired
+                searchPlaceholder="Search branch…"
+                selectedLabel={toLabel}
+                placeholder="Select destination branch"
+                disabled={disabled}
+                style={{ width: '100%' }}
               />
             </FormGroup>
           </div>

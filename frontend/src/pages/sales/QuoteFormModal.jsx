@@ -246,6 +246,7 @@ export default function QuoteFormModal({
                   <td style={{ minWidth: 220 }}>
                     <InventoryItemPicker
                       branchId={quoteForm.branchId}
+                      listedOnly={false}
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}

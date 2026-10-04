@@ -262,8 +262,11 @@ export default function AutocompleteDropdown({
     }
   }, [open, reposition])
 
+  const ignorePickUntilRef = useRef(0)
+
   const pick = (opt) => {
     if (disabled || opt.disabled) return
+    if (Date.now() < ignorePickUntilRef.current) return
     setPickedLabel(opt.label || '')
     onChange?.(opt.id)
     onSelectOption?.(opt)
@@ -429,7 +432,13 @@ export default function AutocompleteDropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         className={`autocomplete-dropdown-trigger ${className}${size === 'sm' ? ' autocomplete-dropdown-trigger--sm' : ''}${disabled ? ' autocomplete-dropdown-trigger--disabled' : ''}`}
-        onClick={() => !disabled && setOpen((v) => !v)}
+        onClick={() => {
+          if (disabled) return
+          setOpen((v) => {
+            if (!v) ignorePickUntilRef.current = Date.now() + 400
+            return !v
+          })
+        }}
         style={{
           display: 'flex',
           alignItems: 'center',

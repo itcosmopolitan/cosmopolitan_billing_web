@@ -250,7 +250,9 @@ export default function InventoryItemPicker({
   const inputValue = value && !open ? value.name : search
   const emptyMessage = search
     ? `No items match "${search}"`
-    : 'No items found in this branch'
+    : listedOnly
+      ? 'No items found in this branch'
+      : 'No items found'
 
   const dropdown = open && !disabled && (
     <div ref={listRef} style={DROPDOWN_STYLE} onScroll={handleScroll}>

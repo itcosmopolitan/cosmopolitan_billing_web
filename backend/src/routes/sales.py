@@ -129,6 +129,99 @@ async def _load_items_by_id(db: AsyncSession, item_ids: set[str]) -> dict[str, I
     res = await db.execute(select(Item).where(Item.id.in_(item_ids)))
     return {item.id: item for item in res.scalars().all()}
 
+
+async def _unlisted_item_names_at_branch(
+    db: AsyncSession,
+    lines,
+    branch_id: Optional[str],
+) -> list[str]:
+    """Names of catalog items that are not listed at ``branch_id``."""
+    if not branch_id:
+        return []
+    ids: list[str] = []
+    names: dict[str, str] = {}
+    for line in lines or []:
+        item_id = getattr(line, "item_id", None)
+        if not item_id:
+            continue
+        if item_id not in names:
+            ids.append(item_id)
+        names[item_id] = (
+            getattr(line, "name", None)
+            or names.get(item_id)
+            or item_id
+        )
+    if not ids:
+        return []
+    res = await db.execute(
+        select(ItemBranchConfig.item_id).where(
+            ItemBranchConfig.item_id.in_(ids),
+            ItemBranchConfig.branch_id == branch_id,
+            ItemBranchConfig.is_available == True,  # noqa: E712
+        )
+    )
+    listed = {row[0] for row in res.all()}
+    missing_ids = [item_id for item_id in ids if item_id not in listed]
+    if not missing_ids:
+        return []
+    item_map = await _load_items_by_id(db, set(missing_ids))
+    out = []
+    for item_id in missing_ids:
+        item = item_map.get(item_id)
+        out.append((item.name if item and item.name else None) or names.get(item_id) or item_id)
+    return out
+
+
+def _items_not_listed_http(names: list[str]) -> HTTPException:
+    label = ", ".join(names)
+    if len(names) == 1:
+        message = (
+            "You can't convert this quotation to an invoice because this item "
+            f"isn't configured for this branch in item master: {label}."
+        )
+    else:
+        message = (
+            "You can't convert this quotation to an invoice because these items "
+            f"aren't configured for this branch in item master: {label}."
+        )
+    return HTTPException(
+        status_code=400,
+        detail={
+            "code": "items_not_listed_at_branch",
+            "message": message,
+            "items": names,
+        },
+    )
+
+
+async def _require_items_listed_at_branch(
+    db: AsyncSession,
+    lines,
+    branch_id: Optional[str],
+) -> None:
+    names = await _unlisted_item_names_at_branch(db, lines, branch_id)
+    if names:
+        raise _items_not_listed_http(names)
+
+
+async def _require_quotation_items_listed_at_branch(
+    db: AsyncSession,
+    quote_id: str,
+    branch_id: Optional[str],
+) -> Quotation:
+    res = await db.execute(
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id == quote_id)
+    )
+    quote = res.unique().scalar_one_or_none()
+    if not quote:
+        raise HTTPException(404, "Quotation not found")
+    await _require_items_listed_at_branch(
+        db, quote.line_items, branch_id or quote.branch_id,
+    )
+    return quote
+
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 class BatchAllocationEntry(BaseModel):
     """One entry of an explicit per-line batch split: take `qty` units from
@@ -1550,6 +1643,9 @@ async def create_invoice(
     inv_origin_early = (data.origin or "invoice").strip().lower() or "invoice"
     if data.quotation_id:
         inv_origin_early = "quotation"
+        await _require_quotation_items_listed_at_branch(
+            db, data.quotation_id, data.branch_id,
+        )
     elif data.sales_order_id:
         inv_origin_early = "sales_order"
 
@@ -5295,9 +5391,11 @@ async def _link_quotation_to_order(db: AsyncSession, quote_id: str, so: SalesOrd
 
 async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleInvoice, user: Optional[User] = None) -> None:
     res = await db.execute(
-        select(Quotation).where(Quotation.id == quote_id)
+        select(Quotation)
+        .options(selectinload(Quotation.line_items))
+        .where(Quotation.id == quote_id)
     )
-    quote = res.scalar_one_or_none()
+    quote = res.unique().scalar_one_or_none()
     if not quote:
         raise HTTPException(404, "Quotation not found")
     if quote.status in (QuotationStatus.converted, QuotationStatus.rejected):
@@ -5317,6 +5415,9 @@ async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleI
         )).scalar_one_or_none()
         if live_inv:
             raise HTTPException(400, "Quotation already spawned an invoice")
+    await _require_items_listed_at_branch(
+        db, quote.line_items, getattr(inv, "branch_id", None) or quote.branch_id,
+    )
     # Ensure the referenced invoice row exists before setting the FK pointer.
     await db.flush()
     quote.status = QuotationStatus.converted
@@ -6395,6 +6496,7 @@ async def convert_quote_to_invoice(
         )).scalar_one_or_none()
         if live_inv:
             raise HTTPException(400, "Quotation already spawned an invoice")
+    await _require_items_listed_at_branch(db, quote.line_items, quote.branch_id)
 
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")

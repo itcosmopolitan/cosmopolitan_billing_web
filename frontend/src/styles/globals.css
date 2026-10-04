@@ -556,12 +556,35 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .transfer-form__route-grid--inputs {
   margin-top: 12px;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr);
   align-items: end;
+  gap: 10px;
+}
+
+.transfer-form__route-grid--inputs .form-group {
+  margin-bottom: 0;
+  width: 100%;
+  max-width: none;
+}
+
+.transfer-form__route-grid--inputs .autocomplete-dropdown-trigger {
+  width: 100%;
+  max-width: none;
 }
 
 .transfer-form__route-arrow--inputs {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .transfer-form__route-card {

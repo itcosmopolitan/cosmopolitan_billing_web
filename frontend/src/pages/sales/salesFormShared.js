@@ -1,5 +1,7 @@
 /** Shared helpers for sales document form pages. */
 
+import { itemsAPI } from '@/api'
+import { unwrapPaged } from '@/utils/pagination'
 import { customerPricingType, customerClassification } from '@/utils/pricingDiscounts'
 
 export {
@@ -260,4 +262,57 @@ export function creditNotePath(invoiceId, mode) {
   const params = new URLSearchParams({ invoiceId })
   if (mode) params.set('mode', mode)
   return `/sales/returns/new?${params.toString()}`
+}
+
+function lineItemId(line) {
+  return line?.item_id || line?.itemId || null
+}
+
+function lineItemName(line) {
+  return line?.name || lineItemId(line) || 'Unnamed item'
+}
+
+export function unlistedItemsFromError(err) {
+  const detail = err?.response?.data?.detail
+  if (detail && typeof detail === 'object' && detail.code === 'items_not_listed_at_branch') {
+    return Array.isArray(detail.items) ? detail.items.filter(Boolean) : []
+  }
+  return []
+}
+
+/** Catalog lines that are not listed for this branch in item master. */
+export async function findUnlistedItemsAtBranch(lines, branchId) {
+  if (!branchId) return []
+  const unique = []
+  const seen = new Set()
+  for (const line of lines || []) {
+    const id = lineItemId(line)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    unique.push(line)
+  }
+  if (unique.length === 0) return []
+
+  const missing = await Promise.all(unique.map(async (line) => {
+    const id = lineItemId(line)
+    const name = lineItemName(line)
+    try {
+      const raw = await itemsAPI.list({
+        branch_id: branchId,
+        listed_only: false,
+        pos_mode: true,
+        search: name || undefined,
+        per_page: 50,
+        page_no: 1,
+        include_total: false,
+      })
+      const rows = unwrapPaged(raw).items || []
+      const match = rows.find((row) => row.id === id)
+      if (match && match.is_available !== false) return null
+      return name
+    } catch {
+      return name
+    }
+  }))
+  return missing.filter(Boolean)
 }

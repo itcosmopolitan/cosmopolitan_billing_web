@@ -141,6 +141,10 @@ api.interceptors.response.use(
       url.includes('/bulk-delete') &&
       rawDetail && typeof rawDetail === 'object' &&
       Array.isArray(rawDetail.blocked)
+    const isQuoteConvertUnlisted =
+      status === 400 &&
+      rawDetail && typeof rawDetail === 'object' &&
+      rawDetail.code === 'items_not_listed_at_branch'
 
     if (status === 401) {
       if (isLoginRequest(url)) {
@@ -160,7 +164,7 @@ api.interceptors.response.use(
         }
       }
       // Boot-time /auth/me failure: RequireAuth sends user to login — stay silent.
-    } else if (!isBulkDeleteBlocked) {
+    } else if (!isBulkDeleteBlocked && !isQuoteConvertUnlisted) {
       // Suppress duplicate identical toasts within a short window to avoid
       // spamming the user when multiple concurrent requests fail for the
       // same reason (e.g. permission check). Keep a tiny in-memory cache

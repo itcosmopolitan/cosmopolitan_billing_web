@@ -32,15 +32,12 @@ export default function TransferFormPage({ mode = 'create' }) {
   const can = useCan()
   const user = useAppStore((s) => s.user)
   const branches = useAppStore((s) => s.branches)
-  const activeBranch = useAppStore((s) => s.activeBranch)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const footerLeft = sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W
 
-  const defaultFromId = activeBranch?.id || branches.find((b) => b.code !== 'WH')?.id || 'br-001'
-  const defaultToId = branches.find((b) => b.id !== defaultFromId)?.id || 'br-002'
   const branchById = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches])
 
-  const [form, setForm] = useState(() => emptyTransfer(defaultFromId, defaultToId))
+  const [form, setForm] = useState(() => emptyTransfer('', ''))
   const [refNumber, setRefNumber] = useState(null)
   const [items, setItems] = useState([])
   const [itemsLoading, setItemsLoading] = useState(false)
@@ -55,6 +52,7 @@ export default function TransferFormPage({ mode = 'create' }) {
       setForm((f) => ({
         ...f,
         from_branch_id: v,
+        to_branch_id: f.to_branch_id === v ? '' : f.to_branch_id,
         items: f.items.map((row) => (
           row.item_id
             ? { ...row, batchAllocation: [], batchAllocationCustom: false }
@@ -296,6 +294,7 @@ export default function TransferFormPage({ mode = 'create' }) {
               <TransferFormFields
                 form={form}
                 patchForm={patchForm}
+                branchLabels={branchById}
                 items={items}
                 itemsLoading={itemsLoading}
                 batchOptions={batchOptions}
