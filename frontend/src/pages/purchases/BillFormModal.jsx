@@ -302,6 +302,7 @@ export default function BillFormModal({
                     <td style={{ minWidth: 220 }}>
                       <InventoryItemPicker
                         branchId={billForm.branchId}
+                        listedOnly={false}
                         value={pickerValue}
                         onPick={(inv) => handlePick(i, inv)}
                         onClear={() => handleClear(i)}

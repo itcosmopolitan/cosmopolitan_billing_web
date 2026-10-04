@@ -103,7 +103,11 @@ function ResultRow({ item, onPick }) {
         }}
       >
         {fmt(item.selling_price)} ·{' '}
-        {oos ? 'Out of stock' : `${fmtQty(stock)} in stock`}
+        {item.is_available === false
+          ? 'Not listed here'
+          : oos
+            ? 'Out of stock'
+            : `${fmtQty(stock)} in stock`}
       </span>
     </div>
   )
@@ -116,6 +120,7 @@ export default function InventoryItemPicker({
   onClear,
   disabled = false,
   excludeIds = [],
+  listedOnly = true,
 }) {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
@@ -155,6 +160,7 @@ export default function InventoryItemPicker({
       sort_by: 'name',
       sort_order: 'asc',
       pos_mode: true,
+      listed_only: listedOnly,
       include_total: false,
     })
     const data = unwrapPaged(raw)
@@ -164,7 +170,7 @@ export default function InventoryItemPicker({
       pageNo: data.pageNo || page,
       hasMorePage: Boolean(data.hasMorePage),
     }
-  }, [branchId, search, excludeKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [branchId, search, excludeKey, listedOnly]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // First page — open, search, branch, or exclusion set changed.
   useEffect(() => {

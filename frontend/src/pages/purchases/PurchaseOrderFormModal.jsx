@@ -195,6 +195,7 @@ export default function PurchaseOrderFormModal({
                   <td style={{ minWidth: 220 }}>
                     <InventoryItemPicker
                       branchId={poForm.branchId}
+                      listedOnly={false}
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}

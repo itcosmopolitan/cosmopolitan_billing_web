@@ -20,6 +20,7 @@ from src.item_branch import effective_cost_price, weighted_average_unit_cost
 from src.models import AuditLog, Item, ItemBatch, ItemBranchConfig, ItemStock, User
 from src.qty import as_qty
 from src.routes._atomic import add_batch_atomic, adjust_stock_atomic, is_tracked, set_batch_quantity_atomic
+from src.routes.items import ensure_item_listed_at_branch
 from src.services.audit_service import add_audit_log
 
 
@@ -275,6 +276,9 @@ async def receive_lines_to_stock(
     for line in lines:
         if not line.item_id or line.qty <= 0:
             continue
+        await ensure_item_listed_at_branch(
+            db, item_id=line.item_id, branch_id=branch_id,
+        )
         tracked, expiry_tracked = await is_tracked(db, line.item_id)
         if tracked:
             date_errs = validate_batch_dates(

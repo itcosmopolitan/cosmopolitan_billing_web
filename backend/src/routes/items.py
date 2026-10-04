@@ -365,6 +365,57 @@ async def _upsert_branch_config(
     return cfg
 
 
+async def ensure_item_listed_at_branch(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+) -> Optional[ItemBranchConfig]:
+    """List an existing catalog item at a branch without wiping prices.
+
+    Used when a purchase bill/GRN receives an item that was never (or is no
+    longer) configured for that branch — create the branch row from catalog
+    defaults, or flip ``is_available`` back on.
+    """
+    if not item_id or not branch_id:
+        return None
+    res = await db.execute(
+        select(ItemBranchConfig).where(
+            ItemBranchConfig.item_id == item_id,
+            ItemBranchConfig.branch_id == branch_id,
+        )
+    )
+    cfg = res.scalar_one_or_none()
+    if cfg is not None:
+        if not cfg.is_available:
+            cfg.is_available = True
+        await _ensure_stock_row(db, item_id=item_id, branch_id=branch_id)
+        return cfg
+    item = (
+        await db.execute(select(Item).where(Item.id == item_id))
+    ).scalar_one_or_none()
+    if item is None:
+        return None
+    cfg = ItemBranchConfig(
+        id=str(uuid.uuid4()),
+        item_id=item_id,
+        branch_id=branch_id,
+        is_available=True,
+        cost_price=item.cost_price,
+        selling_price=item.selling_price,
+        reorder_level=item.reorder_level,
+        wholesale_pricing_mode=item.wholesale_pricing_mode,
+        wholesale_discount_pct=item.wholesale_discount_pct,
+        wholesale_price=item.wholesale_price,
+        staff_pricing_mode=item.staff_pricing_mode,
+        staff_discount_pct=item.staff_discount_pct,
+        staff_price=item.staff_price,
+    )
+    db.add(cfg)
+    await _ensure_stock_row(db, item_id=item_id, branch_id=branch_id)
+    return cfg
+
+
 async def _ensure_stock_row(
     db: AsyncSession,
     *,
@@ -961,17 +1012,12 @@ async def list_items(
         q = q.where(Item.active == True)  # noqa: E712
         cq = cq.where(Item.active == True)  # noqa: E712
 
-    if branch_id:
+    if branch_id and filter_listed:
         listed_join = and_(
             ItemBranchConfig.item_id == Item.id,
             ItemBranchConfig.branch_id == branch_id,
             ItemBranchConfig.is_available == True,  # noqa: E712
         )
-        if filter_listed:
-            listed_join = and_(
-                listed_join,
-                ItemBranchConfig.is_available == True,  # noqa: E712
-            )
         q = q.join(ItemBranchConfig, listed_join)
         cq = cq.join(ItemBranchConfig, listed_join)
 

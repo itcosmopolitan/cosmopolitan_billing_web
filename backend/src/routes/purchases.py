@@ -73,9 +73,20 @@ from src.security import (
     get_allowed_branch_ids,
     require_perm,
 )
+from src.routes.items import ensure_item_listed_at_branch
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+
+
+async def _list_purchase_items_at_branch(db: AsyncSession, branch_id: str, items) -> None:
+    seen = set()
+    for item in items or []:
+        item_id = getattr(item, "item_id", None)
+        if not item_id or item_id in seen:
+            continue
+        seen.add(item_id)
+        await ensure_item_listed_at_branch(db, item_id=item_id, branch_id=branch_id)
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 # 2026-05-24: same allow-list as routes/sales.py PaymentMode. Single source
@@ -762,6 +773,7 @@ async def create_bill(
     )
 
     await enforce_branch_access(data.branch_id, user=user, db=db)
+    await _list_purchase_items_at_branch(db, data.branch_id, data.items)
 
     # If operator marked "payment received" at create time, settle the
     # bill in-line — parity with POS create_invoice. Otherwise the bill
@@ -3714,6 +3726,7 @@ async def create_order(
 
     # Enforce operator may create POs for this branch
     await enforce_branch_access(data.branch_id, user=user, db=db)
+    await _list_purchase_items_at_branch(db, data.branch_id, data.items)
 
     po = PurchaseOrder(
         id=str(uuid.uuid4()), number=po_num,
