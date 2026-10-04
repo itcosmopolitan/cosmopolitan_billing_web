@@ -42,8 +42,10 @@ export default function CashTenderFields({
   if (compact) {
     return (
       <div className="cash-tender cash-tender--compact">
-        <label className="cash-tender__label">Amount collected</label>
-        {input}
+        <div className="cash-tender__field">
+          <label className="cash-tender__label">Amount collected</label>
+          {input}
+        </div>
         {result}
       </div>
     )

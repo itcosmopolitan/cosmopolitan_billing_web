@@ -1269,8 +1269,13 @@ h4 { font-size: 14px; font-weight: 600; }
 }
 
 .cash-tender--compact {
-  margin-top: 8px;
-  max-width: 260px;
+  margin-top: 0;
+  max-width: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 220px;
 }
 
 .cash-tender__label {
@@ -1279,6 +1284,23 @@ h4 { font-size: 14px; font-weight: 600; }
   font-weight: 600;
   color: var(--text-muted);
   margin-bottom: 4px;
+}
+
+.cash-tender--compact .cash-tender__label {
+  margin-bottom: 2px;
+  font-size: 10.5px;
+}
+
+.cash-tender--compact .cash-tender__field {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+.cash-tender--compact .form-input {
+  padding: 6px 8px;
+  font-size: 12px;
+  height: 30px;
+  box-sizing: border-box;
 }
 
 .cash-tender__msg {
@@ -1293,11 +1315,26 @@ h4 { font-size: 14px; font-weight: 600; }
   font-weight: 600;
 }
 
+.cash-tender--compact .cash-tender__msg {
+  margin-top: 0;
+  flex: 1 1 160px;
+  min-width: 140px;
+  min-height: 30px;
+  padding: 4px 10px;
+  align-items: center;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+
 .cash-tender__msg strong {
   font-family: 'DM Mono', monospace;
   font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+.cash-tender--compact .cash-tender__msg strong {
+  font-size: 14px;
 }
 
 .cash-tender__msg--change {

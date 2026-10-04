@@ -1951,8 +1951,8 @@ export default function POSPage() {
               <div
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
+                  alignItems: 'flex-end',
+                  gap: 8,
                   flexWrap: 'wrap',
                 }}
               >
@@ -1985,6 +1985,8 @@ export default function POSPage() {
                         opacity: isDisabled ? 0.6 : 1,
                         transition: 'all 0.12s ease',
                         whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                        alignSelf: 'center',
                       }}
                     >
                       {option.label}
@@ -1996,26 +1998,30 @@ export default function POSPage() {
                     Remaining credit: <strong>{fmt(accountCreditRemaining)}</strong>
                   </div>
                 )}
+                {paymentMethod === 'cash' && remainingDuePreview > 0.001 && (
+                  <CashTenderFields
+                    compact
+                    autoFocus
+                    due={remainingDuePreview}
+                    value={cashCollected}
+                    onChange={store.setCashCollected}
+                  />
+                )}
+                {['card', 'upi', 'bank_transfer'].includes(paymentMethod) && remainingDuePreview > 0.001 && (
+                  <div style={{ flex: '1 1 180px', minWidth: 160 }}>
+                    <label className="cash-tender__label" htmlFor="pos-payment-ref">Reference number</label>
+                    <input
+                      id="pos-payment-ref"
+                      className="form-input"
+                      value={paymentRef}
+                      onChange={(e) => store.setPaymentRef(e.target.value)}
+                      placeholder="Payment reference"
+                      aria-label="Payment reference number"
+                      style={{ width: '100%', padding: '6px 8px', fontSize: 12, height: 30, boxSizing: 'border-box' }}
+                    />
+                  </div>
+                )}
               </div>
-              {paymentMethod === 'cash' && remainingDuePreview > 0.001 && (
-                <CashTenderFields
-                  compact
-                  autoFocus
-                  due={remainingDuePreview}
-                  value={cashCollected}
-                  onChange={store.setCashCollected}
-                />
-              )}
-              {['card', 'upi', 'bank_transfer'].includes(paymentMethod) && remainingDuePreview > 0.001 && (
-                <input
-                  className="form-input"
-                  value={paymentRef}
-                  onChange={(e) => store.setPaymentRef(e.target.value)}
-                  placeholder="Payment reference number"
-                  aria-label="Payment reference number"
-                  style={{ width: '100%', maxWidth: 240, marginTop: 6, padding: '6px 8px', fontSize: 12 }}
-                />
-              )}
             </div>
 
             <button
