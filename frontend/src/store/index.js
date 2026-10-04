@@ -235,7 +235,7 @@ export const useAppStore = create(
     }
 
 // ─── POS Store ────────────────────────────────────────────────────────────────
-export const usePOSStore = create((set, get) => ({
+export const usePOSStore = create(persist((set, get) => ({
   cart: [],
   customer: null,
   discountPct: 0,
@@ -500,7 +500,7 @@ export const usePOSStore = create((set, get) => ({
       heldBills: [...heldBills, {
         id: Date.now(),
         billNumber: label,
-        cart: cart.map((i) => applyLineCalc(i)),
+        cart: cart.map((i) => applyLineCalc({ ...i })),
         customer,
         branchId: branchId || null,
         discountPct,
@@ -546,16 +546,7 @@ export const usePOSStore = create((set, get) => ({
       resumedMethod = bill.paymentMethod
     }
     set({
-      cart: bill.cart.map((i) => {
-        const item = normalizeCartItem(i)
-        const catalogRate = Number(item.catalogTaxRate ?? i.catalogTaxRate) || 0
-        if (catalogRate <= 0) return item
-        const inclusive = item.catalogInclusivePrice || i.catalogInclusivePrice || item.retailPrice || item.price
-        return applyLineCalc({
-          ...item,
-          ...linePricingForCustomer(inclusive, catalogRate, bill.customer),
-        })
-      }),
+      cart: (bill.cart || []).map((i) => normalizeCartItem(i)),
       customer: bill.customer,
       discountPct: bill.discountPct,
       discountAmt: bill.discountAmt || 0,
@@ -591,4 +582,7 @@ export const usePOSStore = create((set, get) => ({
     const disc = get().getDiscount()
     return Math.max(0, roundMoney(sub - disc))
   },
+}), {
+  name: 'retailos-pos',
+  partialize: (s) => ({ heldBills: s.heldBills }),
 }))
