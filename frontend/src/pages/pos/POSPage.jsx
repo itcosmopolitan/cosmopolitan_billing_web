@@ -233,9 +233,14 @@ export default function POSPage() {
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
   const { cart, customer, discountPct, discountAmt, discountType, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const activeBranchData = branches.find((branch) => branch.id === activeBranch?.id) || activeBranch
   const stockMode = activeBranch?.id ? (stockModeByBranch[activeBranch.id] || 'branch') : 'branch'
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
-  const childCounters = Array.isArray(activeBranch?.child_counters) ? activeBranch.child_counters : []
+  const childCounters = Array.isArray(activeBranchData?.child_counters)
+    ? activeBranchData.child_counters
+    : Array.isArray(activeBranchData?.childCounters)
+      ? activeBranchData.childCounters
+      : []
 
   useEffect(() => {
     setSelectedChildCounter('')
@@ -577,7 +582,7 @@ export default function POSPage() {
   const handleComplete = async (allowCreditOverLimit = false) => {
     if (cart.length === 0) { toast.error('Cart is empty'); return }
     if (completing) return
-    if (activeBranch?.has_child_counters && !selectedChildCounter) {
+    if (childCounters.length > 0 && !selectedChildCounter) {
       toast.error('Select a child counter for this sale')
       return
     }
@@ -1462,6 +1467,20 @@ export default function POSPage() {
             </span>
           )}
           <div style={{ flex: 1, minWidth: 8 }} />
+          {childCounters.length > 0 && (
+            <AutocompleteDropdown
+              value={selectedChildCounter}
+              onChange={setSelectedChildCounter}
+              options={childCounters.map((counter) => ({
+                id: counter.id,
+                label: counter.name,
+              }))}
+              placeholder="Select counter"
+              searchPlaceholder="Search counters…"
+              isSearchFieldRequired
+              style={{ width: 148, maxWidth: '28vw', flexShrink: 0 }}
+            />
+          )}
           <div
             style={{
               display: 'flex',
