@@ -143,6 +143,11 @@ class BatchAllocationEntry(BaseModel):
     batch_id: str
     qty: float = Field(..., gt=0)
 
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return _coerce_qty_value(value, field_name="qty")
+
 
 def _coerce_qty_value(value, *, field_name: str = "qty") -> float:
     """Accept fractional quantities (kg, etc.) rounded to org qty precision."""
@@ -602,7 +607,12 @@ async def _validate_child_counter(
 class SourceOrderLineIn(BaseModel):
     """Qty invoiced from a specific SO line when saving via the invoice form."""
     order_line_id: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return _coerce_qty_value(value, field_name="qty")
 
 class PaymentIn(BaseModel):
     amount: float = 0
@@ -4696,10 +4706,15 @@ class SalesOrderLineIn(BaseModel):
     flag later)."""
     item_id: Optional[str] = None
     name: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
     price: float
     tax_rate: float = 0
     discount: float = 0
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return _coerce_qty_value(value, field_name="qty")
 
 
 class SalesOrderCreate(BaseModel):
@@ -4737,7 +4752,12 @@ class ConvertLineAllocation(BaseModel):
 class ConvertLineQtyIn(BaseModel):
     """Partial SO→Invoice: which order line and how many units to invoice."""
     order_line_id: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return _coerce_qty_value(value, field_name="qty")
 
 
 class ConvertToInvoiceIn(BaseModel):
@@ -5225,7 +5245,7 @@ def _recalc_so_header(so: SalesOrder, lines: list, tax_mode: str = "inclusive") 
     rates = []
     for li in lines:
         line_net = _inclusive_after_line_discount(
-            int(li.qty), float(li.price or 0), float(li.discount or 0),
+            as_qty(li.qty), float(li.price or 0), float(li.discount or 0),
         )
         li.line_total = line_net
         inclusives.append(line_net)
@@ -5337,14 +5357,14 @@ async def _link_sales_order_to_invoice(
     orig_inclusive = 0.0
     for li in so.line_items:
         orig_inclusive += _inclusive_after_line_discount(
-            int(li.qty), float(li.price or 0), float(li.discount or 0),
+            as_qty(li.qty), float(li.price or 0), float(li.discount or 0),
         )
     inv_inclusive = 0.0
     for entry in entries:
         so_line = line_by_id.get(entry.order_line_id)
         if not so_line:
             raise HTTPException(400, f"Order line {entry.order_line_id} not found on this SO")
-        if entry.qty > int(so_line.qty):
+        if as_qty(entry.qty) > as_qty(so_line.qty):
             raise HTTPException(
                 400,
                 f"Cannot invoice {entry.qty} of {so_line.name} — only {so_line.qty} remaining on the order",
@@ -5359,8 +5379,8 @@ async def _link_sales_order_to_invoice(
 
     for entry in entries:
         so_line = line_by_id[entry.order_line_id]
-        convert_qty = int(entry.qty)
-        remaining_qty = int(so_line.qty) - convert_qty
+        convert_qty = as_qty(entry.qty)
+        remaining_qty = as_qty(so_line.qty) - convert_qty
         if remaining_qty <= 0:
             await db.delete(so_line)
         else:
@@ -5972,14 +5992,14 @@ async def convert_order_to_invoice(
             so_line = line_by_id.get(entry.order_line_id)
             if not so_line:
                 raise HTTPException(400, f"Order line {entry.order_line_id} not found on this SO")
-            if entry.qty > int(so_line.qty):
+            if as_qty(entry.qty) > as_qty(so_line.qty):
                 raise HTTPException(
                     400,
                     f"Cannot invoice {entry.qty} of {so_line.name} — only {so_line.qty} remaining on the order",
                 )
-            convert_plan.append((so_line, int(entry.qty)))
+            convert_plan.append((so_line, as_qty(entry.qty)))
     else:
-        convert_plan = [(li, int(li.qty)) for li in so.line_items if int(li.qty) > 0]
+        convert_plan = [(li, as_qty(li.qty)) for li in so.line_items if as_qty(li.qty) > 0]
 
     convert_plan = [(ln, q) for ln, q in convert_plan if q > 0]
     if not convert_plan:
@@ -5991,7 +6011,7 @@ async def convert_order_to_invoice(
     orig_inclusive = 0.0
     for li in so.line_items:
         orig_inclusive += _inclusive_after_line_discount(
-            int(li.qty), float(li.price or 0), float(li.discount or 0),
+            as_qty(li.qty), float(li.price or 0), float(li.discount or 0),
         )
     convert_inclusives = []
     convert_rates = []
@@ -6167,7 +6187,7 @@ async def convert_order_to_invoice(
                         notes=f"Oversell clamp on SO convert {inv.number}",
                     )
 
-        remaining_qty = int(so_line.qty) - convert_qty
+        remaining_qty = as_qty(so_line.qty) - convert_qty
         if remaining_qty <= 0:
             await db.delete(so_line)
         else:
@@ -6938,7 +6958,7 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
                     select(ItemBatch).where(ItemBatch.id == bid)
                 )).scalar_one_or_none()
                 if b is not None:
-                    await set_batch_quantity_atomic(db, batch_id=bid, new_qty=int(b.quantity or 0) + qty)
+                    await set_batch_quantity_atomic(db, batch_id=bid, new_qty=as_qty(b.quantity or 0) + qty)
                 elif rl.item_id:
                     try:
                         await adjust_stock_atomic(
@@ -7437,7 +7457,7 @@ async def _apply_sales_return(
         db.add(ret)
         await db.flush()  # need ret.id for the line FK
 
-    total_return_qty = int(sum(int(getattr(r, "return_qty", 0) or 0) for r in (data.items or [])))
+    total_return_qty = as_qty(sum(as_qty(getattr(r, "return_qty", 0) or 0) for r in (data.items or [])))
 
     for r, inv_line, line_net, _line_tax in return_rows:
         # 2026-05-31: batch-aware restock. Restore stock to the SAME lots the
@@ -7860,7 +7880,7 @@ async def _restore_sales_order_from_invoice(
             so_by_name[name_key] = li
 
     for inv_li in inv.line_items or []:
-        qty = int(inv_li.qty or 0)
+        qty = as_qty(inv_li.qty or 0)
         if qty <= 0:
             continue
         so_line = None
@@ -7871,7 +7891,7 @@ async def _restore_sales_order_from_invoice(
             so_line = so_by_name.get(name_key)
 
         if so_line is not None:
-            new_qty = int(so_line.qty or 0) + qty
+            new_qty = as_qty(so_line.qty or 0) + qty
             so_line.qty = new_qty
             _, _, so_line.line_total = _line_amounts(
                 new_qty,

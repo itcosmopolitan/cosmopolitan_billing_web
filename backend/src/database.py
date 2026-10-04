@@ -862,6 +862,8 @@ async def _ensure_columns(conn) -> set[tuple[str, str]]:
 
 _QTY_FLOAT_COLUMNS = (
     ("sale_line_items", "qty"),
+    ("quotation_line_items", "qty"),
+    ("sales_order_line_items", "qty"),
     ("item_stock", "quantity"),
     ("item_batches", "quantity"),
     ("item_batches", "initial_qty"),
