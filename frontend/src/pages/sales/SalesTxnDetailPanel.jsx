@@ -348,7 +348,7 @@ export default function SalesTxnDetailPanel({
       }
       : canShowCreditNoteAction(detail, can)
         ? {
-          description: 'Create a credit note for this invoice.',
+          description: 'Create a credit note for this invoice if the customer is returning items.',
           label: 'Create credit note',
           onClick: () => { onClose?.(); navigate(invoiceReturnPath(detail)) },
         }
