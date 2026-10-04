@@ -1225,6 +1225,7 @@ export default function SalesPage() {
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                       if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'branch') return <SortableHeader key={id} label="Branch" sortKey="branch_id" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
+                      if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
                       if (id === 'cashier') return <SortableHeader key={id} label="Cashier" sortKey="cashier" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
@@ -1267,6 +1268,7 @@ export default function SalesPage() {
                           return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(inv)}</td>
                         }
                         if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || 'N/A'}</td>
+                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{inv.childCounterName || inv.child_counter_name || '—'}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.date}</td>
                         if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.cashier || 'N/A'}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(inv.total)}</td>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, itemsAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import InvoiceFormModal from './InvoiceFormModal'
@@ -11,6 +11,7 @@ import { entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'
 import { customerRequiresImmediatePayment } from '@/utils/storeCredit'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const withCost = await enrichSaleLinesWithCosts(items, branchId)
@@ -46,13 +47,22 @@ export default function InvoiceEditPage() {
   const { invoiceId } = useParams()
   const navigate = useNavigate()
   const can = useCan()
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const branches = useAppStore((s) => s.branches)
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const setSelectedChildCounter = usePOSStore((s) => s.setSelectedChildCounter)
+  const setChildCounterBranchId = usePOSStore((s) => s.setChildCounterBranchId)
 
   const [form, setForm] = useState(null)
-  const branches = useAppStore((s) => s.branches)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  useEffect(() => {
+    setChildCounterBranchId(form?.branchId || '', form?.childCounterId || '')
+    return () => setChildCounterBranchId('')
+  }, [form?.branchId, form?.childCounterId, setChildCounterBranchId])
 
   useEffect(() => {
     if (!can('invoices.edit', 'invoices.create')) {
@@ -80,6 +90,7 @@ export default function InvoiceEditPage() {
         const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
         if (cancelled) return
         setForm({ ...base, items })
+        setSelectedChildCounter(base.childCounterId || '')
       } catch {
         if (!cancelled) {
           toast.error('Invoice not found')
@@ -108,9 +119,13 @@ export default function InvoiceEditPage() {
       toast.error('Each item must have name, qty, and price')
       return
     }
-    const selectedBranch = branches.find((branch) => branch.id === form.branchId)
-    if (selectedBranch?.has_child_counters && !form.childCounterId) {
-      toast.error('Select a child counter for this invoice')
+    const selectedBranch = getChildCounterBranch(branches, form.branchId, activeBranch)
+    const childCounters = getConfiguredChildCounters(selectedBranch)
+    const selectedCounter = childCounters.find(
+      (counter) => String(counter.id) === String(selectedChildCounter),
+    )
+    if (childCounters.length > 0 && !selectedCounter) {
+      toast.error('Select a valid child counter for this invoice')
       return
     }
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && !String(form.paymentRef || '').trim()) {
@@ -134,8 +149,8 @@ export default function InvoiceEditPage() {
       const payload = {
         customer_id: form.customerId || null,
         customer_name: form.customerName,
-        child_counter_id: form.childCounterId || null,
-        child_counter_name: form.childCounterName || null,
+        child_counter_id: selectedCounter?.id || null,
+        child_counter_name: selectedCounter?.name || null,
         date: form.invoiceDate,
         due_date: form.dueDate || null,
         items: form.items.map((i) => ({

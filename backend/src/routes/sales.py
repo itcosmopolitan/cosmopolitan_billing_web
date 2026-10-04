@@ -584,8 +584,16 @@ async def _validate_child_counter(
         return None, None
 
     normalized = normalize_child_counters(branch.id, counters)
+    normalized = [
+        counter for counter in normalized
+        if str(counter.get("name") or "").strip()
+    ]
     selected_id = (child_counter_id or "").strip()
     selected_name = (child_counter_name or "").strip()
+    if not normalized:
+        if selected_id or selected_name:
+            raise HTTPException(400, "This branch has no configured child counters")
+        return None, None
     if not selected_id and not selected_name:
         raise HTTPException(400, "Select a valid child counter for this branch")
     selected = next(

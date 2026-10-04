@@ -39,6 +39,7 @@ import {
   remainingAfterStoreCredit,
   customerRequiresImmediatePayment,
 } from '@/utils/storeCredit'
+import { getConfiguredChildCounters } from '@/utils/childCounters'
 import {
   POS_STORAGE_SPLIT,
   POS_STORAGE_LEADING,
@@ -215,7 +216,6 @@ export default function POSPage() {
   const [stockModeByBranch, setStockModeByBranch] = useState({})
   const [stockPool, setStockPool] = useState(null)
   const clientRequestRef = useRef(null)
-  const [selectedChildCounter, setSelectedChildCounter] = useState('')
   const searchRef = useRef(null)
   const splitRef = useRef(null)
   const productPaneRef = useRef(null)
@@ -232,19 +232,26 @@ export default function POSPage() {
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
-  const { cart, customer, discountPct, discountAmt, discountType, discountReason, notes, heldBills, paymentReceived, paymentMethod, paymentRef, cashCollected } = store
+  const {
+    cart,
+    customer,
+    discountPct,
+    discountAmt,
+    discountType,
+    discountReason,
+    notes,
+    heldBills,
+    paymentReceived,
+    paymentMethod,
+    paymentRef,
+    cashCollected,
+    selectedChildCounter,
+    setSelectedChildCounter,
+  } = store
   const activeBranchData = branches.find((branch) => branch.id === activeBranch?.id) || activeBranch
   const stockMode = activeBranch?.id ? (stockModeByBranch[activeBranch.id] || 'branch') : 'branch'
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
-  const childCounters = Array.isArray(activeBranchData?.child_counters)
-    ? activeBranchData.child_counters
-    : Array.isArray(activeBranchData?.childCounters)
-      ? activeBranchData.childCounters
-      : []
-
-  useEffect(() => {
-    setSelectedChildCounter('')
-  }, [activeBranch?.id])
+  const childCounters = getConfiguredChildCounters(activeBranchData)
 
   // Guard route changes when the cart has unsaved lines. We stash the
   // resume-callback in state so a custom Modal (rather than window.confirm)
@@ -295,7 +302,6 @@ export default function POSPage() {
         const invoiceCounter = (invoiceBranch?.child_counters || []).find((counter) => (
           counter.id === savedCounterId || counter.name === savedCounterName
         ))
-        setSelectedChildCounter(invoiceCounter?.id || savedCounterId || '')
         let customer = null
         if (inv.customerId) {
           try {
@@ -306,7 +312,7 @@ export default function POSPage() {
         }
         if (cancelled) return
         store.hydrateSession(invoiceToCartSession(inv, customer))
-        setSelectedChildCounter(inv.childCounterName || inv.child_counter_name || '')
+        setSelectedChildCounter(invoiceCounter?.id || savedCounterId || '')
         setEditingInvoice({ id: inv.id, number: inv.number })
       } catch {
         if (!cancelled) {
@@ -675,6 +681,9 @@ export default function POSPage() {
         store.notes?.trim(),
         hasDiscountForSubmit ? `Discount reason: ${discountReason}` : '',
       ].filter(Boolean).join('\n')
+      const selectedCounter = childCounters.find(
+        (counter) => String(counter.id) === String(selectedChildCounter),
+      )
 
       const salePayload = {
         customer_id: customer?.id || null,
@@ -682,8 +691,8 @@ export default function POSPage() {
         branch_id: activeBranch.id,
         branch_name: activeBranch.name,
         stock_mode: poolCheckout ? 'clubbed' : 'branch',
-        child_counter_id: selectedChildCounter || null,
-        child_counter_name: childCounters.find((counter) => counter.id === selectedChildCounter)?.name || null,
+        child_counter_id: selectedCounter?.id || null,
+        child_counter_name: selectedCounter?.name || null,
         cashier: 'Staff',
         items: cart.map((i) => {
           const gross = i.qty * i.price
@@ -777,7 +786,6 @@ export default function POSPage() {
         store.setCustomer({ ...customer, credit_balance: newBalance })
       }
       store.clearCart()
-      setSelectedChildCounter('')
       setEditingInvoice(null)
       clientRequestRef.current = null
       if (editInvoiceId) navigate('/pos', { replace: true })
@@ -1467,20 +1475,6 @@ export default function POSPage() {
             </span>
           )}
           <div style={{ flex: 1, minWidth: 8 }} />
-          {childCounters.length > 0 && (
-            <AutocompleteDropdown
-              value={selectedChildCounter}
-              onChange={setSelectedChildCounter}
-              options={childCounters.map((counter) => ({
-                id: counter.id,
-                label: counter.name,
-              }))}
-              placeholder="Select counter"
-              searchPlaceholder="Search counters…"
-              isSearchFieldRequired
-              style={{ width: 148, maxWidth: '28vw', flexShrink: 0 }}
-            />
-          )}
           <div
             style={{
               display: 'flex',

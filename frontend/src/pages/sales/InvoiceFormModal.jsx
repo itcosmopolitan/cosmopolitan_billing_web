@@ -6,7 +6,6 @@ import { useState } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker, AlertBar } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useQuickCustomer } from '@/components/useQuickParty'
-import { useAppStore } from '@/store'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
@@ -38,10 +37,6 @@ export default function InvoiceFormModal({
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
-  const branches = useAppStore((s) => s.branches)
-  const branch = branches.find((b) => b.id === invoiceForm.branchId)
-  const childCounters = Array.isArray(branch?.child_counters) ? branch.child_counters : []
-  const hasChildCounters = Boolean(branch?.has_child_counters)
   const title = editMode
     ? `Edit Invoice — ${invoiceForm.number || ''}`
     : conversionLabel
@@ -151,7 +146,7 @@ export default function InvoiceFormModal({
     Number(invoiceForm.customerCreditLimit || 0) - Number(invoiceForm.customerOutstanding || 0),
   )
   const paymentMethodOptions = [
-    ...PAYMENT_METHOD_OPTIONS,
+    ...PAYMENT_METHOD_OPTIONS.filter((option) => option.id !== 'upi'),
     ...(canUseCredit ? [{ id: 'credit', label: '💳 Credit' }] : []),
   ]
   const discShares = rollup.discountMode === 'entity'
@@ -231,25 +226,6 @@ export default function InvoiceFormModal({
               value={invoiceForm.invoiceDate}
               onChange={(v) => pif('invoiceDate', v)} />
           </FormGroup>
-          {hasChildCounters && (
-            <FormGroup label="Child Counter" required>
-              <select
-                className="form-input"
-                value={invoiceForm.childCounterId || ''}
-                onChange={(e) => {
-                  const selected = childCounters.find((counter) => counter.id === e.target.value)
-                  pif('childCounterId', selected?.id || '')
-                  pif('childCounterName', selected?.name || '')
-                }}
-                aria-label="Child Counter"
-              >
-                <option value="">Select child counter</option>
-                {childCounters.map((counter) => (
-                  <option key={counter.id} value={counter.id}>{counter.name}</option>
-                ))}
-              </select>
-            </FormGroup>
-          )}
         </div>
 
         <div className="invoice-form-payment">

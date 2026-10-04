@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, itemsAPI, customersAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -22,6 +22,7 @@ import {
 } from '@/utils/storeCredit'
 import { computeDocumentTotals, entityDiscountToPayload } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const withCost = await enrichSaleLinesWithCosts(items, branchId)
@@ -53,8 +54,12 @@ export default function InvoiceFormPage() {
   const fromOrderId = searchParams.get('fromOrder')
   const navigate = useNavigate()
   const can = useCan()
-  const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const activeBranchId = activeBranch?.id || 'br-001'
   const branches = useAppStore((s) => s.branches)
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const setSelectedChildCounter = usePOSStore((s) => s.setSelectedChildCounter)
+  const setChildCounterBranchId = usePOSStore((s) => s.setChildCounterBranchId)
 
   const [form, setForm] = useState(() => emptyInvoiceForm(activeBranchId))
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
@@ -64,6 +69,20 @@ export default function InvoiceFormPage() {
   const [showCreditWarning, setShowCreditWarning] = useState(false)
 
   const goBack = () => navigate(fromOrderId ? '/sales?tab=orders' : fromQuoteId ? '/sales?tab=quotes' : '/sales?tab=invoices')
+
+  useEffect(() => {
+    if (fromQuoteId || fromOrderId || !activeBranchId) return
+    setForm((current) => (
+      current.branchId === activeBranchId
+        ? current
+        : { ...current, branchId: activeBranchId }
+    ))
+  }, [activeBranchId, fromOrderId, fromQuoteId])
+
+  useEffect(() => {
+    setChildCounterBranchId(form.branchId || activeBranchId || '', form.childCounterId || '')
+    return () => setChildCounterBranchId('')
+  }, [activeBranchId, form.branchId, form.childCounterId, setChildCounterBranchId])
 
   useEffect(() => {
     if (!can('invoices.create')) {
@@ -83,6 +102,7 @@ export default function InvoiceFormPage() {
           const base = invoiceFromRow(so, activeBranchId, { withOrderLineId: true })
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
+          setSelectedChildCounter(base.childCounterId || '')
           setConversionLabel(so.number)
         } else if (fromQuoteId) {
           const q = await salesAPI.quotations.get(fromQuoteId)
@@ -90,6 +110,7 @@ export default function InvoiceFormPage() {
           const base = invoiceFromRow(q, activeBranchId)
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
+          setSelectedChildCounter(base.childCounterId || '')
           setConversionLabel(q.number)
         }
       } catch {
@@ -100,7 +121,7 @@ export default function InvoiceFormPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [fromQuoteId, fromOrderId, activeBranchId, navigate])
+  }, [fromQuoteId, fromOrderId, activeBranchId, navigate, setSelectedChildCounter])
 
   const save = async (allowCreditOverLimit = false) => {
     if (saving) return
@@ -116,9 +137,13 @@ export default function InvoiceFormPage() {
       toast.error('Each item must have name, qty, and price')
       return
     }
-    const selectedBranch = branches.find((branch) => branch.id === form.branchId)
-    if (selectedBranch?.has_child_counters && !form.childCounterId) {
-      toast.error('Select a child counter for this invoice')
+    const selectedBranch = getChildCounterBranch(branches, form.branchId, activeBranch)
+    const childCounters = getConfiguredChildCounters(selectedBranch)
+    const selectedCounter = childCounters.find(
+      (counter) => String(counter.id) === String(selectedChildCounter),
+    )
+    if (childCounters.length > 0 && !selectedCounter) {
+      toast.error('Select a valid child counter for this invoice')
       return
     }
 
@@ -171,7 +196,7 @@ export default function InvoiceFormPage() {
     }
 
     if (settling && remaining > 0.001 && !form.paymentMethod) {
-      toast.error('Pick a payment method for the remaining amount (Cash / Card / UPI / Bank Transfer)')
+      toast.error('Pick a payment method for the remaining amount (Cash / Card / Bank Transfer)')
       return
     }
     const mustPay = customerRequiresImmediatePayment({
@@ -206,8 +231,8 @@ export default function InvoiceFormPage() {
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
-        child_counter_id: form.childCounterId || null,
-        child_counter_name: form.childCounterName || null,
+        child_counter_id: selectedCounter?.id || null,
+        child_counter_name: selectedCounter?.name || null,
         cashier: 'Staff',
         date: form.invoiceDate,
         items: form.items.map((i) => ({

@@ -89,6 +89,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("customer", "Customer"),
         _col("kam", "KAM"),
         _col("branch", "Branch"),
+        _col("counter", "Counter"),
         _col("date", "Date"),
         _col("cashier", "Cashier"),
         _col("amount", "Amount"),

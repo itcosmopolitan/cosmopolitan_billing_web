@@ -49,6 +49,13 @@ async def _seed(db: AsyncSession) -> None:
             has_child_counters=True,
             child_counters=[{"id": "counter-1", "name": "Shop 01 Male'"}],
         ),
+        Branch(
+            id="b-empty-counters",
+            name="Branch Without Counters",
+            code="NOCOUNTERS",
+            has_child_counters=True,
+            child_counters=[{"name": "  "}],
+        ),
         Customer(id="c1", name="Acme Customer", gstin="CUSTOMER-GST-001", credit_balance=0, credit_limit=10000),
     ])
     await db.commit()
@@ -92,6 +99,25 @@ async def _verify_invoice_child_counter_required_and_saved() -> None:
         invoice = await get_invoice(created["id"], db=db, user=actor)
         assert invoice["childCounterId"] == "counter-1"
         assert invoice["childCounterName"] == "Shop 01 Male'"
+
+        created_without_counter = await create_invoice(
+            SaleCreate(
+                **{
+                    **base,
+                    "branch_id": "b-empty-counters",
+                    "branch_name": "Branch Without Counters",
+                },
+            ),
+            user=actor,
+            db=db,
+        )
+        invoice_without_counter = await get_invoice(
+            created_without_counter["id"],
+            db=db,
+            user=actor,
+        )
+        assert invoice_without_counter["childCounterId"] is None
+        assert invoice_without_counter["childCounterName"] is None
     finally:
         await db.close()
 

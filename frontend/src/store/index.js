@@ -238,6 +238,8 @@ export const useAppStore = create(
 export const usePOSStore = create(persist((set, get) => ({
   cart: [],
   customer: null,
+  selectedChildCounter: '',
+  childCounterBranchId: '',
   discountPct: 0,
   discountAmt: 0,
   // 'pct' | 'flat' — which input the cashier is editing for bill discount.
@@ -452,6 +454,15 @@ export const usePOSStore = create(persist((set, get) => ({
       }),
     }))
   },
+  setSelectedChildCounter: (selectedChildCounter) => set({ selectedChildCounter }),
+  setChildCounterBranchId: (childCounterBranchId, selectedChildCounter = '') => set((state) => {
+    if (state.childCounterBranchId === childCounterBranchId) {
+      return selectedChildCounter && state.selectedChildCounter !== selectedChildCounter
+        ? { selectedChildCounter }
+        : state
+    }
+    return { childCounterBranchId, selectedChildCounter }
+  }),
   setDiscount: (pct, amt) => set({
     discountPct: Number(pct) || 0,
     discountAmt: Number(amt) || 0,

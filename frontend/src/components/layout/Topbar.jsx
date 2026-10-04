@@ -4,7 +4,8 @@ import { useAppStore, usePOSStore } from '@/store'
 import { notificationsAPI } from '@/api'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import * as Icon from '@/components/ui/Icons'
-import { Modal } from '@/components/ui'
+import { AutocompleteDropdown, Modal } from '@/components/ui'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 
 // Topbar is intentionally chrome-only: it carries global context (active
 // branch) and global actions (new sale, notifications, theme). The
@@ -35,7 +36,15 @@ function formatRelativeTime(iso) {
 
 export default function Topbar() {
   const { user, activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
-  const { cart, holdBill, clearCart } = usePOSStore()
+  const {
+    cart,
+    holdBill,
+    clearCart,
+    selectedChildCounter,
+    setSelectedChildCounter,
+    childCounterBranchId,
+    setChildCounterBranchId,
+  } = usePOSStore()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -164,6 +173,23 @@ export default function Topbar() {
 
   const activeAllowed = allowedBranches.some((b) => b.id === activeBranch?.id)
   const hideBranchSwitcher = location.pathname.startsWith('/item-master')
+  const isInvoiceRoute = (
+    location.pathname === '/sales/invoices/new'
+    || /^\/sales\/invoices\/[^/]+\/edit$/.test(location.pathname)
+  )
+  const counterBranchId = isInvoiceRoute && childCounterBranchId
+    ? childCounterBranchId
+    : activeBranch?.id
+  const counterBranch = getChildCounterBranch(branches, counterBranchId, activeBranch)
+  const childCounters = getConfiguredChildCounters(counterBranch)
+  const showChildCounter = (
+    location.pathname === '/pos'
+    || isInvoiceRoute
+  ) && childCounters.length > 0
+
+  useEffect(() => {
+    setChildCounterBranchId(isInvoiceRoute ? (childCounterBranchId || activeBranch?.id || '') : (activeBranch?.id || ''))
+  }, [activeBranch?.id, childCounterBranchId, isInvoiceRoute, setChildCounterBranchId])
 
   useEffect(() => {
     if (!allowedBranches.length) return
@@ -318,6 +344,21 @@ export default function Topbar() {
           </div>
         )}
       </div>
+      )}
+
+      {showChildCounter && (
+        <AutocompleteDropdown
+          value={selectedChildCounter}
+          onChange={setSelectedChildCounter}
+          options={childCounters.map((counter) => ({
+            id: counter.id,
+            label: counter.name,
+          }))}
+          placeholder="Select counter"
+          searchPlaceholder="Search counters…"
+          isSearchFieldRequired
+          style={{ width: 148, maxWidth: '28vw', flexShrink: 0 }}
+        />
       )}
 
       {/* Spacer */}
