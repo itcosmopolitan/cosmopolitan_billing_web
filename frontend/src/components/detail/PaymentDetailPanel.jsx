@@ -34,6 +34,21 @@ export default function PaymentDetailPanel({
     { label: 'Method', value: detail?.paymentMode ? formatLabel(detail.paymentMode) : '—' },
     { label: 'Date', value: detail?.date || '—' },
   ]
+  const nextAction = canEdit && !detail?.voided
+    ? {
+      description: 'Update payment details if a correction is needed.',
+      label: 'Edit payment',
+      onClick: () => { onEdit?.(detail); onClose?.() },
+    }
+    : canVoid && !detail?.voided
+      ? {
+        description: 'Void this payment if it was recorded incorrectly.',
+        label: 'Void payment',
+        onClick: () => onVoid?.(detail),
+      }
+      : {
+        description: detail?.voided ? 'This payment has already been voided.' : 'No further action is available for this payment.',
+      }
 
   return (
     <RecordDetailDrawer
@@ -50,6 +65,7 @@ export default function PaymentDetailPanel({
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={nextAction}
       footer={(
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>

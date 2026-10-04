@@ -55,6 +55,20 @@ export default function AdjustmentDetailPanel({
     },
     { label: 'Reason', value: detail?.reason || '—' },
   ]
+  const nextAction = detail?.status === 'pending' && can('adjustments.approve')
+    ? {
+      description: 'Review the stock change and approve it to apply the adjustment.',
+      label: actionKind === 'approve' && actionBusy === detail.id ? 'Approving…' : 'Approve',
+      onClick: () => onApprove?.(detail),
+      disabled: busy,
+    }
+    : detail?.status === 'pending' && canDelete
+      ? {
+        description: 'This adjustment is awaiting review.',
+      }
+      : {
+        description: 'No further action is needed for this adjustment.',
+      }
 
   const footer = detail?.status === 'pending' && (can('adjustments.approve') || canDelete) ? (
     <>
@@ -97,6 +111,7 @@ export default function AdjustmentDetailPanel({
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={nextAction}
       footer={footer}
       busy={busy}
     >

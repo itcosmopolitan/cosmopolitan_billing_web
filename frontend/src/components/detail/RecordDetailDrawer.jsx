@@ -19,6 +19,7 @@ export default function RecordDetailDrawer({
   onTabChange = null,
   children,
   footer = null,
+  nextAction = null,
   busy = false,
 }) {
   useEffect(() => {
@@ -69,6 +70,26 @@ export default function RecordDetailDrawer({
               </div>
             ))}
           </div>
+        ) : null}
+
+        {nextAction ? (
+          <section className="drawer-next-action" aria-label="What's next">
+            <span className="drawer-next-action__icon" aria-hidden="true">✦</span>
+            <div className="drawer-next-action__content">
+              <div className="drawer-next-action__title">What’s next?</div>
+              <div className="drawer-next-action__description">{nextAction.description}</div>
+            </div>
+            {nextAction.label && nextAction.onClick ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={nextAction.onClick}
+                disabled={busy || nextAction.disabled}
+              >
+                {nextAction.label}
+              </button>
+            ) : null}
+          </section>
         ) : null}
 
         {Array.isArray(tabs) && tabs.length > 0 ? (

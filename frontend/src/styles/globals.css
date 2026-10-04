@@ -2421,6 +2421,11 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   overflow-wrap: anywhere;
   line-height: 1.25;
 }
+.drawer-next-action { display: flex; align-items: center; gap: 12px; padding: 13px 24px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.drawer-next-action__icon { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; border-radius: 50%; color: var(--accent); background: var(--accent-bg); font-size: 16px; }
+.drawer-next-action__content { flex: 1; min-width: 0; }
+.drawer-next-action__title { margin-bottom: 3px; font-size: 10px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; }
+.drawer-next-action__description { font-size: 12px; line-height: 1.4; color: var(--text-muted); }
 .drawer-tabs {
   display: flex;
   gap: 4px;
@@ -2506,6 +2511,8 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   .drawer-summary { padding: 2px 16px 14px; gap: 7px; }
   .drawer-summary__cell { min-height: 60px; padding: 10px 11px; }
   .drawer-tabs { padding: 8px 12px 0; }
+  .drawer-next-action { gap: 8px; padding: 12px; }
+  .drawer-next-action .btn { flex-shrink: 0; }
   .drawer-body--record { padding: 22px 18px 28px; }
   .drawer-footer { padding: 12px 16px; }
 }

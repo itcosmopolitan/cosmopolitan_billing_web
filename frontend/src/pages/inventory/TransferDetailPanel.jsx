@@ -66,6 +66,35 @@ export default function TransferDetailPanel({
   ]
 
   const busy = !!actionBusy || deleteBusy
+  const nextAction = detail?.status === 'pending' && can('transfers.approve')
+    ? {
+      description: 'Review the transfer request and approve it to dispatch the stock.',
+      label: actionKind === 'approve' && actionBusy === detail.id ? 'Approving…' : 'Approve & dispatch',
+      onClick: () => onApprove?.(detail),
+      disabled: busy,
+    }
+    : detail?.status === 'pending' && canCreate
+    ? {
+      description: 'Update the pending transfer request.',
+      label: 'Edit transfer',
+      onClick: () => {
+        onClose?.()
+        navigate(`/transfers/${detail.id}/edit`)
+      },
+      disabled: busy,
+    }
+    : detail?.status === 'transit' && can('transfers.receive')
+      ? {
+        description: 'Confirm receipt to complete this stock transfer.',
+        label: actionKind === 'receive' && actionBusy === detail.id ? 'Receiving…' : 'Receive',
+        onClick: () => onReceive?.(detail),
+        disabled: busy,
+      }
+      : {
+        description: detail?.status === 'pending'
+          ? 'This transfer is awaiting approval.'
+          : 'No further action is needed for this transfer.',
+      }
 
   let footer = null
   if (detail?.status === 'pending' && (can('transfers.approve') || canDelete || canCreate)) {
@@ -134,6 +163,7 @@ export default function TransferDetailPanel({
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={nextAction}
       footer={footer}
       busy={busy}
     >

@@ -60,6 +60,14 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={{
+        description: 'Review this vendor’s credit activity.',
+        label: 'Open ledger',
+        onClick: () => {
+          onOpenLedger?.(detail)
+          onClose?.()
+        },
+      }}
       headerActions={(
         <button
           type="button"

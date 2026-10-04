@@ -339,6 +339,71 @@ export default function SalesTxnDetailPanel({
     </>
   )
 
+  const nextAction = kind === 'invoice'
+    ? ['pending', 'partial', 'overdue'].includes(detail?.status)
+      ? {
+        description: 'Record a payment to reduce the outstanding balance.',
+        label: 'Record payment',
+        onClick: () => { onRecordPayment?.(detail); onClose?.() },
+      }
+      : canShowCreditNoteAction(detail, can)
+        ? {
+          description: 'Create a credit note for this invoice.',
+          label: 'Create credit note',
+          onClick: () => { onClose?.(); navigate(invoiceReturnPath(detail)) },
+        }
+        : canShowInvoiceEdit(detail, can)
+          ? {
+            description: 'Update the invoice details.',
+            label: 'Edit invoice',
+            onClick: () => { onEditInvoice?.(detail); onClose?.() },
+          }
+          : { description: 'No further action is needed for this invoice.' }
+    : kind === 'quote'
+      ? !['converted', 'rejected'].includes(detail?.status) && can('invoices.create')
+        ? {
+          description: 'Turn this quotation into an invoice.',
+          label: 'Convert to invoice',
+          onClick: () => { onClose?.(); navigate(`/sales/invoices/new?fromQuote=${detail.id}`) },
+        }
+        : !['converted', 'accepted', 'rejected'].includes(detail?.status) && can('invoices.edit')
+          ? {
+            description: 'Update the quotation details.',
+            label: 'Edit quotation',
+            onClick: () => { onClose?.(); navigate(`/sales/quotations/${detail.id}/edit`) },
+          }
+          : { description: 'No further action is available for this quotation.' }
+      : kind === 'order'
+        ? ['confirmed', 'partially_invoiced'].includes(detail?.status) && can('invoices.create')
+          ? {
+            description: 'Create an invoice from this sales order.',
+            label: 'Convert to invoice',
+            onClick: () => { onClose?.(); navigate(`/sales/invoices/new?fromOrder=${detail.id}`) },
+          }
+          : ((detail?.status === 'draft' && can('invoices.create', 'invoices.edit'))
+            || (detail?.status === 'confirmed' && can('invoices.edit')))
+            ? {
+              description: 'Update the sales order details.',
+              label: 'Edit sales order',
+              onClick: () => { onClose?.(); navigate(`/sales/orders/${detail.id}/edit`) },
+            }
+            : { description: 'No further action is available for this sales order.' }
+        : kind === 'return' && detail?.status !== 'void'
+          ? can('invoices.create')
+            ? {
+              description: 'Review or update this credit note.',
+              label: 'Edit credit note',
+              onClick: () => { onClose?.(); navigate(`/sales/returns/${detail.id}/edit`) },
+            }
+            : can('invoices.edit')
+              ? {
+                description: 'Void this credit note if it was recorded incorrectly.',
+                label: 'Void credit note',
+                onClick: () => onVoidReturn?.(detail),
+              }
+              : { description: 'No further action is available for this credit note.' }
+          : { description: 'No further action is needed for this record.' }
+
   const overviewTitle = kind === 'return' ? 'Credit note info' : kind === 'quote' ? 'Quotation info' : kind === 'order' ? 'Order info' : 'Bill to'
 
   return (
@@ -361,6 +426,7 @@ export default function SalesTxnDetailPanel({
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={nextAction}
       footer={footer}
     >
       {loading && <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 12 }}>Loading details…</div>}

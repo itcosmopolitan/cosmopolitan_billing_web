@@ -94,6 +94,14 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={{
+        description: 'Review this customer’s store credit activity.',
+        label: 'Open ledger',
+        onClick: () => {
+          onOpenLedger?.(detail)
+          onClose?.()
+        },
+      }}
       headerActions={(
         <button
           type="button"

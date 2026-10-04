@@ -223,6 +223,59 @@ export default function PurchaseTxnDetailPanel({
     </>
   )
 
+  const nextAction = kind === 'bill'
+    ? detail?.status !== 'paid' && detail?.status !== 'cancelled'
+      ? {
+        description: 'Record a payment to reduce the outstanding balance on this bill.',
+        label: 'Record payment',
+        onClick: () => { onRecordPayment?.(detail); onClose?.() },
+      }
+      : canShowBillEdit(detail, can)
+        ? {
+          description: 'Update the purchase bill details.',
+          label: 'Edit bill',
+          onClick: () => { onEditBill?.(detail); onClose?.() },
+        }
+        : { description: 'No further action is needed for this bill.' }
+    : kind === 'order'
+      ? ['confirmed', 'approved', 'partially_received'].includes(detail?.status) && can('purchases.create')
+        ? {
+          description: 'Convert this purchase order into a bill.',
+          label: 'Convert to bill',
+          onClick: () => { onClose?.(); navigate(`/purchases/bills/new?fromPo=${detail.id}`) },
+        }
+        : ((detail?.status === 'draft' && can('purchases.create', 'purchases.edit'))
+          || (['confirmed', 'partially_received', 'approved'].includes(detail?.status) && can('purchases.edit')))
+          ? {
+            description: 'Update the purchase order details.',
+            label: 'Edit purchase order',
+            onClick: () => { onClose?.(); navigate(`/purchases/orders/${detail.id}/edit`) },
+          }
+          : { description: 'No further action is available for this purchase order.' }
+      : kind === 'grn'
+        ? detail?.status === 'received' && !detail?.convertedBillId && can('purchases.create')
+          ? {
+            description: 'Create a purchase bill from the received goods.',
+            label: 'Create bill',
+            onClick: () => { onBillFromGrn?.(detail); onClose?.() },
+          }
+          : { description: 'No further action is available for this goods receipt.' }
+        : kind === 'return' && detail?.status !== 'void' && !detail?.voided
+          ? can('purchases.create')
+            ? {
+              description: 'Review or update this vendor return.',
+              label: 'Edit return',
+              onClick: () => { onClose?.(); navigate(`/purchases/returns/${detail.id}/edit`) },
+            }
+            : can('purchases.edit')
+              ? {
+                description: 'Void this return if it was recorded incorrectly.',
+                label: 'Void return',
+                onClick: () => onVoidReturn?.(detail),
+              }
+              : { description: 'No further action is available for this vendor return.' }
+          : { description: 'No further action is needed for this record.' }
+
   return (
     <RecordDetailDrawer
       open={open}
@@ -239,6 +292,7 @@ export default function PurchaseTxnDetailPanel({
       ]}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={nextAction}
       footer={footer}
     >
       {loading && <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 12 }}>Loading details…</div>}

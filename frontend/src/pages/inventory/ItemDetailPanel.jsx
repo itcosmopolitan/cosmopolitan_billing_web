@@ -136,6 +136,32 @@ export default function ItemDetailPanel({
     </button>
   ) : null
 
+  const nextAction = isMaster && isPending && can('item_master.approve')
+    ? {
+      description: 'Review this item and approve it to add it to the catalog.',
+      label: 'Approve item',
+      onClick: () => onApprove?.(detail),
+      disabled: actionBusy,
+    }
+    : isMaster && can('item_master.edit')
+      ? {
+        description: 'Update the item information or catalog settings.',
+        label: 'Edit item',
+        onClick: () => {
+          onClose?.()
+          navigate(`/item-master/${detail?.id || item?.id}/edit`)
+        },
+        disabled: actionBusy,
+      }
+      : detail?.batch_tracking && can('items.view')
+        ? {
+          description: 'Review the available batches for this item.',
+          label: 'View batches',
+          onClick: () => setTab('batches'),
+          disabled: actionBusy,
+        }
+        : { description: 'No further action is available for this item.' }
+
   return (
     <RecordDetailDrawer
       open={open}
@@ -148,6 +174,7 @@ export default function ItemDetailPanel({
       tabs={TABS.filter((t) => t.id !== 'batches' || detail?.batch_tracking)}
       activeTab={tab}
       onTabChange={setTab}
+      nextAction={nextAction}
       headerActions={headerActions}
       busy={actionBusy}
     >
