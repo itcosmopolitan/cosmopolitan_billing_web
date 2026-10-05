@@ -40,18 +40,27 @@ async def _user_grants(user: User, db: AsyncSession) -> set[str]:
 
 
 async def _transfer_summary(db: AsyncSession, *, branch_id: Optional[str] = None) -> dict[str, int]:
-    async def _count(status: Optional[TransferStatus]) -> int:
-        q = select(func.count(StockTransfer.id))
+    async def _count(status: TransferStatus, *, side: str) -> int:
+        q = select(func.count(StockTransfer.id)).where(StockTransfer.status == status)
         if branch_id:
-            q = q.where(StockTransfer.from_branch_id == branch_id)
-        if status is not None:
-            q = q.where(StockTransfer.status == status)
+            if side == "from":
+                q = q.where(StockTransfer.from_branch_id == branch_id)
+            elif side == "to":
+                q = q.where(StockTransfer.to_branch_id == branch_id)
+            else:
+                q = q.where(
+                    or_(
+                        StockTransfer.from_branch_id == branch_id,
+                        StockTransfer.to_branch_id == branch_id,
+                    )
+                )
         return int((await db.execute(q)).scalar() or 0)
 
-    pending = await _count(TransferStatus.pending)
-    transit = await _count(TransferStatus.transit)
-    received = await _count(TransferStatus.received)
-    rejected = await _count(TransferStatus.rejected)
+    # Match list_transfers status scoping for the active branch.
+    pending = await _count(TransferStatus.pending, side="from")
+    transit = await _count(TransferStatus.transit, side="to")
+    received = await _count(TransferStatus.received, side="either")
+    rejected = await _count(TransferStatus.rejected, side="from")
     return {
         "pending": pending,
         "transit": transit,

@@ -73,6 +73,21 @@ export default function TransfersPage() {
   const canDelete = can('transfers.delete')
   const canCreate = can('transfers.create')
   const canActivity = can('history.view', 'comments.view')
+  const activeBranchId = activeBranch?.id || ''
+  /** Approve/dispatch is a source-branch action (stock leaves from_branch). */
+  const canApproveAtBranch = (t) => (
+    t?.status === 'pending'
+    && can('transfers.approve')
+    && !!activeBranchId
+    && t.from_branch_id === activeBranchId
+  )
+  /** Receive is a destination-branch action (stock lands at to_branch). */
+  const canReceiveAtBranch = (t) => (
+    t?.status === 'transit'
+    && can('transfers.receive')
+    && !!activeBranchId
+    && t.to_branch_id === activeBranchId
+  )
 
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
@@ -535,20 +550,20 @@ export default function TransfersPage() {
                             },
                             {
                               label: actionKind === 'approve' && isRowBusy(t.id) ? 'Approving…' : 'Approve & dispatch',
-                              hidden: t.status !== 'pending' || !can('transfers.approve'),
+                              hidden: !canApproveAtBranch(t),
                               disabled: isRowBusy(t.id),
                               onClick: () => approve(t),
                             },
                             {
                               label: actionKind === 'reject' && isRowBusy(t.id) ? 'Rejecting…' : 'Reject',
                               danger: true,
-                              hidden: t.status !== 'pending' || !can('transfers.approve'),
+                              hidden: !canApproveAtBranch(t),
                               disabled: isRowBusy(t.id),
                               onClick: () => reject(t),
                             },
                             {
                               label: actionKind === 'receive' && isRowBusy(t.id) ? 'Receiving…' : 'Receive',
-                              hidden: t.status !== 'transit' || !can('transfers.receive'),
+                              hidden: !canReceiveAtBranch(t),
                               disabled: isRowBusy(t.id),
                               onClick: () => receive(t),
                             },
@@ -591,6 +606,7 @@ export default function TransfersPage() {
       <TransferDetailPanel
         open={!!showDetail}
         transfer={showDetail}
+        activeBranchId={activeBranchId}
         onClose={() => !actionBusy && !deleteBusy && setShowDetail(null)}
         onApprove={approve}
         onReject={reject}

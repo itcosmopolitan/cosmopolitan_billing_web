@@ -34,6 +34,7 @@ from src.models import (
     VendorReturn,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.qty import as_qty, coerce_qty_value
 from src.routes._grn_stock import (
     ReceiptLine,
     format_branch_cost_change_detail,
@@ -208,7 +209,7 @@ def _summarize_purchase_bill_item_changes(old_lines, new_items) -> list[dict]:
 
         if prev is None:
             structured = [
-                {"field": "qty", "old": None, "new": int(item.qty or 0)},
+                {"field": "qty", "old": None, "new": as_qty(item.qty or 0)},
                 {"field": "rate", "old": None, "new": round(float(item.cost or 0), 2)},
                 {"field": "tax_rate", "old": None, "new": round(float(item.tax_rate or 0), 2)},
                 {"field": "discount", "old": None, "new": round(float(item.discount or 0), 2)},
@@ -227,10 +228,10 @@ def _summarize_purchase_bill_item_changes(old_lines, new_items) -> list[dict]:
         field_changes: list[str] = []
         fields: list[str] = []
         structured: list[dict] = []
-        if int(prev.qty or 0) != int(item.qty or 0):
+        if as_qty(prev.qty or 0) != as_qty(item.qty or 0):
             fields.append("qty")
-            field_changes.append(f"qty {int(prev.qty or 0)} -> {int(item.qty or 0)}")
-            structured.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+            field_changes.append(f"qty {as_qty(prev.qty or 0)} -> {as_qty(item.qty or 0)}")
+            structured.append({"field": "qty", "old": as_qty(prev.qty or 0), "new": as_qty(item.qty or 0)})
         if round(float(prev.cost or 0), 2) != round(float(item.cost or 0), 2):
             fields.append("rate")
             field_changes.append(f"rate {round(float(prev.cost or 0), 2)} -> {round(float(item.cost or 0), 2)}")
@@ -280,7 +281,7 @@ def _summarize_purchase_bill_item_changes(old_lines, new_items) -> list[dict]:
         for row in rows[new_count:]:
             item_name = str(row.name or "Item")
             structured = [
-                {"field": "qty", "old": int(row.qty or 0), "new": None},
+                {"field": "qty", "old": as_qty(row.qty or 0), "new": None},
                 {"field": "rate", "old": round(float(row.cost or 0), 2), "new": None},
                 {"field": "tax_rate", "old": round(float(row.tax_rate or 0), 2), "new": None},
                 {"field": "discount", "old": round(float(row.discount or 0), 2), "new": None},
@@ -291,7 +292,7 @@ def _summarize_purchase_bill_item_changes(old_lines, new_items) -> list[dict]:
                     "item_name": item_name,
                     "fields": ["removed"],
                     "changes": structured,
-                    "detail": f"{item_name}: removed (qty {int(row.qty or 0)}, rate {round(float(row.cost or 0), 2)})",
+                    "detail": f"{item_name}: removed (qty {as_qty(row.qty or 0)}, rate {round(float(row.cost or 0), 2)})",
                 }
             )
 
@@ -350,7 +351,7 @@ def _summarize_purchase_order_item_changes(old_lines, new_items) -> list[dict]:
 
         if prev is None:
             structured = [
-                {"field": "qty", "old": None, "new": int(item.qty or 0)},
+                {"field": "qty", "old": None, "new": as_qty(item.qty or 0)},
                 {"field": "rate", "old": None, "new": round(float(item.cost or 0), 2)},
                 {"field": "tax_rate", "old": None, "new": round(float(item.tax_rate or 0), 2)},
                 {"field": "discount", "old": None, "new": round(float(item.discount or 0), 2)},
@@ -369,10 +370,10 @@ def _summarize_purchase_order_item_changes(old_lines, new_items) -> list[dict]:
         field_changes: list[str] = []
         fields: list[str] = []
         structured: list[dict] = []
-        if int(prev.qty or 0) != int(item.qty or 0):
+        if as_qty(prev.qty or 0) != as_qty(item.qty or 0):
             fields.append("qty")
-            field_changes.append(f"qty {int(prev.qty or 0)} -> {int(item.qty or 0)}")
-            structured.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+            field_changes.append(f"qty {as_qty(prev.qty or 0)} -> {as_qty(item.qty or 0)}")
+            structured.append({"field": "qty", "old": as_qty(prev.qty or 0), "new": as_qty(item.qty or 0)})
         if round(float(prev.cost or 0), 2) != round(float(item.cost or 0), 2):
             fields.append("rate")
             field_changes.append(f"rate {round(float(prev.cost or 0), 2)} -> {round(float(item.cost or 0), 2)}")
@@ -422,7 +423,7 @@ def _summarize_purchase_order_item_changes(old_lines, new_items) -> list[dict]:
         for row in rows[new_count:]:
             item_name = str(row.name or "Item")
             structured = [
-                {"field": "qty", "old": int(row.qty or 0), "new": None},
+                {"field": "qty", "old": as_qty(row.qty or 0), "new": None},
                 {"field": "rate", "old": round(float(row.cost or 0), 2), "new": None},
                 {"field": "tax_rate", "old": round(float(row.tax_rate or 0), 2), "new": None},
                 {"field": "discount", "old": round(float(row.discount or 0), 2), "new": None},
@@ -433,7 +434,7 @@ def _summarize_purchase_order_item_changes(old_lines, new_items) -> list[dict]:
                     "item_name": item_name,
                     "fields": ["removed"],
                     "changes": structured,
-                    "detail": f"{item_name}: removed (qty {int(row.qty or 0)}, rate {round(float(row.cost or 0), 2)})",
+                    "detail": f"{item_name}: removed (qty {as_qty(row.qty or 0)}, rate {round(float(row.cost or 0), 2)})",
                 }
             )
 
@@ -549,7 +550,7 @@ def _log_vendor_return_history(
 class PurchaseLine(BaseModel):
     item_id: Optional[str] = None
     name: str
-    qty: int
+    qty: float = Field(..., gt=0)
     cost: float
     tax_rate: float = 0
     # 2026-05-24: per-line discount in PERCENT (parity with SO/Quote).
@@ -563,6 +564,11 @@ class PurchaseLine(BaseModel):
     batch_number: Optional[str] = None
     mfg_date:     Optional[str] = None
     expiry_date:  Optional[str] = None
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="qty")
 
 class PurchaseCreate(BaseModel):
     vendor_id: str
@@ -592,10 +598,15 @@ class PurchaseCreate(BaseModel):
 class BillLineUpdate(BaseModel):
     item_id: Optional[str] = None
     name: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
     cost: float
     tax_rate: float = 0
     discount: float = 0
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="qty")
 
 
 class BillUpdate(BaseModel):
@@ -2397,10 +2408,15 @@ class ReturnLine(BaseModel):
     bill_line_id: Optional[str] = None
     item_id: Optional[str] = None
     name: str
-    original_qty: int
-    return_qty: int
+    original_qty: float = Field(..., gt=0)
+    return_qty: float = Field(..., gt=0)
     cost: float
     tax_rate: float = 0
+
+    @field_validator("original_qty", "return_qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value, info):
+        return coerce_qty_value(value, field_name=info.field_name)
 
 class VendorReturnCreate(BaseModel):
     bill_id: str
@@ -2412,7 +2428,7 @@ class VendorReturnCreate(BaseModel):
 
 async def _already_returned_for_bill(
     db: AsyncSession, bill_id: str
-) -> dict[str, int]:
+) -> dict[str, float]:
     """Sum return_qty per bill_line_id across active VendorReturns for this bill."""
     res = await db.execute(
         select(
@@ -2439,7 +2455,7 @@ async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) ->
         except (ValueError, TypeError):
             ledger = []
         for entry in ledger:
-            qty = int(entry.get("consumed") or 0)
+            qty = as_qty(entry.get("consumed") or 0)
             if qty <= 0:
                 continue
             batch_id = entry.get("batch_id")
@@ -2450,7 +2466,7 @@ async def _reverse_vendor_return_effects(db: AsyncSession, ret: VendorReturn) ->
                 )).scalar_one_or_none()
                 if b is not None:
                     await set_batch_quantity_atomic(
-                        db, batch_id=batch_id, new_qty=int(b.quantity or 0) + qty,
+                        db, batch_id=batch_id, new_qty=as_qty(b.quantity or 0) + qty,
                     )
                     restored = True
             if not restored and rl.item_id:
@@ -2669,7 +2685,7 @@ async def _apply_vendor_return(
                 f"{r.name}: no matching line on bill {bill.number}",
             )
         prior = already_returned.get(bill_line.id, 0)
-        remaining = max(0, int(bill_line.qty or 0) - prior)
+        remaining = max(0.0, as_qty(bill_line.qty or 0) - prior)
         if r.return_qty > remaining:
             raise HTTPException(
                 400,
@@ -2749,7 +2765,7 @@ async def _apply_vendor_return(
                 try:
                     await adjust_stock_atomic(
                         db, item_id=r.item_id, branch_id=bill.branch_id,
-                        delta=-int(r.return_qty),
+                        delta=-as_qty(r.return_qty),
                         movement_type="vendor_return",
                         source_type="vendor_return",
                         source_ref=ret.id,
@@ -2759,7 +2775,7 @@ async def _apply_vendor_return(
                         400,
                         f"{r.name}: not enough stock on hand to return {r.return_qty} unit(s)",
                     )
-                allocation_json = json.dumps([{"batch_id": None, "consumed": int(r.return_qty)}])
+                allocation_json = json.dumps([{"batch_id": None, "consumed": as_qty(r.return_qty)}])
             else:
                 # 2026-05-31: subtract from THIS BILL's own lot(s) only — the
                 # batch(es) this receipt created (GRN id, or legacy bill id).
@@ -2771,8 +2787,8 @@ async def _apply_vendor_return(
                         ItemBatch.branch_id == bill.branch_id,
                     ).order_by(ItemBatch.expiry_date.asc())
                 )).scalars().all()
-                available = sum(int(b.quantity or 0) for b in bill_batches)
-                if int(r.return_qty) > available:
+                available = sum(as_qty(b.quantity or 0) for b in bill_batches)
+                if as_qty(r.return_qty) > available:
                     raise HTTPException(
                         400,
                         f"{r.name}: only {available} unit(s) from this bill's batch remain on "
@@ -2780,12 +2796,12 @@ async def _apply_vendor_return(
                     )
                 # Build an explicit FEFO split across the bill's lots, then
                 # consume exactly those — keeps batch + aggregate atomic.
-                remaining = int(r.return_qty)
+                remaining = as_qty(r.return_qty)
                 split = []
                 for b in bill_batches:
                     if remaining <= 0:
                         break
-                    take = min(int(b.quantity or 0), remaining)
+                    take = min(as_qty(b.quantity or 0), remaining)
                     if take > 0:
                         split.append({"batch_id": b.id, "qty": take})
                         remaining -= take
@@ -2794,7 +2810,7 @@ async def _apply_vendor_return(
                         db,
                         item_id=r.item_id,
                         branch_id=bill.branch_id,
-                        qty=int(r.return_qty),
+                        qty=as_qty(r.return_qty),
                         explicit_allocation=split,
                         movement_type="vendor_return",
                         source_type="vendor_return",
@@ -2961,8 +2977,8 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
             continue
         existing = already_returned.get(rl.bill_line_id, 0)
         bill_line = bill_lines_by_id.get(rl.bill_line_id)
-        original_qty = int(bill_line.qty or 0) if bill_line else 0
-        if existing + int(rl.return_qty or 0) > original_qty:
+        original_qty = as_qty(bill_line.qty or 0) if bill_line else 0.0
+        if existing + as_qty(rl.return_qty or 0) > original_qty + 1e-9:
             conflicts.append(rl.name or rl.bill_line_id)
     if conflicts:
         items_str = ", ".join(f"'{n}'" for n in conflicts[:3])
@@ -2982,7 +2998,7 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
         except (ValueError, TypeError):
             ledger = []
         for entry in ledger:
-            qty = int(entry.get("consumed") or 0)
+            qty = as_qty(entry.get("consumed") or 0)
             if qty <= 0:
                 continue
             batch_id = entry.get("batch_id")
@@ -2993,7 +3009,7 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
                 )).scalar_one_or_none()
                 if b is not None:
                     await set_batch_quantity_atomic(
-                        db, batch_id=batch_id, new_qty=max(0, int(b.quantity or 0) - qty),
+                        db, batch_id=batch_id, new_qty=max(0.0, as_qty(b.quantity or 0) - qty),
                     )
                     applied = True
             if not applied and rl.item_id:
@@ -3170,10 +3186,15 @@ class PurchaseOrderLineIn(BaseModel):
     not the intent doc). `discount` is a percent (0-100)."""
     item_id: Optional[str] = None
     name: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
     cost: float
     tax_rate: float = 0
     discount: float = 0
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="qty")
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -3366,7 +3387,7 @@ async def _create_grn_draft(
     )
     db.add(grn)
     for line, line_net, line_tax in line_rows:
-        qty = int(getattr(line, "received_qty", None) or getattr(line, "qty", 0) or 0)
+        qty = as_qty(getattr(line, "received_qty", None) or getattr(line, "qty", 0) or 0)
         db.add(GRNLineItem(
             id=str(uuid.uuid4()), grn_id=grn.id,
             po_line_id=getattr(line, "po_line_id", None) or getattr(line, "id", None),
@@ -3450,7 +3471,7 @@ async def _create_grn_received(
     db.add(grn)
     receipt_lines: list[ReceiptLine] = []
     for line, line_net, line_tax in line_rows:
-        qty = int(getattr(line, "received_qty", None) or getattr(line, "qty", 0) or 0)
+        qty = as_qty(getattr(line, "received_qty", None) or getattr(line, "qty", 0) or 0)
         db.add(GRNLineItem(
             id=str(uuid.uuid4()),
             grn_id=grn.id,
@@ -4216,13 +4237,18 @@ async def convert_order_to_bill(
 class GRNLineIn(BaseModel):
     item_id: Optional[str] = None
     name: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
     cost: float
     tax_rate: float = 0
     discount: float = 0
     batch_number: Optional[str] = None
     mfg_date: Optional[str] = None
     expiry_date: Optional[str] = None
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="qty")
 
 
 class GRNCreate(BaseModel):
@@ -4421,7 +4447,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
     if direct and po is not None:
         po.status = PurchaseOrderStatus.partially_received
 
-    total_qty = int(sum(int(getattr(i, "qty", 0) or 0) for i in (data.items or [])))
+    total_qty = as_qty(sum(as_qty(getattr(i, "qty", 0) or 0) for i in (data.items or [])))
     _log_grn_history(db, user=user,
         grn_id=grn.id,
         grn_number=grn.number,
@@ -4533,7 +4559,7 @@ async def approve_grn(
         receipt_lines.append(ReceiptLine(
             item_id=li.item_id,
             name=li.name,
-            qty=int(li.received_qty or 0),
+            qty=as_qty(li.received_qty or 0),
             cost=float(li.cost or 0),
             batch_number=li.batch_number,
             mfg_date=li.mfg_date,
@@ -4695,7 +4721,7 @@ async def receive_from_po(
         # Draft: no stock / PO lock until GRN is submitted and approved.
         grn = await _create_grn_draft(db, **create_kwargs)
 
-    total_qty = int(sum(int(getattr(li, "qty", 0) or 0) for li in (po.line_items or [])))
+    total_qty = as_qty(sum(as_qty(getattr(li, "qty", 0) or 0) for li in (po.line_items or [])))
     _log_grn_history(db, user=user,
         grn_id=grn.id,
         grn_number=grn.number,
@@ -5147,7 +5173,7 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
         stock_ref = getattr(bill, "grn_id", None) or bill.id
         bbatches = [b for b in bill_batches if b.source_ref == stock_ref]
         for b in bbatches:
-            qty = int(b.quantity or 0)
+            qty = as_qty(b.quantity or 0)
             if qty > 0:
                 try:
                     await adjust_stock_atomic(
@@ -5170,9 +5196,9 @@ async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_d
                 try:
                     await adjust_stock_atomic(
                         db, item_id=li.item_id, branch_id=bill.branch_id,
-                        delta=-int(li.qty),
+                        delta=-as_qty(li.qty),
                     )
-                    stock_removed += int(li.qty)
+                    stock_removed += as_qty(li.qty)
                 except ValueError:
                     pass  # missing stock row — no-op
         # Reopen parent PO for convert-again when its spawned bill is deleted.
@@ -5279,7 +5305,7 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
             except (ValueError, TypeError):
                 ledger = []
             for entry in ledger:
-                qty = int(entry.get("consumed") or 0)
+                qty = as_qty(entry.get("consumed") or 0)
                 if qty <= 0:
                     continue
                 batch_id = entry.get("batch_id")
@@ -5291,7 +5317,7 @@ async def bulk_delete_returns(data: BulkDeleteIn, db: AsyncSession = Depends(get
                     )).scalar_one_or_none()
                     if b is not None:
                         await set_batch_quantity_atomic(
-                            db, batch_id=batch_id, new_qty=int(b.quantity or 0) + qty,
+                            db, batch_id=batch_id, new_qty=as_qty(b.quantity or 0) + qty,
                         )
                         restored = True
                 if not restored and rl.item_id:

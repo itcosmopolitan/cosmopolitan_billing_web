@@ -18,6 +18,7 @@ function transferStatusChip(status) {
 export default function TransferDetailPanel({
   open,
   transfer,
+  activeBranchId = '',
   onClose,
   onApprove,
   onReject,
@@ -34,6 +35,18 @@ export default function TransferDetailPanel({
   const [detail, setDetail] = useState(transfer)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState('overview')
+  const canApproveHere = (
+    detail?.status === 'pending'
+    && can('transfers.approve')
+    && !!activeBranchId
+    && detail?.from_branch_id === activeBranchId
+  )
+  const canReceiveHere = (
+    detail?.status === 'transit'
+    && can('transfers.receive')
+    && !!activeBranchId
+    && detail?.to_branch_id === activeBranchId
+  )
 
   useEffect(() => {
     if (!open || !transfer?.id) return
@@ -66,7 +79,7 @@ export default function TransferDetailPanel({
   ]
 
   const busy = !!actionBusy || deleteBusy
-  const nextAction = detail?.status === 'pending' && can('transfers.approve')
+  const nextAction = canApproveHere
     ? {
       description: 'Review the transfer request and approve it to dispatch the stock.',
       label: actionKind === 'approve' && actionBusy === detail.id ? 'Approving…' : 'Approve & dispatch',
@@ -83,7 +96,7 @@ export default function TransferDetailPanel({
       },
       disabled: busy,
     }
-    : detail?.status === 'transit' && can('transfers.receive')
+    : canReceiveHere
       ? {
         description: 'Confirm receipt to complete this stock transfer.',
         label: actionKind === 'receive' && actionBusy === detail.id ? 'Receiving…' : 'Receive',
@@ -92,12 +105,18 @@ export default function TransferDetailPanel({
       }
       : {
         description: detail?.status === 'pending'
-          ? 'This transfer is awaiting approval.'
-          : 'No further action is needed for this transfer.',
+          ? (activeBranchId && detail?.from_branch_id !== activeBranchId
+            ? 'Switch to the source branch to approve and dispatch this transfer.'
+            : 'This transfer is awaiting approval.')
+          : detail?.status === 'transit'
+            ? (activeBranchId && detail?.to_branch_id !== activeBranchId
+              ? 'Switch to the destination branch to receive this transfer.'
+              : 'This transfer is in transit and awaiting receipt.')
+            : 'No further action is needed for this transfer.',
       }
 
   let footer = null
-  if (detail?.status === 'pending' && (can('transfers.approve') || canDelete || canCreate)) {
+  if (detail?.status === 'pending' && (canApproveHere || canDelete || canCreate)) {
     footer = (
       <>
         {canCreate && (
@@ -125,7 +144,7 @@ export default function TransferDetailPanel({
             Delete
           </button>
         )}
-        {can('transfers.approve') && (
+        {canApproveHere && (
           <>
             <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onReject?.(detail)}>
               {actionKind === 'reject' && actionBusy === detail.id ? 'Rejecting…' : 'Reject'}
@@ -137,7 +156,7 @@ export default function TransferDetailPanel({
         )}
       </>
     )
-  } else if (detail?.status === 'transit' && can('transfers.receive')) {
+  } else if (canReceiveHere) {
     footer = (
       <>
         <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>

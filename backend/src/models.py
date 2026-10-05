@@ -941,7 +941,7 @@ class PurchaseLineItem(Base):
     bill_id    = Column(String, ForeignKey("purchase_bills.id"), nullable=False)
     item_id    = Column(String, ForeignKey("items.id"), nullable=True)
     name       = Column(String, nullable=False)
-    qty        = Column(Integer, default=1)
+    qty        = Column(Float, default=1)
     cost       = Column(Float, default=0)
     tax_rate   = Column(Float, default=0)
     # 2026-05-24: per-line discount (percent). Parity with
@@ -991,7 +991,7 @@ class PurchaseOrderLineItem(Base):
     order_id   = Column(String, ForeignKey("purchase_orders.id"), nullable=False)
     item_id    = Column(String, ForeignKey("items.id"), nullable=True)
     name       = Column(String, nullable=False)
-    qty        = Column(Integer, default=1)
+    qty        = Column(Float, default=1)
     # PO captures `cost` (what we'll pay the vendor), matching PurchaseLineItem.
     # Sales side stores `price`; the field name asymmetry is intentional and
     # matches the domain language.
@@ -1040,8 +1040,8 @@ class GRNLineItem(Base):
     po_line_id   = Column(String, ForeignKey("purchase_order_line_items.id"), nullable=True)
     item_id      = Column(String, ForeignKey("items.id"), nullable=True)
     name         = Column(String, nullable=False)
-    ordered_qty  = Column(Integer)
-    received_qty = Column(Integer, default=1)
+    ordered_qty  = Column(Float)
+    received_qty = Column(Float, default=1)
     cost         = Column(Float, default=0)
     tax_rate     = Column(Float, default=0)
     discount     = Column(Float, default=0)
@@ -1157,8 +1157,8 @@ class ReturnLineItem(Base):
     bill_line_id  = Column(String, ForeignKey("purchase_line_items.id"), nullable=True)
     item_id       = Column(String, ForeignKey("items.id"), nullable=True)
     name          = Column(String, nullable=False)
-    original_qty  = Column(Integer)  # Qty from original purchase
-    return_qty    = Column(Integer, default=1)
+    original_qty  = Column(Float)  # Qty from original purchase
+    return_qty    = Column(Float, default=1)
     cost          = Column(Float, default=0)
     tax_rate      = Column(Float, default=0)
     line_total    = Column(Float, default=0)
@@ -1477,7 +1477,7 @@ class TransferLineItem(Base):
     transfer_id = Column(String, ForeignKey("stock_transfers.id"), nullable=False)
     item_id     = Column(String, ForeignKey("items.id"), nullable=False)
     item_name   = Column(String)
-    qty         = Column(Integer, default=0)
+    qty         = Column(Float, default=0)
     # Operator-picked source batch hint set at create time. Honored on
     # approval if the batch still has stock; otherwise FIFO/FEFO kicks in.
     preferred_batch_id = Column(String, nullable=True)
@@ -1607,8 +1607,8 @@ class AdjustmentRequest(Base):
     branch_name      = Column(String)
     item_id          = Column(String, ForeignKey("items.id"), nullable=False)
     item_name        = Column(String)
-    before_qty       = Column(Integer, default=0)
-    new_qty          = Column(Integer, nullable=False)
+    before_qty       = Column(Float, default=0)
+    new_qty          = Column(Float, nullable=False)
     reason           = Column(String)
     notes            = Column(Text)
     batch_id         = Column(String, nullable=True)
@@ -1630,8 +1630,8 @@ class StockAdjustment(Base):
     id            = Column(String, primary_key=True)
     item_id       = Column(String, ForeignKey("items.id"), nullable=False)
     branch_id     = Column(String, ForeignKey("branches.id"), nullable=False)
-    before_qty    = Column(Integer)
-    after_qty     = Column(Integer)
+    before_qty    = Column(Float)
+    after_qty     = Column(Float)
     reason        = Column(String)
     notes         = Column(Text)
     adjusted_by   = Column(String)

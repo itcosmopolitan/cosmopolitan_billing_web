@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,7 @@ from src.models import (
     User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.qty import as_qty, coerce_qty_value
 from src.routes._stock_adjust_apply import apply_stock_adjustment
 from src.routes._approval import can_direct_commit
 from src.security import (
@@ -50,11 +51,16 @@ class AdjustmentCreate(BaseModel):
     branch_id: str
     item_id: str
     item_name: str
-    new_qty: int
+    new_qty: float = Field(..., ge=0)
     reason: str
     notes: Optional[str] = None
     batch_id: Optional[str] = None
     requested_by: str = "Staff"
+
+    @field_validator("new_qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="new_qty")
 
 
 class AdjustmentReject(BaseModel):
@@ -264,19 +270,19 @@ async def _lock_request(
 
 async def _snapshot_before_qty(
     db: AsyncSession, *, item_id: str, branch_id: str, batch_id: Optional[str]
-) -> int:
+) -> float:
     if batch_id:
         row = await db.execute(
             select(ItemBatch.quantity).where(ItemBatch.id == batch_id)
         )
-        return int(row.scalar() or 0)
+        return as_qty(row.scalar() or 0)
     row = await db.execute(
         select(ItemStock.quantity).where(
             ItemStock.item_id == item_id,
             ItemStock.branch_id == branch_id,
         )
     )
-    return int(row.scalar() or 0)
+    return as_qty(row.scalar() or 0)
 
 
 def _raise_adjustment_integrity_error(exc: IntegrityError) -> None:
@@ -453,7 +459,7 @@ async def create_adjustment(
             item_id=data.item_id,
             item_name=data.item_name,
             before_qty=before,
-            new_qty=int(data.new_qty),
+            new_qty=as_qty(data.new_qty),
             reason=data.reason,
             notes=data.notes,
             batch_id=data.batch_id,

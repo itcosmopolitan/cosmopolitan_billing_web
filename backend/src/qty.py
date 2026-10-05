@@ -23,3 +23,23 @@ def as_qty(value: Any) -> float:
 
 def qty_eq(a: Any, b: Any) -> bool:
     return abs(as_qty(a) - as_qty(b)) < _QTY_EPS
+
+
+def coerce_qty_value(value: Any, *, field_name: str = "qty") -> float:
+    """Pydantic-friendly qty parse — accepts ints/floats/numeric strings."""
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{field_name} must be a number")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError(f"{field_name} is required")
+        try:
+            value = float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a number") from exc
+    if isinstance(value, (int, float)):
+        n = float(value)
+        if n != n or n in (float("inf"), float("-inf")):
+            raise ValueError(f"{field_name} must be a number")
+        return as_qty(n)
+    raise ValueError(f"{field_name} must be a number")

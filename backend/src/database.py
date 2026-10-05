@@ -873,6 +873,17 @@ _QTY_FLOAT_COLUMNS = (
     ("stock_reservations", "qty"),
     ("sales_return_line_items", "original_qty"),
     ("sales_return_line_items", "return_qty"),
+    ("purchase_line_items", "qty"),
+    ("purchase_order_line_items", "qty"),
+    ("grn_line_items", "ordered_qty"),
+    ("grn_line_items", "received_qty"),
+    ("return_line_items", "original_qty"),
+    ("return_line_items", "return_qty"),
+    ("transfer_line_items", "qty"),
+    ("adjustment_requests", "before_qty"),
+    ("adjustment_requests", "new_qty"),
+    ("stock_adjustments", "before_qty"),
+    ("stock_adjustments", "after_qty"),
 )
 
 

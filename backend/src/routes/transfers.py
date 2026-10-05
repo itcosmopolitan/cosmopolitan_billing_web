@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,6 +13,7 @@ from src.database import get_db
 from src.document_numbering import allocate_number
 from src.models import AuditLog, Branch, StockTransfer, TransferLineItem, TransferStatus, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.qty import as_qty, coerce_qty_value
 from src.routes._atomic import (
     add_batch_atomic,
     adjust_stock_atomic,
@@ -44,19 +45,29 @@ class TransferAllocationEntry(BaseModel):
     the SUM(batches) == item_stock invariant on approve).
     """
     batch_id: str
-    qty: int = Field(..., gt=0)
+    qty: float = Field(..., gt=0)
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="qty")
 
 
 class TransferLine(BaseModel):
     item_id: str
     item_name: str
-    qty: int
+    qty: float = Field(..., gt=0)
     # ── Source batch hints (precedence: allocation > batch_id > auto) ──
     # `batch_allocation`: explicit per-line split set by the operator in the
     # New Transfer modal. Honored as-is on approve.
     # `batch_id`: legacy single-batch shortcut (consumed first, rest auto).
     batch_allocation: Optional[List[TransferAllocationEntry]] = None
     batch_id: Optional[str] = None
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="qty")
 
 class TransferCreate(BaseModel):
     from_branch_id: str
@@ -149,8 +160,22 @@ async def list_transfers(
         q = q.where(StockTransfer.status == status)
         cq = cq.where(StockTransfer.status == status)
     if branch_id:
-        q = q.where(StockTransfer.from_branch_id == branch_id)
-        cq = cq.where(StockTransfer.from_branch_id == branch_id)
+        # Role of the active branch depends on status:
+        #   draft/pending/rejected → source (from) owns approve/edit
+        #   transit → destination (to) owns receive
+        #   received / all → either side of the route
+        status_key = (status or "").strip().lower()
+        if status_key in {"draft", "pending", "rejected"}:
+            branch_scope = StockTransfer.from_branch_id == branch_id
+        elif status_key == "transit":
+            branch_scope = StockTransfer.to_branch_id == branch_id
+        else:
+            branch_scope = or_(
+                StockTransfer.from_branch_id == branch_id,
+                StockTransfer.to_branch_id == branch_id,
+            )
+        q = q.where(branch_scope)
+        cq = cq.where(branch_scope)
     if from_branch:
         q = q.where(StockTransfer.from_branch_id == from_branch)
         cq = cq.where(StockTransfer.from_branch_id == from_branch)
@@ -353,14 +378,14 @@ def _summarize_transfer_item_changes(old_lines: list[TransferLineItem], new_item
                 "item_id": str(item.item_id),
                 "item_name": item.item_name,
                 "fields": ["added"],
-                "changes": [{"field": "qty", "old": None, "new": int(item.qty or 0)}],
+                "changes": [{"field": "qty", "old": None, "new": as_qty(item.qty or 0)}],
                 "detail": f"{item.item_name}: added (qty {item.qty})",
             })
             continue
 
         line_changes: list[dict] = []
-        if int(prev.qty or 0) != int(item.qty or 0):
-            line_changes.append({"field": "qty", "old": int(prev.qty or 0), "new": int(item.qty or 0)})
+        if as_qty(prev.qty or 0) != as_qty(item.qty or 0):
+            line_changes.append({"field": "qty", "old": as_qty(prev.qty or 0), "new": as_qty(item.qty or 0)})
         if (prev.item_name or "") != item.item_name:
             line_changes.append({"field": "item_name", "old": str(prev.item_name or ""), "new": item.item_name})
 
@@ -381,7 +406,7 @@ def _summarize_transfer_item_changes(old_lines: list[TransferLineItem], new_item
                     "item_id": str(removed.item_id),
                     "item_name": removed.item_name,
                     "fields": ["removed"],
-                    "changes": [{"field": "qty", "old": int(removed.qty or 0), "new": None}],
+                    "changes": [{"field": "qty", "old": as_qty(removed.qty or 0), "new": None}],
                     "detail": f"{removed.item_name}: removed (qty {removed.qty})",
                 })
 
@@ -604,6 +629,8 @@ async def approve_transfer(
 ):
     """Approve & dispatch a transfer."""
     t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
+    # Dispatch deducts stock at the source — only source-branch users may approve.
+    await enforce_branch_access(t.from_branch_id, user=user, db=db)
 
     if (
         t.requested_by
@@ -751,7 +778,7 @@ async def _dispatch_transfer(
         action="Transfer dispatched",
         detail=f"Transfer approved and dispatched by {approved_by}",
     )
-    qty_total = int((await db.execute(select(func.coalesce(func.sum(TransferLineItem.qty), 0)).where(TransferLineItem.transfer_id == transfer_id))).scalar() or 0)
+    qty_total = as_qty((await db.execute(select(func.coalesce(func.sum(TransferLineItem.qty), 0)).where(TransferLineItem.transfer_id == transfer_id))).scalar() or 0)
     await db.commit()
     await _write_post_commit_audit(
         db,
@@ -782,6 +809,7 @@ async def reject_transfer(
     user: User = Depends(current_user),
 ):
     t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
+    await enforce_branch_access(t.from_branch_id, user=user, db=db)
 
     if t.status == TransferStatus.rejected:
         await db.commit()
@@ -834,6 +862,8 @@ async def receive_transfer(
     from src.models import ItemBatch
 
     t = await _lock_transfer(db, transfer_id, ref_number=body.ref_number)
+    # Stock lands at the destination — only destination-branch users may receive.
+    await enforce_branch_access(t.to_branch_id, user=user, db=db)
 
     if t.status == TransferStatus.received:
         await db.commit()
@@ -874,7 +904,7 @@ async def receive_transfer(
                     db,
                     item_id=line.item_id,
                     branch_id=t.to_branch_id,
-                    qty=int(entry.get("consumed") or 0),
+                    qty=as_qty(entry.get("consumed") or 0),
                     batch_number=(src.batch_number if src else entry.get("batch_number")),
                     mfg_date=(src.mfg_date if src else None),
                     expiry_date=(src.expiry_date if src else entry.get("expiry_date")),

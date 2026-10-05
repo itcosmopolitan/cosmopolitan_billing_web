@@ -37,7 +37,7 @@ class ReceiptLine:
         *,
         item_id: Optional[str],
         name: str,
-        qty: int,
+        qty: float,
         cost: float = 0,
         batch_number: Optional[str] = None,
         mfg_date: Optional[str] = None,
@@ -45,7 +45,7 @@ class ReceiptLine:
     ):
         self.item_id = item_id
         self.name = name
-        self.qty = int(qty)
+        self.qty = as_qty(qty)
         self.cost = cost
         self.batch_number = batch_number
         self.mfg_date = mfg_date
@@ -370,7 +370,7 @@ async def reverse_grn_stock(
         select(ItemBatch).where(ItemBatch.source_ref == grn_id)
     )).scalars().all()
     for b in batches:
-        qty = int(b.quantity or 0)
+        qty = as_qty(b.quantity or 0)
         if qty > 0:
             try:
                 await adjust_stock_atomic(
@@ -390,7 +390,7 @@ async def reverse_grn_stock(
     for li in line_items:
         if not li.item_id:
             continue
-        qty = int(getattr(li, "received_qty", None) or getattr(li, "qty", 0) or 0)
+        qty = as_qty(getattr(li, "received_qty", None) or getattr(li, "qty", 0) or 0)
         if qty <= 0:
             continue
         if li.item_id in batch_item_ids:
@@ -416,4 +416,4 @@ async def grn_batches_consumed(db: AsyncSession, grn_id: str) -> bool:
     batches = (await db.execute(
         select(ItemBatch).where(ItemBatch.source_ref == grn_id)
     )).scalars().all()
-    return any(int(b.quantity or 0) < int(b.initial_qty or 0) for b in batches)
+    return any(as_qty(b.quantity or 0) < as_qty(b.initial_qty or 0) for b in batches)
