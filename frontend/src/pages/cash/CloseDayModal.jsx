@@ -5,7 +5,7 @@ import { FormGroup, Modal } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
 
-export default function CloseDayModal({ open, onClose, branchId, summary, date, onClosed, currentUser }) {
+export default function CloseDayModal({ open, onClose, branchId, summary, date, onClosed, currentUser, ledger = 'sales' }) {
   const [physicalCount, setPhysicalCount] = useState('')
   const [varianceReason, setVarianceReason] = useState('')
   const [notes, setNotes] = useState('')
@@ -36,6 +36,7 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
     try {
       const result = await cashAPI.close(branchId, {
         date,
+        ledger,
         physical_count: physical,
         variance_reason: varianceReason || null,
         notes: notes || null,
@@ -62,7 +63,7 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
     <Modal
       open={open}
       onClose={onClose}
-      title="Close Day — Cash Reconciliation"
+      title={`Close ${ledger === 'petty' ? 'Petty Cash' : 'Sales Cash'} Day — Reconciliation`}
       icon="🔒"
       size="sm"
       footer={

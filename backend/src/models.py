@@ -1554,6 +1554,34 @@ class CashDayClose(Base):
     branch = relationship("Branch")
 
 
+class PettyCashDayClose(Base):
+    __tablename__ = "petty_cash_day_closes"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "date", name="uq_petty_cash_day_close_branch_date"),
+    )
+    id               = Column(String, primary_key=True)
+    branch_id        = Column(String, ForeignKey("branches.id"), nullable=False)
+    date             = Column(String, nullable=False)
+    opening_balance  = Column(Float, nullable=False, default=0)
+    total_cash_in    = Column(Float, nullable=False, default=0)
+    total_cash_out   = Column(Float, nullable=False, default=0)
+    expected_balance = Column(Float, nullable=False, default=0)
+    physical_count   = Column(Float, nullable=False)
+    variance         = Column(Float, nullable=False, default=0)
+    variance_reason  = Column(Text)
+    notes            = Column(Text)
+    closed_by        = Column(String, nullable=False)
+    closed_by_id     = Column(String, ForeignKey("users.id"), nullable=True)
+    closed_at        = Column(DateTime, nullable=False, default=datetime.utcnow)
+    unlocked_by      = Column(String)
+    unlocked_at      = Column(DateTime)
+    unlock_reason    = Column(Text)
+    is_locked        = Column(Boolean, default=True)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+    branch = relationship("Branch")
+
+
 # ─── Cash Category ────────────────────────────────────────────────────────────
 class CashCategory(Base):
     __tablename__ = "cash_categories"

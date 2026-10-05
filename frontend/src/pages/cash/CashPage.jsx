@@ -11,19 +11,22 @@ import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
+import './PettyCashPage.css'
 
-const TABS = ['Entries', 'Breakdown', 'Day History']
+const SALES_TABS = ['Entries', 'Breakdown', 'Day History']
 
-export default function CashPage() {
+export default function CashPage({ ledger = 'sales' }) {
+  const isPettyCash = ledger === 'petty'
   const can = useCan()
   const [searchParams] = useSearchParams()
-  const columnPrefs = useColumnPrefs('cash.entries')
+  const columnPrefs = useColumnPrefs(isPettyCash ? 'cash.petty.entries' : 'cash.entries')
   const activeBranch = useAppStore((s) => s.activeBranch)
   const currentUser = useAppStore((s) => s.user)
   const branchId = activeBranch?.id || ''
 
   const [date, setDate] = useState(() => searchParams.get('date') || new Date().toISOString().slice(0, 10))
   const [tab, setTab] = useState('Entries')
+  const tabs = SALES_TABS
   const [version, setVersion] = useState(0)
 
   const [entries, setEntries] = useState([])
@@ -58,8 +61,8 @@ export default function CashPage() {
     ;(async () => {
       try {
         const [entriesRaw, sum] = await Promise.all([
-          cashAPI.entries(branchId, { date }).catch(() => ({ items: [] })),
-          cashAPI.summary(branchId, date).catch(() => ({})),
+          cashAPI.entries(branchId, { date, ledger }).catch(() => ({ items: [] })),
+          cashAPI.summary(branchId, { date, ledger }).catch(() => ({})),
         ])
         if (cancelled) return
         const { items } = unwrapPaged(entriesRaw)
@@ -70,12 +73,12 @@ export default function CashPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [branchId, date, version])
+  }, [branchId, date, ledger, version])
 
   useEffect(() => {
     if (tab !== 'Day History' || !branchId) return
-    cashAPI.history(branchId, {}).then((r) => setHistory(unwrapPaged(r).items || [])).catch(() => {})
-  }, [tab, branchId, version])
+    cashAPI.history(branchId, { ledger }).then((r) => setHistory(unwrapPaged(r).items || [])).catch(() => {})
+  }, [tab, branchId, ledger, version])
 
   const refresh = () => setVersion((v) => v + 1)
 
@@ -117,13 +120,50 @@ export default function CashPage() {
   const threshold = 500
   const breakdownIn = summary.breakdown_in || []
   const breakdownOut = summary.breakdown_out || []
+  const summaryCards = isPettyCash
+    ? [
+        { label: 'Opening Balance', value: fmt(summary.opening_balance ?? 0), color: 'var(--teal)' },
+        { label: 'Cash In', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in').length} entries`, color: 'var(--green)' },
+        { label: 'Cash Out', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out' && e.category !== 'Opening Balance').length} entries`, color: 'var(--red)' },
+        { label: 'Expected', value: fmt(summary.expected_balance ?? 0), color: 'var(--text-primary)' },
+        {
+          label: 'Actual',
+          value: isLocked ? fmt(summary.physical_count ?? 0) : '— pending',
+          color: isLocked ? 'var(--green)' : 'var(--text-muted)',
+          sub: isLocked ? 'at close' : 'close to record',
+        },
+        {
+          label: 'Variance',
+          value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
+          color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
+        },
+      ]
+    : [
+        { label: 'Opening Balance', value: fmt(summary.opening_balance ?? summary.opening ?? 0), color: 'var(--teal)' },
+        { label: 'Cash In', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in' && e.category !== 'Opening Balance').length} entries`, color: 'var(--green)' },
+        { label: 'Cash Out', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out').length} entries`, color: 'var(--red)' },
+        { label: 'Expected', value: fmt(summary.expected_balance ?? summary.expected ?? 0), color: 'var(--text-primary)' },
+        {
+          label: 'Actual',
+          value: isLocked ? fmt(summary.physical_count ?? 0) : '— pending',
+          color: isLocked ? 'var(--green)' : 'var(--text-muted)',
+          sub: isLocked ? 'at close' : 'close to record',
+        },
+        {
+          label: 'Variance',
+          value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
+          color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
+        },
+      ]
 
   return (
-    <div className="page-container">
+    <div className={`page-container cash-control-page${isPettyCash ? ' petty-cash-page' : ''}`}>
       {/* ── Header ── */}
       <SectionHeader
-        title="Cash Control"
-        subtitle={`Daily petty cash register — ${activeBranch?.name || 'select a branch'}`}
+        title={isPettyCash ? 'Petty Cash Register' : 'Trade Cash Register'}
+        subtitle={isPettyCash
+          ? `Hand-cash expenses and movements — ${activeBranch?.name || 'select a branch'}`
+          : `Cash sales and purchase payments — ${activeBranch?.name || 'select a branch'}`}
       >
         <DatePicker
           value={date}
@@ -131,7 +171,6 @@ export default function CashPage() {
           style={{ width: 148 }}
         />
 
-        {/* Day status chip — clickable to unlock if admin */}
         <span
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -147,9 +186,9 @@ export default function CashPage() {
           {isLocked ? '🔒 CLOSED' : '✅ OPEN'}
         </span>
 
-        {can('cash.entry') && !isLocked && branchId && (
+        {isPettyCash && can('cash.entry') && !isLocked && branchId && (
           <button className="btn btn-secondary btn-sm" onClick={() => { setEditEntry(null); setShowEntry(true) }}>
-            + Cash Entry
+            + Petty Cash Entry
           </button>
         )}
         {can('cash.close') && !isLocked && branchId && (
@@ -177,33 +216,20 @@ export default function CashPage() {
           icon="⚠️"
           style={{ marginBottom: 16 }}
         >
-          Cash variance detected: <strong>{fmt(Math.abs(variance))}</strong>{' '}
+          {isPettyCash ? 'Petty cash' : 'Cash'} variance detected: <strong>{fmt(Math.abs(variance))}</strong>{' '}
           {variance < 0 ? 'shortage' : 'excess'}. Recount and close the day to record it.
         </AlertBar>
       )}
 
       {/* ── Summary tiles ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 12, marginBottom: 20 }}>
-        {[
-          { label: 'Opening Balance', value: fmt(summary.opening_balance ?? summary.opening ?? 0), color: 'var(--teal)' },
-          { label: 'Cash In', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in' && e.category !== 'Opening Balance').length} entries`, color: 'var(--green)' },
-          { label: 'Cash Out', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out').length} entries`, color: 'var(--red)' },
-          { label: 'Expected', value: fmt(summary.expected_balance ?? summary.expected ?? 0), color: 'var(--text-primary)' },
-          {
-            label: 'Actual',
-            value: isLocked ? fmt(summary.physical_count ?? 0) : '— pending',
-            color: isLocked ? 'var(--green)' : 'var(--text-muted)',
-            sub: isLocked ? 'at close' : 'close to record',
-          },
-          {
-            label: 'Variance',
-            value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
-            color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
-          },
-        ].map((c) => (
+      <div className="cash-control-summary" style={{ display: 'grid', gridTemplateColumns: `repeat(${summaryCards.length},1fr)`, gap: 12, marginBottom: 20 }}>
+        {summaryCards.map((c) => (
           <div key={c.label} style={{
             background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
-            borderRadius: 10, padding: '14px 16px', textAlign: 'center',
+            borderRadius: 14,
+            padding: '18px 20px',
+            textAlign: 'left',
+            borderTop: `3px solid ${c.color}`,
           }}>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>{c.label}</div>
             <div style={{ fontSize: 17, fontWeight: 700, color: c.color, fontFamily: 'DM Mono,monospace' }}>{c.value}</div>
@@ -213,18 +239,63 @@ export default function CashPage() {
       </div>
 
       {/* ── Tabs ── */}
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
       {/* ─── Tab: Entries ─── */}
       {tab === 'Entries' && (
         <Card
-          title={`Entries — ${activeBranch?.name || '—'} / ${date}`}
+          title={`${isPettyCash ? 'Petty Cash Movements' : 'Cash Sales & Purchase Entries'} — ${activeBranch?.name || '—'} / ${date}`}
           bodyPadding={false}
         >
           {loading ? (
             <TableLoadingPanel label="Loading…" />
           ) : entries.length === 0 ? (
-            <EmptyState icon="💰" title="No entries for this date" />
+            <EmptyState icon="💰" title={isPettyCash ? 'No petty cash entries for this date' : 'No cash sales or purchase entries for this date'} />
+          ) : isPettyCash ? (
+            <div className="petty-cash-movement-list">
+              {entries.map((e) => (
+                <div className="petty-cash-movement" key={e.id}>
+                  <div className={`petty-cash-movement-icon ${e.type === 'in' ? 'is-in' : 'is-out'}`}>
+                    {e.type === 'in' ? '↓' : '↑'}
+                  </div>
+                  <div className="petty-cash-movement-main">
+                    <strong>{e.description}</strong>
+                    <div className="petty-cash-movement-meta">
+                      <span>{e.category || 'Uncategorised'}</span>
+                      <span>{e.date} {e.time}</span>
+                      {e.ref && <span>Ref: {e.ref}</span>}
+                      {e.by && <span>By {e.by}</span>}
+                      {e.is_voided && <span className="petty-cash-voided">VOIDED</span>}
+                    </div>
+                  </div>
+                  <strong className={`petty-cash-movement-amount ${e.type === 'in' ? 'is-in' : 'is-out'}`}>
+                    {e.type === 'in' ? '+' : '−'}{fmt(e.amount)}
+                  </strong>
+                  <RowActionsMenu
+                    busy={entryBusy || voidSaving}
+                    ariaLabel={`Actions for ${e.entry_number || e.id}`}
+                    actions={[
+                      {
+                        label: 'Edit',
+                        hidden: e.is_voided || isLocked || e.is_system || !can('cash.edit'),
+                        onClick: () => { setEditEntry(e); setShowEntry(true) },
+                      },
+                      {
+                        label: 'Void',
+                        hidden: e.is_voided || e.source_type === 'void' || isLocked || !can('cash.edit'),
+                        onClick: () => setVoidTarget(e),
+                      },
+                      {
+                        label: 'Delete',
+                        hidden: e.is_voided || isLocked || e.is_system || !can('cash.edit'),
+                        danger: true,
+                        onClick: () => handleDelete(e),
+                      },
+                    ]}
+                  />
+                </div>
+              ))}
+            </div>
           ) : (
             <table className="data-table">
               <thead>
@@ -304,7 +375,7 @@ export default function CashPage() {
                           },
                           {
                             label: 'Void',
-                            hidden: e.is_voided || isLocked || !can('cash.edit'),
+                            hidden: e.is_voided || e.source_type === 'void' || isLocked || !can('cash.edit'),
                             onClick: () => setVoidTarget(e),
                           },
                           {
@@ -435,6 +506,7 @@ export default function CashPage() {
         editEntry={editEntry}
         categories={categories}
         onCategoriesChange={setCategories}
+        excludeOpeningBalance={isPettyCash}
       />
 
       <CloseDayModal
@@ -445,6 +517,7 @@ export default function CashPage() {
         date={date}
         onClosed={refresh}
         currentUser={currentUser}
+        ledger={ledger}
       />
 
       {closeRecord && (
@@ -454,6 +527,7 @@ export default function CashPage() {
           branchId={branchId}
           closeRecord={closeRecord}
           onUnlocked={refresh}
+          ledger={ledger}
         />
       )}
 

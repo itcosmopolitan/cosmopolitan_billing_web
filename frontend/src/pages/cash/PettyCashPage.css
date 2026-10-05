@@ -1,0 +1,121 @@
+.cash-control-page .section-hdr {
+  padding: 18px 20px;
+  border: 1px solid #cce8dc;
+  border-radius: 14px;
+  background: linear-gradient(115deg, #eaf8f1 0%, #f7fbf8 65%, #e8f4ef 100%);
+}
+
+.cash-control-page .section-hdr h2 {
+  color: #155c42;
+}
+
+.cash-control-page .section-hdr p {
+  color: #547768 !important;
+}
+
+.cash-control-page .cash-control-summary > div {
+  box-shadow: 0 6px 18px rgba(25, 86, 63, 0.06);
+}
+
+.cash-control-page .cash-control-summary > div > div:first-child {
+  font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.petty-cash-movement-list {
+  padding: 4px 18px;
+}
+
+.petty-cash-movement {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 76px;
+  padding: 13px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.petty-cash-movement:last-child {
+  border-bottom: 0;
+}
+
+.petty-cash-movement-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border-radius: 13px;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.petty-cash-movement-icon.is-in {
+  color: #138252;
+  background: #e5f7ed;
+}
+
+.petty-cash-movement-icon.is-out {
+  color: #c64b4b;
+  background: #fff0ed;
+}
+
+.petty-cash-movement-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.petty-cash-movement-main > strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.petty-cash-movement-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.petty-cash-movement-amount {
+  min-width: 110px;
+  text-align: right;
+  font-family: 'DM Mono', monospace;
+  font-size: 14px;
+}
+
+.petty-cash-movement-amount.is-in {
+  color: var(--green);
+}
+
+.petty-cash-movement-amount.is-out {
+  color: var(--red);
+}
+
+.petty-cash-voided {
+  color: var(--red);
+  font-weight: 700;
+}
+
+@media (max-width: 800px) {
+  .cash-control-page .cash-control-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .petty-cash-movement {
+    gap: 9px;
+  }
+
+  .petty-cash-movement-amount {
+    min-width: 88px;
+    font-size: 12px;
+  }
+}

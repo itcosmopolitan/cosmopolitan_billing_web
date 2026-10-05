@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
 import { FormGroup, Modal } from '@/components/ui'
 
-export default function UnlockDayModal({ open, onClose, branchId, closeRecord, onUnlocked }) {
+export default function UnlockDayModal({ open, onClose, branchId, closeRecord, onUnlocked, ledger = 'sales' }) {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -11,7 +11,7 @@ export default function UnlockDayModal({ open, onClose, branchId, closeRecord, o
     if (!reason.trim()) { toast.error('Provide a reason for unlocking'); return }
     setSaving(true)
     try {
-      await cashAPI.unlock(branchId, closeRecord.id, { reason })
+      await cashAPI.unlock(branchId, closeRecord.id, { reason, ledger })
       toast.success('Day unlocked')
       setReason('')
       onUnlocked?.()

@@ -1,4 +1,4 @@
-"""Cash Control — daily petty cash register, entries, and day-close reconciliation."""
+"""Sales cash and petty cash ledgers, entries, and sales day-close reconciliation."""
 from __future__ import annotations
 
 import uuid
@@ -8,11 +8,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import AuditLog, Branch, CashCategory, CashDayClose, CashEntry, Organisation, User
+from src.models import (
+    AuditLog, Branch, CashCategory, CashDayClose, CashEntry, Organisation,
+    PettyCashDayClose, User,
+)
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
 from src.permissions import CASH_CATEGORIES_READ, CASH_CATEGORIES_WRITE
@@ -20,6 +23,68 @@ from src.security import enforce_branch_access, current_user, require_perm, get_
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+
+SALES_CASH_SOURCE_TYPES = (
+    "sale_invoice",
+    "customer_payment",
+    "sale_return",
+    "sales_return",
+    "purchase_payment",
+    "vendor_advance",
+    "vendor_payment",
+)
+
+
+def _cash_ledger_filter(ledger: str):
+    if ledger not in ("sales", "petty"):
+        raise HTTPException(400, "Ledger must be 'sales' or 'petty'")
+
+    if ledger == "sales":
+        voided_sales_entry_ids = select(CashEntry.id).where(
+            or_(
+                CashEntry.source_type.in_(SALES_CASH_SOURCE_TYPES),
+                and_(
+                    CashEntry.source_type == "manual",
+                    func.lower(func.trim(CashEntry.category)) == "opening balance",
+                ),
+            )
+        )
+        return or_(
+            CashEntry.source_type.in_(SALES_CASH_SOURCE_TYPES),
+            and_(
+                CashEntry.source_type == "void",
+                CashEntry.source_id.in_(voided_sales_entry_ids),
+            ),
+            and_(
+                CashEntry.source_type == "manual",
+                func.lower(func.trim(CashEntry.category)) == "opening balance",
+            ),
+        )
+
+    voided_petty_entry_ids = select(CashEntry.id).where(
+        CashEntry.source_type == "manual",
+        or_(
+            CashEntry.category.is_(None),
+            func.lower(func.trim(CashEntry.category)) != "opening balance",
+        ),
+    )
+    return or_(
+        and_(
+            CashEntry.source_type == "manual",
+            or_(
+                CashEntry.category.is_(None),
+                func.lower(func.trim(CashEntry.category)) != "opening balance",
+            ),
+        ),
+        and_(
+            CashEntry.source_type == "void",
+            CashEntry.source_id.in_(voided_petty_entry_ids),
+        ),
+    )
+
+
+def _is_opening_balance(category: Optional[str]) -> bool:
+    return (category or "").strip().casefold() == "opening balance"
 
 
 async def _write_post_commit_audit(
@@ -72,6 +137,7 @@ class VoidRequest(BaseModel):
 
 class DayCloseRequest(BaseModel):
     date: Optional[str] = None
+    ledger: str = "sales"
     physical_count: float
     variance_reason: Optional[str] = None
     notes: Optional[str] = None
@@ -79,6 +145,7 @@ class DayCloseRequest(BaseModel):
 
 class UnlockRequest(BaseModel):
     reason: str
+    ledger: str = "sales"
 
 class CashCategoryCreate(BaseModel):
     name: str
@@ -101,12 +168,26 @@ async def _get_branch(db: AsyncSession, branch_id: str) -> Branch:
     return branch
 
 
-async def _get_day_close(db: AsyncSession, branch_id: str, date: str) -> Optional[CashDayClose]:
+def _day_close_model(ledger: str):
+    if ledger == "sales":
+        return CashDayClose
+    if ledger == "petty":
+        return PettyCashDayClose
+    raise HTTPException(400, "Ledger must be 'sales' or 'petty'")
+
+
+async def _get_day_close(
+    db: AsyncSession,
+    branch_id: str,
+    date: str,
+    ledger: str = "sales",
+):
+    model = _day_close_model(ledger)
     return (
         await db.execute(
-            select(CashDayClose).where(
-                CashDayClose.branch_id == branch_id,
-                CashDayClose.date == date,
+            select(model).where(
+                model.branch_id == branch_id,
+                model.date == date,
             )
         )
     ).scalar_one_or_none()
@@ -130,7 +211,7 @@ async def _opening_balance(db: AsyncSession, branch: Branch, date: str) -> float
             .where(
                 CashEntry.branch_id == branch.id,
                 CashEntry.date == date,
-                CashEntry.category == "Opening Balance",
+                func.lower(func.trim(CashEntry.category)) == "opening balance",
                 CashEntry.type == "in",
                 CashEntry.is_voided == False,
             )
@@ -145,6 +226,18 @@ async def _opening_balance(db: AsyncSession, branch: Branch, date: str) -> float
             select(CashDayClose)
             .where(CashDayClose.branch_id == branch.id, CashDayClose.date < date)
             .order_by(CashDayClose.date.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return float(prior.physical_count) if prior else 0
+
+
+async def _petty_opening_balance(db: AsyncSession, branch_id: str, date: str) -> float:
+    prior = (
+        await db.execute(
+            select(PettyCashDayClose)
+            .where(PettyCashDayClose.branch_id == branch_id, PettyCashDayClose.date < date)
+            .order_by(PettyCashDayClose.date.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -187,8 +280,11 @@ async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optiona
 
 def _build_summary(entries: list, opening: float, close: Optional[CashDayClose]) -> dict:
     active = [e for e in entries if not e.is_voided]
-    cash_in = sum(e.amount for e in active if e.type == "in" and e.category != "Opening Balance")
-    cash_out = sum(e.amount for e in active if e.type == "out")
+    cash_in = sum(e.amount for e in active if e.type == "in" and not _is_opening_balance(e.category))
+    cash_out = sum(
+        e.amount for e in active
+        if e.type == "out" and not _is_opening_balance(e.category)
+    )
     expected = opening + cash_in - cash_out
     breakdown_in = _breakdown(active, "in")
     breakdown_out = _breakdown(active, "out")
@@ -207,7 +303,7 @@ def _build_summary(entries: list, opening: float, close: Optional[CashDayClose])
 def _breakdown(entries: list, entry_type: str) -> list:
     totals: dict = defaultdict(float)
     for e in entries:
-        if e.type == entry_type and e.category != "Opening Balance":
+        if e.type == entry_type and not _is_opening_balance(e.category):
             totals[e.category or "Uncategorised"] += e.amount
     return [{"category": k, "amount": round(v, 2)} for k, v in sorted(totals.items(), key=lambda x: -x[1])]
 
@@ -315,6 +411,7 @@ async def delete_category(cat_id: str, db: AsyncSession = Depends(get_db)):
 async def get_entries(
     branch_id: str = Depends(enforce_branch_access),
     date: Optional[str] = None,
+    ledger: str = "sales",
     type: Optional[str] = None,
     category: Optional[str] = None,
     source_type: Optional[str] = None,
@@ -328,8 +425,17 @@ async def get_entries(
     # Validate supplied branch against user's scope
     await _resolve_branch_scope(current_user, db, branch_id)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
-    q = select(CashEntry).where(CashEntry.branch_id == branch_id, CashEntry.date == target_date)
-    cq = select(func.count(CashEntry.id)).where(CashEntry.branch_id == branch_id, CashEntry.date == target_date)
+    ledger_filter = _cash_ledger_filter(ledger)
+    q = select(CashEntry).where(
+        CashEntry.branch_id == branch_id,
+        CashEntry.date == target_date,
+        ledger_filter,
+    )
+    cq = select(func.count(CashEntry.id)).where(
+        CashEntry.branch_id == branch_id,
+        CashEntry.date == target_date,
+        ledger_filter,
+    )
     if type:
         q = q.where(CashEntry.type == type)
         cq = cq.where(CashEntry.type == type)
@@ -350,10 +456,10 @@ async def get_entries(
     lim = normalize_limit(limit)
     total = int((await db.execute(cq)).scalar() or 0)
     entries = (await db.execute(q.offset(sk).limit(lim))).scalars().all()
-    close = await _get_day_close(db, branch_id, target_date)
+    close = await _get_day_close(db, branch_id, target_date, ledger)
     return {
         **paged([serialize_cash_entry(e) for e in entries], total, sk, lim),
-        "day_status": "closed" if (close and close.is_locked) else "open",
+        "day_status": "closed" if close and close.is_locked else "open",
         "date": target_date,
     }
 
@@ -369,9 +475,13 @@ async def add_entry(
     # Ensure supplied branch is in user's allowed branches
     await _resolve_branch_scope(current_user, db, branch_id)
     target_date = data.date or datetime.now().strftime("%Y-%m-%d")
-    close = await _get_day_close(db, branch_id, target_date)
+    opening_balance_entry = _is_opening_balance(data.category)
+    entry_ledger = "sales" if opening_balance_entry else "petty"
+    close = await _get_day_close(db, branch_id, target_date, entry_ledger)
     if close and close.is_locked:
-        raise HTTPException(409, "Day is locked. Contact an admin to unlock.")
+        raise HTTPException(409, f"{entry_ledger.title()} cash day is locked. Contact an admin to unlock.")
+    if opening_balance_entry and data.type != "in":
+        raise HTTPException(400, "Opening Balance entries must be Cash In")
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be greater than zero")
     if not data.description or len(data.description.strip()) < 3:
@@ -427,9 +537,19 @@ async def update_entry(
         raise HTTPException(404, "Entry not found")
     if entry.is_system:
         raise HTTPException(400, "System entries cannot be edited — use void instead")
-    close = await _get_day_close(db, branch_id, entry.date)
+    target_category = data.category if data.category is not None else entry.category
+    entry_ledger = (
+        "sales"
+        if _is_opening_balance(entry.category) or _is_opening_balance(target_category)
+        else "petty"
+    )
+    close = await _get_day_close(db, branch_id, entry.date, entry_ledger)
     if close and close.is_locked:
         raise HTTPException(409, "Day is locked. Contact an admin to unlock.")
+    if _is_opening_balance(entry.category) != _is_opening_balance(target_category):
+        raise HTTPException(400, "Opening Balance entries cannot be moved between cash ledgers")
+    if _is_opening_balance(target_category) and entry.type != "in":
+        raise HTTPException(400, "Opening Balance entries must be Cash In")
     if data.description is not None:
         entry.description = data.description
     if data.category is not None:
@@ -459,7 +579,8 @@ async def delete_entry(
         raise HTTPException(400, "System entries cannot be deleted — use void instead")
     if entry.is_voided:
         raise HTTPException(400, "Entry is already voided")
-    close = await _get_day_close(db, branch_id, entry.date)
+    entry_ledger = "sales" if entry.is_system or _is_opening_balance(entry.category) else "petty"
+    close = await _get_day_close(db, branch_id, entry.date, entry_ledger)
     if close and close.is_locked:
         raise HTTPException(409, "Day is locked. Contact an admin to unlock.")
     await db.delete(entry)
@@ -479,9 +600,12 @@ async def void_entry(
     entry = (await db.execute(select(CashEntry).where(CashEntry.id == entry_id, CashEntry.branch_id == branch_id))).scalar_one_or_none()
     if not entry:
         raise HTTPException(404, "Entry not found")
+    if entry.source_type == "void":
+        raise HTTPException(400, "Reversal entries cannot be voided")
     if entry.is_voided:
         raise HTTPException(400, "Entry is already voided")
-    close = await _get_day_close(db, branch_id, entry.date)
+    entry_ledger = "sales" if entry.is_system or _is_opening_balance(entry.category) else "petty"
+    close = await _get_day_close(db, branch_id, entry.date, entry_ledger)
     if close and close.is_locked:
         raise HTTPException(409, "Day is locked. Contact an admin to unlock.")
     now = datetime.now()
@@ -518,17 +642,29 @@ async def void_entry(
 async def get_summary(
     branch_id: str = Depends(enforce_branch_access),
     date: Optional[str] = None,
+    ledger: str = "sales",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),
 ):
     await _resolve_branch_scope(current_user, db, branch_id)
     target_date = date or datetime.now().strftime("%Y-%m-%d")
-    branch = await _get_branch(db, branch_id)
+    ledger_filter = _cash_ledger_filter(ledger)
     entries = (await db.execute(
-        select(CashEntry).where(CashEntry.branch_id == branch_id, CashEntry.date == target_date)
+        select(CashEntry).where(
+            CashEntry.branch_id == branch_id,
+            CashEntry.date == target_date,
+            ledger_filter,
+        )
     )).scalars().all()
-    opening = await _opening_balance(db, branch, target_date)
-    close = await _get_day_close(db, branch_id, target_date)
+    opening = 0
+    close = None
+    if ledger == "sales":
+        branch = await _get_branch(db, branch_id)
+        opening = await _opening_balance(db, branch, target_date)
+        close = await _get_day_close(db, branch_id, target_date, "sales")
+    else:
+        opening = await _petty_opening_balance(db, branch_id, target_date)
+        close = await _get_day_close(db, branch_id, target_date, "petty")
     summary = _build_summary(entries, opening, close)
     return {
         "date": target_date,
@@ -555,15 +691,24 @@ async def close_day(
     db: AsyncSession = Depends(get_db),
 ):
     await _resolve_branch_scope(current_user, db, branch_id)
+    model = _day_close_model(data.ledger)
     target_date = data.date or datetime.now().strftime("%Y-%m-%d")
-    existing = await _get_day_close(db, branch_id, target_date)
+    existing = await _get_day_close(db, branch_id, target_date, data.ledger)
     if existing and existing.is_locked:
         raise HTTPException(409, "Day is already closed. Use unlock to re-open.")
     branch = await _get_branch(db, branch_id)
     entries = (await db.execute(
-        select(CashEntry).where(CashEntry.branch_id == branch_id, CashEntry.date == target_date)
+        select(CashEntry).where(
+            CashEntry.branch_id == branch_id,
+            CashEntry.date == target_date,
+            _cash_ledger_filter(data.ledger),
+        )
     )).scalars().all()
-    opening = await _opening_balance(db, branch, target_date)
+    opening = (
+        await _opening_balance(db, branch, target_date)
+        if data.ledger == "sales"
+        else await _petty_opening_balance(db, branch_id, target_date)
+    )
     summary = _build_summary(entries, opening, None)
     expected = summary["expected_balance"]
     variance = round(data.physical_count - expected, 2)
@@ -589,7 +734,7 @@ async def close_day(
         existing.expected_balance = expected
         close = existing
     else:
-        close = CashDayClose(
+        close = model(
             id=str(uuid.uuid4()),
             branch_id=branch_id,
             date=target_date,
@@ -608,18 +753,18 @@ async def close_day(
         db.add(close)
     db.add(AuditLog(
         id=str(uuid.uuid4()),
-        action="close_day",
+        action=f"close_{data.ledger}_cash_day",
         user_id=current_user.id,
         user_name=current_user.name,
         module="cash",
-        ref=f"{branch_id}:{target_date}",
-        detail=f"Day closed. Physical={data.physical_count}, Variance={variance}",
+        ref=f"{branch_id}:{data.ledger}:{target_date}",
+        detail=f"{data.ledger.title()} cash day closed. Physical={data.physical_count}, Variance={variance}",
         risk="low",
     ))
     await db.commit()
     return {
         **serialize_cash_day_close(close),
-        "message": f"Day closed. Opening balance for next day: MVR{data.physical_count:,.2f}",
+        "message": f"{data.ledger.title()} cash day closed. Opening balance for next day: MVR{data.physical_count:,.2f}",
     }
 
 
@@ -634,7 +779,8 @@ async def unlock_day(
     db: AsyncSession = Depends(get_db),
 ):
     await _resolve_branch_scope(current_user, db, branch_id)
-    close = (await db.execute(select(CashDayClose).where(CashDayClose.id == close_id, CashDayClose.branch_id == branch_id))).scalar_one_or_none()
+    model = _day_close_model(data.ledger)
+    close = (await db.execute(select(model).where(model.id == close_id, model.branch_id == branch_id))).scalar_one_or_none()
     if not close:
         raise HTTPException(404, "Day close record not found")
     if not close.is_locked:
@@ -645,12 +791,12 @@ async def unlock_day(
     close.unlock_reason = data.reason
     db.add(AuditLog(
         id=str(uuid.uuid4()),
-        action="unlock_day",
+        action=f"unlock_{data.ledger}_cash_day",
         user_id=current_user.id,
         user_name=current_user.name,
         module="cash",
-        ref=f"{branch_id}:{close.date}",
-        detail=f"Day unlocked. Reason: {data.reason}",
+        ref=f"{branch_id}:{data.ledger}:{close.date}",
+        detail=f"{data.ledger.title()} cash day unlocked. Reason: {data.reason}",
         risk="high",
     ))
     await db.commit()
@@ -662,6 +808,7 @@ async def unlock_day(
 @router.get("/{branch_id}/history", dependencies=[Depends(require_perm("cash.view"))])
 async def get_history(
     branch_id: str = Depends(enforce_branch_access),
+    ledger: str = "sales",
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     skip: int = Query(0, ge=0),
@@ -670,15 +817,16 @@ async def get_history(
     current_user: User = Depends(current_user),
 ):
     await _resolve_branch_scope(current_user, db, branch_id)
-    q = select(CashDayClose).where(CashDayClose.branch_id == branch_id)
-    cq = select(func.count(CashDayClose.id)).where(CashDayClose.branch_id == branch_id)
+    model = _day_close_model(ledger)
+    q = select(model).where(model.branch_id == branch_id)
+    cq = select(func.count(model.id)).where(model.branch_id == branch_id)
     if from_date:
-        q = q.where(CashDayClose.date >= from_date)
-        cq = cq.where(CashDayClose.date >= from_date)
+        q = q.where(model.date >= from_date)
+        cq = cq.where(model.date >= from_date)
     if to_date:
-        q = q.where(CashDayClose.date <= to_date)
-        cq = cq.where(CashDayClose.date <= to_date)
-    q = q.order_by(CashDayClose.date.desc())
+        q = q.where(model.date <= to_date)
+        cq = cq.where(model.date <= to_date)
+    q = q.order_by(model.date.desc())
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     total = int((await db.execute(cq)).scalar() or 0)
@@ -690,17 +838,22 @@ async def get_history(
 async def get_history_day(
     date: str,
     branch_id: str = Depends(enforce_branch_access),
+    ledger: str = "sales",
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),
 ):
     await _resolve_branch_scope(current_user, db, branch_id)
-    branch = await _get_branch(db, branch_id)
-    close = await _get_day_close(db, branch_id, date)
+    close = await _get_day_close(db, branch_id, date, ledger)
     entries = (await db.execute(
         select(CashEntry).where(CashEntry.branch_id == branch_id, CashEntry.date == date)
+        .where(_cash_ledger_filter(ledger))
         .order_by(CashEntry.created_at)
     )).scalars().all()
-    opening = await _opening_balance(db, branch, date)
+    if ledger == "sales":
+        branch = await _get_branch(db, branch_id)
+        opening = await _opening_balance(db, branch, date)
+    else:
+        opening = await _petty_opening_balance(db, branch_id, date)
     summary = _build_summary(entries, opening, close)
     return {
         "date": date,
@@ -735,7 +888,11 @@ async def monitor(
 
     for branch in branches:
         entries = (await db.execute(
-            select(CashEntry).where(CashEntry.branch_id == branch.id, CashEntry.date == target_date)
+            select(CashEntry).where(
+                CashEntry.branch_id == branch.id,
+                CashEntry.date == target_date,
+                _cash_ledger_filter("sales"),
+            )
         )).scalars().all()
         close = await _get_day_close(db, branch.id, target_date)
         opening = await _opening_balance(db, branch, target_date)

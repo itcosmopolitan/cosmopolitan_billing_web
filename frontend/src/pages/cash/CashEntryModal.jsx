@@ -40,6 +40,7 @@ export default function CashEntryModal({
   editEntry = null,
   categories = [],
   onCategoriesChange,
+  excludeOpeningBalance = false,
 }) {
   const can = useCan()
   const [form, setForm] = useState(DEFAULT_FORM)
@@ -92,7 +93,9 @@ export default function CashEntryModal({
 
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
-  const filteredCats = cats.filter((c) => categoryMatchesType(c, form.type))
+  const filteredCats = cats.filter((c) =>
+    (!excludeOpeningBalance || c.name !== 'Opening Balance') && categoryMatchesType(c, form.type),
+  )
 
   const openAddCategory = () => {
     setNewCatName('')
@@ -104,6 +107,10 @@ export default function CashEntryModal({
     const name = newCatName.trim()
     if (name.length < 2) {
       toast.error('Category name must be at least 2 characters')
+      return
+    }
+    if (excludeOpeningBalance && name.toLowerCase() === 'opening balance') {
+      toast.error('Opening Balance is reserved for the Trade Cash Register')
       return
     }
     const existing = cats.find((c) => String(c.name || '').trim().toLowerCase() === name.toLowerCase())
@@ -179,7 +186,7 @@ export default function CashEntryModal({
       <Modal
         open={open}
         onClose={onClose}
-        title={editEntry ? 'Edit Cash Entry' : 'New Cash Entry'}
+        title={editEntry ? 'Edit Cash Entry' : 'New Petty Cash Entry'}
         icon="💰"
         size="sm"
         footer={

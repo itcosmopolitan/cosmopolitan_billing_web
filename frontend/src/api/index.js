@@ -556,8 +556,8 @@ export const adjustmentsAPI = {
 
 // ─── Cash ─────────────────────────────────────────────────────────────────────
 export const cashAPI = {
-  entries: (branchId, date) => api.get(`/cash/${branchId}/entries`, { params: { date } }),
-  summary: (branchId, date) => api.get(`/cash/${branchId}/summary`, { params: { date } }),
+  entries: (branchId, params) => api.get(`/cash/${branchId}/entries`, { params }),
+  summary: (branchId, params) => api.get(`/cash/${branchId}/summary`, { params }),
   add:     (branchId, data) => api.post(`/cash/${branchId}/entries`, data),
   delete:  (branchId, entryId) => api.delete(`/cash/${branchId}/entries/${entryId}`),
   void:    (branchId, entryId, data) => api.post(`/cash/${branchId}/entries/${entryId}/void`, data),

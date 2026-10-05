@@ -10,7 +10,7 @@ const QUICK_ACTIONS = [
   { icon: '🧾', label: 'New Sale', path: '/pos' },
   { icon: '📄', label: 'Quotation', path: '/sales' },
   { icon: '📥', label: 'Receive Stock', path: '/purchases' },
-  { icon: '💸', label: 'Add Expense', path: '/cash' },
+  { icon: '💸', label: 'Add Expense', path: '/petty-cash' },
   { icon: '💳', label: 'Record Payment', path: '/sales' },
   { icon: '🔄', label: 'Transfer Stock', path: '/transfers' },
 ]
