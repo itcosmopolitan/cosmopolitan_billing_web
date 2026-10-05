@@ -21,6 +21,7 @@ import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclR
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 import {
   customerRequiresImmediatePayment,
+  isCreditEligibleCustomer,
   storeCreditApplyAmount,
   remainingAfterStoreCredit,
 } from '@/utils/storeCredit'
@@ -55,6 +56,7 @@ export default function InvoiceFormModal({
       pif('customerCreditBalance', Number(c.credit_balance || 0))
       pif('customerCreditLimit', Number(c.credit_limit || 0))
       pif('customerOutstanding', Number(c.outstanding || 0))
+      pif('customerCreditEligible', Boolean(c.is_credit_eligible ?? c.isCreditEligible))
       pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
     },
   })
@@ -139,8 +141,12 @@ export default function InvoiceFormModal({
     invoiceForm.paymentMethod !== 'credit' && Boolean(invoiceForm.customerId) && creditAvail > 0,
   )
   const remainingDuePreview = remainingAfterStoreCredit(rollup.total, creditAppliedPreview)
-  const customerType = String(invoiceForm.customerType || 'retail').toLowerCase()
-  const canUseCredit = Boolean(invoiceForm.customerId) && ['wholesale', 'staff'].includes(customerType)
+  const canUseCredit = isCreditEligibleCustomer({
+    id: invoiceForm.customerId,
+    is_credit_eligible: invoiceForm.customerCreditEligible,
+    customer_type: invoiceForm.customerType,
+    credit_limit: invoiceForm.customerCreditLimit,
+  })
   const accountCreditRemaining = Math.max(
     0,
     Number(invoiceForm.customerCreditLimit || 0) - Number(invoiceForm.customerOutstanding || 0),
@@ -184,6 +190,7 @@ export default function InvoiceFormModal({
                   pif('customerCreditBalance', 0)
                   pif('customerCreditLimit', 0)
                   pif('customerOutstanding', 0)
+                  pif('customerCreditEligible', false)
                   pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail'))
                   return
                 }
@@ -193,12 +200,14 @@ export default function InvoiceFormModal({
                 pif('customerName', opt.label)
                 pif('customerType', type)
                 pif('customerClassification', cls)
+                pif('customerCreditEligible', Boolean(opt.raw?.is_credit_eligible))
                 pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, { customer_type: type, classification: cls }))
                 try {
                   const c = await customersAPI.get(opt.id)
                   pif('customerCreditBalance', Number(c?.credit_balance || 0))
                   pif('customerCreditLimit', Number(c?.credit_limit || 0))
                   pif('customerOutstanding', Number(c?.outstanding || 0))
+                  pif('customerCreditEligible', Boolean(c?.is_credit_eligible ?? c?.isCreditEligible))
                   pif('customerType', customerPricingType(c.customer_type || c.type || type))
                   pif('customerClassification', customerClassification(c))
                   pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
@@ -206,6 +215,7 @@ export default function InvoiceFormModal({
                   pif('customerCreditBalance', Number(opt.raw?.credit_balance || 0))
                   pif('customerCreditLimit', Number(opt.raw?.credit_limit || 0))
                   pif('customerOutstanding', Number(opt.raw?.outstanding || 0))
+                  pif('customerCreditEligible', Boolean(opt.raw?.is_credit_eligible))
                 }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
@@ -305,10 +315,12 @@ export default function InvoiceFormModal({
               )}
               {!invoiceForm.paymentMethod && remainingDuePreview > 0.001 && customerRequiresImmediatePayment({
                 id: invoiceForm.customerId,
+                is_credit_eligible: invoiceForm.customerCreditEligible,
                 customer_type: invoiceForm.customerType,
+                credit_limit: invoiceForm.customerCreditLimit,
               }) && (
                 <div style={{ width: '100%', fontSize: 12, color: 'var(--amber)', marginTop: 4 }}>
-                  Payment method is <strong>required</strong> for walk-in / retail customers
+                  Payment method is <strong>required</strong> for walk-in / non-credit-eligible customers
                   {creditAppliedPreview > 0 ? ' (for the remaining amount)' : ''}.
                 </div>
               )}

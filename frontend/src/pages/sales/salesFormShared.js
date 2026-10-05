@@ -124,6 +124,7 @@ export const emptyInvoiceForm = (branchId) => ({
   customerCreditBalance: 0,
   customerCreditLimit: 0,
   customerOutstanding: 0,
+  customerCreditEligible: false,
   branchId,
   childCounterId: '',
   childCounterName: '',
@@ -195,6 +196,11 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false, keepNum
     customerType: customerPricingType(doc.customerType || doc.customer_type || 'retail'),
     customerClassification: customerClassification(doc),
     customerCreditBalance: Number(doc.creditBalance ?? doc.credit_balance ?? 0) || 0,
+    customerCreditLimit: Number(doc.creditLimit ?? doc.credit_limit ?? 0) || 0,
+    customerOutstanding: Number(doc.outstanding ?? 0) || 0,
+    customerCreditEligible: Boolean(
+      doc.is_credit_eligible ?? doc.isCreditEligible ?? doc.customerCreditEligible,
+    ),
     notes: doc.notes || '',
   }
 }

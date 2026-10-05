@@ -50,6 +50,23 @@ async function enrichLinesWithBatchFlags(items, branchId) {
   return out
 }
 
+async function enrichCustomerCreditFields(base) {
+  if (!base?.customerId) return base
+  try {
+    const cust = await customersAPI.get(base.customerId)
+    return {
+      ...base,
+      customerCreditBalance: Number(cust?.credit_balance || 0),
+      customerCreditLimit: Number(cust?.credit_limit || 0),
+      customerOutstanding: Number(cust?.outstanding || 0),
+      customerCreditEligible: Boolean(cust?.is_credit_eligible ?? cust?.isCreditEligible),
+      customerType: cust?.customer_type || cust?.type || base.customerType,
+    }
+  } catch {
+    return base
+  }
+}
+
 export default function InvoiceFormPage() {
   const [searchParams] = useSearchParams()
   const fromQuoteId = searchParams.get('fromQuote')
@@ -102,7 +119,9 @@ export default function InvoiceFormPage() {
         if (fromOrderId) {
           const so = await salesAPI.orders.get(fromOrderId)
           if (cancelled) return
-          const base = invoiceFromRow(so, activeBranchId, { withOrderLineId: true })
+          const base = await enrichCustomerCreditFields(
+            invoiceFromRow(so, activeBranchId, { withOrderLineId: true }),
+          )
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
           setSelectedChildCounter(base.childCounterId || '')
@@ -120,7 +139,7 @@ export default function InvoiceFormPage() {
             setConversionLabel(q.number)
             return
           }
-          const base = invoiceFromRow(q, activeBranchId)
+          const base = await enrichCustomerCreditFields(invoiceFromRow(q, activeBranchId))
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
           setSelectedChildCounter(base.childCounterId || '')
@@ -176,6 +195,7 @@ export default function InvoiceFormPage() {
         customerCreditBalance: creditAvail,
         customerCreditLimit: Number(cust?.credit_limit || 0),
         customerOutstanding: Number(cust?.outstanding || 0),
+        customerCreditEligible: Boolean(cust?.is_credit_eligible ?? cust?.isCreditEligible),
       }))
     } catch {
       /* keep form balance */
@@ -212,10 +232,12 @@ export default function InvoiceFormPage() {
     }
     const mustPay = customerRequiresImmediatePayment({
       id: form.customerId,
+      is_credit_eligible: form.customerCreditEligible,
       customer_type: form.customerType,
+      credit_limit: form.customerCreditLimit,
     })
     if (mustPay && remaining > 0.001 && !form.paymentMethod) {
-      toast.error('Retail customers must pay at sale — select a payment method')
+      toast.error('This customer is not credit eligible — select a payment method')
       return
     }
     if ((form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer') && remaining > 0.001 && !String(form.paymentRef || '').trim()) {

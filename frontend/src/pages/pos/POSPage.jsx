@@ -38,6 +38,7 @@ import {
   storeCreditApplyAmount,
   remainingAfterStoreCredit,
   customerRequiresImmediatePayment,
+  isCreditEligibleCustomer,
 } from '@/utils/storeCredit'
 import { getConfiguredChildCounters } from '@/utils/childCounters'
 import {
@@ -629,7 +630,7 @@ export default function POSPage() {
     if (mustPay && !settling && !poolCheckout) {
       toast.error(
         customer?.id
-          ? 'Retail customers must pay at sale — select a payment method'
+          ? 'This customer is not credit eligible — select a payment method'
           : 'Walk-in customers must pay at sale — select a payment method',
       )
       return
@@ -923,8 +924,7 @@ export default function POSPage() {
   const creditAvail = customer?.id ? Number(customer.credit_balance || 0) : 0
   const creditAppliedPreview = storeCreditApplyAmount(creditAvail, total, !!customer?.id)
   const remainingDuePreview = remainingAfterStoreCredit(total, creditAppliedPreview)
-  const customerType = String(customer?.customer_type || customer?.customerType || customer?.type || 'retail').toLowerCase()
-  const canUseCredit = Boolean(customer?.id) && ['wholesale', 'staff'].includes(customerType)
+  const canUseCredit = isCreditEligibleCustomer(customer)
   const accountCreditRemaining = Math.max(0, Number(customer?.credit_limit || 0) - Number(customer?.outstanding || 0))
   const paymentMethodOptions = [
     { id: 'cash', label: '💵 Cash' },

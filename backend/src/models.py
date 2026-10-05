@@ -564,6 +564,9 @@ class Customer(Base):
     type            = Column(String, default="retail")  # retail | wholesale | staff
     # external (default) pays GST at item rates; internal is billed at 0% GST.
     classification  = Column(String, default="external")  # external | internal
+    # Explicit account-credit facility (limit + terms). Independent of pricing
+    # category — retail customers may be credit-eligible when this is true.
+    is_credit_eligible = Column(Boolean, default=False, nullable=False)
     key_account_manager = Column(String)  # users.id of a branch manager (optional)
     credit_terms    = Column(String)  # free text, e.g. Cash / Credit - 7 Days
     active          = Column(Boolean, default=True)

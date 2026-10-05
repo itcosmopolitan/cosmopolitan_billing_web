@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { salesAPI, itemsAPI } from '@/api'
+import { salesAPI, itemsAPI, customersAPI } from '@/api'
 import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -88,8 +88,23 @@ export default function InvoiceEditPage() {
         }
         const base = invoiceFromRow(inv, inv.branchId, { keepNumber: true })
         const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
+        let creditMeta = {}
+        if (base.customerId) {
+          try {
+            const cust = await customersAPI.get(base.customerId)
+            creditMeta = {
+              customerCreditBalance: Number(cust?.credit_balance || 0),
+              customerCreditLimit: Number(cust?.credit_limit || 0),
+              customerOutstanding: Number(cust?.outstanding || 0),
+              customerCreditEligible: Boolean(cust?.is_credit_eligible ?? cust?.isCreditEligible),
+              customerType: cust?.customer_type || cust?.type || base.customerType,
+            }
+          } catch {
+            /* keep invoice snapshot */
+          }
+        }
         if (cancelled) return
-        setForm({ ...base, items })
+        setForm({ ...base, items, ...creditMeta })
         setSelectedChildCounter(base.childCounterId || '')
       } catch {
         if (!cancelled) {
@@ -130,12 +145,14 @@ export default function InvoiceEditPage() {
     }
     const mustPay = customerRequiresImmediatePayment({
       id: form.customerId,
+      is_credit_eligible: form.customerCreditEligible,
       customer_type: form.customerType,
+      credit_limit: form.customerCreditLimit,
     })
     if (mustPay && !form.paymentMethod) {
       toast.error(
         form.customerId
-          ? 'Retail customers must pay at sale — select a payment method'
+          ? 'This customer is not credit eligible — select a payment method'
           : 'Walk-in customers must pay at sale — select a payment method',
       )
       return

@@ -10,16 +10,26 @@ export function remainingAfterStoreCredit(due, creditApplied) {
   return Math.round(Math.max(0, (Number(due) || 0) - (Number(creditApplied) || 0)) * 100) / 100
 }
 
-/**
- * Walk-in and retail customers have no account credit facility —
- * payment (or full account-credit cover) is required at sale.
- */
-export function customerRequiresImmediatePayment(customer) {
-  if (!customer?.id) return true
+/** True when the customer may use account credit (limit / unpaid invoices). */
+export function isCreditEligibleCustomer(customer) {
+  if (!customer?.id) return false
+  const raw = customer.is_credit_eligible ?? customer.isCreditEligible ?? customer.customerCreditEligible
+  if (raw === true || raw === 1 || raw === '1' || String(raw).toLowerCase() === 'true') return true
+  if (raw === false || raw === 0 || raw === '0' || String(raw).toLowerCase() === 'false') return false
+  // Legacy payloads without the flag: non-retail + positive limit.
   const type = String(
     customer.customer_type || customer.customerType || customer.type || 'retail',
   ).trim().toLowerCase()
-  return type === 'retail' || type === ''
+  return ['wholesale', 'staff'].includes(type) && Number(customer.credit_limit || customer.creditLimit || 0) > 0
+}
+
+/**
+ * Walk-in and non-credit-eligible customers have no account credit facility —
+ * payment (or full store-credit cover) is required at sale.
+ */
+export function customerRequiresImmediatePayment(customer) {
+  if (!customer?.id) return true
+  return !isCreditEligibleCustomer(customer)
 }
 
 /** Human label for invoice settlement (tender ± account credit). */

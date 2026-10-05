@@ -33,6 +33,7 @@ class CustomerCreate(BaseModel):
     credit_limit: float = 0
     customer_type: str = "retail"
     classification: str = "external"
+    is_credit_eligible: bool = False
     key_account_manager: Optional[str] = None
     credit_terms: Optional[StrictInt] = Field(default=None, ge=0)
     street1: str
@@ -65,6 +66,7 @@ class CustomerUpdate(BaseModel):
     credit_limit: Optional[float] = None
     customer_type: Optional[str] = None
     classification: Optional[str] = None
+    is_credit_eligible: Optional[bool] = None
     key_account_manager: Optional[str] = None
     credit_terms: Optional[StrictInt] = Field(default=None, ge=0)
     street1: Optional[str] = None
@@ -383,10 +385,11 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     await enforce_branch_access(data.branch_id, user=user, db=db)
     customer_type = _normalize_customer_type(data.customer_type)
     classification = _normalize_classification(data.classification)
-    # Retail has no account credit facility — force limit/terms off.
-    credit_limit = 0.0 if customer_type == "retail" else float(data.credit_limit or 0)
-    credit_terms = None if customer_type == "retail" else (
-        str(data.credit_terms) if data.credit_terms is not None else None
+    # Account credit is gated by is_credit_eligible (not pricing category).
+    is_credit_eligible = bool(data.is_credit_eligible)
+    credit_limit = float(data.credit_limit or 0) if is_credit_eligible else 0.0
+    credit_terms = (
+        str(data.credit_terms) if is_credit_eligible and data.credit_terms is not None else None
     )
     address = _compose_address_from_parts(data)
     customer_id = str(uuid.uuid4())
@@ -396,6 +399,7 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
                  gstin=data.gst_in, branch_id=data.branch_id,
                  credit_limit=credit_limit, type=customer_type,
                  classification=classification,
+                 is_credit_eligible=is_credit_eligible,
                  key_account_manager=(data.key_account_manager or None),
                  credit_terms=credit_terms,
                  street1=data.street1, street2=data.street2, street3=data.street3,
@@ -435,9 +439,8 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
             continue
         setattr(c, _FIELD_TO_COLUMN.get(k, k), v)
 
-    # After applying fields: retail never keeps an account limit / terms.
-    effective_type = (c.type or "retail").strip().lower()
-    if effective_type == "retail":
+    # After applying fields: non-eligible customers never keep limit / terms.
+    if not bool(getattr(c, "is_credit_eligible", False)):
         c.credit_limit = 0.0
         c.credit_terms = None
 

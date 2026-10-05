@@ -32,6 +32,8 @@ _MAP_KEYS = {
     "credit limit": "credit_limit", "customer type": "customer_type",
     "classification": "classification", "internal/external": "classification",
     "key account manager": "key_account_manager", "credit terms": "credit_terms",
+    "credit eligible": "is_credit_eligible", "is credit eligible": "is_credit_eligible",
+    "is_credit_eligible": "is_credit_eligible",
 }
 
 
@@ -131,12 +133,18 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
 
             customer_type = _normalize_customer_type(_as_text(data.get("customer_type")) or "retail")
             classification = _normalize_classification(_as_text(data.get("classification")) or "external")
-            if customer_type == "retail":
-                credit_limit = 0.0
-                credit_terms = None
+            eligible_raw = _as_text(data.get("is_credit_eligible") or data.get("credit eligible") or "")
+            if eligible_raw:
+                is_credit_eligible = eligible_raw.strip().lower() in {"1", "true", "yes", "y"}
             else:
+                # Legacy import sheets without the column: non-retail + limit ⇒ eligible.
+                is_credit_eligible = customer_type in {"wholesale", "staff"}
+            if is_credit_eligible:
                 credit_limit = float(data.get("credit_limit") if data.get("credit_limit") not in (None, "") else 10000)
                 credit_terms = _as_text(data.get("credit_terms")) or None
+            else:
+                credit_limit = 0.0
+                credit_terms = None
 
             customer_id = str(uuid.uuid4())
             customer = Customer(
@@ -149,6 +157,7 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
                 credit_limit=credit_limit,
                 type=customer_type,
                 classification=classification,
+                is_credit_eligible=is_credit_eligible,
                 key_account_manager=_as_text(data.get("key_account_manager")) or None,
                 credit_terms=credit_terms,
                 street1=_as_text(data.get("street1")) or None,

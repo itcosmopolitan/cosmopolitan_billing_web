@@ -24,6 +24,7 @@ const emptyForm = (branchId) => ({
   credit_limit: '0',
   customer_type: 'retail',
   classification: 'external',
+  is_credit_eligible: false,
   key_account_manager: '',
   key_account_manager_name: '',
   credit_terms: '',
@@ -55,6 +56,10 @@ function formFromCustomer(customer) {
     credit_limit: customer.credit_limit != null ? String(customer.credit_limit) : '0',
     customer_type: customer.customer_type || customer.type || 'retail',
     classification: customer.classification === 'internal' ? 'internal' : 'external',
+    is_credit_eligible: Boolean(
+      customer.is_credit_eligible ?? customer.isCreditEligible
+      ?? (Number(customer.credit_limit || 0) > 0),
+    ),
     key_account_manager: customer.keyAccountManagerId || customer.key_account_manager || '',
     key_account_manager_name: customer.keyAccountManager || customer.key_account_manager_name || '',
     credit_terms: customer.credit_terms || customer.creditTerms || '',
@@ -114,11 +119,14 @@ export default function CustomerFormModal({
       address: '',
       gst_in: form.gst_in?.trim() || undefined,
       branch_id: effectiveBranchId,
-      credit_limit: form.customer_type === 'retail' ? 0 : (Number(form.credit_limit) || 0),
+      is_credit_eligible: Boolean(form.is_credit_eligible),
+      credit_limit: form.is_credit_eligible ? (Number(form.credit_limit) || 0) : 0,
       customer_type: form.customer_type,
       classification: form.classification === 'internal' ? 'internal' : 'external',
       key_account_manager: form.key_account_manager?.trim() || null,
-      credit_terms: form.customer_type === 'retail' ? null : (form.credit_terms === '' ? null : Number(form.credit_terms)),
+      credit_terms: form.is_credit_eligible
+        ? (form.credit_terms === '' ? null : Number(form.credit_terms))
+        : null,
       street1: form.street1?.trim(),
       street2: form.street2?.trim() || undefined,
       street3: form.street3?.trim() || undefined,
@@ -263,16 +271,11 @@ export default function CustomerFormModal({
         <FormGroup label="Pricing category" required>
           <AutocompleteDropdown
             value={form.customer_type}
-            onChange={(v) => {
-              pf('customer_type', v)
-              if (v === 'retail') pf('credit_limit', '0')
-            }}
+            onChange={(v) => pf('customer_type', v || 'retail')}
             options={CUSTOMER_TYPE_OPTIONS}
             isSearchFieldRequired={false}
           />
         </FormGroup>
-      </FormRow>
-      <FormRow>
         <FormGroup label="Key Account Manager">
           <AutocompleteDropdown
             value={form.key_account_manager}
@@ -300,8 +303,30 @@ export default function CustomerFormModal({
             emptyLabel="No users found"
           />
         </FormGroup>
-        {form.customer_type !== 'retail' && (
-          <FormGroup label="Account limit (MVR)">
+      </FormRow>
+      <FormGroup label="Credit">
+        <label className="form-checkbox" style={{ alignItems: 'center', marginTop: 4 }}>
+          <input
+            type="checkbox"
+            checked={Boolean(form.is_credit_eligible)}
+            onChange={(e) => {
+              const on = e.target.checked
+              pf('is_credit_eligible', on)
+              if (!on) {
+                pf('credit_limit', '0')
+                pf('credit_terms', '')
+              }
+            }}
+          />
+          <span style={{ marginLeft: 8 }}>Credit eligible customer</span>
+        </label>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          Enable to set an account limit and credit terms for unpaid invoices.
+        </div>
+      </FormGroup>
+      {form.is_credit_eligible && (
+        <FormRow>
+          <FormGroup label="Account limit (MVR)" required>
             <input
               className="form-input"
               type="number"
@@ -311,21 +336,19 @@ export default function CustomerFormModal({
               onChange={(e) => pf('credit_limit', e.target.value)}
             />
           </FormGroup>
-        )}
-      </FormRow>
-      {form.customer_type !== 'retail' && (
-        <FormGroup label="Credit terms">
-          <input
-            className="form-input"
-            type="number"
-            min="0"
-            step="1"
-            inputMode="numeric"
-            value={form.credit_terms}
-            onChange={(e) => pf('credit_terms', e.target.value.replace(/\D/g, ''))}
-            placeholder="Numbers of days"
-          />
-        </FormGroup>
+          <FormGroup label="Credit terms">
+            <input
+              className="form-input"
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              value={form.credit_terms}
+              onChange={(e) => pf('credit_terms', e.target.value.replace(/\D/g, ''))}
+              placeholder="Number of days"
+            />
+          </FormGroup>
+        </FormRow>
       )}
     </Modal>
   )

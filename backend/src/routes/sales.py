@@ -356,7 +356,7 @@ async def _validate_unpaid_account_limit(
     customer_id: Optional[str],
     invoice_total: float,
 ) -> None:
-    """Block unpaid sales for walk-in/retail; enforce account limit otherwise."""
+    """Block unpaid sales for walk-in / non-credit-eligible; enforce limit otherwise."""
     if not customer_id:
         raise HTTPException(
             400,
@@ -370,15 +370,10 @@ async def _validate_unpaid_account_limit(
     if not customer:
         return
 
-    ctype = str(
-        getattr(customer, "customer_type", None)
-        or getattr(customer, "type", None)
-        or "retail"
-    ).strip().lower()
-    if ctype in ("", "retail"):
+    if not bool(getattr(customer, "is_credit_eligible", False)):
         raise HTTPException(
             400,
-            "Retail customers must pay at sale — select a payment method to continue.",
+            "This customer is not credit eligible — select a payment method to continue.",
         )
 
     outstanding = float(customer.outstanding or 0)

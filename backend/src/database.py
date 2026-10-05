@@ -340,6 +340,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("customers", "key_account_manager", "VARCHAR"),
     ("customers", "credit_terms", "VARCHAR"),
     ("customers", "classification", "VARCHAR DEFAULT 'external'"),
+    ("customers", "is_credit_eligible", "BOOLEAN DEFAULT FALSE NOT NULL"),
     ("items", "wholesale_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "staff_discount_pct", "FLOAT DEFAULT 0"),
     ("items", "wholesale_pricing_mode", "VARCHAR DEFAULT 'pct'"),
@@ -561,6 +562,7 @@ async def init_schema() -> None:
             added_columns = await _ensure_columns(conn)
             await _promote_qty_columns_to_float(conn)
             await _backfill_user_account_status(conn, added_columns)
+            await _backfill_customer_credit_eligible(conn, added_columns)
             await _ensure_audit_log_indexes(conn)
             await _ensure_stock_pool_indexes(conn)
             await _ensure_nullable_columns(conn)
@@ -932,6 +934,31 @@ async def _backfill_user_account_status(conn, added_columns: set[tuple[str, str]
                 WHEN must_change_password THEN 'invited'
                 ELSE 'active'
             END
+            """
+        )
+    )
+
+
+async def _backfill_customer_credit_eligible(
+    conn, added_columns: set[tuple[str, str]]
+) -> None:
+    """One-time: wholesale/staff customers with an account limit become eligible.
+
+    Legacy behaviour treated non-retail pricing as credit-capable. Preserve that
+    for existing rows when the column is first added.
+    """
+    if ("customers", "is_credit_eligible") not in added_columns:
+        return
+    tables = await _existing_tables(conn, ["customers"])
+    if "customers" not in tables:
+        return
+    await conn.execute(
+        text(
+            """
+            UPDATE customers
+            SET is_credit_eligible = TRUE
+            WHERE LOWER(COALESCE(type, 'retail')) IN ('wholesale', 'staff')
+              AND COALESCE(credit_limit, 0) > 0
             """
         )
     )

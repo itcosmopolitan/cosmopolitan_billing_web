@@ -146,6 +146,7 @@ def serialize_customer(c) -> dict:
         "total_purchases": c.total_purchases,
         "customer_type": c.type,
         "classification": getattr(c, "classification", None) or "external",
+        "is_credit_eligible": bool(getattr(c, "is_credit_eligible", False)),
         "key_account_manager": getattr(c, "key_account_manager", None),
         "key_account_manager_name": getattr(c, "_key_account_manager_name", None),
         "credit_terms": getattr(c, "credit_terms", None),
