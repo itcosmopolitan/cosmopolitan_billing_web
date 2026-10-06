@@ -441,8 +441,10 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
         if (!ready) throw new Error('The invoice preview did not finish rendering.')
       }
 
-      const customerName = sale.customerName || sale.customer_name || sale.vendorName || 'Customer'
-      const fileName = `${customerName}_${sale.number || sale.quote_no || (documentType === 'Quote' ? 'quote' : 'invoice')}`
+      const docNumber = sale.number || sale.quote_no || sale.invoiceNumber || sale.invoice_no || sale.id || (documentType === 'Quote' ? 'quote' : 'invoice')
+      const fileName = documentType === 'Tax Invoice'
+        ? `Tax_Invoice_${docNumber}`
+        : `${documentType.replace(/\s+/g, '_')}_${docNumber}`
       const previewContainerId = documentType === 'Quote' ? 'quotePages' : 'invoicePages'
       const invoicePages = invoiceFormat === 'standard'
         ? standardPreviewRef.current?.contentDocument?.getElementById(previewContainerId)
@@ -501,7 +503,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
         <iframe
           ref={standardPreviewRef}
           title={documentType === 'Quote' ? 'Quote preview' : 'Standard invoice preview'}
-          src={documentType === 'Quote' ? '/quote-cosmo.html?preview=1' : '/invoice-cosmo.html?preview=1'}
+          src={documentType === 'Quote' ? '/quote-export-a4.html?preview=1' : '/invoice-export-a4.html?preview=1'}
           style={{
             width: '100%',
             height: 900,

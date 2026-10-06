@@ -26,6 +26,7 @@ from src.routes import (
     customer_display,
     customers,
     dashboard,
+    documents,
     items,
     permissions,
     purchases,
@@ -123,6 +124,7 @@ app.include_router(auth.router,       prefix=f"{PREFIX}/auth",      tags=["Auth"
 app.include_router(audit.router,      prefix=f"{PREFIX}/audit",     tags=["Audit"])
 app.include_router(activity.router,   prefix=f"{PREFIX}/activity",  tags=["Activity"])
 app.include_router(dashboard.router,  prefix=f"{PREFIX}/dashboard", tags=["Dashboard"])
+app.include_router(documents.router,  prefix=f"{PREFIX}/documents", tags=["Documents"])
 app.include_router(branches.router,   prefix=f"{PREFIX}/branches",  tags=["Branches"])
 app.include_router(items.router,      prefix=f"{PREFIX}/items",     tags=["Items"])
 app.include_router(customers.router,  prefix=f"{PREFIX}/customers", tags=["Customers"])

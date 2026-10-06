@@ -9,6 +9,7 @@ from src.routes import (
     cash,
     customers,
     dashboard,
+    documents,
     items,
     permissions,
     purchases,
@@ -26,6 +27,6 @@ __all__ = [
     "activity",
     "audit",
     "auth", "branches", "cash", "customers", "dashboard",
-    "items", "permissions", "purchases", "reports", "roles",
+    "documents", "items", "permissions", "purchases", "reports", "roles",
     "sales", "setup", "taxes", "transfers", "users", "vendors",
 ]

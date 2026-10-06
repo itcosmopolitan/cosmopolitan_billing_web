@@ -16,8 +16,8 @@ export async function exportStockTransferPdf(transfer, branch) {
 
   const frame = document.createElement('iframe')
   frame.title = 'Stock transfer PDF export'
-  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;height:1200px;border:0;'
-  frame.src = '/invoice-cosmo.html?preview=1'
+  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;'
+  frame.src = '/invoice-export-a4.html?preview=1'
   const frameLoaded = waitForFrameLoad(frame)
   document.body.appendChild(frame)
 

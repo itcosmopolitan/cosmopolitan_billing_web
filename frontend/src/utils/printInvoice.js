@@ -136,7 +136,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
 
 async function openDocumentPrintWindow(sale, branch, documentType, fetchSale) {
   if (typeof window === 'undefined') return
-  const win = window.open('/invoice-cosmo.html', '_blank')
+  const win = window.open('/invoice-print-a5.html', '_blank')
   const payload = await prepareInvoicePayload(sale, branch, { documentType, fetchSale })
   if (!payload) return
 
@@ -216,7 +216,7 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
 
 export async function openStockTransferPrintWindow(transfer, branch) {
   if (typeof window === 'undefined') return
-  const win = window.open('/invoice-cosmo.html', '_blank')
+  const win = window.open('/invoice-print-a5.html', '_blank')
   if (!win) throw new Error('The stock transfer print window was blocked.')
   let payload
   try {

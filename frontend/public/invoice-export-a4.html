@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tax Invoice Export</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 11px;
+    color: #222;
+    margin: 0;
+    padding: 0;
+    background: #e8e8e8;
+  }
+  .page {
+    background: #fff;
+    margin: 20px auto;
+    padding: 30px 40px 20px 40px;
+    position: relative;
+    page-break-after: always;
+    page-break-inside: auto;
+  }
+  .continuation-page .header,
+  .continuation-page .title-row,
+  .continuation-page .parties {
+    display: none;
+  }
+  .page:last-child {
+    page-break-after: auto;
+  }
+  table.items {
+    page-break-inside: auto;
+  }
+  table.items thead, table.items tbody, table.items tbody tr {
+    page-break-inside: avoid;
+  }
+  /* Header */
+  .header {
+    display: grid;
+    grid-template-columns: 140px 1fr 90px;
+    align-items: flex-start;
+    border-bottom: 0px solid transparent;
+    padding-bottom: 6px;
+    gap: 1px;
+  }
+  .logo-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 140px;
+  }
+  .logo-img {
+    width: 120px;
+    height: auto;
+    display: block;
+  }
+  .logo-tag {
+    font-size: 7px;
+    font-style: italic;
+    color: #444;
+  }
+  .fssc {
+    font-size: 10px;
+    color: #2e7d32;
+    font-weight: bold;
+    margin-top: 6px;
+  }
+  .company-info {
+    flex: 1;
+    width: 100%;
+    max-width: none;
+    padding-top: 5px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  .company-name {
+    color: #47aa1c;
+    font-weight: 800;
+    font-size: 15px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    line-height: 1.2;
+  }
+  .company-line {
+    font-size: 8px;
+    color: #222;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-x: visible;
+  }
+  .company-tin {
+    width: 100%;
+    text-align: center;
+  }
+  .company-addr {
+    display: none;
+  }
+  .gold-badge {
+    text-align: center;
+    width: 90px;
+    display:flex;justify-content:flex-end;align-items:center
+  }
+  .badge-img {
+    width: 70px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+  .gold-circle {
+    width: 45px;
+    height: 45px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #ffe27a, #d4af37);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: bold;
+    color: #5a4200;
+    margin: 0 auto 2px auto;
+  }
+  .gold-seal {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    border: 3px solid #c89b43;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    color: #8b6a00;
+    text-align: center;
+    padding: 4px;
+    margin: 0 auto;
+  }
+  .gold-seal .gold-corporate { font-size: 9px; letter-spacing: 0.6px; color: #8b6a00; margin-bottom: 0; }
+  .gold-seal .gold-text { font-size: 12px; font-weight: 700; margin-top: 2px; }
+  .gold-seal .gold-100 { font-size: 26px; font-weight: 800; line-height: 0.95; margin-top: 0; }
+  .gold-seal .gold-year { font-size: 10px; margin-top: 2px; color: #6d6d6d }
+
+  /* Title */
+  .title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 6px;
+    position: relative;
+  }
+  .copy-label {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #fff;
+    background: #1b3e6f;
+    padding: 3px 7px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+  }
+  .title-row h1 {
+    font-size: 16px;
+    margin: 0;
+    color: #111;
+    letter-spacing: 0.4px;
+    font-weight: 800;
+  }
+  .title-row .pageno {
+    font-size: 9.5px;
+    color: #555;
+    white-space: nowrap;
+  }
+
+  /* Bill-to / seller block */
+  .parties {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 22px;
+    margin-top: 18px;
+    align-items: start;
+  }
+  .bill-to {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+  }
+  .bill-to table {
+    width: 100%;
+    table-layout: fixed;
+  }
+  .bill-to table td {
+    min-width: 0;
+  }
+  .bill-to table td.label {
+    width: 78px;
+  }
+  .bill-to table td:not(.label) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .bill-to h2 {
+    font-size: 15px;
+    margin: 0 0 6px 0;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+  }
+  .bill-to .addr-line {
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #222;
+    white-space: pre-wrap;
+    margin-top: 2px;
+  }
+  .seller-addr {
+    font-size: 10.5px;
+    text-align: right;
+    line-height: 1.35;
+    color: #222;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  .seller-addr strong {
+    display: block;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  /* Info table */
+  .info-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .details-box {
+    border: 1px solid rgba(0,0,0,0.08);
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: #fbfbfb;
+  }
+  .details-title {
+    font-size: 11px;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: #1b3e6f;
+  }
+  .info-left table, .info-right table {
+    border-collapse: collapse;
+    font-size: 10px;
+    width: 100%;
+  }
+  .info-left td, .info-right td {
+    padding: 2px 3px;
+    vertical-align: top;
+    line-height: 1.25;
+  }
+  .info-left td.label, .info-right td.label {
+    color: #333;
+    white-space: nowrap;
+    width: 130px;
+    font-weight: 700;
+    font-size: 9.8px;
+    letter-spacing: 0.3px;
+  }
+  .info-left td + td, .info-right td + td {
+    padding-left: 8px;
+    color: #111;
+    font-size: 10px;
+  }
+  .info-left tr, .info-right tr {
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+  }
+  .info-left tr:last-child td, .info-right tr:last-child td {
+    border-bottom: none;
+  }
+  .info-left td, .info-right td {
+    padding-top: 3px;
+    padding-bottom: 3px;
+  }
+  .info-right {
+    text-align: left;
+  }
+
+  /* Items table */
+  table.items {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    margin-top: 20px;
+    font-size: 10.5px;
+  }
+  table.items th:nth-child(1), table.items td:nth-child(1) { width: 6%; }
+  table.items th:nth-child(2), table.items td:nth-child(2) { width: 28%; }
+  table.items th:nth-child(3), table.items td:nth-child(3) { width: 14%; }
+  table.items th:nth-child(4), table.items td:nth-child(4) { width: 8%; }
+  table.items th:nth-child(5), table.items td:nth-child(5) { width: 7%; }
+  table.items th:nth-child(6), table.items td:nth-child(6) { width: 14%; }
+  table.items th:nth-child(7), table.items td:nth-child(7) { width: 7%; }
+  table.items th:nth-child(8), table.items td:nth-child(8) { width: 7%; }
+  table.items th:nth-child(9), table.items td:nth-child(9) { width: 9%; }
+  table.items thead {
+    display: table-header-group;
+  }
+  table.items thead tr {
+    border-bottom: 1.5px solid #1b3e6f;
+  }
+  table.items th {
+    text-align: left;
+    padding: 5px 4px;
+    font-weight: bold;
+    color: #1b3e6f;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+    line-height: 1.18;
+  }
+  table.items td {
+    padding: 4px 4px;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+  table.items th.num, table.items td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  table.items td.num {
+    white-space: nowrap;
+  }
+  table.items tbody tr {
+    border-bottom: 1px solid #eee;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .totals {
+    width: 45%;
+    margin: 8px 0 0 auto;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .totals td {
+    padding: 3px 4px;
+    font-size: 10.5px;
+  }
+  .totals .tlabel {
+    text-align: right;
+    padding-right: 10px;
+  }
+  .totals .tval {
+    text-align: right;
+    width: 110px;
+  }
+  .totals .grand-row td {
+    border-top: 1.5px solid #1b3e6f;
+  }
+  .totals .grand {
+    font-weight: bold;
+  }
+  .totals-payment {
+    text-align: left;
+    font-size: 9.5px;
+    line-height: 1.35;
+    vertical-align: top;
+    padding-right: 12px !important;
+  }
+  .totals-payment strong {
+    font-weight: bold;
+  }
+
+  .discount-note {
+    margin-top: 10px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    text-align: right;
+  }
+
+  .amount-words {
+    margin-top: 6px;
+    font-size: 10.5px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    text-align: right;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .payment-section {
+    margin-top: 22px;
+    border-top: 1px solid #333;
+    padding-top: 10px;
+    font-size: 10.5px;
+  }
+  .payment-row {
+    display: flex;
+    margin-bottom: 4px;
+  }
+  .payment-row .plabel {
+    width: 160px;
+    flex-shrink: 0;
+  }
+  .payment-row .pcolon {
+    width: 12px;
+  }
+  .bank-details {
+    margin-left: 0;
+    line-height: 1.5;
+  }
+
+  .terms {
+    margin-top: 16px;
+    font-size: 9.5px;
+    color: #333;
+    line-height: 1.6;
+  }
+  .terms div { margin-bottom: 1px; }
+
+  .thankyou {
+    margin-top: 24px;
+    text-align: center;
+    font-style: italic;
+    font-weight: bold;
+    font-size: 11px;
+  }
+
+  .signoff {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 40px;
+    font-size: 10.5px;
+    font-weight: bold;
+  }
+
+  .page-break {
+    page-break-before: always;
+  }
+
+  .p2-note {
+    margin-top: 20px;
+    font-size: 11px;
+    font-weight: bold;
+  }
+
+  @page { size: A4; margin: 12mm; }
+
+  @media print {
+    body { background: #fff; }
+    .page { box-shadow: none; margin: 0; padding: 0; width: auto; }
+  }
+  body.invoice-preview #invoicePages { width: 794px; margin: 0 auto; }
+  body.invoice-preview .page { width: 100%; margin: 0; }
+  body.invoice-preview .header {
+    grid-template-columns: minmax(0, 120px) minmax(0, 1fr) minmax(0, 70px);
+    gap: 4px;
+  }
+  body.invoice-preview .logo-block { width: 120px; }
+  body.invoice-preview .company-info { min-width: 0; }
+  body.invoice-preview .company-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  body.invoice-preview .company-line {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  body.invoice-preview .gold-badge { width: 70px; }
+</style>
+</head>
+<body>
+<div id="invoicePages"></div>
+<script>
+(function(){
+  const isPreview = new URLSearchParams(window.location.search).get('preview') === '1'
+  if (isPreview) document.body.classList.add('invoice-preview')
+
+  function roundNumber(value) {
+    const n = Number(value || 0)
+    if (Number.isNaN(n)) return 0
+    return Math.round((n + Number.EPSILON) * 100) / 100
+  }
+
+  function formatNumber(value, opts = {}) {
+    const n = Number(value || 0)
+    if (Number.isNaN(n)) return '0.00'
+    return n.toLocaleString('en-MV', {
+      minimumFractionDigits: opts.minimumFractionDigits ?? 2,
+      maximumFractionDigits: opts.maximumFractionDigits ?? 2,
+    })
+  }
+
+  function formatDate(value) {
+    if (!value) return ''
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+
+    return `${day}/${month}/${year}`
+  }
+
+  function amountToWords(value, invalidFallback = 'ZERO RUFIYAA AND ZERO LAARI ONLY') {
+    const number = Number(value ?? 0)
+    if (Number.isNaN(number)) return invalidFallback
+    const rupees = Math.floor(number)
+    const laari = Math.round((number - rupees) * 100)
+    const ones = [
+      'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
+      'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN',
+      'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN',
+    ]
+    const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY']
+    const chunk = (n) => {
+      if (n < 20) return ones[n]
+      if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ` ${ones[n % 10]}` : '')
+      const remainder = n % 100
+      return `${ones[Math.floor(n / 100)]} HUNDRED${remainder ? ` ${chunk(remainder)}` : ''}`
+    }
+    if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
+    const parts = []
+    let remaining = rupees
+    let scaleIndex = 0
+    const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
+    while (remaining > 0) {
+      const part = remaining % 1000
+      if (part > 0) parts.unshift(`${chunk(part)}${scale[scaleIndex] ? ` ${scale[scaleIndex]}` : ''}`)
+      remaining = Math.floor(remaining / 1000)
+      scaleIndex += 1
+    }
+    return `${parts.join(' ') || 'ZERO'} RUFIYAA AND ${laari === 0 ? 'ZERO' : chunk(laari)} LAARI ONLY`
+  }
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  }
+
+  function getLineAmounts(item, documentDiscountShare = 0) {
+    const qty = Number(item.qty || item.quantity || 0)
+    const inclusiveRate = Number(item.price || item.rate || 0)
+    const discountPct = Math.min(100, Math.max(0, Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)))
+    const gstRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    // Display rate excl. GST (before discount). GST is extracted from the
+    // discounted inclusive amount — never from the pre-discount base.
+    const rate = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
+    const gross = roundNumber(qty * rate)
+    const inclusiveGross = roundNumber(qty * inclusiveRate)
+    const inclusiveAfterLineDiscount = roundNumber(inclusiveGross * (1 - discountPct / 100))
+    const inclusiveNet = roundNumber(Math.max(0, inclusiveAfterLineDiscount - documentDiscountShare))
+    const gst = gstRate > 0 ? roundNumber(inclusiveNet * gstRate / (100 + gstRate)) : 0
+    const net = roundNumber(inclusiveNet - gst)
+    const discount = roundNumber(Math.max(0, gross - net))
+    return { qty, rate, discountPct, gross, net, gst, discount, inclusiveAfterLineDiscount }
+  }
+
+  function allocateFlatAmount(amounts, flat) {
+    if (!amounts.length) return []
+    const normalized = amounts.map((amount) => Math.max(0, Number(amount) || 0))
+    const total = roundNumber(normalized.reduce((sum, amount) => sum + amount, 0))
+    const discount = Math.min(total, roundNumber(Math.max(0, Number(flat) || 0)))
+    if (discount <= 0 || total <= 0) return normalized.map(() => 0)
+    const lastIndex = normalized.reduce((last, amount, index) => amount > 0 ? index : last, 0)
+    const shares = normalized.map(() => 0)
+    let allocated = 0
+    normalized.forEach((amount, index) => {
+      if (index === lastIndex || amount <= 0) return
+      shares[index] = Math.min(amount, roundNumber(amount / total * discount))
+      allocated += shares[index]
+    })
+    shares[lastIndex] = Math.min(normalized[lastIndex], Math.max(0, roundNumber(discount - allocated)))
+    return shares
+  }
+
+  function renderRows(items, firstSerialNumber = 1, lineAmounts = []) {
+    return items.map((it, index) => {
+      const amounts = lineAmounts[index] || getLineAmounts(it)
+      return `<tr>\n<td>${firstSerialNumber + index}</td>\n<td>${escapeHtml(it.name || it.description || '')}</td>\n<td>${escapeHtml(it.packaging || it.packing || it.package || '')}</td>\n<td>${escapeHtml(it.units || it.unit || '')}</td>\n<td class="num">${formatNumber(amounts.qty,{minimumFractionDigits:0,maximumFractionDigits:3})}</td>\n<td class="num">${formatNumber(amounts.rate)}</td>\n<td class="num">${amounts.discountPct ? formatNumber(amounts.discountPct, {minimumFractionDigits:0,maximumFractionDigits:2}) + '%' : ''}</td>\n<td class="num">${formatNumber(amounts.gst)}</td>\n<td class="num">${formatNumber(amounts.net)}</td>\n</tr>`
+    }).join('\n')
+  }
+
+  function renderPage(pageIndex, totalPages, pageItems, invoice, branch, totals, copyLabel) {
+    const hasValue = (value) => value != null && String(value).trim() !== ''
+    const counterAddressLines = branch.invoiceAddressUsesCounter
+      ? (Array.isArray(branch.invoiceAddressLines) ? branch.invoiceAddressLines : [])
+      : [
+        `${branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'}, ${branch.street3 || branch.street_3 || "Hulhumale'"}, ${branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'}`,
+      ]
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const isPurchaseOrder = invoice.documentType === 'Purchase Order'
+    const isPurchaseBill = invoice.documentType === 'Purchase Bill'
+    const isGrnReceipt = invoice.documentType === 'GRN Receipt'
+    const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
+    const documentNumberLabel = isPurchaseOrder ? 'Purchase Order No.' : isPurchaseBill ? 'Bill No.' : isGrnReceipt ? 'GRN No.' : invoice.documentType === 'Sales Order' ? 'Sales Order No.' : 'Invoice No.'
+    const purchaseOrderNumber = invoice.purchaseOrderNumber || invoice.purchase_order_number || invoice.poNumber || invoice.po_number || ''
+    const paymentTerms = invoice.customerCreditTerms || invoice.customer_credit_terms || invoice.paymentTerms || invoice.payment_terms || ''
+    const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
+    const customerPhone = invoice.customerPhone || invoice.customer_phone || ''
+    const customerGstin = invoice.customerGstin || invoice.customer_gstin || invoice.customerGSTIN || invoice.customer_gst_in || ''
+    const invoiceNumber = invoice.number || invoice.invoiceNumber || invoice.invoice_no || ''
+    const rawAddress = invoice.customerAddress || invoice.customer_address || invoice.address || invoice.shippingAddress || invoice.address_lines || invoice.addressLines || ''
+    const addressParts = [
+      invoice.customerStreet1 || invoice.customer_street1,
+      invoice.customerStreet2 || invoice.customer_street2,
+      invoice.customerStreet3 || invoice.customer_street3,
+      invoice.customerCity || invoice.customer_city || invoice.city,
+      invoice.customerStateProvince || invoice.customer_state_province,
+      invoice.customerCountry || invoice.customer_country || invoice.country,
+      invoice.customerPostalCode || invoice.customer_postal_code || invoice.postal_code,
+    ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+    const customerAddress = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
+    const remarks = invoice.notes || invoice.remark || invoice.remarks || ''
+    const quotationNumber = invoice.quotationNumber || invoice.quotation_number || invoice.quotationNo || invoice.quotation_no || ''
+    const salesPerson = invoice.customerKeyAccountManagerName || invoice.customer_key_account_manager_name || invoice.customerKeyAccountManager || invoice.customer_key_account_manager || ''
+    const cashier = invoice.cashier || invoice.cashierName || invoice.cashier_name || ''
+    const createdBy = invoice.createdBy || invoice.created_by || ''
+    const invoiceDate = invoice.date || invoice.invoiceDate || invoice.invoice_date || ''
+    const paymentMode = String(invoice.paymentMode || invoice.payment_mode || invoice.method || '').toLowerCase()
+    const paymentDetails = isPurchaseDocument ? '' : paymentMode === 'cash'
+      ? `<strong>Cash Collected:</strong> ${formatNumber(invoice.cashCollected || 0)}<br/><strong>Cash Refunded:</strong> ${formatNumber(invoice.cashChange || invoice.cash_change || 0)}`
+      : ['card', 'upi', 'bank_transfer'].includes(paymentMode) && (invoice.paymentRef || invoice.payment_ref)
+        ? `<strong>Payment Ref:</strong> ${escapeHtml(invoice.paymentRef || invoice.payment_ref)}`
+        : ''
+    return `
+      <div class="page${pageIndex > 0 ? ' continuation-page' : ''}">
+        <div class="header">
+          <div style="display:flex; align-items:flex-start;">
+            <div class="logo-block">
+              <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+              <div class="logo-tag">"where quality and service matters"</div>
+            </div>
+          </div>
+          <div class="company-info">
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            ${counterAddressLines.map((line) => `<div class="company-line">${escapeHtml(line)}</div>`).join('')}
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
+          </div>
+          <div class="gold-badge">
+            ${branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl ? `<img class="badge-img" src="${escapeHtml(branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl)}" alt="Badge" />` : `
+                <img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='block'" />
+                <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+                  <div class="gold-corporate">Corporate Maldives</div>
+                  <div class="gold-text">GOLD</div>
+                  <div class="gold-100">100</div>
+                  <div class="gold-year">2023</div>
+                </div>
+            `}
+          </div>
+        </div>
+
+        <div class="title-row">
+          ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
+          <h1 class='center'>${escapeHtml(invoice.documentType || 'Tax Invoice')}</h1>
+          <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
+        </div>
+
+        <div class="parties">
+          <div class="bill-to details-box">
+            <div class="details-title">${isPurchaseDocument ? 'Vendor Details' : 'Customer Details'}</div>
+            <h2 style="margin:0 0 6px 0;">${escapeHtml(invoice.customerName || invoice.customer_name || invoice.customer || invoice.name || '')}</h2>
+            ${isPurchaseDocument || !hasValue(customerPhone) ? '' : `<div class="addr-line">${escapeHtml(customerPhone)}</div>`}
+            <table style="margin-top:4px; width:100%;">
+              ${!isPurchaseDocument && hasValue(customerGstin) ? `<tr><td class="label">GST Number</td><td>${escapeHtml(customerGstin)}</td></tr>` : ''}
+              ${hasValue(invoiceNumber) ? `<tr><td class="label">${documentNumberLabel}</td><td>${escapeHtml(invoiceNumber)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(customerAddress) ? `<tr><td class="label">Address</td><td>${escapeHtml(String(customerAddress)).replace(/\n/g, '<br/>')}</td></tr>` : ''}
+              ${hasValue(remarks) ? `<tr><td class="label">${isPurchaseDocument ? 'Notes' : 'Remarks'}</td><td>${escapeHtml(remarks)}</td></tr>` : ''}
+            </table>
+          </div>
+          <div class="seller-addr details-box">
+            <table style="width:100%;">
+              ${hasValue(invoiceDate) ? `<tr><td class="label">${isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : invoice.documentType === 'Sales Order' ? 'Order Date' : 'Invoice Date'}</td><td>${formatDate(invoiceDate)}</td></tr>` : ''}
+              ${(invoice.documentType === 'Sales Order' || isPurchaseOrder) && hasValue(invoice.expectedDate || invoice.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(invoice.expectedDate || invoice.expected_date)}</td></tr>` : ''}
+              ${isPurchaseBill && hasValue(invoice.dueDate || invoice.due_date) ? `<tr><td class="label">Due Date</td><td>${formatDate(invoice.dueDate || invoice.due_date)}</td></tr>` : ''}
+              ${(isPurchaseBill || isGrnReceipt) && purchaseOrderNumber ? `<tr><td class="label">Purchase Order</td><td>${escapeHtml(purchaseOrderNumber)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(quotationNumber) ? `<tr><td class="label">Quotation No.</td><td>${escapeHtml(quotationNumber)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(displayPaymentTerms) ? `<tr><td class="label">Payment Terms</td><td>${escapeHtml(displayPaymentTerms)}</td></tr>` : ''}
+              ${isPurchaseOrder && hasValue(createdBy) ? `<tr><td class="label">Created By</td><td>${escapeHtml(createdBy)}</td></tr>` : !isPurchaseDocument && hasValue(salesPerson) ? `<tr><td class="label">Sales Person</td><td>${escapeHtml(salesPerson)}</td></tr>` : ''}
+              ${!isPurchaseDocument && hasValue(cashier) ? `<tr><td class="label">Cashier</td><td>${escapeHtml(cashier)}</td></tr>` : ''}
+            </table>
+          </div>
+        </div>
+
+        <table class="items">
+          <thead>
+            <tr>
+              <th>S.No</th>
+              <th>Description</th>
+              <th>Packing</th>
+              <th>Units</th>
+              <th class="num">Qty</th>
+              <th class="num">Rate (Excl. GST)</th>
+              <th class="num">Disc %</th>
+              <th class="num">GST</th>
+              <th class="num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderRows(pageItems, pageIndex * 28 + 1, totals.lineAmounts.slice(pageIndex * 14, (pageIndex + 1) * 14))}
+          </tbody>
+        </table>
+
+        ${pageIndex === totalPages - 1 ? `
+          <table class="totals">
+            <tr>
+              <td colspan="5" class="totals-payment">${paymentDetails}</td>
+              <td class="tlabel">Subtotal</td>
+              <td class="tval">${formatNumber(totals.subtotal)}</td>
+            </tr>
+            <tr>
+              <td colspan="5"></td>
+              <td class="tlabel">GST</td>
+              <td class="tval">${formatNumber(totals.taxTotal)}</td>
+            </tr>
+            <tr class="grand-row">
+              <td colspan="5"></td>
+              <td class="tlabel grand">${isPurchaseOrder ? 'Purchase Order Total (Inc. GST)' : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)' : isGrnReceipt ? 'Goods Receipt Total (Inc. GST)' : invoice.documentType === 'Sales Order' ? 'Total Order Value (Inc. GST)' : 'Total Payable (Inc. GST)'}</td>
+              <td class="tval grand">${formatNumber(totals.total)}</td>
+            </tr>
+          </table>
+          ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
+          <div class="amount-words">${escapeHtml(totals.totalInWords)}</div>
+          ${isPurchaseDocument ? '' : `<div class="payment-section">
+            <div class="bank-details">
+              Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
+            </div>
+          </div>`}
+          <div class="terms">
+            ${isPurchaseOrder ? 'Please quote this purchase order number on all invoices and correspondence.' : isPurchaseBill ? 'Please retain this purchase bill for your records.' : isGrnReceipt ? 'Please verify the quantities and condition of the goods received.' : 'Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day'}
+          </div>
+          <div class="thankyou">${isPurchaseDocument ? 'Thank you for your partnership' : 'Thank you for choosing Cosmopolitan as your preferred partner'}</div>
+          <div class="signoff">
+            <div>${isGrnReceipt ? 'Received By' : isPurchaseDocument ? 'Authorized By' : 'Received By'}</div>
+          </div>
+        ` : ''}
+      </div>
+    `
+  }
+
+  function renderTransferPage(pageIndex, totalPages, pageItems, transfer, branch) {
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const fromBranch = transfer.from_branch_name || transfer.from_branch_id || ''
+    const toBranch = transfer.to_branch_name || transfer.to_branch_id || ''
+    const refNumber = transfer.ref_number || transfer.number || transfer.id || ''
+    const transferDate = transfer.request_date || transfer.created_at || ''
+    const status = String(transfer.status || '').replace(/_/g, ' ')
+    const itemRows = pageItems.map((item, index) => `
+      <tr>
+        <td>${pageIndex * 28 + index + 1}</td>
+        <td>${escapeHtml(item.name || item.item_name || '')}</td>
+        <td>${escapeHtml(item.packing || item.packaging || '')}</td>
+        <td>${escapeHtml(item.unit || item.units || '')}</td>
+        <td class="num">${formatNumber(item.qty ?? item.quantity ?? 0, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
+      </tr>
+    `).join('')
+
+    return `
+      <div class="page${pageIndex > 0 ? ' continuation-page' : ''}">
+        <div class="header">
+          <div style="display:flex; align-items:flex-start;">
+            <div class="logo-block">
+              <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+              <div class="logo-tag">"where quality and service matters"</div>
+            </div>
+          </div>
+          <div class="company-info">
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            <div class="company-line">${escapeHtml(`${branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'}, ${branch.street3 || branch.street_3 || "Hulhumale'"}, ${branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'}`)}</div>
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
+          </div>
+          <div class="gold-badge">
+            ${branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl ? `<img class="badge-img" src="${escapeHtml(branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl)}" alt="Badge" />` : `
+              <img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='block'" />
+              <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+                <div class="gold-corporate">Corporate Maldives</div>
+                <div class="gold-text">GOLD</div>
+                <div class="gold-100">100</div>
+                <div class="gold-year">2023</div>
+              </div>
+            `}
+          </div>
+        </div>
+
+        <div class="title-row">
+          <h1 class="center">Stock Transfer</h1>
+          <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
+        </div>
+
+        <div class="parties">
+          <div class="bill-to details-box">
+            <div class="details-title">From Branch</div>
+            <h2>${escapeHtml(fromBranch)}</h2>
+            <table style="margin-top:4px; width:100%;">
+              <tr><td class="label">Transfer #</td><td>${escapeHtml(refNumber)}</td></tr>
+              ${transfer.requested_by ? `<tr><td class="label">Requested By</td><td>${escapeHtml(transfer.requested_by)}</td></tr>` : ''}
+              ${transfer.approved_by ? `<tr><td class="label">Approved By</td><td>${escapeHtml(transfer.approved_by)}</td></tr>` : ''}
+            </table>
+          </div>
+          <div class="seller-addr details-box">
+            <div class="details-title">To Branch</div>
+            <h2 style="font-size:15px; margin:0 0 6px 0;">${escapeHtml(toBranch)}</h2>
+            <table style="width:100%;">
+              ${transferDate ? `<tr><td class="label">Transfer Date</td><td>${formatDate(transferDate)}</td></tr>` : ''}
+              ${status ? `<tr><td class="label">Status</td><td>${escapeHtml(status)}</td></tr>` : ''}
+              ${transfer.priority ? `<tr><td class="label">Priority</td><td>${escapeHtml(transfer.priority)}</td></tr>` : ''}
+            </table>
+          </div>
+        </div>
+
+        <table class="items">
+          <thead><tr><th>S.No</th><th>Description</th><th>Packing</th><th>Units</th><th class="num">Qty</th></tr></thead>
+          <tbody>${itemRows}</tbody>
+        </table>
+
+        ${pageIndex === totalPages - 1 ? `
+          ${transfer.notes ? `<div class="terms"><strong>Notes:</strong> ${escapeHtml(transfer.notes).replace(/\n/g, '<br/>')}</div>` : ''}
+          <div class="signoff"><div>Authorized By</div></div>
+        ` : ''}
+      </div>
+    `
+  }
+
+  function paginateItems(items, rowsPerPage) {
+    const pages = []
+    for (let i = 0; i < items.length; i += rowsPerPage) {
+      pages.push(items.slice(i, i + rowsPerPage))
+    }
+    return pages
+  }
+
+  let hasRenderedInvoice = false
+
+  function normalizeInvoicePayload(payload) {
+    const sale = { ...(payload?.sale || {}) }
+    const sourceBranch = payload?.branch || {}
+    const organisation = sale.organisation || sale.organization || {}
+    const branch = { ...organisation, ...sourceBranch }
+
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no ||
+      organisation.phone || ''
+    const salePhone = sale.phoneNo || sale.phone_no || ''
+    const email = sale.email ||
+      branch.email || branch.emailAddress || branch.email_address ||
+      organisation.email || ''
+    const website = sale.website || sale.homePage || sale.homepage ||
+      branch.website || branch.homePage || branch.homepage || branch.url ||
+      organisation.website || organisation.homePage || ''
+    const branchGst = sourceBranch.gstRegNo || sourceBranch.gst || sourceBranch.gstin ||
+      sourceBranch.gstNo || sourceBranch.gst_no || organisation.gstin ||
+      organisation.gstNo || organisation.gst_no || ''
+    const salesperson = sale.salesperson || sale.salesPerson ||
+      sale.salesperson_name || sale.cashier || sale.cashierName || ''
+
+    Object.assign(branch, {
+      company: sourceBranch.company || sourceBranch.companyName || '',
+      address: sourceBranch.address || sourceBranch.address_lines || sourceBranch.addressLines || '',
+      phone: branchPhone,
+      phoneNo: branch.phoneNo || branchPhone,
+      website,
+      homePage: branch.homePage || website,
+      gstin: branchGst,
+      gst: branchGst,
+      gstNo: branchGst,
+      gst_no: branchGst,
+      email,
+    })
+
+    Object.assign(sale, {
+      salesperson,
+      phoneNo: salePhone,
+      email,
+      website,
+    })
+
+    return { ...payload, sale, branch }
+  }
+
+  function renderInvoicePayload(payload) {
+    if (hasRenderedInvoice && !isPreview) return
+    hasRenderedInvoice = true
+    const sale = payload?.sale || {}
+    sale.documentType = payload?.documentType || 'Tax Invoice'
+    document.title = `${sale.documentType} ${sale.number || (sale.documentType === 'Stock Transfer' ? sale.ref_number : '') || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
+    const branch = payload?.branch || {}
+    const items = sale.items || []
+    if (sale.documentType === 'Stock Transfer') {
+      const pages = paginateItems(items, 28)
+      const transferPages = (pages.length ? pages : [[]]).map((pageItems, pageIndex, allPages) => {
+        return renderTransferPage(pageIndex, allPages.length, pageItems, sale, branch)
+      })
+      document.getElementById('invoicePages').innerHTML = transferPages.join('')
+      setTimeout(() => {
+        if (isPreview) {
+          window.parent.postMessage({
+            type: 'invoiceRendered',
+            height: document.documentElement.scrollHeight,
+          }, window.location.origin)
+        } else {
+          window.print()
+        }
+      }, 500)
+      return
+    }
+    const baseLineAmounts = items.map((item) => getLineAmounts(item, 0))
+    const documentDiscountShares = allocateFlatAmount(
+      baseLineAmounts.map((line) => line.inclusiveAfterLineDiscount),
+      sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0,
+    )
+    const lineAmounts = items.map((item, index) => getLineAmounts(item, documentDiscountShares[index]))
+    const grossAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gross, 0))
+    const netAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
+    const discountAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + (line.discount || 0), 0))
+    const taxtotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
+    const total = roundNumber(netAmount + taxtotal)
+    const pages = paginateItems(items, 28)
+    const allPages = pages.map((pageItems, pageIndex) => ({
+      pageItems,
+      pageIndex,
+      totalPages: pages.length,
+    }))
+
+    const totals = {
+      subtotal: netAmount,
+      grossAmount,
+      taxTotal: taxtotal,
+      total,
+      discountAmount,
+      lineAmounts,
+      totalInWords: amountToWords(total),
+    }
+
+    document.getElementById('invoicePages').innerHTML = allPages.map((page) => {
+      return renderPage(page.pageIndex, page.totalPages, page.pageItems, sale, branch, totals, page.copyLabel)
+    }).join('')
+    setTimeout(() => {
+      if (isPreview) {
+        window.parent.postMessage({
+          type: 'invoiceRendered',
+          height: document.documentElement.scrollHeight,
+        }, window.location.origin)
+      } else {
+        window.print()
+      }
+    }, 500)
+  }
+
+  window.addEventListener('message', (ev) => {
+    const msg = ev.data || {}
+    if (msg.type !== 'renderInvoice') return
+    renderInvoicePayload(normalizeInvoicePayload(msg.payload))
+  })
+
+  function setStatusMessage(message) {
+    const container = document.getElementById('invoicePages')
+    if (!container) return
+    container.innerHTML = `<div style="padding:40px; text-align:center; color:#555; font-size:14px;">${message}</div>`
+  }
+
+  const queryParams = new URLSearchParams(window.location.search)
+  const hasStandaloneInvoiceQuery = Boolean(queryParams.get('invoice_id') || queryParams.get('invoiceId'))
+  if (!hasStandaloneInvoiceQuery) {
+    setTimeout(() => {
+      if (!hasRenderedInvoice) setStatusMessage('Failed to load invoice data.')
+    }, 4000)
+  }
+
+  function getAuthHeaders() {
+    const headers = { Accept: 'application/json' }
+    try {
+      const token = window.localStorage.getItem('retailos_token')
+      if (token) headers.Authorization = `Bearer ${token}`
+    } catch (e) {
+      // ignore localStorage errors
+    }
+    return headers
+  }
+
+  async function tryLoadInvoiceFromQuery() {
+    const params = new URLSearchParams(window.location.search)
+    const invoiceId = params.get('invoice_id') || params.get('invoiceId')
+    if (!invoiceId) return
+
+    setStatusMessage('Loading invoice…')
+    try {
+      const response = await fetch(`/api/v1/sales/${encodeURIComponent(invoiceId)}`, {
+        headers: getAuthHeaders(),
+      })
+      if (!response.ok) {
+        console.error('Invoice fetch failed', response.status, response.statusText)
+        setStatusMessage('Unable to load invoice. Please refresh or sign in again.')
+        return
+      }
+      const sale = await response.json()
+      if (!sale || !sale.id) {
+        setStatusMessage('Invoice data is invalid or missing.')
+        return
+      }
+      renderInvoicePayload(normalizeInvoicePayload({ sale, branch: {} }))
+    } catch (err) {
+      console.error('Failed to load invoice from query:', err)
+      setStatusMessage('Unable to load invoice. Check your network connection.')
+    }
+  }
+
+  tryLoadInvoiceFromQuery()
+})();
+</script>
+
+</body>
+</html>
