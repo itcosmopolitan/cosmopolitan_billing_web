@@ -383,7 +383,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
 
                 <div className="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
                 <div className="signoff">
-                  <div>Recieved By</div>
+                  <div>Received By</div>
                 </div>
               </>
             ) : null}
