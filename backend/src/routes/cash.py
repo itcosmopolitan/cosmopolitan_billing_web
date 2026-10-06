@@ -18,6 +18,7 @@ from src.models import (
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
+from src.routes._child_counters import validate_child_counter
 from src.permissions import CASH_CATEGORIES_READ, CASH_CATEGORIES_WRITE
 from src.security import enforce_branch_access, current_user, require_perm, get_allowed_branch_ids
 from src.services.audit_service import build_audit_entry
@@ -119,6 +120,8 @@ async def _write_post_commit_audit(
 
 class CashEntryCreate(BaseModel):
     type: str                          # 'in' | 'out'
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     category: str
     description: str
     amount: float
@@ -127,6 +130,8 @@ class CashEntryCreate(BaseModel):
     by: Optional[str] = None
 
 class CashEntryUpdate(BaseModel):
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
     amount: Optional[float] = None
@@ -414,6 +419,7 @@ async def get_entries(
     ledger: str = "sales",
     type: Optional[str] = None,
     category: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     source_type: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
@@ -439,6 +445,9 @@ async def get_entries(
     if type:
         q = q.where(CashEntry.type == type)
         cq = cq.where(CashEntry.type == type)
+    if child_counter_id:
+        q = q.where(CashEntry.child_counter_id == child_counter_id)
+        cq = cq.where(CashEntry.child_counter_id == child_counter_id)
     if category:
         q = q.where(CashEntry.category == category)
         cq = cq.where(CashEntry.category == category)
@@ -474,6 +483,12 @@ async def add_entry(
 ):
     # Ensure supplied branch is in user's allowed branches
     await _resolve_branch_scope(current_user, db, branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db,
+        branch_id,
+        data.child_counter_id,
+        data.child_counter_name,
+    )
     target_date = data.date or datetime.now().strftime("%Y-%m-%d")
     opening_balance_entry = _is_opening_balance(data.category)
     entry_ledger = "sales" if opening_balance_entry else "petty"
@@ -490,6 +505,8 @@ async def add_entry(
     entry = CashEntry(
         id=str(uuid.uuid4()),
         branch_id=branch_id,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         type=data.type,
         category=data.category,
         description=data.description,
@@ -550,6 +567,16 @@ async def update_entry(
         raise HTTPException(400, "Opening Balance entries cannot be moved between cash ledgers")
     if _is_opening_balance(target_category) and entry.type != "in":
         raise HTTPException(400, "Opening Balance entries must be Cash In")
+    if (
+        "child_counter_id" in data.model_fields_set
+        or "child_counter_name" in data.model_fields_set
+    ):
+        entry.child_counter_id, entry.child_counter_name = await validate_child_counter(
+            db,
+            branch_id,
+            data.child_counter_id,
+            data.child_counter_name,
+        )
     if data.description is not None:
         entry.description = data.description
     if data.category is not None:
@@ -618,6 +645,8 @@ async def void_entry(
     reversal = CashEntry(
         id=str(uuid.uuid4()),
         branch_id=branch_id,
+        child_counter_id=getattr(entry, "child_counter_id", None),
+        child_counter_name=getattr(entry, "child_counter_name", None),
         type=reversal_type,
         category=entry.category,
         description=f"Void: {entry.entry_number or entry.id}",
@@ -839,6 +868,7 @@ async def get_history_day(
     date: str,
     branch_id: str = Depends(enforce_branch_access),
     ledger: str = "sales",
+    child_counter_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),
 ):
@@ -847,6 +877,11 @@ async def get_history_day(
     entries = (await db.execute(
         select(CashEntry).where(CashEntry.branch_id == branch_id, CashEntry.date == date)
         .where(_cash_ledger_filter(ledger))
+        .where(
+            CashEntry.child_counter_id == child_counter_id
+            if child_counter_id
+            else True
+        )
         .order_by(CashEntry.created_at)
     )).scalars().all()
     if ledger == "sales":

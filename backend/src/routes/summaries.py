@@ -39,9 +39,16 @@ async def _user_grants(user: User, db: AsyncSession) -> set[str]:
     return expand(granted)
 
 
-async def _transfer_summary(db: AsyncSession, *, branch_id: Optional[str] = None) -> dict[str, int]:
+async def _transfer_summary(
+    db: AsyncSession,
+    *,
+    branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
+) -> dict[str, int]:
     async def _count(status: TransferStatus, *, side: str) -> int:
         q = select(func.count(StockTransfer.id)).where(StockTransfer.status == status)
+        if child_counter_id:
+            q = q.where(StockTransfer.child_counter_id == child_counter_id)
         if branch_id:
             if side == "from":
                 q = q.where(StockTransfer.from_branch_id == branch_id)
@@ -71,11 +78,16 @@ async def _transfer_summary(db: AsyncSession, *, branch_id: Optional[str] = None
 
 
 async def _adjustment_summary(
-    db: AsyncSession, *, branch_id: Optional[str] = None
+    db: AsyncSession,
+    *,
+    branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
 ) -> dict[str, int]:
     base = select(func.count(AdjustmentRequest.id))
     if branch_id:
         base = base.where(AdjustmentRequest.branch_id == branch_id)
+    if child_counter_id:
+        base = base.where(AdjustmentRequest.child_counter_id == child_counter_id)
 
     async def _count(status: Optional[AdjustmentStatus]) -> int:
         q = base
@@ -98,6 +110,7 @@ async def _adjustment_summary(
 async def get_module_summary(
     module: str = Query(..., min_length=1),
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
+    child_counter_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -115,8 +128,12 @@ async def get_module_summary(
         raise HTTPException(403, f"Missing permission: {' or '.join(allowed)}")
 
     if key == "transfers":
-        return await _transfer_summary(db, branch_id=branch_id)
+        return await _transfer_summary(
+            db, branch_id=branch_id, child_counter_id=child_counter_id,
+        )
     if key == "adjustments":
-        return await _adjustment_summary(db, branch_id=branch_id)
+        return await _adjustment_summary(
+            db, branch_id=branch_id, child_counter_id=child_counter_id,
+        )
 
     raise HTTPException(400, f"Unknown module: {module}")

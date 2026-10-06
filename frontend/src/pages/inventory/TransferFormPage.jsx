@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { transfersAPI, itemsAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fetchAllList } from '@/utils/pagination'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import { SectionHeader, Card } from '@/components/ui'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import TransferFormFields from './TransferFormFields'
@@ -32,6 +33,9 @@ export default function TransferFormPage({ mode = 'create' }) {
   const can = useCan()
   const user = useAppStore((s) => s.user)
   const branches = useAppStore((s) => s.branches)
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const setChildCounterBranchId = usePOSStore((s) => s.setChildCounterBranchId)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const footerLeft = sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W
 
@@ -46,6 +50,13 @@ export default function TransferFormPage({ mode = 'create' }) {
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
 
+  useEffect(() => {
+    setChildCounterBranchId(
+      form.from_branch_id || activeBranch?.id || '',
+      form.child_counter_id || '',
+    )
+  }, [activeBranch?.id, form.from_branch_id, form.child_counter_id, setChildCounterBranchId])
+
   const patchForm = (k, v) => {
     if (k === 'from_branch_id' && v !== form.from_branch_id) {
       setBatchOptions({})
@@ -53,6 +64,8 @@ export default function TransferFormPage({ mode = 'create' }) {
         ...f,
         from_branch_id: v,
         to_branch_id: f.to_branch_id === v ? '' : f.to_branch_id,
+        child_counter_id: '',
+        child_counter_name: '',
         items: f.items.map((row) => (
           row.item_id
             ? { ...row, batchAllocation: [], batchAllocationCustom: false }
@@ -231,12 +244,30 @@ export default function TransferFormPage({ mode = 'create' }) {
     }
     setSaving(true)
     try {
+      const sourceBranch = getChildCounterBranch(
+        branches,
+        form.from_branch_id,
+        activeBranch,
+      )
+      const counters = getConfiguredChildCounters(sourceBranch)
+      const selectedCounter = counters.find(
+        (counter) => String(counter.id) === String(selectedChildCounter),
+      )
+      if (counters.length > 0 && !selectedCounter) {
+        toast.error('Select a counter from the top toolbar before saving this transfer')
+        return
+      }
+      const payloadForm = {
+        ...form,
+        child_counter_id: selectedCounter?.id || '',
+        child_counter_name: selectedCounter?.name || '',
+      }
       if (isEdit) {
-        const payload = buildTransferPayload(form, items, { refNumber })
+        const payload = buildTransferPayload(payloadForm, items, { refNumber })
         await transfersAPI.update(transferId, payload)
         toast.success(`${refNumber} updated`)
       } else {
-        const payload = buildTransferPayload(form, items, { requestedBy: user?.name || 'Staff' })
+        const payload = buildTransferPayload(payloadForm, items, { requestedBy: user?.name || 'Staff' })
         const res = await transfersAPI.create(payload)
         toast.success(
           res.status === 'transit'
@@ -294,6 +325,7 @@ export default function TransferFormPage({ mode = 'create' }) {
               <TransferFormFields
                 form={form}
                 patchForm={patchForm}
+                branches={branches}
                 branchLabels={branchById}
                 items={items}
                 itemsLoading={itemsLoading}

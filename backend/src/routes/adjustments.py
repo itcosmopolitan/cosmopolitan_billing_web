@@ -39,6 +39,7 @@ from src.security import (
     require_perm,
 )
 from src.routes._serializers import get_user_branch_ids
+from src.routes._child_counters import validate_child_counter
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
@@ -49,6 +50,8 @@ _VALID_STATUSES = {status.value for status in AdjustmentStatus}
 
 class AdjustmentCreate(BaseModel):
     branch_id: str
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     item_id: str
     item_name: str
     new_qty: float = Field(..., ge=0)
@@ -89,6 +92,8 @@ def _serialize(ar: AdjustmentRequest) -> dict:
         "number": ar.ref_number,
         "branch_id": ar.branch_id,
         "branch_name": ar.branch_name,
+        "child_counter_id": getattr(ar, "child_counter_id", None),
+        "child_counter_name": getattr(ar, "child_counter_name", None),
         "item_id": ar.item_id,
         "item_name": ar.item_name,
         "before_qty": ar.before_qty,
@@ -322,6 +327,7 @@ def _raise_adjustment_integrity_error(exc: IntegrityError) -> None:
 @router.get("/", dependencies=[Depends(require_perm("adjustments.view"))])
 async def list_adjustments(
     status: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -354,6 +360,9 @@ async def list_adjustments(
     if status:
         q = q.where(AdjustmentRequest.status == status)
         cq = cq.where(AdjustmentRequest.status == status)
+    if child_counter_id:
+        q = q.where(AdjustmentRequest.child_counter_id == child_counter_id)
+        cq = cq.where(AdjustmentRequest.child_counter_id == child_counter_id)
     if branch_id:
         q = q.where(AdjustmentRequest.branch_id == branch_id)
         cq = cq.where(AdjustmentRequest.branch_id == branch_id)
@@ -428,6 +437,9 @@ async def create_adjustment(
         raise HTTPException(400, "new_qty must be >= 0")
 
     await enforce_branch_access(data.branch_id, user=user, db=db)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
 
     branch_name = (
         await db.execute(
@@ -456,6 +468,8 @@ async def create_adjustment(
             ref_number=ref,
             branch_id=data.branch_id,
             branch_name=branch_name,
+            child_counter_id=child_counter_id,
+            child_counter_name=child_counter_name,
             item_id=data.item_id,
             item_name=data.item_name,
             before_qty=before,

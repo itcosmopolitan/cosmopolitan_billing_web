@@ -414,6 +414,16 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("sale_invoices", "payment_proof_uploaded_by", "VARCHAR"),
     ("sale_invoices", "child_counter_id", "VARCHAR"),
     ("sale_invoices", "child_counter_name", "VARCHAR"),
+    ("quotations", "child_counter_id", "VARCHAR"),
+    ("quotations", "child_counter_name", "VARCHAR"),
+    ("sales_orders", "child_counter_id", "VARCHAR"),
+    ("sales_orders", "child_counter_name", "VARCHAR"),
+    ("stock_transfers", "child_counter_id", "VARCHAR"),
+    ("stock_transfers", "child_counter_name", "VARCHAR"),
+    ("adjustment_requests", "child_counter_id", "VARCHAR"),
+    ("adjustment_requests", "child_counter_name", "VARCHAR"),
+    ("cash_entries", "child_counter_id", "VARCHAR"),
+    ("cash_entries", "child_counter_name", "VARCHAR"),
     # 2026-06-09: soft void for payments (audit trail vs hard delete).
     ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("customer_payments", "voided_at", "VARCHAR"),
@@ -577,6 +587,7 @@ async def init_schema() -> None:
             await _bootstrap_invoice_template(conn)
             await _backfill_role_ids(conn)
             await _backfill_item_branch_config(conn)
+            await _backfill_cash_entry_child_counters(conn)
             await _migrate_adjustment_requests_per_branch_ref(conn)
             await _repair_return_invoice_totals(conn)
         except DBAPIError as e:
@@ -1282,6 +1293,119 @@ async def _existing_tables(conn, names: list[str]) -> set[str]:
         )
     ).fetchall()
     return {r[0] for r in rows}
+
+
+async def _backfill_cash_entry_child_counters(conn) -> None:
+    """Backfill counters for existing cash entries with an unambiguous sales source."""
+    tables = await _existing_tables(
+        conn,
+        ["cash_entries", "sale_invoices", "sales_returns", "customer_payment_allocations"],
+    )
+    if "cash_entries" not in tables or "sale_invoices" not in tables:
+        return
+
+    await conn.execute(text("""
+        UPDATE cash_entries
+        SET child_counter_id = (
+                SELECT invoice.child_counter_id FROM sale_invoices invoice
+                WHERE invoice.id = cash_entries.source_id
+            ),
+            child_counter_name = (
+                SELECT invoice.child_counter_name FROM sale_invoices invoice
+                WHERE invoice.id = cash_entries.source_id
+            )
+        WHERE cash_entries.child_counter_id IS NULL
+          AND cash_entries.source_type = 'sale_invoice'
+          AND EXISTS (
+                SELECT 1 FROM sale_invoices invoice
+                WHERE invoice.id = cash_entries.source_id
+                  AND invoice.child_counter_id IS NOT NULL
+            )
+    """))
+
+    if "sales_returns" in tables:
+        await conn.execute(text("""
+            UPDATE cash_entries
+            SET child_counter_id = (
+                    SELECT invoice.child_counter_id
+                    FROM sales_returns sales_return
+                    JOIN sale_invoices invoice ON invoice.id = sales_return.invoice_id
+                    WHERE sales_return.id = cash_entries.source_id
+                ),
+                child_counter_name = (
+                    SELECT invoice.child_counter_name
+                    FROM sales_returns sales_return
+                    JOIN sale_invoices invoice ON invoice.id = sales_return.invoice_id
+                    WHERE sales_return.id = cash_entries.source_id
+                )
+            WHERE cash_entries.child_counter_id IS NULL
+              AND cash_entries.source_type IN ('sale_return', 'sales_return')
+              AND EXISTS (
+                    SELECT 1 FROM sales_returns sales_return
+                    JOIN sale_invoices invoice ON invoice.id = sales_return.invoice_id
+                    WHERE sales_return.id = cash_entries.source_id
+                      AND invoice.child_counter_id IS NOT NULL
+                )
+        """))
+
+    if "customer_payment_allocations" in tables:
+        await conn.execute(text("""
+            UPDATE cash_entries
+            SET child_counter_id = (
+                    SELECT invoice.child_counter_id
+                    FROM customer_payment_allocations allocation
+                    JOIN sale_invoices invoice ON invoice.id = allocation.invoice_id
+                    WHERE allocation.payment_id = cash_entries.source_id
+                      AND invoice.child_counter_id IS NOT NULL
+                    LIMIT 1
+                ),
+                child_counter_name = (
+                    SELECT invoice.child_counter_name
+                    FROM customer_payment_allocations allocation
+                    JOIN sale_invoices invoice ON invoice.id = allocation.invoice_id
+                    WHERE allocation.payment_id = cash_entries.source_id
+                      AND invoice.child_counter_id IS NOT NULL
+                    LIMIT 1
+                )
+            WHERE cash_entries.child_counter_id IS NULL
+              AND cash_entries.source_type = 'customer_payment'
+              AND (
+                    SELECT COUNT(*)
+                    FROM customer_payment_allocations allocation
+                    JOIN sale_invoices invoice ON invoice.id = allocation.invoice_id
+                    WHERE allocation.payment_id = cash_entries.source_id
+                      AND invoice.child_counter_id IS NOT NULL
+                ) = (
+                    SELECT COUNT(*)
+                    FROM customer_payment_allocations allocation
+                    WHERE allocation.payment_id = cash_entries.source_id
+                )
+              AND (
+                    SELECT COUNT(DISTINCT invoice.child_counter_id)
+                    FROM customer_payment_allocations allocation
+                    JOIN sale_invoices invoice ON invoice.id = allocation.invoice_id
+                    WHERE allocation.payment_id = cash_entries.source_id
+                ) = 1
+        """))
+
+    await conn.execute(text("""
+        UPDATE cash_entries
+        SET child_counter_id = (
+                SELECT original.child_counter_id FROM cash_entries original
+                WHERE original.id = cash_entries.source_id
+            ),
+            child_counter_name = (
+                SELECT original.child_counter_name FROM cash_entries original
+                WHERE original.id = cash_entries.source_id
+            )
+        WHERE cash_entries.child_counter_id IS NULL
+          AND cash_entries.source_type = 'void'
+          AND EXISTS (
+                SELECT 1 FROM cash_entries original
+                WHERE original.id = cash_entries.source_id
+                  AND original.child_counter_id IS NOT NULL
+            )
+    """))
 
 
 async def _backfill_item_branch_config(conn) -> None:

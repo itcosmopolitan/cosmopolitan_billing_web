@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import QuoteFormModal from './QuoteFormModal'
@@ -23,8 +24,11 @@ export default function QuoteFormPage({ mode = 'create' }) {
   const navigate = useNavigate()
   const can = useCan()
   const user = useAppStore((s) => s.user)
-  const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const activeBranchId = activeBranch?.id || 'br-001'
   const branches = useAppStore((s) => s.branches)
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const setChildCounterBranchId = usePOSStore((s) => s.setChildCounterBranchId)
 
   const [form, setForm] = useState(() => emptyQuoteForm(activeBranchId))
   const pqf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
@@ -33,6 +37,25 @@ export default function QuoteFormPage({ mode = 'create' }) {
   const [saving, setSaving] = useState(false)
 
   const goBack = () => navigate('/sales?tab=quotes')
+
+  useEffect(() => {
+    const branchId = isEdit ? form.branchId || activeBranchId : activeBranchId
+    setChildCounterBranchId(branchId, isEdit ? form.childCounterId || '' : '')
+  }, [activeBranchId, isEdit, form.branchId, form.childCounterId, setChildCounterBranchId])
+
+  useEffect(() => {
+    if (isEdit || !activeBranchId) return
+    setForm((current) => (
+      current.branchId === activeBranchId
+        ? current
+        : {
+            ...current,
+            branchId: activeBranchId,
+            childCounterId: '',
+            childCounterName: '',
+          }
+    ))
+  }, [activeBranchId, isEdit])
 
   useEffect(() => {
     if (isEdit && !can('invoices.edit') && !readOnly) {
@@ -75,6 +98,10 @@ export default function QuoteFormPage({ mode = 'create' }) {
       toast.error('Each item must have name, qty, and price')
       return
     }
+    const selectedBranch = getChildCounterBranch(branches, form.branchId, activeBranch)
+    const selectedCounter = getConfiguredChildCounters(selectedBranch).find(
+      (counter) => String(counter.id) === String(selectedChildCounter),
+    )
     setSaving(true)
     try {
       const payload = {
@@ -82,6 +109,8 @@ export default function QuoteFormPage({ mode = 'create' }) {
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
+        child_counter_id: selectedCounter?.id || null,
+        child_counter_name: selectedCounter?.name || null,
         created_by: user?.name || 'Staff',
         valid_until: form.validUntil,
         shipment_date: form.shipmentDate,

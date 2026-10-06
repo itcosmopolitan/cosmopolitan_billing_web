@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
 import { Receipt } from '@/components/Receipt'
-import { useAppStore, subscribeToBranchChanged } from '@/store'
+import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
 import { amountInputStep } from '@/utils/decimalPrecision'
@@ -143,6 +143,7 @@ export default function SalesPage() {
   // gate + label the new "credit" payment method. null = not loaded yet.
   const [payCustCredit, setPayCustCredit] = useState(null)
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const childCounterId = usePOSStore((s) => s.selectedChildCounter)
   const [invoices, setInvoices] = useState([])
   const [invoiceTotal, setInvoiceTotal] = useState(0)
   const [invSkip, setInvSkip] = useState(0)
@@ -193,6 +194,13 @@ export default function SalesPage() {
   const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    setInvSkip(0)
+    setQuoteSkip(0)
+    setOrderSkip(0)
+    setSelectedIds(new Set())
+  }, [childCounterId])
 
   // Reset selection when the tab changes — different rows, different scope.
   useEffect(() => {
@@ -480,6 +488,7 @@ export default function SalesPage() {
           discount: discountF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
+          child_counter_id: childCounterId || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -498,7 +507,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, invSkip, invLimit, search, invStatusF, paymentModeF, customerF, categoryF, discountF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
+  }, [tab, activeBranch?.id, childCounterId, invSkip, invLimit, search, invStatusF, paymentModeF, customerF, categoryF, discountF, dateFrom, dateTo, salesListVersion, invSortBy, invSortOrder])
 
   useEffect(() => {
     if (tab !== 'quotes') return
@@ -516,6 +525,7 @@ export default function SalesPage() {
           customer_id: customerF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
+          child_counter_id: childCounterId || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -532,7 +542,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, customerF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, childCounterId, quoteSkip, quoteLimit, quoteListVersion, quoteSortBy, quoteSortOrder, search, quoteStatusF, customerF, dateFrom, dateTo])
 
   // Credit Purchases tab was removed 2026-05-23 (Sales Phase 1). No
   // separate data-fetch effect — same invoices are available via the main
@@ -556,6 +566,7 @@ export default function SalesPage() {
           customer_id: customerF || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
+          child_counter_id: childCounterId || undefined,
         })
         const { items, total } = unwrapPaged(raw)
         if (!cancelled) {
@@ -569,7 +580,7 @@ export default function SalesPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, customerF, dateFrom, dateTo])
+  }, [tab, activeBranch?.id, childCounterId, orderSkip, orderLimit, orderSortBy, orderSortOrder, orderListVersion, search, orderStatusF, customerF, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'returns') return
@@ -1461,6 +1472,7 @@ export default function SalesPage() {
                       if (id === 'number') return <SortableHeader key={id} label="Quote #" sortKey="number" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
                       if (id === 'kam') return <th key={id}>KAM</th>
+                      if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'valid_until') return <SortableHeader key={id} label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
@@ -1494,6 +1506,7 @@ export default function SalesPage() {
                         if (id === 'number') return <td key={id}><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
                         if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(q)}</td>
+                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{q.childCounterName || q.child_counter_name || '—'}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
                         if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono">{fmt(q.total)}</td>
@@ -2094,6 +2107,7 @@ export default function SalesPage() {
                       if (id === 'number') return <SortableHeader key={id} label="Order #" sortKey="number" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                       if (id === 'kam') return <th key={id}>KAM</th>
+                      if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                       if (id === 'expected') return <SortableHeader key={id} label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                       if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
@@ -2133,6 +2147,7 @@ export default function SalesPage() {
                           if (id === 'number') return <td key={id}><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                           if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{o.customerName || 'Walk-in'}</td>
                           if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(o)}</td>
+                          if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{o.childCounterName || o.child_counter_name || '—'}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
                           if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
                           if (id === 'amount') return <td key={id} className="text-right mono">{fmt(o.total)}</td>

@@ -59,6 +59,7 @@ from src.routes._lifecycle import (
     sync_customer_outstanding,
     _recompute_invoice_status,
 )
+from src.routes._child_counters import validate_child_counter
 from src.routes._credit_ledger import adjust_customer_credit
 from src.routes._payment_ledger import record_customer_payment, void_payment_record
 from src.routes._cash_ledger import (
@@ -93,7 +94,7 @@ from src.pool_sales import (
 )
 from src.stock_pools import active_pool_for_branch, active_pool_members, user_has_permission
 from src.routes.dashboard import invalidate_dashboard_cache_for_user
-from src.routes._serializers import _build_customer_code, get_user_branch_ids, normalize_child_counters
+from src.routes._serializers import _build_customer_code, get_user_branch_ids
 from src.routes._approval import (
     assert_may_edit_document,
     can_direct_commit,
@@ -664,45 +665,9 @@ async def _validate_child_counter(
     child_counter_id: Optional[str],
     child_counter_name: Optional[str],
 ) -> tuple[Optional[str], Optional[str]]:
-    branch = (
-        await db.execute(select(Branch).where(Branch.id == branch_id))
-    ).scalar_one_or_none()
-    if not branch:
-        raise HTTPException(404, "Branch not found")
-
-    counters = getattr(branch, "child_counters", None) or []
-    if not getattr(branch, "has_child_counters", False):
-        if child_counter_id or child_counter_name:
-            raise HTTPException(400, "This branch does not have child counters")
-        return None, None
-
-    normalized = normalize_child_counters(branch.id, counters)
-    normalized = [
-        counter for counter in normalized
-        if str(counter.get("name") or "").strip()
-    ]
-    selected_id = (child_counter_id or "").strip()
-    selected_name = (child_counter_name or "").strip()
-    if not normalized:
-        if selected_id or selected_name:
-            raise HTTPException(400, "This branch has no configured child counters")
-        return None, None
-    if not selected_id and not selected_name:
-        raise HTTPException(400, "Select a valid child counter for this branch")
-    selected = next(
-        (
-            counter for counter in normalized
-            if (
-                counter["id"] == selected_id
-                if selected_id
-                else counter.get("name") == selected_name
-            )
-        ),
-        None,
+    return await validate_child_counter(
+        db, branch_id, child_counter_id, child_counter_name,
     )
-    if not selected:
-        raise HTTPException(400, "Select a valid child counter for this branch")
-    return selected["id"], str(selected.get("name") or "")
 
 
 class SourceOrderLineIn(BaseModel):
@@ -733,6 +698,8 @@ class QuotationCreate(BaseModel):
     customer_name: str = "Walk-in"
     branch_id: str
     branch_name: str = ""
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     created_by: str = "Staff"
     date: Optional[str] = None
     valid_until: Optional[str] = None
@@ -932,6 +899,7 @@ async def list_invoices(
 @router.get("/quotations/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def list_quotations(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
+    child_counter_id: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -952,6 +920,8 @@ async def list_quotations(
         conds.append(or_(Quotation.number.ilike(f"%{search}%"), Quotation.customer_name.ilike(f"%{search}%")))
     if status:
         conds.append(Quotation.status == status)
+    if child_counter_id:
+        conds.append(Quotation.child_counter_id == child_counter_id)
     if customer_id:
         conds.append(Quotation.customer_id == customer_id)
     if date_from:
@@ -1061,6 +1031,9 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
 
     # Ensure user may create documents in the requested branch
     await _resolve_branch_scope(user, db, data.branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
 
     # 2026-05-24: rewrote the totals + line math to match update_quotation
     # and _calc_lines exactly. The old code was buggy in three ways:
@@ -1101,6 +1074,8 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
         customer_name=data.customer_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         created_by=data.created_by,
         date=data.date or datetime.now().strftime("%Y-%m-%d"),
         valid_until=data.valid_until,
@@ -1178,6 +1153,9 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     # If branch is being changed, validate the target branch
     if data.branch_id and data.branch_id != quote.branch_id:
         await _resolve_branch_scope(user, db, data.branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
 
     item_changes = _summarize_quotation_item_changes(list(quote.line_items or []), data.items)
 
@@ -1206,6 +1184,8 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     quote.customer_name = data.customer_name
     quote.branch_id = data.branch_id
     quote.branch_name = data.branch_name or data.branch_id
+    quote.child_counter_id = child_counter_id
+    quote.child_counter_name = child_counter_name
     quote.created_by = data.created_by
     quote.date = data.date or quote.date
     quote.valid_until = data.valid_until
@@ -4544,6 +4524,10 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
         "customer_key_account_manager": _customer_kam_label(customer),
         "branchId": quote.branch_id,
         "branchName": quote.branch_name,
+        "childCounterId": getattr(quote, "child_counter_id", None),
+        "child_counter_id": getattr(quote, "child_counter_id", None),
+        "childCounterName": getattr(quote, "child_counter_name", None),
+        "child_counter_name": getattr(quote, "child_counter_name", None),
         "createdBy": quote.created_by,
         "date": quote.date,
         "validUntil": quote.valid_until,
@@ -4826,6 +4810,8 @@ class SalesOrderCreate(BaseModel):
     customer_name: str = "Walk-in"
     branch_id: str
     branch_name: str = ""
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     created_by: str = "Staff"
     date: Optional[str] = None
     expected_date: Optional[str] = None
@@ -4943,6 +4929,10 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
         "customer_key_account_manager": customer_key_account_manager or _customer_kam_label(customer),
         "branchId": so.branch_id,
         "branchName": so.branch_name,
+        "childCounterId": getattr(so, "child_counter_id", None),
+        "child_counter_id": getattr(so, "child_counter_id", None),
+        "childCounterName": getattr(so, "child_counter_name", None),
+        "child_counter_name": getattr(so, "child_counter_name", None),
         "createdBy": so.created_by,
         "date": so.date,
         "expectedDate": so.expected_date,
@@ -5563,6 +5553,7 @@ async def list_orders(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
+    child_counter_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db), user: User = Depends(current_user),
 ):
     sk = normalize_skip(skip)
@@ -5574,6 +5565,8 @@ async def list_orders(
         conds.append(SalesOrder.status == status)
     if customer_id:
         conds.append(SalesOrder.customer_id == customer_id)
+    if child_counter_id:
+        conds.append(SalesOrder.child_counter_id == child_counter_id)
     if date_from:
         conds.append(SalesOrder.date >= date_from)
     if date_to:
@@ -5663,6 +5656,9 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
 
     direct = await can_direct_commit(user, db, "invoices.approve")
     await _resolve_branch_scope(user, db, data.branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
     data.customer_id = await _resolve_customer_id(db, data.customer_id)
     tax_mode = await _get_org_tax_mode(db)
     await _apply_internal_customer_gst(db, data.customer_id, data.items)
@@ -5684,6 +5680,8 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         customer_name=data.customer_name,
         branch_id=data.branch_id,
         branch_name=data.branch_name or data.branch_id,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         created_by=user.name,
         date=data.date or today,
         expected_date=data.expected_date,
@@ -5807,11 +5805,16 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
     # If branch is being changed, validate the target branch
     if data.branch_id and data.branch_id != so.branch_id:
         await _resolve_branch_scope(user, db, data.branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
 
     so.customer_id = data.customer_id
     so.customer_name = data.customer_name
     so.branch_id = data.branch_id
     so.branch_name = data.branch_name or data.branch_id
+    so.child_counter_id = child_counter_id
+    so.child_counter_name = child_counter_name
     so.date = data.date or so.date
     so.expected_date = data.expected_date
     so.subtotal = round(subtotal, 2)
@@ -6175,6 +6178,8 @@ async def convert_order_to_invoice(
         customer_name=so.customer_name,
         branch_id=so.branch_id,
         branch_name=so.branch_name,
+        child_counter_id=so.child_counter_id,
+        child_counter_name=so.child_counter_name,
         cashier=(user.name if user is not None else so.created_by) or "Staff",
         date=today,
         subtotal=inv_subtotal,
@@ -6433,6 +6438,8 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
         customer_name=quote.customer_name,
         branch_id=quote.branch_id,
         branch_name=quote.branch_name,
+        child_counter_id=quote.child_counter_id,
+        child_counter_name=quote.child_counter_name,
         created_by=quote.created_by or "Staff",
         date=today,
         subtotal=quote.subtotal,
@@ -6552,6 +6559,8 @@ async def convert_quote_to_invoice(
         customer_name=quote.customer_name,
         branch_id=quote.branch_id,
         branch_name=quote.branch_name,
+        child_counter_id=quote.child_counter_id,
+        child_counter_name=quote.child_counter_name,
         cashier=(user.name if user is not None else quote.created_by) or "Staff",
         date=today,
         subtotal=inv_subtotal,

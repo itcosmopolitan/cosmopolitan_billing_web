@@ -5,7 +5,11 @@ import { notificationsAPI } from '@/api'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import * as Icon from '@/components/ui/Icons'
 import { AutocompleteDropdown, Modal } from '@/components/ui'
-import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
+import {
+  getChildCounterBranch,
+  getConfiguredChildCounters,
+  shouldFollowActiveBranchForCounters,
+} from '@/utils/childCounters'
 
 // Topbar is intentionally chrome-only: it carries global context (active
 // branch) and global actions (new sale, notifications, theme). The
@@ -177,7 +181,24 @@ export default function Topbar() {
     location.pathname === '/sales/invoices/new'
     || /^\/sales\/invoices\/[^/]+\/edit$/.test(location.pathname)
   )
-  const counterBranchId = isInvoiceRoute && childCounterBranchId
+  const salesTab = new URLSearchParams(location.search).get('tab') || 'quotes'
+  const isSalesDocumentRoute = (
+    /^\/sales\/(quotations|orders)\/(new|[^/]+\/edit)$/.test(location.pathname)
+  )
+  const followsActiveBranch = shouldFollowActiveBranchForCounters(
+    location.pathname,
+    location.search,
+  )
+  const isTransferFormRoute = /^\/transfers\/(new|[^/]+\/edit)$/.test(location.pathname)
+  const isCounterFilterRoute = (
+    (location.pathname === '/sales' && ['quotes', 'orders', 'invoices'].includes(salesTab))
+    || location.pathname === '/transfers'
+    || location.pathname === '/adjustments'
+    || location.pathname === '/cash'
+    || location.pathname === '/petty-cash'
+  )
+  const hasCustomCounterBranch = isInvoiceRoute || isSalesDocumentRoute || isTransferFormRoute
+  const counterBranchId = hasCustomCounterBranch && !followsActiveBranch && childCounterBranchId
     ? childCounterBranchId
     : activeBranch?.id
   const counterBranch = getChildCounterBranch(branches, counterBranchId, activeBranch)
@@ -185,11 +206,14 @@ export default function Topbar() {
   const showChildCounter = (
     location.pathname === '/pos'
     || isInvoiceRoute
+    || isCounterFilterRoute
+    || isSalesDocumentRoute
+    || isTransferFormRoute
   ) && childCounters.length > 0
 
   useEffect(() => {
-    setChildCounterBranchId(isInvoiceRoute ? (childCounterBranchId || activeBranch?.id || '') : (activeBranch?.id || ''))
-  }, [activeBranch?.id, childCounterBranchId, isInvoiceRoute, setChildCounterBranchId])
+    setChildCounterBranchId(hasCustomCounterBranch ? (childCounterBranchId || activeBranch?.id || '') : (activeBranch?.id || ''))
+  }, [activeBranch?.id, childCounterBranchId, hasCustomCounterBranch, setChildCounterBranchId])
 
   useEffect(() => {
     if (!allowedBranches.length) return
@@ -350,10 +374,14 @@ export default function Topbar() {
         <AutocompleteDropdown
           value={selectedChildCounter}
           onChange={setSelectedChildCounter}
-          options={childCounters.map((counter) => ({
-            id: counter.id,
-            label: counter.name,
-          }))}
+          options={[
+            ...(isCounterFilterRoute ? [{ id: '', label: 'All counters' }] : []),
+            ...childCounters.map((counter) => ({
+              id: counter.id,
+              label: counter.name,
+            })),
+          ]}
+          selectedLabel={isCounterFilterRoute && !selectedChildCounter ? 'All counters' : undefined}
           placeholder="Select counter"
           searchPlaceholder="Search counters…"
           isSearchFieldRequired

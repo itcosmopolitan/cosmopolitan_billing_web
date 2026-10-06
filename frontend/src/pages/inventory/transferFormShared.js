@@ -15,6 +15,8 @@ export function emptyTransfer(defaultFromId = '', defaultToId = '') {
   return {
     from_branch_id: defaultFromId || '',
     to_branch_id: defaultToId || '',
+    child_counter_id: '',
+    child_counter_name: '',
     priority: 'Normal',
     expected_date: '',
     notes: '',
@@ -30,6 +32,8 @@ export function formFromTransfer(transfer) {
   return {
     from_branch_id: transfer.from_branch_id,
     to_branch_id: transfer.to_branch_id,
+    child_counter_id: transfer.child_counter_id || '',
+    child_counter_name: transfer.child_counter_name || '',
     priority: transfer.priority || 'Normal',
     expected_date: transfer.expected_date || transfer.request_date || '',
     notes: transfer.notes || '',
@@ -86,6 +90,8 @@ export function buildTransferPayload(form, items, { requestedBy, refNumber } = {
   const payload = {
     from_branch_id: form.from_branch_id,
     to_branch_id: form.to_branch_id,
+    child_counter_id: form.child_counter_id || null,
+    child_counter_name: form.child_counter_name || null,
     priority: form.priority || 'Normal',
     notes: form.notes || undefined,
     expected_date: form.expected_date || undefined,

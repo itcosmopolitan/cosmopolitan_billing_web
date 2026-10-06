@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { transfersAPI, summariesAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { useAppStore, subscribeToBranchChanged } from '@/store'
+import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
@@ -62,6 +62,7 @@ export default function TransfersPage() {
   const [trLimit, setTrLimit] = useState(DEFAULT_PAGE_SIZE)
   const [trSortBy, setTrSortBy] = useState('created_at')
   const [trSortOrder, setTrSortOrder] = useState('desc')
+  const childCounterId = usePOSStore((s) => s.selectedChildCounter)
   const [listLoading, setListLoading] = useState(true)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -109,7 +110,7 @@ export default function TransfersPage() {
   }, [searchParams, setSearchParams])
 
   useEffect(() => {
-      const key = `${activeBranch?.id || ''}|${tab}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
+      const key = `${activeBranch?.id || ''}|${childCounterId}|${tab}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
       let cancelled = false
       const run = async () => {
         try {
@@ -130,13 +131,17 @@ export default function TransfersPage() {
             promise = Promise.all([
               transfersAPI.list({
                 branch_id: activeBranch?.id,
+                child_counter_id: childCounterId || undefined,
                 skip: trSkip,
                 limit: trLimit,
                 sort_by: trSortBy,
                 sort_order: trSortOrder,
                 status: tab === 'all' ? undefined : tab,
               }),
-              summariesAPI.get('transfers', { branch_id: activeBranch?.id }),
+              summariesAPI.get('transfers', {
+                branch_id: activeBranch?.id,
+                child_counter_id: childCounterId || undefined,
+              }),
             ])
             inFlightTransfersRequests.set(key, promise)
           }
@@ -162,11 +167,16 @@ export default function TransfersPage() {
       }
       run()
       return () => { cancelled = true }
-  }, [activeBranch?.id, tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
+  }, [activeBranch?.id, childCounterId, tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
 
   useEffect(() => {
     setSelectedIds(new Set())
   }, [tab, trSkip, trLimit])
+
+  useEffect(() => {
+    setTrSkip(0)
+    setSelectedIds(new Set())
+  }, [childCounterId])
 
   useEffect(() => {
     setSelectedIds((prev) => {
@@ -378,7 +388,6 @@ export default function TransfersPage() {
   const deleteSelected = () => openDeleteConfirm(selectedPending)
 
   const tabs = useMemo(() => tabsWithCounts(TAB_DEFS, summary), [summary])
-
   return (
     <div className="page-container">
       <SectionHeader title="Stock Transfers" subtitle="Move stock between branches with approval workflow">
@@ -457,6 +466,7 @@ export default function TransfersPage() {
                       if (id === 'route') {
                         return <SortableHeader key={id} label="From → To" sortKey="from_branch_id" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                       }
+                      if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'items') return <th key={id}>Items</th>
                       if (id === 'status') {
                         return <SortableHeader key={id} label="Status" sortKey="status" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
@@ -500,6 +510,7 @@ export default function TransfersPage() {
                             </td>
                           )
                         }
+                        if (id === 'counter') return <td key={id}>{t.child_counter_name || '—'}</td>
                         if (id === 'items') {
                           return (
                             <td key={id}>

@@ -40,9 +40,6 @@ export default function OrderFormModal({
   onSave,
   orderForm,
   pof,
-  // `branches` prop dropped 2026-05-24 (no longer needed — branch is
-  // sourced from the operator's active branch via SalesPage). Parent
-  // can stop passing it; we accept extra props silently for now.
   saving = false,
   editingNumber = null,
   readOnly = false,

@@ -22,7 +22,49 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import CashEntry
+from src.models import (
+    CashEntry,
+    CustomerPaymentAllocation,
+    SaleInvoice,
+    SalesReturn,
+)
+
+
+async def _source_child_counter(
+    db: AsyncSession,
+    source_type: str,
+    source_id: str,
+) -> tuple[Optional[str], Optional[str]]:
+    if source_type == "sale_invoice":
+        rows = (
+            await db.execute(
+                select(SaleInvoice.child_counter_id, SaleInvoice.child_counter_name)
+                .where(SaleInvoice.id == source_id)
+            )
+        ).all()
+    elif source_type == "customer_payment":
+        rows = (
+            await db.execute(
+                select(SaleInvoice.child_counter_id, SaleInvoice.child_counter_name)
+                .join(CustomerPaymentAllocation, CustomerPaymentAllocation.invoice_id == SaleInvoice.id)
+                .where(CustomerPaymentAllocation.payment_id == source_id)
+            )
+        ).all()
+    elif source_type in {"sale_return", "sales_return"}:
+        rows = (
+            await db.execute(
+                select(SaleInvoice.child_counter_id, SaleInvoice.child_counter_name)
+                .join(SalesReturn, SalesReturn.invoice_id == SaleInvoice.id)
+                .where(SalesReturn.id == source_id)
+            )
+        ).all()
+    else:
+        return None, None
+
+    counters = {(counter_id, counter_name) for counter_id, counter_name in rows}
+    if len(counters) != 1:
+        return None, None
+    return next(iter(counters))
 
 
 def first_nonempty(*values: Optional[str]) -> Optional[str]:
@@ -72,10 +114,15 @@ async def record_cash_in(
     recorded_by: str,
 ) -> CashEntry:
     branch_id = require_cash_branch_id(branch_id)
+    child_counter_id, child_counter_name = await _source_child_counter(
+        db, source_type, source_id,
+    )
     entry_number = await _next_entry_number(db, branch_id, date)
     entry = CashEntry(
         id=str(uuid.uuid4()),
         branch_id=branch_id,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         type="in",
         category=category,
         description=description,
@@ -107,10 +154,15 @@ async def record_cash_out(
     recorded_by: str,
 ) -> CashEntry:
     branch_id = require_cash_branch_id(branch_id)
+    child_counter_id, child_counter_name = await _source_child_counter(
+        db, source_type, source_id,
+    )
     entry_number = await _next_entry_number(db, branch_id, date)
     entry = CashEntry(
         id=str(uuid.uuid4()),
         branch_id=branch_id,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         type="out",
         category=category,
         description=description,
@@ -163,6 +215,8 @@ async def void_cash_entry(
     reversal = CashEntry(
         id=str(uuid.uuid4()),
         branch_id=original.branch_id,
+        child_counter_id=getattr(original, "child_counter_id", None),
+        child_counter_name=getattr(original, "child_counter_name", None),
         type=reversal_type,
         category=original.category,
         description=f"Void: {original.entry_number or original.id}",

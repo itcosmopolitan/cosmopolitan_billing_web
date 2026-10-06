@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
-import { useAppStore, subscribeToBranchChanged } from '@/store'
+import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
@@ -21,7 +21,9 @@ export default function CashPage({ ledger = 'sales' }) {
   const [searchParams] = useSearchParams()
   const columnPrefs = useColumnPrefs(isPettyCash ? 'cash.petty.entries' : 'cash.entries')
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const branches = useAppStore((s) => s.branches)
   const currentUser = useAppStore((s) => s.user)
+  const childCounterId = usePOSStore((s) => s.selectedChildCounter)
   const branchId = activeBranch?.id || ''
 
   const [date, setDate] = useState(() => searchParams.get('date') || new Date().toISOString().slice(0, 10))
@@ -61,7 +63,11 @@ export default function CashPage({ ledger = 'sales' }) {
     ;(async () => {
       try {
         const [entriesRaw, sum] = await Promise.all([
-          cashAPI.entries(branchId, { date, ledger }).catch(() => ({ items: [] })),
+          cashAPI.entries(branchId, {
+            date,
+            ledger,
+            child_counter_id: childCounterId || undefined,
+          }).catch(() => ({ items: [] })),
           cashAPI.summary(branchId, { date, ledger }).catch(() => ({})),
         ])
         if (cancelled) return
@@ -73,7 +79,7 @@ export default function CashPage({ ledger = 'sales' }) {
       }
     })()
     return () => { cancelled = true }
-  }, [branchId, date, ledger, version])
+  }, [branchId, date, ledger, childCounterId, version])
 
   useEffect(() => {
     if (tab !== 'Day History' || !branchId) return
@@ -239,7 +245,13 @@ export default function CashPage({ ledger = 'sales' }) {
       </div>
 
       {/* ── Tabs ── */}
-      <Tabs tabs={tabs} active={tab} onChange={setTab} />
+      <Tabs
+        tabs={tabs}
+        active={tab}
+        onChange={(next) => {
+          setTab(next)
+        }}
+      />
 
       {/* ─── Tab: Entries ─── */}
       {tab === 'Entries' && (
@@ -264,6 +276,7 @@ export default function CashPage({ ledger = 'sales' }) {
                       <span>{e.category || 'Uncategorised'}</span>
                       <span>{e.date} {e.time}</span>
                       {e.ref && <span>Ref: {e.ref}</span>}
+                      {e.child_counter_name && <span>Counter: {e.child_counter_name}</span>}
                       {e.by && <span>By {e.by}</span>}
                       {e.is_voided && <span className="petty-cash-voided">VOIDED</span>}
                     </div>
@@ -305,6 +318,7 @@ export default function CashPage({ ledger = 'sales' }) {
                     if (id === 'entry_number') return <th key={id}>#</th>
                     if (id === 'time') return <th key={id}>Time</th>
                     if (id === 'type') return <th key={id}>Type</th>
+                    if (id === 'counter') return <th key={id}>Counter</th>
                     if (id === 'category') return <th key={id}>Category</th>
                     if (id === 'description') return <th key={id}>Description</th>
                     if (id === 'ref') return <th key={id}>Ref</th>
@@ -341,6 +355,9 @@ export default function CashPage({ ledger = 'sales' }) {
                             {e.is_voided && <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--text-muted)' }}>VOIDED</span>}
                           </td>
                         )
+                      }
+                      if (id === 'counter') {
+                        return <td key={id} style={{ fontSize: 12 }}>{e.child_counter_name || '—'}</td>
                       }
                       if (id === 'category') {
                         return <td key={id} style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.category}</td>
@@ -504,6 +521,7 @@ export default function CashPage({ ledger = 'sales' }) {
         branchId={branchId}
         onSaved={refresh}
         editEntry={editEntry}
+        branches={branches}
         categories={categories}
         onCategoriesChange={setCategories}
         excludeOpeningBalance={isPettyCash}

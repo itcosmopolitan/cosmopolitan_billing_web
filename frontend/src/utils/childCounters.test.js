@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { getChildCounterBranch, getConfiguredChildCounters } from './childCounters'
+import {
+  getChildCounterBranch,
+  getConfiguredChildCounters,
+  shouldFollowActiveBranchForCounters,
+} from './childCounters'
+
+describe('shouldFollowActiveBranchForCounters', () => {
+  it('tracks the active branch for a new quotation', () => {
+    expect(shouldFollowActiveBranchForCounters('/sales/quotations/new')).toBe(true)
+  })
+
+  it('tracks the active branch for a standalone new order', () => {
+    expect(shouldFollowActiveBranchForCounters('/sales/orders/new')).toBe(true)
+  })
+
+  it('keeps the source document branch when creating an order from a quotation', () => {
+    expect(shouldFollowActiveBranchForCounters('/sales/orders/new', '?fromQuote=quote-1')).toBe(false)
+  })
+
+  it('keeps the saved branch when editing a sales document', () => {
+    expect(shouldFollowActiveBranchForCounters('/sales/quotations/quote-1/edit')).toBe(false)
+  })
+})
 
 describe('getConfiguredChildCounters', () => {
   it('ignores empty or unnamed counter entries', () => {

@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI } from '@/api'
-import { useAppStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import { formatLabel } from '@/utils/helpers'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
@@ -25,8 +26,11 @@ export default function OrderFormPage({ mode = 'create' }) {
   const readOnly = searchParams.get('view') === '1'
   const navigate = useNavigate()
   const can = useCan()
-  const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const activeBranchId = activeBranch?.id || 'br-001'
   const branches = useAppStore((s) => s.branches)
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const setChildCounterBranchId = usePOSStore((s) => s.setChildCounterBranchId)
 
   const [form, setForm] = useState(() => emptyOrderForm(activeBranchId))
   const pof = (k, v) => setForm((f) => ({ ...f, [k]: v }))
@@ -36,6 +40,28 @@ export default function OrderFormPage({ mode = 'create' }) {
   const [saving, setSaving] = useState(false)
 
   const goBack = () => navigate('/sales?tab=orders')
+
+  useEffect(() => {
+    const branchId = isEdit || fromQuoteId ? form.branchId || activeBranchId : activeBranchId
+    setChildCounterBranchId(
+      branchId,
+      isEdit || fromQuoteId ? form.childCounterId || '' : '',
+    )
+  }, [activeBranchId, isEdit, fromQuoteId, form.branchId, form.childCounterId, setChildCounterBranchId])
+
+  useEffect(() => {
+    if (isEdit || fromQuoteId || !activeBranchId) return
+    setForm((current) => (
+      current.branchId === activeBranchId
+        ? current
+        : {
+            ...current,
+            branchId: activeBranchId,
+            childCounterId: '',
+            childCounterName: '',
+          }
+    ))
+  }, [activeBranchId, isEdit, fromQuoteId])
 
   useEffect(() => {
     if (isEdit && !can('invoices.edit', 'invoices.create') && !readOnly) {
@@ -113,6 +139,10 @@ export default function OrderFormPage({ mode = 'create' }) {
       toast.error('Each item must have name, qty, and price')
       return
     }
+    const selectedBranch = getChildCounterBranch(branches, form.branchId, activeBranch)
+    const selectedCounter = getConfiguredChildCounters(selectedBranch).find(
+      (counter) => String(counter.id) === String(selectedChildCounter),
+    )
     setSaving(true)
     try {
       const payload = {
@@ -120,6 +150,8 @@ export default function OrderFormPage({ mode = 'create' }) {
         customer_id: form.customerId || null,
         branch_id: form.branchId,
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
+        child_counter_id: selectedCounter?.id || null,
+        child_counter_name: selectedCounter?.name || null,
         expected_date: form.expectedDate || null,
         items: form.items.map((i) => ({
           item_id: i.item_id || null,

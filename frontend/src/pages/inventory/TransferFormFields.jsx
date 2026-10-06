@@ -12,6 +12,7 @@ import { qtyInputStep } from '@/utils/decimalPrecision'
 export default function TransferFormFields({
   form,
   patchForm,
+  branches = [],
   branchLabels = new Map(),
   items = [],
   itemsLoading = false,

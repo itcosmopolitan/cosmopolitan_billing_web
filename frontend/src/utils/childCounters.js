@@ -3,6 +3,11 @@ export function getChildCounterBranch(branches, branchId, fallbackBranch) {
     || (fallbackBranch?.id === branchId ? fallbackBranch : null)
 }
 
+export function shouldFollowActiveBranchForCounters(pathname, search = '') {
+  if (pathname === '/sales/quotations/new') return true
+  return pathname === '/sales/orders/new' && !new URLSearchParams(search).has('fromQuote')
+}
+
 export function getConfiguredChildCounters(branch) {
   if (branch?.has_child_counters === false || branch?.hasChildCounters === false) {
     return []

@@ -4,6 +4,8 @@ import { cashAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { FormGroup, Modal, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { amountInputStep } from '@/utils/decimalPrecision'
+import { usePOSStore } from '@/store'
+import { getConfiguredChildCounters } from '@/utils/childCounters'
 
 const DEFAULT_FORM = {
   type: 'in',
@@ -12,6 +14,8 @@ const DEFAULT_FORM = {
   amount: '',
   ref: '',
   date: '',
+  childCounterId: '',
+  childCounterName: '',
 }
 
 const DIRECTION_OPTIONS = [
@@ -36,6 +40,7 @@ export default function CashEntryModal({
   open,
   onClose,
   branchId,
+  branches = [],
   onSaved,
   editEntry = null,
   categories = [],
@@ -43,6 +48,8 @@ export default function CashEntryModal({
   excludeOpeningBalance = false,
 }) {
   const can = useCan()
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const setSelectedChildCounter = usePOSStore((s) => s.setSelectedChildCounter)
   const [form, setForm] = useState(DEFAULT_FORM)
   const [saving, setSaving] = useState(false)
   const [cats, setCats] = useState(() => unwrapCategories(categories))
@@ -56,6 +63,7 @@ export default function CashEntryModal({
   useEffect(() => {
     if (open) {
       if (editEntry) {
+        setSelectedChildCounter(editEntry.child_counter_id || '')
         setForm({
           type: editEntry.type || 'out',
           category: editEntry.category || '',
@@ -63,6 +71,8 @@ export default function CashEntryModal({
           amount: String(editEntry.amount || ''),
           ref: editEntry.ref || '',
           date: editEntry.date || '',
+          childCounterId: editEntry.child_counter_id || '',
+          childCounterName: editEntry.child_counter_name || '',
         })
       } else {
         const today = new Date().toISOString().slice(0, 10)
@@ -71,7 +81,7 @@ export default function CashEntryModal({
       setShowAddCat(false)
       setNewCatName('')
     }
-  }, [open, editEntry])
+  }, [open, editEntry, setSelectedChildCounter])
 
   useEffect(() => {
     if (!open) return undefined
@@ -151,10 +161,21 @@ export default function CashEntryModal({
     if (!form.amount || Number(form.amount) <= 0) { toast.error('Enter a valid amount'); return }
     if (!form.description || form.description.trim().length < 3) { toast.error('Description must be at least 3 characters'); return }
     if (!form.category) { toast.error('Select a category'); return }
+    const selectedBranch = branches.find((branch) => branch.id === branchId)
+    const counters = getConfiguredChildCounters(selectedBranch)
+    const selectedCounter = counters.find(
+      (counter) => String(counter.id) === String(selectedChildCounter),
+    )
+    if (counters.length > 0 && !selectedCounter) {
+      toast.error('Select a counter from the top toolbar before saving this entry')
+      return
+    }
     setSaving(true)
     try {
       if (editEntry) {
         await cashAPI.update(branchId, editEntry.id, {
+          child_counter_id: selectedCounter?.id || null,
+          child_counter_name: selectedCounter?.name || null,
           description: form.description,
           category: form.category,
           amount: Number(form.amount),
@@ -164,6 +185,8 @@ export default function CashEntryModal({
       } else {
         await cashAPI.add(branchId, {
           type: form.type,
+          child_counter_id: selectedCounter?.id || null,
+          child_counter_name: selectedCounter?.name || null,
           category: form.category,
           description: form.description,
           amount: Number(form.amount),

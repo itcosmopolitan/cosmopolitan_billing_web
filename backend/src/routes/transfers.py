@@ -23,6 +23,7 @@ from src.routes._atomic import (
 )
 from src.routes.items import _upsert_branch_config
 from src.routes._serializers import get_user_branch_ids, serialize_transfer
+from src.routes._child_counters import validate_child_counter
 from src.routes._approval import can_direct_commit
 from src.permissions import TRANSFER_DOCUMENT_READ
 from src.security import (
@@ -72,6 +73,8 @@ class TransferLine(BaseModel):
 class TransferCreate(BaseModel):
     from_branch_id: str
     to_branch_id: str
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     requested_by: str
     items: List[TransferLine]
     priority: str = "Normal"
@@ -83,6 +86,8 @@ class TransferUpdate(BaseModel):
     ref_number: str
     from_branch_id: str
     to_branch_id: str
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
     items: List[TransferLine]
     priority: str = "Normal"
     notes: Optional[str] = None
@@ -126,6 +131,7 @@ async def _lock_transfer(
 async def list_transfers(
     status: Optional[str] = None,
     branch_id: Optional[str] = Query(None),
+    child_counter_id: Optional[str] = None,
     from_branch: Optional[str] = Query(None, alias="from_branch_id"),
     to_branch: Optional[str] = Query(None, alias="to_branch_id"),
     sort_by: Optional[str] = None,
@@ -161,6 +167,9 @@ async def list_transfers(
     if status:
         q = q.where(StockTransfer.status == status)
         cq = cq.where(StockTransfer.status == status)
+    if child_counter_id:
+        q = q.where(StockTransfer.child_counter_id == child_counter_id)
+        cq = cq.where(StockTransfer.child_counter_id == child_counter_id)
     if branch_id:
         # Role of the active branch depends on status:
         #   draft/pending/rejected → source (from) owns approve/edit
@@ -465,6 +474,9 @@ async def create_transfer(
     # Validate requested branches are within the user's scope
     await _resolve_branch_scope(user, db, data.from_branch_id)
     await _resolve_branch_scope(user, db, data.to_branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.from_branch_id, data.child_counter_id, data.child_counter_name,
+    )
     if not data.items:
         raise HTTPException(400, "At least one line item is required")
     tid = str(uuid.uuid4())
@@ -481,6 +493,8 @@ async def create_transfer(
         from_branch_name=from_name,
         to_branch_id=data.to_branch_id,
         to_branch_name=to_name,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
         requested_by=data.requested_by or user.name,
         status=TransferStatus.pending if direct else TransferStatus.draft,
         priority=data.priority,
@@ -549,12 +563,17 @@ async def update_transfer(
     # Validate the requested branches are within the user's scope
     await _resolve_branch_scope(user, db, data.from_branch_id)
     await _resolve_branch_scope(user, db, data.to_branch_id)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.from_branch_id, data.child_counter_id, data.child_counter_name,
+    )
 
     from_name, to_name = await _branch_names(db, data.from_branch_id, data.to_branch_id)
     t.from_branch_id = data.from_branch_id
     t.from_branch_name = from_name
     t.to_branch_id = data.to_branch_id
     t.to_branch_name = to_name
+    t.child_counter_id = child_counter_id
+    t.child_counter_name = child_counter_name
     t.priority = data.priority
     t.notes = data.notes
     t.request_date = data.expected_date

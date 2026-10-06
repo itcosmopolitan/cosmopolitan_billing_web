@@ -175,6 +175,8 @@ def serialize_cash_entry(e) -> dict:
     return {
         "id": e.id,
         "branch_id": e.branch_id,
+        "child_counter_id": getattr(e, "child_counter_id", None),
+        "child_counter_name": getattr(e, "child_counter_name", None),
         "entry_number": getattr(e, "entry_number", None),
         "type": e.type,
         "category": e.category,
@@ -227,6 +229,8 @@ def serialize_transfer(t) -> dict:
         "number": t.ref_number,
         "from_branch_id": t.from_branch_id,
         "to_branch_id": t.to_branch_id,
+        "child_counter_id": getattr(t, "child_counter_id", None),
+        "child_counter_name": getattr(t, "child_counter_name", None),
         "requested_by": t.requested_by,
         "approved_by": t.approved_by,
         "status": _enum_value(t.status),

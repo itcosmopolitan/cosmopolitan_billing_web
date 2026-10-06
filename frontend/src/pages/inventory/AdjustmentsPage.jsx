@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_ITEM_URL, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { useAppStore, subscribeToBranchChanged } from '@/store'
+import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import {
   SectionHeader, Card, Tabs, Chip, Modal, FormGroup, FormRow,
@@ -16,6 +16,7 @@ import { fmtDate, fmtDateTime, fmtQty, formatLabel } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
+import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import RowActionsMenu from './RowActionsMenu'
 import AdjustmentDetailPanel from './AdjustmentDetailPanel'
 
@@ -68,6 +69,8 @@ export default function AdjustmentsPage() {
   const columnPrefs = useColumnPrefs('adjustments.list')
   const user = useAppStore((s) => s.user)
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const branches = useAppStore((s) => s.branches)
+  const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
   const [activityTarget, setActivityTarget] = useState(null)
   const [tab, setTab] = useState('all')
   const [requests, setRequests] = useState([])
@@ -82,8 +85,11 @@ export default function AdjustmentsPage() {
   const [limit, setLimit] = useState(DEFAULT_PAGE_SIZE)
   const [sortBy, setSortBy] = useState('created_at')
   const [sortOrder, setSortOrder] = useState('desc')
+  const childCounterId = usePOSStore((s) => s.selectedChildCounter)
   const [newForm, setNewForm] = useState({
     branch_id: activeBranch?.id || 'br-001',
+    child_counter_id: '',
+    child_counter_name: '',
     item_id: '',
     new_qty: '',
     reason: 'Physical count',
@@ -106,7 +112,7 @@ export default function AdjustmentsPage() {
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
   useEffect(() => {
-    const key = `${tab}|${activeBranch?.id || ''}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
+    const key = `${tab}|${activeBranch?.id || ''}|${childCounterId}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
     let cancelled = false
     const run = async () => {
       try {
@@ -120,8 +126,11 @@ export default function AdjustmentsPage() {
               sort_by: sortBy,
               sort_order: sortOrder,
               status: tab === 'all' ? undefined : tab,
+              child_counter_id: childCounterId || undefined,
             }),
-            summariesAPI.get('adjustments'),
+            summariesAPI.get('adjustments', {
+              child_counter_id: childCounterId || undefined,
+            }),
           ])
           inFlightAdjustmentsRequests.set(key, promise)
         }
@@ -147,18 +156,28 @@ export default function AdjustmentsPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, skip, limit, sortBy, sortOrder, listVersion])
+  }, [tab, activeBranch?.id, childCounterId, skip, limit, sortBy, sortOrder, listVersion])
 
   // Re-fetch list when active branch changes; also update newForm.branch_id
   useEffect(() => {
     const unsub = subscribeToBranchChanged((newBranch) => {
-      setNewForm((f) => ({ ...f, branch_id: newBranch?.id || 'br-001' }))
+      setNewForm((f) => ({
+        ...f,
+        branch_id: newBranch?.id || 'br-001',
+        child_counter_id: '',
+        child_counter_name: '',
+      }))
       setSelectedIds(new Set())
       setSkip(0)
       setListVersion((v) => v + 1)
     })
     return () => unsub()
   }, [])
+
+  useEffect(() => {
+    setSkip(0)
+    setSelectedIds(new Set())
+  }, [childCounterId])
 
   useEffect(() => {
     setSelectedIds(new Set())
@@ -300,10 +319,20 @@ export default function AdjustmentsPage() {
     if (newForm.new_qty === '' || newForm.new_qty === null) { toast.error('Enter new quantity'); return }
     const item = pickedItem
     if (!item) return
+    const selectedBranch = getChildCounterBranch(branches, newForm.branch_id, activeBranch)
+    const selectedCounter = getConfiguredChildCounters(selectedBranch).find(
+      (counter) => String(counter.id) === String(selectedChildCounter),
+    )
+    if (getConfiguredChildCounters(selectedBranch).length > 0 && !selectedCounter) {
+      toast.error('Select a counter from the top toolbar before creating an adjustment')
+      return
+    }
     setSubmitting(true)
     try {
       const res = await adjustmentsAPI.create({
         branch_id: newForm.branch_id,
+        child_counter_id: selectedCounter?.id || null,
+        child_counter_name: selectedCounter?.name || null,
         item_id: newForm.item_id,
         item_name: item.name,
         new_qty: Number(newForm.new_qty),
@@ -321,6 +350,8 @@ export default function AdjustmentsPage() {
       setPickedItem(null)
       setNewForm({
         branch_id: activeBranch?.id || 'br-001',
+        child_counter_id: '',
+        child_counter_name: '',
         item_id: '',
         new_qty: '',
         reason: 'Physical count',
@@ -496,6 +527,7 @@ export default function AdjustmentsPage() {
                       if (id === 'branch') {
                         return <SortableHeader key={id} label="Branch" sortKey="branch_name" sortBy={sortBy} sortOrder={sortOrder} onSort={onSort} />
                       }
+                      if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'item') return <th key={id}>Item</th>
                       if (id === 'qty_change') return <th key={id}>Qty change</th>
                       if (id === 'status') {
@@ -534,6 +566,7 @@ export default function AdjustmentsPage() {
                         if (id === 'branch') {
                           return <td key={id} style={{ fontSize: 13 }}>{r.branch_name || r.branch_id}</td>
                         }
+                        if (id === 'counter') return <td key={id}>{r.child_counter_name || '—'}</td>
                         if (id === 'item') {
                           return (
                             <td key={id}>
@@ -671,6 +704,8 @@ export default function AdjustmentsPage() {
                 setNewForm((f) => ({
                   ...f,
                   branch_id: v,
+                  child_counter_id: '',
+                  child_counter_name: '',
                   item_id: '',
                   batch_id: '',
                   new_qty: '',
@@ -711,7 +746,6 @@ export default function AdjustmentsPage() {
             />
           </FormGroup>
         </FormRow>
-
         {picked?.batch_tracking && (
           <div style={{ marginBottom: 12 }}>
             <div className="form-label" style={{ marginBottom: 6 }}>Target batch (optional)</div>
