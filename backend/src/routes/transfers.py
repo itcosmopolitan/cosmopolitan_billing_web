@@ -154,7 +154,9 @@ async def list_transfers(
         default_key="created_at",
         default_order="desc",
     )
-    q = select(StockTransfer).options(selectinload(StockTransfer.items)).order_by(sort_expr)
+    q = select(StockTransfer).options(
+        selectinload(StockTransfer.items).selectinload(TransferLineItem.item)
+    ).order_by(sort_expr)
     cq = select(func.count(StockTransfer.id))
     if status:
         q = q.where(StockTransfer.status == status)
@@ -234,6 +236,8 @@ def _line_dict(ln: TransferLineItem) -> dict:
     return {
         "item_id":              ln.item_id,
         "name":                 ln.item_name,
+        "packing":              ln.item.packaging if ln.item else "",
+        "unit":                 ln.item.unit if ln.item else "",
         "qty":                  ln.qty,
         "preferred_batch_id":   ln.preferred_batch_id,
         "requested_allocation": _safe_parse(ln.requested_allocation),
@@ -432,7 +436,7 @@ async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), use
     result = await db.execute(
         select(StockTransfer)
         .where(StockTransfer.id == transfer_id)
-        .options(selectinload(StockTransfer.items))
+        .options(selectinload(StockTransfer.items).selectinload(TransferLineItem.item))
     )
     t = result.scalar_one_or_none()
     if not t:

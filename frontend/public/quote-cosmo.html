@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Sales Quote</title>
+<title>Quote</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -14,7 +14,6 @@
     background: #e8e8e8;
   }
   .page {
-    width: 850px;
     background: #fff;
     margin: 20px auto;
     padding: 30px 40px 20px 40px;
@@ -364,7 +363,114 @@
     font-size: 10.5px;
     font-weight: bold;
   }
-  #quotePages { min-height: 100vh; }
+  .logo-block { width: 140px; }
+  .logo-img { width: 120px; }
+  .company-info { width: 100%; max-width: none; }
+  .company-name { font-size: 15px; }
+  .company-line { font-size: 8px; }
+  .gold-badge { width: 90px; }
+  .badge-img { width: 70px; }
+  .gold-seal { width: 70px; height: 70px; }
+  .bill-to {
+    min-width: 0;
+  }
+  .bill-to table {
+    width: 100%;
+    table-layout: fixed;
+  }
+  .bill-to table td { min-width: 0; }
+  .bill-to table td.label { width: 78px; }
+  .bill-to table td:not(.label) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  table.items {
+    table-layout: auto;
+    font-size: 10.5px;
+  }
+  table.items thead tr {
+    border-top: 1.5px solid #1b3e6f;
+    border-bottom: 1.5px solid #1b3e6f;
+  }
+  table.items th {
+    text-align: left;
+    padding: 5px 4px;
+    color: #1b3e6f;
+  }
+  table.items td {
+    padding: 4px 4px;
+    text-align: left;
+  }
+  table.items th.num, table.items td.num { text-align: right; }
+  table.items tbody tr { border-bottom: 1px solid #eee; }
+  .totals {
+    width: 100%;
+    margin-top: 4px;
+    table-layout: auto;
+    font-size: 10.5px;
+    border-collapse: separate;
+  }
+  .totals td { font-size: 10.5px; }
+  .totals .tlabel {
+    text-align: right;
+    padding-right: 10px;
+    width: auto;
+  }
+  .totals .tval {
+    text-align: right;
+    width: 110px;
+    padding-left: 0;
+  }
+  .totals .grand-row td { border-top: 1.5px solid #1b3e6f; }
+  .payment-section {
+    margin-top: 22px;
+    border-top: 1px solid #333;
+    padding-top: 10px;
+    font-size: 10.5px;
+  }
+  .payment-row { display: flex; margin-bottom: 4px; }
+  .payment-row { gap: 0; }
+  .payment-row .plabel { width: 160px; flex-shrink: 0; font-weight: normal; }
+  .payment-row .pcolon { width: 12px; }
+  .bank-details { margin: 0; margin-left: 0; font-size: inherit; line-height: 1.5; }
+  .terms {
+    margin-top: 16px;
+    font-size: 9.5px;
+    color: #333;
+    line-height: 1.6;
+  }
+  .terms div { margin-bottom: 1px; }
+  .thankyou {
+    margin-top: 24px;
+    text-align: center;
+    font-style: italic;
+    font-weight: bold;
+    font-size: 11px;
+  }
+  .signoff {
+    margin-top: 40px;
+    font-size: 10.5px;
+    font-weight: bold;
+  }
+  @page { size: A5; margin: 8mm; }
+  @media print {
+    body { background: #fff; }
+    .page { box-shadow: none; margin: 0; width: auto; }
+  }
+  body.invoice-preview #quotePages { width: 499px; margin: 0 auto; }
+  body.invoice-preview .page { width: 100%; margin: 0; }
+  body.invoice-preview .header {
+    grid-template-columns: minmax(0, 120px) minmax(0, 1fr) minmax(0, 70px);
+    gap: 4px;
+  }
+  body.invoice-preview .logo-block { width: 120px; }
+  body.invoice-preview .company-info { min-width: 0; }
+  body.invoice-preview .company-name,
+  body.invoice-preview .company-line {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  body.invoice-preview .gold-badge { width: 70px; }
 </style>
 </head>
 <body>
@@ -456,10 +562,14 @@
     return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100
   }
 
+  function quoteLineDiscountPct(line) {
+    return Math.min(100, Math.max(0, Number(line.discount || line.line_discount || line.discPercent || 0)))
+  }
+
   function quoteLineAmount(line) {
     const qty = Number(line.qty || 0)
     const price = Number(line.price || 0)
-    const discountPct = Math.min(100, Math.max(0, Number(line.discount || line.line_discount || line.discPercent || 0)))
+    const discountPct = quoteLineDiscountPct(line)
     const gross = roundNumber(qty * price)
     const fromDisc = roundNumber(gross * (1 - discountPct / 100))
     const stored = Number(line.lineTotal ?? line.total ?? 0)
@@ -582,7 +692,7 @@
 
         <div class="title-row">
           ${copyLabel ? `<div class="copy-label">${escapeHtml(copyLabel)}</div>` : ''}
-          <h1 class='center'>Sales - Quote</h1>
+          <h1 class='center'>Quote</h1>
           <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
         </div>
 
@@ -610,30 +720,28 @@
         <table class="items">
           <thead>
             <tr>
-              <th>Product ID</th>
+              <th>S.No</th>
               <th>Description</th>
-              <th>Packaging</th>
-              <th>Unit of<br>Measure</th>
-              <th class="num">Quantity</th>
+              <th>Packing</th>
+              <th>Units</th>
+              <th class="num">Qty</th>
               <th class="num">Rate (Excl. GST)</th>
-              <th class="num">Discount<br>%</th>
-              <th>Allow<br>Invoice<br>Discount</th>
-              <th>GST<br>Identifier</th>
+              <th class="num">Disc %</th>
+              <th class="num">GST</th>
               <th class="num">Amount</th>
             </tr>
           </thead>
           <tbody>
-            ${pageItems.map((line) => `
+            ${pageItems.map((line, lineIndex) => `
               <tr>
-                <td>${escapeHtml(line.sku || line.itemId || line.id || '')}</td>
+                <td>${pageIndex * 14 + lineIndex + 1}</td>
                 <td>${escapeHtml(line.name || '')}</td>
                 <td>${escapeHtml(line.packing ?? '')}</td>
                 <td>${escapeHtml(line.unit || line.units || '')}</td>
                 <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
                 <td class="num">${formatNumber(quoteExclusiveRate(line))}</td>
-                <td class="num">${escapeHtml(Number(line.discount || line.line_discount || 0).toFixed(2))}</td>
-                <td>${escapeHtml(line.allowInvoiceDiscount || line.allow_invoice_discount ? 'Yes' : 'No')}</td>
-                <td>${escapeHtml(line.vatIdentifier || line.vat_identifier || 'GST')}</td>
+                <td class="num">${quoteLineDiscountPct(line) ? `${formatNumber(quoteLineDiscountPct(line), { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : ''}</td>
+                <td class="num">${formatNumber(quoteLineVatAmount(line, pricesIncludingVat))}</td>
                 <td class="num">${formatNumber(quoteLineTaxable(line))}</td>
               </tr>
             `).join('')}
@@ -642,36 +750,23 @@
 
         ${pageIndex === totalPages - 1 ? `
         <table class="totals">
-          <tr><td colspan="8"></td><td class="tlabel">Subtotal</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
-          <tr><td colspan="8"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
-          ${paymentDiscountOnVat > 0 ? `<tr><td colspan="8"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>` : ''}
-          <tr class="grand"><td colspan="8"></td><td class="tlabel">Total Payable (Inc. GST)</td><td class="tval">${formatNumber(totals.total)}</td></tr>
+          <tr><td colspan="5"></td><td class="tlabel">Subtotal</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
+          <tr><td colspan="5"></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
+          ${paymentDiscountOnVat > 0 ? `<tr><td colspan="5"></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>` : ''}
+          <tr class="grand-row"><td colspan="5"></td><td class="tlabel grand">Total Payable (Inc. GST)</td><td class="tval grand">${formatNumber(totals.total)}</td></tr>
         </table>
         ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
         <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
-        <div class="quote-terms-box">
-          <div class="payment-row">
-            <div class="plabel">Payment Terms</div><div class="pcolon">:</div><div>${escapeHtml(displayPaymentTerms || quote.paymentTerms || 'As agreed')}</div>
-          </div>
+        <div class="payment-section">
           <div class="bank-details">
-            Payment details for settlement when invoiced:<br>
-            A/C NAME : Cosmopolitan Champa Brothers Maldives Pvt Ltd<br>
-            Bank Account No : 7730000271249<br>
-            Bank Name : Bank of Maldives<br>
-            Bank Address : Boduthakurufaanu Magu, Malé 20094<br>
-            Swift Code : MALBMVMVXXX
+            Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
           </div>
         </div>
-        <div class="quote-terms">
-          <div>- Cosmopolitan (Champa Bros. Maldives Pvt Ltd) cannot take any responsibility for product lost or spoiled in transit.</div>
-          <div>- Overdue interest, where applicable, applies to overdue invoices.</div>
-          <div>- Any discrepancies in the eventual invoice should be raised within 24 hours of receipt.</div>
-          <div>- Currency fluctuations may affect the final invoiced amount as advised by the MMA.</div>
-          <div>- By accepting this quotation, the customer accepts these terms and conditions.</div>
-          <div>- This document is governed by and enforced in accordance with the laws and regulations of the Republic of Maldives.</div>
+        <div class="terms">
+          Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day
         </div>
-        <div class="quote-thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
-        <div class="quote-signoff">
+        <div class="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
+        <div class="signoff">
           <div>Recieved By</div>
         </div>
         ` : ''}
@@ -693,7 +788,9 @@
     if (hasRenderedQuote) return
     hasRenderedQuote = true
     const quote = payload?.quote || {}
-    document.title = quote.number || quote.quote_no || quote.id || 'Sales Quote'
+    const isPreview = new URLSearchParams(window.location.search).get('preview') === '1'
+    if (isPreview) document.body.classList.add('invoice-preview')
+    document.title = `Quote ${quote.number || quote.quote_no || quote.id || ''}`.trim()
     const branch = {
       ...payload?.branch,
       gstin: payload?.branch?.gstin || payload?.branch?.gst || payload?.branch?.gstNo || payload?.branch?.gst_no || '',
@@ -723,7 +820,7 @@
     }, 0))
     const discountAmount = roundNumber(Math.max(0, exclGross - subtotal))
     const taxPercent = quote.taxPercent ?? quote.tax_percent ?? (subtotal ? Math.round((taxTotal / subtotal) * 100) : 0)
-    const pages = paginateItems(items, 16)
+    const pages = paginateItems(items, 14)
     const totals = {
       subtotal,
       taxTotal,
@@ -740,7 +837,7 @@
 
     document.getElementById('quotePages').innerHTML = allPages.map((page) => renderPage(page.pageIndex, page.totalPages, page.pageItems, quote, branch, totals, page.copyLabel)).join('')
     setTimeout(() => {
-      if (new URLSearchParams(window.location.search).get('preview') === '1') {
+      if (isPreview) {
         window.parent.postMessage({
           type: 'quoteRendered',
           height: document.documentElement.scrollHeight,

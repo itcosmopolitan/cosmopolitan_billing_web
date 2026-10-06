@@ -42,6 +42,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     const isPurchaseBill = documentType === 'Purchase Bill'
     const isGrnReceipt = documentType === 'GRN Receipt'
     const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
+    const isSalesOrder = documentType === 'Sales Order'
     const paymentMode = String(sale?.paymentMode || sale?.payment_mode || '').toLowerCase()
     const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
     const needsPurchaseOrderFetch = sale?.id && (!Array.isArray(sale?.items) || sale.items.length === 0)
@@ -55,7 +56,9 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
         ? `/api/v1/purchases/orders/${sale.id}`
         : isPurchaseBill
           ? `/api/v1/purchases/${sale.id}`
-          : isGrnReceipt ? `/api/v1/purchases/grns/${sale.id}` : `/api/v1/sales/${sale.id}`
+          : isGrnReceipt
+            ? `/api/v1/purchases/grns/${sale.id}`
+            : isSalesOrder ? `/api/v1/sales/orders/${sale.id}` : `/api/v1/sales/${sale.id}`
       const res = await fetch(endpoint, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) {
         const fetchedSale = await res.json()
@@ -167,7 +170,7 @@ export function openInvoicePrintWindow(sale, branch) {
 }
 
 export function openSalesOrderPrintWindow(order, branch) {
-  return openDocumentPrintWindow(order, branch, 'Sales Order', false)
+  return openDocumentPrintWindow(order, branch, 'Sales Order', true)
 }
 
 export function openPurchaseOrderPrintWindow(order, branch) {
@@ -180,6 +183,60 @@ export function openPurchaseBillPrintWindow(bill, branch) {
 
 export function openGrnPrintWindow(grn, branch) {
   return openDocumentPrintWindow(grn, branch, 'GRN Receipt', true)
+}
+
+export async function prepareStockTransferPayload(transfer, branch = {}) {
+  if (typeof window === 'undefined') return null
+  if (!transfer?.id) throw new Error('A stock transfer ID is required to print the transfer.')
+
+  const authToken = window.localStorage.getItem('retailos_token')
+  const headers = { Accept: 'application/json' }
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+  const response = await fetch(`/api/v1/transfers/${encodeURIComponent(transfer.id)}`, { headers })
+  if (!response.ok) {
+    throw new Error(`Failed to load stock transfer (${response.status}).`)
+  }
+
+  const fullTransfer = { ...transfer, ...(await response.json()) }
+  const sale = {
+    ...fullTransfer,
+    number: fullTransfer.ref_number || fullTransfer.number || '',
+    date: fullTransfer.request_date || fullTransfer.created_at || '',
+    items: (fullTransfer.items || []).map((item) => ({
+      ...item,
+      name: item.name || item.item_name || '',
+      packing: item.packing || item.packaging || '',
+      unit: item.unit || item.units || '',
+      qty: item.qty ?? item.quantity ?? 0,
+    })),
+  }
+
+  return { sale, branch: branch || {}, documentType: 'Stock Transfer' }
+}
+
+export async function openStockTransferPrintWindow(transfer, branch) {
+  if (typeof window === 'undefined') return
+  const win = window.open('/invoice-cosmo.html', '_blank')
+  if (!win) throw new Error('The stock transfer print window was blocked.')
+  let payload
+  try {
+    payload = await prepareStockTransferPayload(transfer, branch)
+  } catch (error) {
+    win.close()
+    throw error
+  }
+  const sendPayload = () => {
+    if (win.closed) return false
+    win.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
+    return true
+  }
+  const interval = setInterval(() => {
+    if (win.closed || sendPayload()) clearInterval(interval)
+  }, 200)
+  win.addEventListener('load', () => {
+    sendPayload()
+    clearInterval(interval)
+  }, { once: true })
 }
 
 export async function prepareQuotePayload(quote, branch) {

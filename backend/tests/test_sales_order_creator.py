@@ -2,14 +2,15 @@ import asyncio
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 from src.database import Base
-from src.models import Branch, SalesOrder, SalesOrderStatus, User
+from src.models import Branch, Item, SalesOrder, SalesOrderLineItem, SalesOrderStatus, User
 from src.notifications import store as notification_store
 from src.routes import sales as sales_routes
-from src.routes.sales import SalesOrderCreate, SalesOrderLineIn, create_order, submit_sales_order
+from src.routes.sales import SalesOrderCreate, SalesOrderLineIn, _so_dict, create_order, submit_sales_order
 
 
 async def _build_session() -> AsyncSession:
@@ -102,6 +103,38 @@ def test_sales_order_number_skips_deleted_gaps():
             # COUNT(*) would be 2 → SO-{year}-1002, which already exists.
             next_num = await next_free_prefixed_number(db, SalesOrder, doc_prefix="SO")
             assert next_num == f"SO-{year}-1003"
+        finally:
+            await db.close()
+
+    asyncio.run(run_test())
+
+
+def test_sales_order_response_includes_inventory_packing_and_unit():
+    async def run_test():
+        db = await _build_session()
+        try:
+            db.add(Branch(id="b1", name="Main", code="MAIN"))
+            db.add(Item(id="item-1", name="Almond Flakes", unit="KG", packaging="1x15KG"))
+            order = SalesOrder(
+                id="so-1", number="SO-0001", branch_id="b1", date="2026-10-06",
+                status=SalesOrderStatus.draft,
+            )
+            db.add(order)
+            db.add(SalesOrderLineItem(
+                id="line-1", order_id="so-1", item_id="item-1",
+                name="Almond Flakes", qty=1, price=257.2,
+            ))
+            await db.commit()
+
+            loaded_order = (await db.execute(
+                select(SalesOrder)
+                .options(selectinload(SalesOrder.line_items).selectinload(SalesOrderLineItem.item))
+                .where(SalesOrder.id == "so-1")
+            )).scalar_one()
+
+            result = _so_dict(loaded_order, loaded_order.line_items)
+            assert result["items"][0]["packing"] == "1x15KG"
+            assert result["items"][0]["unit"] == "KG"
         finally:
             await db.close()
 

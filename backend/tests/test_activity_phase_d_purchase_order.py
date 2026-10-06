@@ -5,12 +5,20 @@ import sys
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.database import Base  # noqa: E402
-from src.models import AuditLog, Branch, PurchaseOrder, Vendor, User  # noqa: E402
+from src.models import (  # noqa: E402
+    AuditLog,
+    Branch,
+    Item,
+    PurchaseOrder,
+    PurchaseOrderLineItem,
+    Vendor,
+    User,
+)
 from src.routes.purchases import (  # noqa: E402
     ConvertPOToBillIn,
     PurchaseOrderCreate,
@@ -18,6 +26,7 @@ from src.routes.purchases import (  # noqa: E402
     convert_order_to_bill,
     create_order,
     update_order,
+    _po_dict,
 )
 
 
@@ -151,6 +160,50 @@ async def _run_purchase_order_conversion_proof() -> None:
 
 def test_purchase_order_converted_cross_link_metadata() -> None:
     asyncio.run(_run_purchase_order_conversion_proof())
+
+
+def test_purchase_order_response_includes_inventory_packing_and_unit() -> None:
+    async def run_test() -> None:
+        db = await _build_session()
+        try:
+            await _seed_vendor_branch(db)
+            db.add(Item(id="item-1", name="Almond Flakes", unit="KG", packaging="1x15KG"))
+            order = PurchaseOrder(
+                id="po-1",
+                number="PO-2026-1000",
+                vendor_id="v1",
+                branch_id="b1",
+                date="2026-10-06",
+            )
+            db.add(order)
+            db.add(PurchaseOrderLineItem(
+                id="line-1",
+                order_id="po-1",
+                item_id="item-1",
+                name="Almond Flakes",
+                qty=1,
+                cost=100,
+            ))
+            await db.commit()
+
+            loaded_order = (
+                await db.execute(
+                    select(PurchaseOrder)
+                    .options(
+                        selectinload(PurchaseOrder.line_items)
+                        .selectinload(PurchaseOrderLineItem.item)
+                    )
+                    .where(PurchaseOrder.id == "po-1")
+                )
+            ).scalar_one()
+
+            result = _po_dict(loaded_order, loaded_order.line_items)
+            assert result["items"][0]["packing"] == "1x15KG"
+            assert result["items"][0]["unit"] == "KG"
+        finally:
+            await db.close()
+
+    asyncio.run(run_test())
 
 
 if __name__ == "__main__":

@@ -6,8 +6,30 @@ from httpx import AsyncClient
 from src.main import app
 from src.security import create_access_token
 from src.database import get_db
-from src.models import User
+from src.models import Item, TransferLineItem, User
+from src.routes.transfers import _line_dict
 from sqlalchemy import select
+
+
+def test_transfer_line_serializer_includes_inventory_packing_and_unit():
+    item = Item(id='item-1', name='Transfer item', packaging='1x15KG', unit='KG')
+    line = TransferLineItem(
+        item_id='item-1',
+        item_name='Transfer item',
+        qty=4,
+        item=item,
+    )
+
+    assert _line_dict(line) == {
+        'item_id': 'item-1',
+        'name': 'Transfer item',
+        'packing': '1x15KG',
+        'unit': 'KG',
+        'qty': 4,
+        'preferred_batch_id': None,
+        'requested_allocation': [],
+        'batches': [],
+    }
 
 
 async def _get_super_admin_token():

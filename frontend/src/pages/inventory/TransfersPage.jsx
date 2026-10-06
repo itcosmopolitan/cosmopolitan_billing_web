@@ -607,6 +607,7 @@ export default function TransfersPage() {
         open={!!showDetail}
         transfer={showDetail}
         activeBranchId={activeBranchId}
+        activeBranch={activeBranch}
         onClose={() => !actionBusy && !deleteBusy && setShowDetail(null)}
         onApprove={approve}
         onReject={reject}

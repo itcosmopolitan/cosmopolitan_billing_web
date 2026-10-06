@@ -4961,6 +4961,8 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
             "id": i.id, "itemId": i.item_id, "name": i.name,
             "qty": i.qty, "price": i.price, "taxRate": i.tax_rate,
             "discount": i.discount, "lineTotal": i.line_total,
+            "unit": i.item.unit if i.item else "",
+            "packing": i.item.packaging if i.item else "",
         } for i in items]
     return d
 
@@ -5598,7 +5600,7 @@ async def list_orders(
         default_order="desc",
     )
     q = select(SalesOrder).options(
-        selectinload(SalesOrder.line_items),
+        selectinload(SalesOrder.line_items).selectinload(SalesOrderLineItem.item),
         selectinload(SalesOrder.customer),
     )
     q_count = select(func.count(SalesOrder.id))
@@ -5628,7 +5630,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
 
     res = await db.execute(
         select(SalesOrder)
-        .options(selectinload(SalesOrder.line_items))
+        .options(selectinload(SalesOrder.line_items).selectinload(SalesOrderLineItem.item))
         .where(SalesOrder.id == order_id)
     )
     so = res.scalar_one_or_none()

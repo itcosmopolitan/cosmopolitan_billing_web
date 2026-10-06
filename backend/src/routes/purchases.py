@@ -3276,6 +3276,8 @@ def _po_dict(po, items=None, *, converted_bill_number=None):
             "id": i.id, "itemId": i.item_id, "name": i.name,
             "qty": i.qty, "cost": i.cost, "taxRate": i.tax_rate,
             "discount": i.discount, "lineTotal": i.line_total,
+            "unit": i.item.unit if i.item else "",
+            "packing": i.item.packaging if i.item else "",
         } for i in items]
     return d
 
@@ -3675,7 +3677,7 @@ async def list_orders(
     )
     q = (
         select(PurchaseOrder)
-        .options(selectinload(PurchaseOrder.line_items))
+        .options(selectinload(PurchaseOrder.line_items).selectinload(PurchaseOrderLineItem.item))
         .where(base)
         .order_by(sort_expr)
         .offset(sk)
@@ -3701,7 +3703,7 @@ async def list_orders(
 async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(PurchaseOrder)
-        .options(selectinload(PurchaseOrder.line_items))
+        .options(selectinload(PurchaseOrder.line_items).selectinload(PurchaseOrderLineItem.item))
         .where(PurchaseOrder.id == order_id)
     )
     po = res.scalar_one_or_none()

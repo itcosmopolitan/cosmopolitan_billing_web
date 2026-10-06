@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { transfersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmtDate, fmtQty } from '@/utils/helpers'
+import { openStockTransferPrintWindow } from '@/utils/printInvoice'
+import { exportStockTransferPdf } from '@/utils/exportStockTransferPdf'
 import { Chip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
@@ -19,6 +22,7 @@ export default function TransferDetailPanel({
   open,
   transfer,
   activeBranchId = '',
+  activeBranch = {},
   onClose,
   onApprove,
   onReject,
@@ -35,6 +39,8 @@ export default function TransferDetailPanel({
   const [detail, setDetail] = useState(transfer)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState('overview')
+  const [documentBusy, setDocumentBusy] = useState(false)
+  const [documentAction, setDocumentAction] = useState('')
   const canApproveHere = (
     detail?.status === 'pending'
     && can('transfers.approve')
@@ -78,7 +84,36 @@ export default function TransferDetailPanel({
     { label: 'Requested by', value: detail?.requested_by || '—' },
   ]
 
-  const busy = !!actionBusy || deleteBusy
+  const busy = !!actionBusy || deleteBusy || documentBusy
+
+  const printTransfer = async () => {
+    setDocumentBusy(true)
+    setDocumentAction('print')
+    try {
+      await openStockTransferPrintWindow(detail, activeBranch)
+    } catch (error) {
+      console.error('Failed to print stock transfer:', error)
+      toast.error(error.message || 'Failed to print stock transfer')
+    } finally {
+      setDocumentBusy(false)
+      setDocumentAction('')
+    }
+  }
+
+  const exportTransfer = async () => {
+    setDocumentBusy(true)
+    setDocumentAction('export')
+    try {
+      await exportStockTransferPdf(detail, activeBranch)
+      toast.success('Stock transfer exported')
+    } catch (error) {
+      console.error('Failed to export stock transfer:', error)
+      toast.error(error.message || 'Failed to export stock transfer')
+    } finally {
+      setDocumentBusy(false)
+      setDocumentAction('')
+    }
+  }
   const nextAction = canApproveHere
     ? {
       description: 'Review the transfer request and approve it to dispatch the stock.',
@@ -166,6 +201,29 @@ export default function TransferDetailPanel({
       </>
     )
   }
+
+  footer = (
+    <>
+      {footer}
+      <button
+        type="button"
+        className="btn btn-secondary"
+        style={{ marginLeft: 'auto' }}
+        disabled={busy || !detail?.id}
+        onClick={exportTransfer}
+      >
+        {documentAction === 'export' ? 'Exporting…' : 'Export Stock Transfer'}
+      </button>
+      <button
+        type="button"
+        className="btn btn-primary"
+        disabled={busy || !detail?.id}
+        onClick={printTransfer}
+      >
+        {documentAction === 'print' ? 'Opening…' : 'Print Stock Transfer'}
+      </button>
+    </>
+  )
 
   return (
     <RecordDetailDrawer

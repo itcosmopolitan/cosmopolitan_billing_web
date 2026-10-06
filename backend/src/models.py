@@ -1498,6 +1498,7 @@ class TransferLineItem(Base):
     batch_allocation = Column(Text, nullable=True)
 
     transfer = relationship("StockTransfer", back_populates="items")
+    item = relationship("Item")
 
 
 # ─── Cash Entry ───────────────────────────────────────────────────────────────

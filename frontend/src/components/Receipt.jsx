@@ -101,7 +101,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     window.addEventListener('message', handleMessage)
     const preparedPayload = isQuote
       ? prepareQuotePayload(sale, branch)
-      : prepareInvoicePayload(sale, branch, { documentType, fetchSale: documentType !== 'Sales Order' })
+      : prepareInvoicePayload(sale, branch, { documentType })
     preparedPayload
       .then((preparedPayload) => {
         if (!active) return

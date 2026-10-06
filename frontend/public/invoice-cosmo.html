@@ -557,6 +557,94 @@
     }).join('\n')
   }
 
+  function renderTransferPage(pageIndex, totalPages, pageItems, transfer, branch) {
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const fromBranch = transfer.from_branch_name || transfer.from_branch_id || ''
+    const toBranch = transfer.to_branch_name || transfer.to_branch_id || ''
+    const refNumber = transfer.ref_number || transfer.number || transfer.id || ''
+    const transferDate = transfer.request_date || transfer.created_at || ''
+    const status = String(transfer.status || '').replace(/_/g, ' ')
+    const itemRows = pageItems.map((item, index) => `
+      <tr>
+        <td>${pageIndex * 14 + index + 1}</td>
+        <td>${escapeHtml(item.name || item.item_name || '')}</td>
+        <td>${escapeHtml(item.packing || item.packaging || '')}</td>
+        <td>${escapeHtml(item.unit || item.units || '')}</td>
+        <td class="num">${formatNumber(item.qty ?? item.quantity ?? 0, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
+      </tr>
+    `).join('')
+
+    return `
+      <div class="page${pageIndex > 0 ? ' continuation-page' : ''}">
+        <div class="header">
+          <div style="display:flex; align-items:flex-start;">
+            <div class="logo-block">
+              <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+              <div class="logo-tag">"where quality and service matters"</div>
+            </div>
+          </div>
+          <div class="company-info">
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            <div class="company-line">${escapeHtml(`${branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'}, ${branch.street3 || branch.street_3 || "Hulhumale'"}, ${branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'}`)}</div>
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
+          </div>
+          <div class="gold-badge">
+            ${branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl ? `<img class="badge-img" src="${escapeHtml(branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl)}" alt="Badge" />` : `
+              <img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='block'" />
+              <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+                <div class="gold-corporate">Corporate Maldives</div>
+                <div class="gold-text">GOLD</div>
+                <div class="gold-100">100</div>
+                <div class="gold-year">2023</div>
+              </div>
+            `}
+          </div>
+        </div>
+
+        <div class="title-row">
+          <h1 class="center">Stock Transfer</h1>
+          <div class="pageno">Page ${pageIndex + 1} of ${totalPages}</div>
+        </div>
+
+        <div class="parties">
+          <div class="bill-to details-box">
+            <div class="details-title">From Branch</div>
+            <h2>${escapeHtml(fromBranch)}</h2>
+            <table style="margin-top:4px; width:100%;">
+              <tr><td class="label">Transfer #</td><td>${escapeHtml(refNumber)}</td></tr>
+              ${transfer.requested_by ? `<tr><td class="label">Requested By</td><td>${escapeHtml(transfer.requested_by)}</td></tr>` : ''}
+              ${transfer.approved_by ? `<tr><td class="label">Approved By</td><td>${escapeHtml(transfer.approved_by)}</td></tr>` : ''}
+            </table>
+          </div>
+          <div class="seller-addr details-box">
+            <div class="details-title">To Branch</div>
+            <h2 style="font-size:15px; margin:0 0 6px 0;">${escapeHtml(toBranch)}</h2>
+            <table style="width:100%;">
+              ${transferDate ? `<tr><td class="label">Transfer Date</td><td>${formatDate(transferDate)}</td></tr>` : ''}
+              ${status ? `<tr><td class="label">Status</td><td>${escapeHtml(status)}</td></tr>` : ''}
+              ${transfer.priority ? `<tr><td class="label">Priority</td><td>${escapeHtml(transfer.priority)}</td></tr>` : ''}
+            </table>
+          </div>
+        </div>
+
+        <table class="items">
+          <thead><tr><th>S.No</th><th>Description</th><th>Packing</th><th>Units</th><th class="num">Qty</th></tr></thead>
+          <tbody>${itemRows}</tbody>
+        </table>
+
+        ${pageIndex === totalPages - 1 ? `
+          ${transfer.notes ? `<div class="terms"><strong>Notes:</strong> ${escapeHtml(transfer.notes).replace(/\n/g, '<br/>')}</div>` : ''}
+          <div class="signoff"><div>Authorized By</div></div>
+        ` : ''}
+      </div>
+    `
+  }
+
   function renderPage(pageIndex, totalPages, pageItems, invoice, branch, totals, copyLabel) {
     const hasValue = (value) => value != null && String(value).trim() !== ''
     const counterAddressLines = branch.invoiceAddressUsesCounter
@@ -779,9 +867,27 @@
     hasRenderedInvoice = true
     const sale = payload?.sale || {}
     sale.documentType = payload?.documentType || 'Tax Invoice'
-    document.title = `${sale.documentType} ${sale.number || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
+    document.title = `${sale.documentType} ${sale.number || (sale.documentType === 'Stock Transfer' ? sale.ref_number : '') || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
     const branch = payload?.branch || {}
     const items = sale.items || []
+    if (sale.documentType === 'Stock Transfer') {
+      const pages = paginateItems(items, 14)
+      const transferPages = (pages.length ? pages : [[]]).map((pageItems, pageIndex, allPages) => {
+        return renderTransferPage(pageIndex, allPages.length, pageItems, sale, branch)
+      })
+      document.getElementById('invoicePages').innerHTML = transferPages.join('')
+      setTimeout(() => {
+        if (isPreview) {
+          window.parent.postMessage({
+            type: 'invoiceRendered',
+            height: document.documentElement.scrollHeight,
+          }, window.location.origin)
+        } else {
+          window.print()
+        }
+      }, 500)
+      return
+    }
     const baseLineAmounts = items.map((item) => getLineAmounts(item, 0))
     const documentDiscountShares = allocateFlatAmount(
       baseLineAmounts.map((line) => line.inclusiveAfterLineDiscount),
