@@ -16,7 +16,12 @@ from sqlalchemy.orm import selectinload
 
 from src import config
 from src.database import get_db
-from src.document_numbering import allocate_customer_payment_number, allocate_number, resolve_number
+from src.document_numbering import (
+    allocate_customer_payment_number,
+    allocate_number,
+    next_free_prefixed_number,
+    resolve_number,
+)
 from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
 from src.models import (
     AuditLog,
@@ -5655,24 +5660,19 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         raise HTTPException(400, "Sales order must have at least one line item")
 
     direct = await can_direct_commit(user, db, "invoices.approve")
+    await _resolve_branch_scope(user, db, data.branch_id)
+    data.customer_id = await _resolve_customer_id(db, data.customer_id)
     tax_mode = await _get_org_tax_mode(db)
     await _apply_internal_customer_gst(db, data.customer_id, data.items)
     line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
     today = datetime.now().strftime("%Y-%m-%d")
 
-    async def _alloc_so() -> str:
-        count = (await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0
-        return f"SO-{datetime.now().year}-{1000 + count}"
-
-    # Ensure user may create orders in the requested branch
-    await _resolve_branch_scope(user, db, data.branch_id)
-
     so_num = await resolve_number(
         db,
         requested=data.number,
         model=SalesOrder,
-        allocate=_alloc_so,
+        allocate=lambda: next_free_prefixed_number(db, SalesOrder, doc_prefix="SO"),
     )
 
     so_status = SalesOrderStatus.confirmed if direct else SalesOrderStatus.draft
@@ -5738,7 +5738,23 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
     # NB: no stock side-effect at create. Stock moves only when the SO is
     # converted to an invoice (same code path as POS sales).
     # Draft stays private — notification fires on submit.
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        orig = str(getattr(exc, "orig", exc) or exc).lower()
+        if "unique" in orig or "already exists" in orig or "duplicate" in orig:
+            raise HTTPException(
+                400,
+                "This sales order number is already in use. Leave the number blank to auto-assign.",
+            ) from exc
+        if "customer" in orig:
+            raise HTTPException(400, "The selected customer is invalid or was deleted.") from exc
+        if "item" in orig:
+            raise HTTPException(400, "One or more line items are invalid or were deleted.") from exc
+        if "branch" in orig:
+            raise HTTPException(400, "The selected branch is invalid.") from exc
+        raise HTTPException(400, "Could not save this sales order.") from exc
     return {"id": so.id, "number": so.number, "total": total, "status": so.status.value}
 
 

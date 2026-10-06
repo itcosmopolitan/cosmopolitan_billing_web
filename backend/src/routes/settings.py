@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.database import get_db
-from src.document_numbering import get_counter_seq, peek_next_number, serialize_numbering
+from src.document_numbering import (
+    get_counter_seq,
+    next_free_prefixed_number,
+    peek_next_number,
+    serialize_numbering,
+)
 from src.invoice_template_defaults import (
     DEFAULT_INVOICE_TEMPLATE,
     DEFAULT_INVOICE_TEMPLATE_ID,
@@ -314,8 +319,8 @@ async def preview_document_number(
         return {"doc_type": dt, "number": number}
     year = datetime.now().year
     if dt == "sales_order":
-        count = (await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0
-        return {"doc_type": dt, "number": f"SO-{year}-{1000 + count}"}
+        number = await next_free_prefixed_number(db, SalesOrder, doc_prefix="SO")
+        return {"doc_type": dt, "number": number}
     if dt == "purchase_order":
         count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
         return {"doc_type": dt, "number": f"PO-{year}-{1000 + count:04d}"}

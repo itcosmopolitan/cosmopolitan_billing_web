@@ -326,6 +326,42 @@ async def allocate_customer_payment_number(
     return f"PAY-{year}-{sequence:04d}"
 
 
+async def next_free_prefixed_number(
+    db: AsyncSession,
+    model,
+    *,
+    doc_prefix: str,
+    year: int | None = None,
+    min_seq: int = 1000,
+    width: int | None = None,
+) -> str:
+    """Next unused ``PREFIX-YYYY-N`` number, skipping gaps from deleted rows.
+
+    Count-based allocators (``1000 + COUNT(*)``) reuse a live number as soon as
+    any earlier document is deleted, which raises a unique-constraint 500 on
+    create. This walks existing numbers for the year and returns max+1.
+    """
+    year = year or datetime.utcnow().year
+    prefix = f"{doc_prefix}-{year}-"
+    numbers = (
+        await db.execute(select(model.number).where(model.number.startswith(prefix)))
+    ).scalars().all()
+    taken: set[int] = set()
+    max_seq = min_seq - 1
+    for num in numbers:
+        suffix = str(num or "")[len(prefix):]
+        if suffix.isdigit():
+            seq = int(suffix)
+            taken.add(seq)
+            if seq > max_seq:
+                max_seq = seq
+    seq = max_seq + 1
+    while seq in taken:
+        seq += 1
+    token = f"{seq:0{width}d}" if width else str(seq)
+    return f"{prefix}{token}"
+
+
 async def peek_next_number(
     db: AsyncSession,
     doc_type: str,

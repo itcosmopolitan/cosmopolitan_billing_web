@@ -101,20 +101,21 @@ async def reserve_for_sales_order(
 ) -> None:
     """Create active reservations for each catalog line on a confirmed SO."""
     for line in lines:
-        if not line.item_id or not line.qty:
+        need = as_qty(getattr(line, "qty", 0))
+        if not line.item_id or need <= 0:
             continue
         available = await get_available_qty(
             db, item_id=line.item_id, branch_id=branch_id, exclude_source_ref=order_id,
         )
-        if int(line.qty) > available:
+        if need > available:
             raise ValueError(
-                f"Insufficient stock for {line.name}: need {line.qty}, available {available}"
+                f"Insufficient stock for {line.name}: need {need}, available {available}"
             )
         db.add(StockReservation(
             id=str(uuid.uuid4()),
             item_id=line.item_id,
             branch_id=branch_id,
-            qty=int(line.qty),
+            qty=need,
             source_type="sales_order",
             source_ref=order_id,
             source_line_id=getattr(line, "id", None),

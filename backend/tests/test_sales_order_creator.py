@@ -77,3 +77,32 @@ def test_sales_order_creator_is_authenticated_and_legacy_staff_draft_is_recovere
             await db.close()
 
     asyncio.run(run_test())
+
+
+def test_sales_order_number_skips_deleted_gaps():
+    from datetime import datetime
+
+    from src.document_numbering import next_free_prefixed_number
+
+    async def run_test():
+        db = await _build_session()
+        try:
+            db.add(Branch(id="b1", name="Main", code="MAIN"))
+            await db.commit()
+            year = datetime.utcnow().year
+            db.add(SalesOrder(
+                id="so-a", number=f"SO-{year}-1000",
+                branch_id="b1", date="2026-10-06", status=SalesOrderStatus.draft,
+            ))
+            db.add(SalesOrder(
+                id="so-c", number=f"SO-{year}-1002",
+                branch_id="b1", date="2026-10-06", status=SalesOrderStatus.draft,
+            ))
+            await db.commit()
+            # COUNT(*) would be 2 → SO-{year}-1002, which already exists.
+            next_num = await next_free_prefixed_number(db, SalesOrder, doc_prefix="SO")
+            assert next_num == f"SO-{year}-1003"
+        finally:
+            await db.close()
+
+    asyncio.run(run_test())
