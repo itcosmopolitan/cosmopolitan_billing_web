@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, KPICard, Modal, EmptyState, Tag, Chip, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, RowActionsMenu, ConfirmDialog } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, KPICard, Modal, EmptyState, Tag, Chip, PaginationBar, SortableHeader, TablePanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, RowActionsMenu, ConfirmDialog } from '@/components/ui'
 import VendorFormModal from './VendorFormModal'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
@@ -164,12 +164,6 @@ export default function VendorsPage() {
     return 'var(--text-primary)'
   }
 
-  if (loading) return (
-    <div className="page-container">
-      <TableLoadingPanel label="Loading vendors…" />
-    </div>
-  )
-
   return (
     <div className="page-container">
       <SectionHeader title="Vendor Master" subtitle="Manage suppliers, payment terms, and outstanding payables">
@@ -215,7 +209,12 @@ export default function VendorsPage() {
       </div>
 
       <Card bodyPadding={false}>
-        {vendors.length === 0 ? <EmptyState icon="🏭" title={tab === 'inactive' ? 'No inactive vendors' : 'No vendors found'} /> : (
+        <TablePanel
+          loading={loading}
+          isEmpty={!loading && vendors.length === 0}
+          emptyIcon="🏭"
+          emptyTitle={tab === 'inactive' ? 'No inactive vendors' : 'No vendors found'}
+        >
           <table className="data-table">
             <thead>
               <tr>
@@ -325,7 +324,7 @@ export default function VendorsPage() {
               ))}
             </tbody>
           </table>
-        )}
+        </TablePanel>
         <PaginationBar
           total={vendorTotal}
           skip={venSkip}

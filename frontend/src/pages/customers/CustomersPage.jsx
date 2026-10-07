@@ -4,7 +4,7 @@ import { customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
-import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, ConfirmDialog } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TablePanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, ConfirmDialog } from '@/components/ui'
 
 const CUSTOMER_TABS = [
   { id: 'all', label: 'All Customers' },
@@ -173,14 +173,6 @@ export default function CustomersPage() {
     overdue:     custSummary?.withBalanceCount ?? 0,
     topBuyer:    customers.length > 0 ? customers.reduce((a, c) => (c.totalPurchases || 0) > (a.totalPurchases || 0) ? c : a, customers[0]) : null,
   }), [custTotal, custSummary, customers])
-
-  if (loading) {
-    return (
-      <div className="page-container">
-        <TableLoadingPanel label="Loading customers…" />
-      </div>
-    )
-  }
 
   const creditUsedPct = (c) => {
     const owed = Math.max(0, Number(c.outstanding) || 0)
@@ -363,7 +355,12 @@ export default function CustomersPage() {
       </div>
 
       <Card bodyPadding={false}>
-        {customers.length === 0 ? <EmptyState icon="👥" title={tab === 'inactive' ? 'No inactive customers' : 'No customers found'} /> : (
+        <TablePanel
+          loading={loading}
+          isEmpty={!loading && customers.length === 0}
+          emptyIcon="👥"
+          emptyTitle={tab === 'inactive' ? 'No inactive customers' : 'No customers found'}
+        >
           <div className="table-scroll">
           <table className="data-table">
             <thead>
@@ -616,7 +613,7 @@ export default function CustomersPage() {
             </tbody>
           </table>
           </div>
-        )}
+        </TablePanel>
         <PaginationBar
           total={custTotal}
           skip={custSkip}
