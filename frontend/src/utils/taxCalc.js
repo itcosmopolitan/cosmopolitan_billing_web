@@ -1,24 +1,38 @@
-import { formatAmountInput, roundAmount } from '@/utils/decimalPrecision'
+import {
+  formatAmountInput,
+  getAmountDecimals,
+  MAX_DECIMAL_PRECISION,
+  roundAmount,
+  roundToPrecision,
+} from '@/utils/decimalPrecision'
 
 /** Always inclusive — pricing-mode preference removed. */
 export function normalizeTaxPricingMode(_mode) {
   return 'inclusive'
 }
 
-export function exclusiveFromInclusive(inclusive, taxRate) {
+/**
+ * @param {number} inclusive
+ * @param {number} taxRate
+ * @param {number} [decimals] — defaults to org amount precision; pass
+ *   MAX_DECIMAL_PRECISION for POS rate entry so multi-decimal rates survive.
+ */
+export function exclusiveFromInclusive(inclusive, taxRate, decimals) {
   const amount = Number(inclusive) || 0
   const rate = Number(taxRate) || 0
+  const d = decimals ?? getAmountDecimals()
   if (amount <= 0) return 0
-  if (rate <= 0) return roundAmount(amount)
-  return roundAmount((amount * 100) / (100 + rate))
+  if (rate <= 0) return roundToPrecision(amount, d)
+  return roundToPrecision((amount * 100) / (100 + rate), d)
 }
 
-export function inclusiveFromExclusive(exclusive, taxRate) {
+export function inclusiveFromExclusive(exclusive, taxRate, decimals) {
   const amount = Number(exclusive) || 0
   const rate = Number(taxRate) || 0
+  const d = decimals ?? getAmountDecimals()
   if (amount <= 0) return 0
-  if (rate <= 0) return roundAmount(amount)
-  return roundAmount(amount * (1 + rate / 100))
+  if (rate <= 0) return roundToPrecision(amount, d)
+  return roundToPrecision(amount * (1 + rate / 100), d)
 }
 
 /** Split an entered unit price into excl. GST / GST / incl. GST. */
@@ -104,14 +118,17 @@ export function lineTaxableFromInclusive(item, entityDiscountShare = 0) {
 }
 
 /** Unit rate shown to cashiers — always excl. GST (stored prices remain inclusive). */
-export function displayExclusiveUnitRate(inclusiveUnitPrice, taxRate) {
-  return exclusiveFromInclusive(inclusiveUnitPrice, taxRate)
+export function displayExclusiveUnitRate(inclusiveUnitPrice, taxRate, decimals) {
+  return exclusiveFromInclusive(inclusiveUnitPrice, taxRate, decimals)
 }
 
 /** Convert a cashier-entered excl. GST unit rate back to stored inclusive. */
-export function storeInclusiveUnitRate(exclusiveUnitPrice, taxRate) {
-  return inclusiveFromExclusive(exclusiveUnitPrice, taxRate)
+export function storeInclusiveUnitRate(exclusiveUnitPrice, taxRate, decimals) {
+  return inclusiveFromExclusive(exclusiveUnitPrice, taxRate, decimals)
 }
+
+/** POS rate/qty entry precision — wider than org display rounding. */
+export const POS_ENTRY_DECIMALS = MAX_DECIMAL_PRECISION
 
 /** Split a document-level discount across inclusive line amounts. */
 export function allocateFlatShares(amounts, flat) {

@@ -4,18 +4,24 @@ import { customerPricingType, discountPatternFromItem, resolveCategoryLinePricin
 import {
   DEFAULT_AMOUNT_DECIMALS,
   DEFAULT_QTY_DECIMALS,
+  MAX_DECIMAL_PRECISION,
   parsePrecisionPayload,
   roundAmount,
-  roundQty,
+  roundToPrecision,
   setDecimalPrecision,
 } from '@/utils/decimalPrecision'
 
 const roundMoney = (n) => roundAmount(n)
 
-/** Pre-tax line amount after one line-level discount (pct or flat). */
+/** Pre-tax line amount after one line-level discount (pct or flat).
+ *
+ * Qty and unit price keep entry precision (up to org max); only the
+ * computed money amounts (gross / discount / lineTotal) use settings
+ * amount rounding — matching POS "enter many decimals, round totals".
+ */
 export const applyLineCalc = (item) => {
-  const qty = Math.max(0, roundQty(Number(item.qty) || 0))
-  const price = Number(item.price) || 0
+  const qty = Math.max(0, roundToPrecision(Number(item.qty) || 0, MAX_DECIMAL_PRECISION))
+  const price = Math.max(0, roundToPrecision(Number(item.price) || 0, MAX_DECIMAL_PRECISION))
   const gross = roundMoney(qty * price)
   const lineDiscountType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
   const rawValue = Number(

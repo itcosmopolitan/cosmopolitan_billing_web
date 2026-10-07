@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fmt, fmtQty } from '@/utils/helpers'
+import { fmtQty } from '@/utils/helpers'
 import { itemsAPI } from '@/api'
 import MarginBadge from '@/components/MarginBadge'
-import { qtyInputStep, amountInputStep, roundQty, roundAmount } from '@/utils/decimalPrecision'
+import {
+  amountInputStep,
+  formatAmountNumber,
+  inputStep,
+  roundAmount,
+  roundToPrecision,
+} from '@/utils/decimalPrecision'
 import {
   allocatableBatches,
   computeAutoAllocation,
@@ -17,7 +23,12 @@ import {
   storeInclusiveUnitRate,
   lineTaxAmount,
   lineTaxableAmount,
+  POS_ENTRY_DECIMALS,
 } from '@/utils/taxCalc'
+
+/** Qty/rate inputs accept full entry precision; totals use org amount rounding. */
+const entryStep = () => inputStep(POS_ENTRY_DECIMALS)
+const entryQty = (n) => roundToPrecision(n, POS_ENTRY_DECIMALS)
 
 /** Move focus to the same column on the previous/next cart line (↑/↓). */
 function handleCartFieldArrowNav(e, field, cartIndex) {
@@ -74,7 +85,12 @@ export default function CartRow({
   stockMode = 'branch',
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
-  const exclRate = displayExclusiveUnitRate(item.price, item.taxRate)
+  // Editable rates keep entry precision; read-only display uses org amount rounding.
+  const exclRate = displayExclusiveUnitRate(
+    item.price,
+    item.taxRate,
+    allowPriceEditing ? POS_ENTRY_DECIMALS : undefined,
+  )
   const afterEntity = Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0)))
   const lineTax = lineTaxAmount(afterEntity, item.taxRate)
   const lineTotalExcl = lineTaxableAmount(afterEntity, item.taxRate)
@@ -108,15 +124,26 @@ export default function CartRow({
   const lastPositiveQtyRef = useRef(item.qty)
   if (Number(item.qty) > 0) lastPositiveQtyRef.current = item.qty
   const [qtyText, setQtyText] = useState(null)
+  const [priceText, setPriceText] = useState(null)
   const qtyEditing = qtyText !== null
+  const priceEditing = priceText !== null
 
   const commitQty = (raw) => {
     const v = Number(raw)
     if (Number.isFinite(v) && v > 0) {
-      onQtyChange(roundQty(v))
+      onQtyChange(entryQty(v))
       return
     }
-    onQtyChange(roundQty(lastPositiveQtyRef.current || qtyInputStep()))
+    onQtyChange(entryQty(lastPositiveQtyRef.current || entryQty(1)))
+  }
+
+  const commitPrice = (raw) => {
+    const v = Number(raw)
+    if (Number.isFinite(v) && v >= 0) {
+      onPriceChange?.(storeInclusiveUnitRate(v, item.taxRate, POS_ENTRY_DECIMALS))
+      return
+    }
+    onPriceChange?.(storeInclusiveUnitRate(exclRate, item.taxRate, POS_ENTRY_DECIMALS))
   }
 
   // Stash the callbacks in refs so their identity (recreated on every
@@ -304,8 +331,8 @@ export default function CartRow({
           type="number"
           data-pos-cart-field="qty"
           data-pos-cart-index={cartIndex}
-          min={qtyInputStep()}
-          step={qtyInputStep()}
+          min={entryStep()}
+          step={entryStep()}
           value={qtyEditing ? qtyText : item.qty}
           onFocus={(e) => {
             setQtyText(String(item.qty ?? ''))
@@ -317,7 +344,7 @@ export default function CartRow({
             if (raw.trim() === '' || raw === '.' || raw.endsWith('.')) return
             const v = Number(raw)
             if (!Number.isFinite(v) || v <= 0) return
-            onQtyChange(roundQty(v))
+            onQtyChange(entryQty(v))
           }}
           onBlur={() => {
             commitQty(qtyText)
@@ -328,7 +355,7 @@ export default function CartRow({
             else handleCartFieldArrowNav(e, 'qty', cartIndex)
           }}
           aria-label={`Quantity for ${item.name || 'item'}`}
-          style={{ width: 56, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
+          style={{ width: 72, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
@@ -339,16 +366,36 @@ export default function CartRow({
             data-pos-cart-field="price"
             data-pos-cart-index={cartIndex}
             min={0}
-            step={amountInputStep()}
-            value={exclRate}
-            onChange={(e) => onPriceChange?.(storeInclusiveUnitRate(Number(e.target.value) || 0, item.taxRate))}
-            onKeyDown={(e) => handleCartFieldArrowNav(e, 'price', cartIndex)}
-            style={{ width: 86, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
+            step={entryStep()}
+            value={priceEditing ? priceText : exclRate}
+            onFocus={(e) => {
+              setPriceText(String(exclRate ?? ''))
+              e.target.select()
+            }}
+            onChange={(e) => {
+              const raw = e.target.value
+              setPriceText(raw)
+              if (raw.trim() === '' || raw === '.' || raw.endsWith('.')) return
+              const v = Number(raw)
+              if (!Number.isFinite(v) || v < 0) return
+              onPriceChange?.(storeInclusiveUnitRate(v, item.taxRate, POS_ENTRY_DECIMALS))
+            }}
+            onBlur={() => {
+              commitPrice(priceText)
+              setPriceText(null)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              else handleCartFieldArrowNav(e, 'price', cartIndex)
+            }}
+            style={{ width: 96, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
             aria-label={`Rate excl. GST for ${item.name}`}
-            title="Rate excl. GST"
+            title="Rate excl. GST — enter any decimals; line total uses settings rounding"
           />
         ) : (
-          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">{exclRate}</span>
+          <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">
+            {formatAmountNumber(exclRate)}
+          </span>
         )}
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}>
@@ -379,14 +426,14 @@ export default function CartRow({
           </div>
         </div>
       </td>
-      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="GST on discounted amount">
-        {lineTax}
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="GST on discounted amount (settings rounding)">
+        {formatAmountNumber(lineTax)}
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
         <MarginBadge margin={margin} />
       </td>
-      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="Line total excl. GST">
-        {lineTotalExcl}
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', fontFamily: 'DM Mono, monospace', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', verticalAlign: 'middle', whiteSpace: 'nowrap' }} title="Line total excl. GST (settings rounding)">
+        {formatAmountNumber(lineTotalExcl)}
       </td>
       <td style={{ padding: '5px 8px', borderBottom: '1px solid var(--border-subtle)', textAlign: 'center', verticalAlign: 'middle' }}>
         <button type="button" onClick={onRemove} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 2px' }} aria-label="Remove line">✕</button>
