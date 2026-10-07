@@ -224,11 +224,19 @@ export default function TransferFormPage({ mode = 'create' }) {
     items: f.items.filter((_, idx) => idx !== i),
   }))
 
-  const patchItem = (i, k, v) => setForm((f) => ({
+  const patchItem = (i, k, v, selectedCostPrice) => setForm((f) => ({
     ...f,
     items: f.items.map((it, idx) => {
       if (idx !== i) return it
-      if (k === 'item_id') return { ...it, item_id: v, batchAllocation: [], batchAllocationCustom: false }
+      if (k === 'item_id') {
+        return {
+          ...it,
+          item_id: v,
+          cost_price: v ? String(selectedCostPrice ?? '') : '',
+          batchAllocation: [],
+          batchAllocationCustom: false,
+        }
+      }
       if (k === 'qty') return { ...it, qty: v, batchAllocationCustom: false }
       return { ...it, [k]: v }
     }),
@@ -298,7 +306,7 @@ export default function TransferFormPage({ mode = 'create' }) {
         <div className="transfer-hero">
           <div className="transfer-hero__copy">
             <div className="transfer-hero__eyebrow">Inventory movement</div>
-            <h1>{isEdit ? 'Refine a transfer before approval' : 'Create a sharp transfer request'}</h1>
+            <h1>{isEdit ? 'Refine a transfer before approval' : 'Create a share transfer request'}</h1>
             <p>
               Move stock between branches with batch-aware allocation, clear routing, and a more focused workspace.
             </p>

@@ -8,6 +8,7 @@ import {
   isAllocationValid,
 } from '@/utils/batchAllocation'
 import { qtyInputStep } from '@/utils/decimalPrecision'
+import { fmt } from '@/utils/helpers'
 
 export default function TransferFormFields({
   form,
@@ -27,6 +28,11 @@ export default function TransferFormFields({
 }) {
   const fromLabel = branchLabels.get(form.from_branch_id)?.name
   const toLabel = branchLabels.get(form.to_branch_id)?.name
+  const totalCostPrice = form.items.reduce((sum, row) => {
+    const item = items.find((entry) => entry.id === row.item_id)
+    const costPrice = Number(row.cost_price ?? item?.cost_price ?? item?.default_cost_price ?? 0)
+    return sum + (Number(row.qty) || 0) * costPrice
+  }, 0)
 
   return (
     <div className="transfer-form">
@@ -121,9 +127,11 @@ export default function TransferFormFields({
             <thead>
               <tr>
                 <th style={{ width: 48 }}>#</th>
-                <th style={{ width: '44%' }}>Item</th>
-                <th style={{ width: 110 }}>Qty</th>
-                <th style={{ width: 330 }}>Batch allocation</th>
+                <th style={{ width: '34%' }}>Item</th>
+                <th style={{ width: 90 }}>Qty</th>
+                <th style={{ width: 120 }}>Cost Price</th>
+                <th style={{ width: 145 }}>Total Cost Price</th>
+                <th style={{ width: 280 }}>Batch allocation</th>
                 <th style={{ width: 44 }} />
               </tr>
             </thead>
@@ -137,6 +145,7 @@ export default function TransferFormFields({
                 const batches = key ? (batchOptions[key] || []) : []
                 const allocation = row.batchAllocation || []
                 const need = Number(row.qty) || 0
+                const costPrice = Number(row.cost_price ?? picked?.cost_price ?? picked?.default_cost_price ?? 0)
                 const valid = isAllocationValid(allocation, need)
                 return (
                   <tr key={i} style={{ verticalAlign: 'top' }}>
@@ -151,11 +160,12 @@ export default function TransferFormFields({
                             ? { id: row.item_id, name: picked?.name || `Item ${row.item_id}` }
                             : null}
                           onPick={(inv) => {
-                            patchItem(i, 'item_id', inv.id)
+                            patchItem(i, 'item_id', inv.id, inv.cost_price ?? inv.default_cost_price)
                             loadBatchesForRow(inv.id)
                           }}
                           onClear={() => patchItem(i, 'item_id', null)}
                           disabled={disabled || itemsLoading}
+                          portalDropdown
                         />
                       </div>
                     </td>
@@ -171,6 +181,20 @@ export default function TransferFormFields({
                         disabled={disabled}
                       />
                     </td>
+                    <td>
+                      <input
+                        className="form-input"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Cost price"
+                        value={row.cost_price ?? (row.item_id ? costPrice : '')}
+                        onChange={(e) => patchItem(i, 'cost_price', e.target.value)}
+                        disabled={disabled || !row.item_id}
+                        aria-label={`Cost price for ${picked?.name || `item ${i + 1}`}`}
+                      />
+                    </td>
+                    <td className="mono">{fmt(need * costPrice)}</td>
                     <td>
                       {!tracked || !row.item_id ? (
                         <div className="transfer-form__allocation-empty">
@@ -268,6 +292,9 @@ export default function TransferFormFields({
               })}
             </tbody>
           </table>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10, fontSize: 13, fontWeight: 700 }}>
+          Total Cost Price: <span className="mono" style={{ marginLeft: 8 }}>{fmt(totalCostPrice)}</span>
         </div>
         <button
           type="button"

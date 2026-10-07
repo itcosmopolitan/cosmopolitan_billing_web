@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { transfersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { fmtDate, fmtQty } from '@/utils/helpers'
+import { fmt, fmtDate, fmtQty } from '@/utils/helpers'
 import { openStockTransferPrintWindow } from '@/utils/printInvoice'
 import { exportStockTransferPdf } from '@/utils/exportStockTransferPdf'
 import { Chip } from '@/components/ui'
@@ -76,6 +76,10 @@ export default function TransferDetailPanel({
   const chip = transferStatusChip(detail?.status)
   const lineCount = detail?.items?.length || 0
   const totalQty = (detail?.items || []).reduce((s, it) => s + Number(it.qty || 0), 0)
+  const totalCostPrice = (detail?.items || []).reduce(
+    (sum, item) => sum + Number(item.qty || 0) * Number(item.cost_price || 0),
+    0,
+  )
 
   const summary = [
     { label: 'Status', value: <Chip status={chip.status} label={chip.label} /> },
@@ -278,6 +282,8 @@ export default function TransferDetailPanel({
                   <tr>
                     <th>Item</th>
                     <th className="text-right">Qty</th>
+                    <th className="text-right">Cost Price</th>
+                    <th className="text-right">Total Cost Price</th>
                     <th>Source batches drained</th>
                   </tr>
                 </thead>
@@ -304,6 +310,8 @@ export default function TransferDetailPanel({
                           )}
                         </td>
                         <td className="text-right mono">{fmtQty(item.qty)}</td>
+                        <td className="text-right mono">{fmt(item.cost_price || 0)}</td>
+                        <td className="text-right mono">{fmt(Number(item.qty || 0) * Number(item.cost_price || 0))}</td>
                         <td>
                           {lots.length === 0 ? (
                             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -337,6 +345,9 @@ export default function TransferDetailPanel({
                   })}
                 </tbody>
               </table>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8, fontSize: 13, fontWeight: 700 }}>
+                Total Cost Price: <span className="mono" style={{ marginLeft: 8 }}>{fmt(totalCostPrice)}</span>
+              </div>
               {detail.status === 'received' && detail.items.some((it) => it.batches?.length) && (
                 <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
                   Each batch above was recreated at <strong>{detail.to_branch_name || detail.to_branch_id}</strong> with the original

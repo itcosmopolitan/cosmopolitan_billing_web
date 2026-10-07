@@ -296,6 +296,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("transfer_line_items", "preferred_batch_id",   "VARCHAR"),
     ("transfer_line_items", "requested_allocation", "TEXT"),
     ("transfer_line_items", "batch_allocation",     "TEXT"),
+    ("transfer_line_items", "cost_price",           "FLOAT"),
     ("organisations", "tax_pricing_mode", "VARCHAR DEFAULT 'inclusive'"),
     ("invoice_template_settings", "show_attr", "BOOLEAN DEFAULT 1"),
     ("invoice_template_settings", "show_size", "BOOLEAN DEFAULT 1"),

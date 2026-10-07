@@ -111,6 +111,7 @@ describe('prepareInvoicePayload for Purchase Orders', () => {
         items: [{
           name: 'Item from transfer',
           qty: 4,
+          cost_price: 12.5,
           packing: '1x15KG',
           unit: 'KG',
         }],
@@ -139,6 +140,7 @@ describe('prepareInvoicePayload for Purchase Orders', () => {
       expect(payload.sale.items[0]).toMatchObject({
         name: 'Item from transfer',
         qty: 4,
+        cost_price: 12.5,
         packing: '1x15KG',
         unit: 'KG',
       })

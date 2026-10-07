@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from src.database import get_db
 from src.document_numbering import allocate_number
-from src.models import AuditLog, Branch, StockTransfer, TransferLineItem, TransferStatus, User
+from src.models import AuditLog, Branch, ItemBranchConfig, StockTransfer, TransferLineItem, TransferStatus, User
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.qty import as_qty, coerce_qty_value
 from src.routes._atomic import (
@@ -58,6 +58,7 @@ class TransferLine(BaseModel):
     item_id: str
     item_name: str
     qty: float = Field(..., gt=0)
+    cost_price: Optional[float] = Field(None, ge=0)
     # ── Source batch hints (precedence: allocation > batch_id > auto) ──
     # `batch_allocation`: explicit per-line split set by the operator in the
     # New Transfer modal. Honored as-is on approve.
@@ -225,7 +226,7 @@ async def list_transfers(
     return paged(out, total, sk, lim)
 
 
-def _line_dict(ln: TransferLineItem) -> dict:
+def _line_dict(ln: TransferLineItem, cost_price: Optional[float] = None) -> dict:
     """Serialize a transfer line, including any persisted batch manifest so
     the detail view can show:
       • `requested_allocation` — operator's pre-approval split (if any).
@@ -242,12 +243,16 @@ def _line_dict(ln: TransferLineItem) -> dict:
         except Exception:
             return []
 
+    if cost_price is None:
+        cost_price = float(ln.item.cost_price or 0) if ln.item else 0
+
     return {
         "item_id":              ln.item_id,
         "name":                 ln.item_name,
         "packing":              ln.item.packaging if ln.item else "",
         "unit":                 ln.item.unit if ln.item else "",
         "qty":                  ln.qty,
+        "cost_price":           ln.cost_price if ln.cost_price is not None else cost_price,
         "preferred_batch_id":   ln.preferred_batch_id,
         "requested_allocation": _safe_parse(ln.requested_allocation),
         "batches":              _safe_parse(ln.batch_allocation),
@@ -305,6 +310,7 @@ def _add_transfer_lines(transfer_id: str, items: List[TransferLine]) -> None:
             item_id=item.item_id,
             item_name=item.item_name,
             qty=item.qty,
+            cost_price=item.cost_price,
             preferred_batch_id=item.batch_id,
             requested_allocation=requested,
         )
@@ -399,6 +405,16 @@ def _summarize_transfer_item_changes(old_lines: list[TransferLineItem], new_item
         line_changes: list[dict] = []
         if as_qty(prev.qty or 0) != as_qty(item.qty or 0):
             line_changes.append({"field": "qty", "old": as_qty(prev.qty or 0), "new": as_qty(item.qty or 0)})
+        if (
+            prev.cost_price is None and item.cost_price is not None
+        ) or (
+            prev.cost_price is not None and float(prev.cost_price) != float(item.cost_price or 0)
+        ):
+            line_changes.append({
+                "field": "cost_price",
+                "old": float(prev.cost_price) if prev.cost_price is not None else None,
+                "new": float(item.cost_price or 0),
+            })
         if (prev.item_name or "") != item.item_name:
             line_changes.append({"field": "item_name", "old": str(prev.item_name or ""), "new": item.item_name})
 
@@ -436,7 +452,24 @@ async def _serialize_transfer_detail(
     d["from_branch_name"] = branch_map.get(t.from_branch_id, t.from_branch_name or t.from_branch_id)
     d["to_branch_name"] = branch_map.get(t.to_branch_id, t.to_branch_name or t.to_branch_id)
     d["expected_date"] = t.request_date
-    d["items"] = [_line_dict(ln) for ln in lines]
+    item_ids = {ln.item_id for ln in lines}
+    branch_costs = {}
+    if item_ids:
+        cost_rows = await db.execute(
+            select(ItemBranchConfig.item_id, ItemBranchConfig.cost_price).where(
+                ItemBranchConfig.branch_id == t.from_branch_id,
+                ItemBranchConfig.item_id.in_(item_ids),
+            )
+        )
+        branch_costs = {
+            item_id: cost_price
+            for item_id, cost_price in cost_rows.all()
+            if cost_price is not None
+        }
+    d["items"] = [
+        _line_dict(ln, branch_costs.get(ln.item_id))
+        for ln in lines
+    ]
     return d
 
 

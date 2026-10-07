@@ -647,18 +647,31 @@ h4 { font-size: 14px; font-weight: 600; }
 .transfer-form__table-wrap {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  overflow: visible;
+  overflow-x: auto;
   background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
 }
 
 .transfer-form__table {
   table-layout: fixed;
+  width: 100%;
 }
 
 .transfer-form__table th,
 .transfer-form__table td {
   vertical-align: top;
+  min-width: 0;
+}
+
+.transfer-form__table td > * {
+  max-width: 100%;
+}
+
+.transfer-form__table .form-input,
+.transfer-form__table .autocomplete-dropdown-trigger {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .transfer-form__allocation-stack {
@@ -2113,7 +2126,7 @@ h4 { font-size: 14px; font-weight: 600; }
   opacity: 1;
   box-shadow: none;
 }
-..form-input:disabled::placeholder,
+.form-input:disabled::placeholder,
 .form-input[readonly]::placeholder { color: var(--text-muted); opacity: 0.6; }
 
 select.form-input { cursor: pointer; }

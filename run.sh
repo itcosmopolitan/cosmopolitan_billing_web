@@ -90,6 +90,7 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 python -m pip install -r requirements.txt -q
+python -m playwright install chromium
 echo -e "${GREEN}✓ Backend dependencies installed${RESET}"
 
 echo ""

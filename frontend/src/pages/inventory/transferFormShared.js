@@ -7,6 +7,7 @@ import {
 export const EMPTY_LINE = {
   item_id: '',
   qty: '',
+  cost_price: '',
   batchAllocation: [],
   batchAllocationCustom: false,
 }
@@ -40,6 +41,7 @@ export function formFromTransfer(transfer) {
     items: lines.map((line) => ({
       item_id: line.item_id || '',
       qty: line.qty != null ? String(line.qty) : '',
+      cost_price: line.cost_price != null ? String(line.cost_price) : '',
       batchAllocation: [],
       batchAllocationCustom: Boolean(line.requested_allocation?.length),
       _requestedAllocation: line.requested_allocation || [],
@@ -63,6 +65,11 @@ export function validateTransferForm(form, items, batchOptions) {
     if (!qty || qty <= 0) {
       const picked = items.find((x) => x.id === row.item_id)
       return { ok: false, error: `Enter a valid quantity for ${picked?.name || 'item'}` }
+    }
+    const costPrice = Number(row.cost_price)
+    if (row.cost_price === '' || !Number.isFinite(costPrice) || costPrice < 0) {
+      const picked = items.find((x) => x.id === row.item_id)
+      return { ok: false, error: `Enter a valid cost price for ${picked?.name || 'item'}` }
     }
     const picked = items.find((x) => x.id === row.item_id)
     if (!picked?.batch_tracking) continue
@@ -101,6 +108,7 @@ export function buildTransferPayload(form, items, { requestedBy, refNumber } = {
         item_id: row.item_id,
         item_name: itm?.name || 'Unknown',
         qty: Number(row.qty),
+        cost_price: Number(row.cost_price ?? itm?.cost_price ?? itm?.default_cost_price ?? 0),
         batch_allocation: toApiPayload(row.batchAllocation),
       }
     }),

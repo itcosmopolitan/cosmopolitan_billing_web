@@ -26,10 +26,14 @@ def test_transfer_line_serializer_includes_inventory_packing_and_unit():
         'packing': '1x15KG',
         'unit': 'KG',
         'qty': 4,
+        'cost_price': 0,
         'preferred_batch_id': None,
         'requested_allocation': [],
         'batches': [],
     }
+    assert _line_dict(line, cost_price=12.5)['cost_price'] == 12.5
+    line.cost_price = 18.75
+    assert _line_dict(line, cost_price=12.5)['cost_price'] == 18.75
 
 
 async def _get_super_admin_token():

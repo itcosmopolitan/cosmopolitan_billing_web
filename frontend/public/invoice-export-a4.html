@@ -306,6 +306,14 @@
   table.items th:nth-child(7), table.items td:nth-child(7) { width: 7%; }
   table.items th:nth-child(8), table.items td:nth-child(8) { width: 7%; }
   table.items th:nth-child(9), table.items td:nth-child(9) { width: 9%; }
+  table.transfer-items th:nth-child(1), table.transfer-items td:nth-child(1) { width: 5%; }
+  table.transfer-items th:nth-child(2), table.transfer-items td:nth-child(2) { width: 24%; }
+  table.transfer-items th:nth-child(3), table.transfer-items td:nth-child(3) { width: 12%; }
+  table.transfer-items th:nth-child(4), table.transfer-items td:nth-child(4) { width: 8%; }
+  table.transfer-items th:nth-child(5), table.transfer-items td:nth-child(5) { width: 7%; }
+  table.transfer-items th:nth-child(6), table.transfer-items td:nth-child(6) { width: 18%; }
+  table.transfer-items th:nth-child(7), table.transfer-items td:nth-child(7) { width: 26%; }
+  table.transfer-items th:nth-child(7) { white-space: nowrap; }
   table.items thead {
     display: table-header-group;
   }
@@ -759,6 +767,11 @@
     const refNumber = transfer.ref_number || transfer.number || transfer.id || ''
     const transferDate = transfer.request_date || transfer.created_at || ''
     const status = String(transfer.status || '').replace(/_/g, ' ')
+    const totalCostPrice = (transfer.items || []).reduce((sum, item) => {
+      const qty = Number(item.qty ?? item.quantity ?? 0)
+      const costPrice = Number(item.cost_price ?? item.unit_cost ?? 0)
+      return sum + qty * costPrice
+    }, 0)
     const itemRows = pageItems.map((item, index) => `
       <tr>
         <td>${pageIndex * 28 + index + 1}</td>
@@ -766,6 +779,8 @@
         <td>${escapeHtml(item.packing || item.packaging || '')}</td>
         <td>${escapeHtml(item.unit || item.units || '')}</td>
         <td class="num">${formatNumber(item.qty ?? item.quantity ?? 0, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
+        <td class="num">${formatNumber(item.cost_price ?? item.unit_cost ?? 0)}</td>
+        <td class="num">${formatNumber(Number(item.qty ?? item.quantity ?? 0) * Number(item.cost_price ?? item.unit_cost ?? 0))}</td>
       </tr>
     `).join('')
 
@@ -823,9 +838,9 @@
           </div>
         </div>
 
-        <table class="items">
-          <thead><tr><th>S.No</th><th>Description</th><th>Packing</th><th>Units</th><th class="num">Qty</th></tr></thead>
-          <tbody>${itemRows}</tbody>
+        <table class="items transfer-items">
+          <thead><tr><th>S.No</th><th>Description</th><th>Packing</th><th>Units</th><th class="num">Qty</th><th class="num">Cost Price</th><th class="num">Total Cost Price</th></tr></thead>
+          <tbody>${itemRows}${pageIndex === totalPages - 1 ? `<tr><td colspan="6" class="num"><strong>Total Cost Price</strong></td><td class="num"><strong>${formatNumber(totalCostPrice)}</strong></td></tr>` : ''}</tbody>
         </table>
 
         ${pageIndex === totalPages - 1 ? `

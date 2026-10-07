@@ -13,6 +13,7 @@
  *   • branchId, value, onPick(item), onClear(), disabled, excludeIds
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { itemsAPI } from '@/api'
 import { unwrapPaged } from '@/utils/pagination'
 import { fmt, fmtQty } from '@/utils/helpers'
@@ -121,6 +122,7 @@ export default function InventoryItemPicker({
   disabled = false,
   excludeIds = [],
   listedOnly = true,
+  portalDropdown = false,
 }) {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
@@ -132,10 +134,12 @@ export default function InventoryItemPicker({
 
   const wrapperRef = useRef(null)
   const listRef = useRef(null)
+  const dropdownRef = useRef(null)
   const fetchGenRef = useRef(0)
   const loadingMoreRef = useRef(false)
   const hasMoreRef = useRef(false)
   const pageNoRef = useRef(1)
+  const [dropdownPosition, setDropdownPosition] = useState(null)
   const excludeKey = excludeIds.join('|')
 
   hasMoreRef.current = hasMore
@@ -143,13 +147,40 @@ export default function InventoryItemPicker({
 
   useEffect(() => {
     function onDoc(e) {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+      if (
+        wrapperRef.current
+        && !wrapperRef.current.contains(e.target)
+        && !dropdownRef.current?.contains(e.target)
+      ) {
         setOpen(false)
       }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
+
+  useLayoutEffect(() => {
+    if (!portalDropdown || !open) return undefined
+    const updatePosition = () => {
+      const rect = wrapperRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const below = window.innerHeight - rect.bottom
+      const openAbove = below < 252 && rect.top > 252
+      setDropdownPosition({
+        left: rect.left,
+        top: openAbove ? rect.top - 244 : rect.bottom + 4,
+        width: rect.width,
+        maxHeight: Math.max(80, Math.min(240, openAbove ? rect.top - 12 : below - 12)),
+      })
+    }
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [portalDropdown, open])
 
   const fetchPage = useCallback(async (page) => {
     const raw = await itemsAPI.list({
@@ -255,7 +286,16 @@ export default function InventoryItemPicker({
       : 'No items found'
 
   const dropdown = open && !disabled && (
-    <div ref={listRef} style={DROPDOWN_STYLE} onScroll={handleScroll}>
+    <div
+      ref={(node) => {
+        listRef.current = node
+        dropdownRef.current = node
+      }}
+      style={portalDropdown
+        ? { ...DROPDOWN_STYLE, position: 'fixed', top: dropdownPosition?.top ?? 0, left: dropdownPosition?.left ?? 0, right: 'auto', width: dropdownPosition?.width ?? 0, maxHeight: dropdownPosition?.maxHeight ?? 240, zIndex: 10000 }
+        : DROPDOWN_STYLE}
+      onScroll={handleScroll}
+    >
       {loading && results.length === 0 && <StatusRow>Searching…</StatusRow>}
       {!loading && results.length === 0 && <StatusRow>{emptyMessage}</StatusRow>}
       {results.map((r) => (
@@ -280,7 +320,9 @@ export default function InventoryItemPicker({
         autoComplete="off"
         aria-label={value ? `Selected item ${value.name}. Type to replace.` : 'Search inventory'}
       />
-      {dropdown}
+      {portalDropdown && dropdown
+        ? createPortal(dropdown, document.body)
+        : dropdown}
       {value && !disabled && (
         <button
           type="button"

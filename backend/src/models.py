@@ -1487,6 +1487,7 @@ class TransferLineItem(Base):
     item_id     = Column(String, ForeignKey("items.id"), nullable=False)
     item_name   = Column(String)
     qty         = Column(Float, default=0)
+    cost_price  = Column(Float, nullable=True)
     # Operator-picked source batch hint set at create time. Honored on
     # approval if the batch still has stock; otherwise FIFO/FEFO kicks in.
     preferred_batch_id = Column(String, nullable=True)
