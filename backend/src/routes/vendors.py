@@ -10,7 +10,16 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import User, Vendor, VendorCreditEntry
+from src.models import (
+    GoodsReceiptNote,
+    PurchaseBill,
+    PurchaseOrder,
+    User,
+    Vendor,
+    VendorCreditEntry,
+    VendorPayment,
+    VendorReturn,
+)
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_vendor
 from src.permissions import VENDOR_PICKER_READ
@@ -35,10 +44,52 @@ class VendorUpdate(BaseModel):
     address: Optional[str] = None
     gstin: Optional[str] = None
     payment_terms: Optional[str] = None
+    active: Optional[bool] = None
+
+
+async def _vendor_delete_blockers(db: AsyncSession, vendor_id: str) -> list[str]:
+    """Reasons a vendor cannot be hard-deleted (historical / open balances)."""
+    blockers: list[str] = []
+    vendor = (
+        await db.execute(select(Vendor).where(Vendor.id == vendor_id))
+    ).scalar_one_or_none()
+    if not vendor:
+        return blockers
+    if abs(float(vendor.outstanding or 0)) > 0.001:
+        blockers.append("vendor has a non-zero outstanding balance")
+    if abs(float(getattr(vendor, "credit_balance", 0) or 0)) > 0.001:
+        blockers.append("vendor has advance credit remaining")
+
+    async def _count(model) -> int:
+        return int(
+            (
+                await db.execute(
+                    select(func.count()).select_from(model).where(model.vendor_id == vendor_id)
+                )
+            ).scalar()
+            or 0
+        )
+
+    if await _count(PurchaseBill):
+        blockers.append("vendor has purchase bills")
+    if await _count(PurchaseOrder):
+        blockers.append("vendor has purchase orders")
+    if await _count(GoodsReceiptNote):
+        blockers.append("vendor has goods receipts")
+    if await _count(VendorPayment):
+        blockers.append("vendor has payments")
+    if await _count(VendorReturn):
+        blockers.append("vendor has returns")
+    if await _count(VendorCreditEntry):
+        blockers.append("vendor has credit ledger entries")
+    return blockers
+
 
 @router.get("/", dependencies=[Depends(require_perm(*VENDOR_PICKER_READ))])
 async def list_vendors(
     search: Optional[str] = None,
+    status: Optional[str] = Query(None, description="active | inactive — default active only"),
+    include_inactive: bool = Query(False, description="When true, list inactive vendors only"),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
@@ -50,6 +101,17 @@ async def list_vendors(
     q = select(Vendor)
     cq = select(func.count(Vendor.id))
     conds = []
+    status_key = (status or "").strip().lower()
+    if status_key == "inactive" or include_inactive:
+        active_filter = Vendor.active.is_(False)
+        q = q.where(active_filter)
+        cq = cq.where(active_filter)
+        conds.append(active_filter)
+    elif status_key in ("", "active"):
+        active_filter = Vendor.active.is_(True)
+        q = q.where(active_filter)
+        cq = cq.where(active_filter)
+        conds.append(active_filter)
     if search:
         term = f"%{search}%"
         search_filter = or_(
@@ -307,3 +369,23 @@ async def update_vendor(vendor_id: str, data: VendorUpdate, db: AsyncSession = D
     await db.commit()
     await db.refresh(v)
     return serialize_vendor(v)
+
+
+@router.patch("/{vendor_id}", dependencies=[Depends(require_perm("vendors.edit"))])
+async def patch_vendor(vendor_id: str, data: VendorUpdate, db: AsyncSession = Depends(get_db)):
+    """Partial update — used for deactivate / reactivate (`active`)."""
+    return await update_vendor(vendor_id, data, db=db)
+
+
+@router.delete("/{vendor_id}", dependencies=[Depends(require_perm("vendors.delete"))])
+async def delete_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Vendor).where(Vendor.id == vendor_id))
+    v = result.scalar_one_or_none()
+    if not v:
+        raise HTTPException(404, "Vendor not found")
+    blockers = await _vendor_delete_blockers(db, vendor_id)
+    if blockers:
+        raise HTTPException(400, "Cannot delete vendor: " + "; ".join(blockers))
+    await db.delete(v)
+    await db.commit()
+    return {"deleted": vendor_id}

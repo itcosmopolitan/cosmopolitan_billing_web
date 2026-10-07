@@ -462,6 +462,8 @@ export const customersAPI = {
   creditLedger: (id, params) => api.get(`/customers/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/customers/', data),
   update: (id, data) => api.put(`/customers/${id}`, data),
+  patch:  (id, data) => api.patch(`/customers/${id}`, data),
+  delete: (id)     => api.delete(`/customers/${id}`),
   import: (file, branchId) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -509,6 +511,8 @@ export const vendorsAPI = {
   creditLedger: (id, params) => api.get(`/vendors/${id}/credit-ledger`, { params }),
   create: (data)   => api.post('/vendors/', data),
   update: (id, data) => api.put(`/vendors/${id}`, data),
+  patch:  (id, data) => api.patch(`/vendors/${id}`, data),
+  delete: (id)     => api.delete(`/vendors/${id}`),
   import: (file) => {
     const fd = new FormData()
     fd.append('file', file)

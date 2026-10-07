@@ -4,7 +4,12 @@ import { customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, ConfirmDialog } from '@/components/ui'
+
+const CUSTOMER_TABS = [
+  { id: 'all', label: 'All Customers' },
+  { id: 'inactive', label: 'Inactive' },
+]
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, CUSTOMER_CLASSIFICATION_LABELS } from '@/utils/dropdownOptions'
 import CustomerFormModal from './CustomerFormModal'
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
@@ -17,6 +22,9 @@ export default function CustomersPage() {
   const columnPrefs = useColumnPrefs('customers.list')
   const [search, setSearch]     = useState('')
   const [typeF, setTypeF]       = useState('')
+  const [tab, setTab]           = useState('all')
+  const [confirmAction, setConfirmAction] = useState(null)
+  const [actionBusy, setActionBusy] = useState(false)
   const [customerModalOpen, setCustomerModalOpen] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
@@ -57,7 +65,7 @@ export default function CustomersPage() {
 
   useEffect(() => {
     setCustSkip(0)
-  }, [search, typeF])
+  }, [search, typeF, tab])
 
   useEffect(() => {
     const unsub = subscribeToBranchChanged(() => {
@@ -80,6 +88,7 @@ export default function CustomersPage() {
           sort_order: custSortOrder,
           search: search || undefined,
           customer_type: typeF || undefined,
+          status: tab === 'inactive' ? 'inactive' : 'active',
         })
         const { items, total, summary } = unwrapPaged(raw)
         if (cancelled) return
@@ -117,7 +126,31 @@ export default function CustomersPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [custSkip, custLimit, search, typeF, listVersion, custSortBy, custSortOrder, activeBranch?.id])
+  }, [custSkip, custLimit, search, typeF, tab, listVersion, custSortBy, custSortOrder, activeBranch?.id])
+
+  const handleConfirmAction = async () => {
+    if (!confirmAction) return
+    setActionBusy(true)
+    try {
+      const { type, customer } = confirmAction
+      if (type === 'delete') {
+        await customersAPI.delete(customer.id)
+        toast.success(`Deleted ${customer.name}`)
+      } else {
+        await customersAPI.patch(customer.id, { active: type === 'reactivate' })
+        toast.success(`${customer.name} ${type === 'reactivate' ? 'reactivated' : 'deactivated'}`)
+      }
+      setConfirmAction(null)
+      if (showDetail?.id === customer.id) setShowDetail(null)
+      setListVersion((v) => v + 1)
+    } catch (err) {
+      console.error('Failed customer action:', err)
+      if (!err?.response) toast.error(err?.message || 'Action failed')
+      throw err
+    } finally {
+      setActionBusy(false)
+    }
+  }
 
   const onSort = (key) => {
     setCustSkip(0)
@@ -314,6 +347,8 @@ export default function CustomersPage() {
         <KPICard label="Top Buyer"          value={totals.topBuyer?.name?.split(' ')[0] || '—'} color="var(--green)" icon="🏆" sub={totals.topBuyer ? fmt(totals.topBuyer.total_purchases || 0) : '—'} />
       </div> */}
 
+      <Tabs tabs={CUSTOMER_TABS} active={tab} onChange={setTab} />
+
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, phone, email…" />
         <AutocompleteDropdown
@@ -328,7 +363,7 @@ export default function CustomersPage() {
       </div>
 
       <Card bodyPadding={false}>
-        {customers.length === 0 ? <EmptyState icon="👥" title="No customers found" /> : (
+        {customers.length === 0 ? <EmptyState icon="👥" title={tab === 'inactive' ? 'No inactive customers' : 'No customers found'} /> : (
           <div className="table-scroll">
           <table className="data-table">
             <thead>
@@ -555,8 +590,22 @@ export default function CustomersPage() {
                           },
                           {
                             label: 'Edit',
-                            hidden: !can('customers.edit'),
+                            hidden: !can('customers.edit') || !c.active,
                             onClick: () => openEditCustomerModal(c),
+                          },
+                          {
+                            label: c.active ? 'Deactivate customer' : 'Reactivate customer',
+                            hidden: !can('customers.edit'),
+                            onClick: () => setConfirmAction({
+                              type: c.active ? 'deactivate' : 'reactivate',
+                              customer: c,
+                            }),
+                          },
+                          {
+                            label: 'Delete customer',
+                            hidden: !can('customers.delete'),
+                            danger: true,
+                            onClick: () => setConfirmAction({ type: 'delete', customer: c }),
                           },
                         ]}
                       />
@@ -599,6 +648,28 @@ export default function CustomersPage() {
         customer={showDetail}
         onClose={() => setShowDetail(null)}
         onOpenLedger={openCreditLedger}
+      />
+
+      <ConfirmDialog
+        open={!!confirmAction}
+        onClose={() => !actionBusy && setConfirmAction(null)}
+        onConfirm={handleConfirmAction}
+        title={confirmAction ? (
+          confirmAction.type === 'delete'
+            ? 'Delete customer?'
+            : confirmAction.type === 'deactivate'
+              ? 'Deactivate customer?'
+              : 'Reactivate customer?'
+        ) : ''}
+        message={confirmAction ? (
+          confirmAction.type === 'delete'
+            ? `Delete ${confirmAction.customer.name}? This cannot be undone.`
+            : confirmAction.type === 'deactivate'
+              ? `Deactivate ${confirmAction.customer.name}? They will be hidden from sales pickers.`
+              : `Reactivate ${confirmAction.customer.name}? They will appear in sales pickers again.`
+        ) : ''}
+        confirmLabel={confirmAction?.type === 'delete' ? 'Delete' : 'Confirm'}
+        danger={confirmAction?.type === 'delete'}
       />
 
       {/* Credit Ledger */}

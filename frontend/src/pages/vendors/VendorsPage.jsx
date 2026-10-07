@@ -3,17 +3,25 @@ import toast from 'react-hot-toast'
 import { vendorsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToCSV } from '@/utils/helpers'
-import { SectionHeader, Card, SearchBar, KPICard, Modal, EmptyState, Tag, Chip, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
+import { SectionHeader, Card, Tabs, SearchBar, KPICard, Modal, EmptyState, Tag, Chip, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, RowActionsMenu, ConfirmDialog } from '@/components/ui'
 import VendorFormModal from './VendorFormModal'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import VendorDetailPanel from './VendorDetailPanel'
 
+const VENDOR_TABS = [
+  { id: 'all', label: 'All Vendors' },
+  { id: 'inactive', label: 'Inactive' },
+]
+
 export default function VendorsPage() {
   const can = useCan()
   const columnPrefs = useColumnPrefs('vendors.list')
   const [search, setSearch]   = useState('')
+  const [tab, setTab]         = useState('all')
+  const [confirmAction, setConfirmAction] = useState(null)
+  const [actionBusy, setActionBusy] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
@@ -45,6 +53,7 @@ export default function VendorsPage() {
         sort_by: venSortBy,
         sort_order: venSortOrder,
         search: search || undefined,
+        status: tab === 'inactive' ? 'inactive' : 'active',
       })
       const { items, total, summary } = unwrapPaged(raw)
       const mapped = (items || []).map((v) => ({
@@ -67,7 +76,7 @@ export default function VendorsPage() {
     // listVersion is the manual cache-bust knob — bumping it triggers a
     // re-fetch (used by save/edit handlers below). Keep it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [venSkip, venLimit, search, listVersion, venSortBy, venSortOrder])
+  }, [venSkip, venLimit, search, tab, listVersion, venSortBy, venSortOrder])
 
   const onSort = (key) => {
     setVenSkip(0)
@@ -79,13 +88,37 @@ export default function VendorsPage() {
     setVenSortOrder('asc')
   }
 
+  const handleConfirmAction = async () => {
+    if (!confirmAction) return
+    setActionBusy(true)
+    try {
+      const { type, vendor } = confirmAction
+      if (type === 'delete') {
+        await vendorsAPI.delete(vendor.id)
+        toast.success(`Deleted ${vendor.name}`)
+      } else {
+        await vendorsAPI.patch(vendor.id, { active: type === 'reactivate' })
+        toast.success(`${vendor.name} ${type === 'reactivate' ? 'reactivated' : 'deactivated'}`)
+      }
+      setConfirmAction(null)
+      if (showDetail?.id === vendor.id) setShowDetail(null)
+      setListVersion((v) => v + 1)
+    } catch (err) {
+      console.error('Failed vendor action:', err)
+      if (!err?.response) toast.error(err?.message || 'Action failed')
+      throw err
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
   useEffect(() => {
     fetchVendors()
   }, [fetchVendors])
 
   useEffect(() => {
     setVenSkip(0)
-  }, [search])
+  }, [search, tab])
 
   const totals = useMemo(() => ({
     total: vendorTotal,
@@ -175,12 +208,14 @@ export default function VendorsPage() {
         <KPICard label="Top Vendor"      value={totals.topVendor?.name?.split(' ')[0] || '—'} color="var(--green)" sub={totals.topVendor ? fmt(totals.topVendor.totalPurchases || 0) : '—'} icon="🏆" />
       </div> */}
 
+      <Tabs tabs={VENDOR_TABS} active={tab} onChange={setTab} />
+
       <div className="filter-bar">
         <SearchBar value={search} onChange={setSearch} placeholder="Search name, contact, phone, email…" />
       </div>
 
       <Card bodyPadding={false}>
-        {vendors.length === 0 ? <EmptyState icon="🏭" title="No vendors found" /> : (
+        {vendors.length === 0 ? <EmptyState icon="🏭" title={tab === 'inactive' ? 'No inactive vendors' : 'No vendors found'} /> : (
           <table className="data-table">
             <thead>
               <tr>
@@ -256,13 +291,35 @@ export default function VendorsPage() {
                     }
                     return null
                   })}
-                  <td data-no-row-click>
-                    <div style={{display:'flex',gap:4}}>
-                      <button className="btn btn-ghost btn-xs" onClick={() => setShowDetail(v)}>View</button>
-                      {can('vendors.edit') && (
-                        <button className="btn btn-ghost btn-xs" onClick={() => openEdit(v)}>Edit</button>
-                      )}
-                    </div>
+                  <td className="text-right" data-no-row-click>
+                    <RowActionsMenu
+                      ariaLabel={`Actions for ${v.name}`}
+                      actions={[
+                        {
+                          label: 'View',
+                          onClick: () => setShowDetail(v),
+                        },
+                        {
+                          label: 'Edit',
+                          hidden: !can('vendors.edit') || !v.active,
+                          onClick: () => openEdit(v),
+                        },
+                        {
+                          label: v.active ? 'Deactivate vendor' : 'Reactivate vendor',
+                          hidden: !can('vendors.edit'),
+                          onClick: () => setConfirmAction({
+                            type: v.active ? 'deactivate' : 'reactivate',
+                            vendor: v,
+                          }),
+                        },
+                        {
+                          label: 'Delete vendor',
+                          hidden: !can('vendors.delete'),
+                          danger: true,
+                          onClick: () => setConfirmAction({ type: 'delete', vendor: v }),
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}
@@ -299,6 +356,28 @@ export default function VendorsPage() {
         vendor={showDetail}
         onClose={() => setShowDetail(null)}
         onOpenLedger={openCreditLedger}
+      />
+
+      <ConfirmDialog
+        open={!!confirmAction}
+        onClose={() => !actionBusy && setConfirmAction(null)}
+        onConfirm={handleConfirmAction}
+        title={confirmAction ? (
+          confirmAction.type === 'delete'
+            ? 'Delete vendor?'
+            : confirmAction.type === 'deactivate'
+              ? 'Deactivate vendor?'
+              : 'Reactivate vendor?'
+        ) : ''}
+        message={confirmAction ? (
+          confirmAction.type === 'delete'
+            ? `Delete ${confirmAction.vendor.name}? This cannot be undone.`
+            : confirmAction.type === 'deactivate'
+              ? `Deactivate ${confirmAction.vendor.name}? They will be hidden from purchase pickers.`
+              : `Reactivate ${confirmAction.vendor.name}? They will appear in purchase pickers again.`
+        ) : ''}
+        confirmLabel={confirmAction?.type === 'delete' ? 'Delete' : 'Confirm'}
+        danger={confirmAction?.type === 'delete'}
       />
 
       <Modal

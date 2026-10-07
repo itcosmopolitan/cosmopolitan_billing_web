@@ -10,12 +10,22 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, Customer, CustomerCreditEntry, CustomerImportJob, User
+from src.models import (
+    Branch,
+    Customer,
+    CustomerCreditEntry,
+    CustomerImportJob,
+    CustomerPayment,
+    Quotation,
+    SaleInvoice,
+    SalesOrder,
+    SalesReturn,
+    User,
+)
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import _build_customer_code, serialize_customer
 from src.permissions import CUSTOMER_PICKER_READ
 from src.security import require_perm, current_user, enforce_branch_access
-from src.models import User
 
 router = APIRouter()
 
@@ -107,11 +117,51 @@ _FIELD_TO_COLUMN = {
     "customer_type": "type",
 }
 
+async def _customer_delete_blockers(db: AsyncSession, customer_id: str) -> list[str]:
+    """Reasons a customer cannot be hard-deleted (historical / open balances)."""
+    blockers: list[str] = []
+    customer = (
+        await db.execute(select(Customer).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+    if not customer:
+        return blockers
+    if abs(float(customer.outstanding or 0)) > 0.001:
+        blockers.append("customer has a non-zero outstanding balance")
+    if abs(float(getattr(customer, "credit_balance", 0) or 0)) > 0.001:
+        blockers.append("customer has store credit remaining")
+
+    async def _count(model) -> int:
+        return int(
+            (
+                await db.execute(
+                    select(func.count()).select_from(model).where(model.customer_id == customer_id)
+                )
+            ).scalar()
+            or 0
+        )
+
+    if await _count(SaleInvoice):
+        blockers.append("customer has sales invoices")
+    if await _count(Quotation):
+        blockers.append("customer has quotations")
+    if await _count(SalesOrder):
+        blockers.append("customer has sales orders")
+    if await _count(CustomerPayment):
+        blockers.append("customer has payments")
+    if await _count(SalesReturn):
+        blockers.append("customer has sales returns")
+    if await _count(CustomerCreditEntry):
+        blockers.append("customer has store-credit ledger entries")
+    return blockers
+
+
 @router.get("/", dependencies=[Depends(require_perm(*CUSTOMER_PICKER_READ))])
 async def list_customers(
     search: Optional[str] = None,
     customer_type: Optional[str] = None,
     branch_id: Optional[str] = None,
+    status: Optional[str] = Query(None, description="active | inactive — default active only"),
+    include_inactive: bool = Query(False, description="When true with status=inactive, list inactive only"),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
@@ -122,6 +172,13 @@ async def list_customers(
     lim = normalize_limit(limit)
     q = select(Customer)
     cq = select(func.count(Customer.id))
+    status_key = (status or "").strip().lower()
+    if status_key == "inactive" or include_inactive:
+        q = q.where(Customer.active.is_(False))
+        cq = cq.where(Customer.active.is_(False))
+    elif status_key in ("", "active"):
+        q = q.where(Customer.active.is_(True))
+        cq = cq.where(Customer.active.is_(True))
     if search:
         term = f"%{search}%"
         q = q.where(
@@ -146,6 +203,10 @@ async def list_customers(
         cq = cq.where(Customer.branch_id == branch_id)
     total = int((await db.execute(cq)).scalar() or 0)
     conds = []
+    if status_key == "inactive" or include_inactive:
+        conds.append(Customer.active.is_(False))
+    elif status_key in ("", "active"):
+        conds.append(Customer.active.is_(True))
     if search:
         term = f"%{search}%"
         conds.append(
@@ -451,3 +512,28 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
         c.customer_code = _build_customer_code(c.id)
     await db.commit()
     return {"message": "Updated"}
+
+
+@router.patch("/{customer_id}", dependencies=[Depends(require_perm("customers.edit"))])
+async def patch_customer(
+    customer_id: str,
+    data: CustomerUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Partial update — used for deactivate / reactivate (`active`)."""
+    return await update_customer(customer_id, data, db=db, user=user)
+
+
+@router.delete("/{customer_id}", dependencies=[Depends(require_perm("customers.delete"))])
+async def delete_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Customer).where(Customer.id == customer_id))
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    blockers = await _customer_delete_blockers(db, customer_id)
+    if blockers:
+        raise HTTPException(400, "Cannot delete customer: " + "; ".join(blockers))
+    await db.delete(c)
+    await db.commit()
+    return {"deleted": customer_id}
