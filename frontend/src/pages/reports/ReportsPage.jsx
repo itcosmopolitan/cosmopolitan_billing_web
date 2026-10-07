@@ -1062,7 +1062,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     const raw = Number(searchParams.get('skip') || 0)
     return Number.isFinite(raw) && raw > 0 ? raw : 0
   })
-  const [limit, setLimit] = useState(() => (report.id === 'current-stock' ? 500 : 200))
+  const [limit, setLimit] = useState(() => (report.id === 'current-stock' ? 1000 : 200))
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -1199,7 +1199,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
     const nextSkip = Number(urlFilters.skip || 0)
     setSkip(Number.isFinite(nextSkip) && nextSkip > 0 ? nextSkip : 0)
-    setLimit(report.id === 'current-stock' ? 500 : 200)
+    setLimit(report.id === 'current-stock' ? 1000 : 200)
     setRows([])
     setTotal(0)
     setRunKey(Date.now())

@@ -486,6 +486,7 @@ export const AUTOCOMPLETE_ITEM_URL = '/autocomplete/item'
 export const AUTOCOMPLETE_STAFF_URL = '/autocomplete/staff'
 export const AUTOCOMPLETE_BRANCH_MANAGERS_URL = '/autocomplete/branch-managers'
 export const AUTOCOMPLETE_BRANCH_USERS_URL = '/autocomplete/branch-users'
+export const AUTOCOMPLETE_KEY_ACCOUNT_MANAGERS_URL = '/autocomplete/key-account-managers'
 
 export const autocompleteAPI = {
   customers: (params) => api.get(AUTOCOMPLETE_CUSTOMER_URL, { params }),
@@ -498,6 +499,7 @@ export const autocompleteAPI = {
   staff: (params) => api.get(AUTOCOMPLETE_STAFF_URL, { params }),
   branchManagers: (params) => api.get(AUTOCOMPLETE_BRANCH_MANAGERS_URL, { params }),
   branchUsers: (params) => api.get(AUTOCOMPLETE_BRANCH_USERS_URL, { params }),
+  keyAccountManagers: (params) => api.get(AUTOCOMPLETE_KEY_ACCOUNT_MANAGERS_URL, { params }),
 }
 
 // ─── Vendors ──────────────────────────────────────────────────────────────────

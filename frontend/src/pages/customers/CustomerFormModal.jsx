@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import toast from 'react-hot-toast'
-import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_BRANCH_USERS_URL } from '@/api'
+import { customersAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_KEY_ACCOUNT_MANAGERS_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { Modal, FormGroup, FormRow, AutocompleteDropdown } from '@/components/ui'
 import { CUSTOMER_TYPE_OPTIONS, CUSTOMER_CLASSIFICATION_OPTIONS } from '@/utils/dropdownOptions'
@@ -26,9 +26,17 @@ const emptyForm = (branchId) => ({
   classification: 'external',
   is_credit_eligible: false,
   key_account_manager: '',
-  key_account_manager_name: '',
   credit_terms: '',
 })
+
+function kamDisplayName(customer) {
+  return (
+    customer?.keyAccountManager
+    || customer?.key_account_manager_name
+    || customer?.key_account_manager
+    || ''
+  ).trim()
+}
 
 function formFromCustomer(customer) {
   const structured = {
@@ -60,8 +68,8 @@ function formFromCustomer(customer) {
       customer.is_credit_eligible ?? customer.isCreditEligible
       ?? (Number(customer.credit_limit || 0) > 0),
     ),
-    key_account_manager: customer.keyAccountManagerId || customer.key_account_manager || '',
-    key_account_manager_name: customer.keyAccountManager || customer.key_account_manager_name || '',
+    // Free-text name (prefer resolved display name over legacy user id).
+    key_account_manager: kamDisplayName(customer),
     credit_terms: customer.credit_terms || customer.creditTerms || '',
   }
 }
@@ -83,17 +91,47 @@ export default function CustomerFormModal({
   const isEdit = Boolean(customer?.id)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(() => emptyForm(defaultBranchId || activeBranch?.id || branches[0]?.id || ''))
+  const [showAddKam, setShowAddKam] = useState(false)
+  const [newKamName, setNewKamName] = useState('')
+  const [extraKamOptions, setExtraKamOptions] = useState([])
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const resolvedBranchId = form.branch_id || defaultBranchId || activeBranch?.id || branches[0]?.id || ''
 
   useEffect(() => {
     if (!open) return
+    setShowAddKam(false)
+    setNewKamName('')
+    setExtraKamOptions([])
     if (customer?.id) {
       setForm(formFromCustomer(customer))
       return
     }
     setForm(emptyForm(defaultBranchId || activeBranch?.id || branches[0]?.id || ''))
   }, [open, customer, defaultBranchId, activeBranch?.id, branches])
+
+  const applyKam = (name) => {
+    const value = (name || '').trim()
+    pf('key_account_manager', value)
+    if (value) {
+      const key = value.toLowerCase()
+      setExtraKamOptions((prev) => (
+        prev.some((o) => String(o.id).toLowerCase() === key)
+          ? prev
+          : [...prev, { id: value, label: value }]
+      ))
+    }
+  }
+
+  const submitNewKam = () => {
+    const name = newKamName.trim()
+    if (!name) {
+      toast.error('Key account manager name is required')
+      return
+    }
+    applyKam(name)
+    setShowAddKam(false)
+    setNewKamName('')
+  }
 
   const save = async () => {
     if (saving) return
@@ -192,6 +230,7 @@ export default function CustomerFormModal({
   if (!open) return null
 
   const node = (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -279,28 +318,34 @@ export default function CustomerFormModal({
         <FormGroup label="Key Account Manager">
           <AutocompleteDropdown
             value={form.key_account_manager}
+            onChange={(v) => applyKam(v || '')}
             onSelectOption={(opt) => {
-              if (!opt) {
-                pf('key_account_manager', '')
-                pf('key_account_manager_name', '')
+              if (!opt?.id) {
+                applyKam('')
                 return
               }
-              pf('key_account_manager', opt.id)
-              pf('key_account_manager_name', opt.label)
+              applyKam(opt.label || opt.id)
             }}
-            fetchUrl={AUTOCOMPLETE_BRANCH_USERS_URL}
-            fetchParams={{ branch_id: form.branch_id }}
-            prependOptions={[{ id: '', label: 'None' }]}
+            fetchUrl={AUTOCOMPLETE_KEY_ACCOUNT_MANAGERS_URL}
+            prependOptions={[
+              { id: '', label: 'None' },
+              ...extraKamOptions,
+            ]}
             isSearchFieldRequired
-            selectedLabel={form.key_account_manager_name || undefined}
+            selectedLabel={form.key_account_manager || undefined}
             clearable
-            onClear={() => {
-              pf('key_account_manager', '')
-              pf('key_account_manager_name', '')
+            onClear={() => applyKam('')}
+            placeholder="Select or add…"
+            searchPlaceholder="Search key account managers…"
+            emptyLabel="No key account managers yet"
+            noMatchLabel="No matches"
+            footerAction={{
+              label: '+ Add key account manager',
+              onClick: () => {
+                setNewKamName('')
+                setShowAddKam(true)
+              },
             }}
-            placeholder="Select user…"
-            searchPlaceholder="Search users…"
-            emptyLabel="No users found"
           />
         </FormGroup>
       </FormRow>
@@ -351,6 +396,43 @@ export default function CustomerFormModal({
         </FormRow>
       )}
     </Modal>
+      {showAddKam && (
+        <Modal
+          open={open && showAddKam}
+          onClose={() => setShowAddKam(false)}
+          title="Add Key Account Manager"
+          icon="👤"
+          size="sm"
+          zIndex={(zIndex || 1000) + 50}
+          footer={
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowAddKam(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={submitNewKam}>
+                Add
+              </button>
+            </>
+          }
+        >
+          <FormGroup label="Name" required>
+            <input
+              className="form-input"
+              value={newKamName}
+              onChange={(e) => setNewKamName(e.target.value)}
+              placeholder="e.g. Aisha Mohamed"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  submitNewKam()
+                }
+              }}
+            />
+          </FormGroup>
+        </Modal>
+      )}
+    </>
   )
 
   return createPortal(node, document.body)

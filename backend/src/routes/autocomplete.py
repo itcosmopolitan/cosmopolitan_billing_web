@@ -284,6 +284,60 @@ async def autocomplete_staff(
 
 
 @router.get(
+    "/key-account-managers",
+    dependencies=[Depends(require_perm("customers.view", "customers.create", "customers.edit"))],
+)
+async def autocomplete_key_account_managers(
+    search_text: Optional[str] = None,
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Distinct key-account-manager names already used on customers.
+
+    Values are free text (operators can add new names in the customer form).
+    Legacy rows that still store a users.id are resolved to that user's name.
+    """
+    raw_values = (
+        await db.execute(
+            select(Customer.key_account_manager)
+            .where(
+                Customer.key_account_manager.isnot(None),
+                Customer.key_account_manager != "",
+            )
+            .distinct()
+        )
+    ).scalars().all()
+    if not raw_values:
+        return []
+
+    user_rows = (
+        await db.execute(
+            select(User.id, User.name).where(User.id.in_(list(raw_values)))
+        )
+    ).all()
+    name_by_id = {row.id: row.name for row in user_rows if row.name}
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        label = (name_by_id.get(raw) or str(raw)).strip()
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(label)
+
+    if search_text:
+        term = search_text.strip().casefold()
+        names = [n for n in names if term in n.casefold()]
+
+    names.sort(key=lambda n: n.casefold())
+    return [{"id": n, "text": n} for n in names[:limit]]
+
+
+@router.get(
     "/branch-managers",
     dependencies=[Depends(require_perm("customers.view", "customers.create", "customers.edit"))],
 )

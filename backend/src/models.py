@@ -567,7 +567,9 @@ class Customer(Base):
     # Explicit account-credit facility (limit + terms). Independent of pricing
     # category — retail customers may be credit-eligible when this is true.
     is_credit_eligible = Column(Boolean, default=False, nullable=False)
-    key_account_manager = Column(String)  # users.id of a branch manager (optional)
+    # Free-text name (optional). Legacy rows may still store a users.id;
+    # serializers resolve those to the user's display name.
+    key_account_manager = Column(String)
     credit_terms    = Column(String)  # free text, e.g. Cash / Credit - 7 Days
     active          = Column(Boolean, default=True)
     notes           = Column(Text)

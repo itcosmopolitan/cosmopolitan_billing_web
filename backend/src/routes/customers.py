@@ -292,21 +292,24 @@ def _compose_address_from_parts(data: Union[CustomerCreate, CustomerUpdate]) -> 
 
 
 async def _attach_kam_names(db: AsyncSession, customers: list[Customer]) -> None:
-    """Resolve key_account_manager user ids → display names on each customer."""
-    kam_ids = {
+    """Attach display names for key_account_manager.
+
+    New values are free text. Legacy rows may still store a users.id —
+    resolve those to the user's name; otherwise use the stored string.
+    """
+    kam_values = {
         c.key_account_manager
         for c in customers
         if getattr(c, "key_account_manager", None)
     }
-    if not kam_ids:
+    if not kam_values:
         return
     rows = (
-        await db.execute(select(User.id, User.name).where(User.id.in_(kam_ids)))
+        await db.execute(select(User.id, User.name).where(User.id.in_(kam_values)))
     ).all()
     name_by_id = {row.id: row.name for row in rows}
     for c in customers:
         kam = getattr(c, "key_account_manager", None)
-        # Fall back to the raw value for legacy free-text entries.
         c._key_account_manager_name = name_by_id.get(kam) or kam
 
 
