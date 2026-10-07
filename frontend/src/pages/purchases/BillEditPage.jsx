@@ -7,7 +7,7 @@ import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import BillFormModal from './BillFormModal'
 import { billFromRow, lineDiscountToPercent, billHasPayment, billHasReturn, billLockedForEdit } from './purchaseFormShared'
-import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { entityDiscountToPayload, purchaseLineGross } from '@/utils/documentFormTotals'
 import { enrichPurchaseLinesWithSellPrice } from '@/utils/enrichSaleLineCosts'
 
 export default function BillEditPage() {
@@ -95,7 +95,7 @@ export default function BillEditPage() {
           discount: lineDiscountToPercent(i),
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-          lineGross: (it) => Number(it.qty || 0) * Number(it.cost || 0),
+          lineGross: purchaseLineGross,
         }),
         notes: form.notes || null,
       }

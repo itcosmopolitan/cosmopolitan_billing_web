@@ -8,7 +8,7 @@ import { formatLabel } from '@/utils/helpers'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import PurchaseOrderFormModal from './PurchaseOrderFormModal'
 import { emptyPoForm, poFromRow, lineDiscountToPercent } from './purchaseFormShared'
-import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { entityDiscountToPayload, purchaseLineGross } from '@/utils/documentFormTotals'
 import { enrichPurchaseLinesWithSellPrice } from '@/utils/enrichSaleLineCosts'
 
 export default function PurchaseOrderFormPage({ mode = 'create' }) {
@@ -98,7 +98,7 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
           discount: lineDiscountToPercent(i),
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-          lineGross: (it) => Number(it.qty || 0) * Number(it.cost || 0),
+          lineGross: purchaseLineGross,
         }),
         notes: form.notes || null,
       }

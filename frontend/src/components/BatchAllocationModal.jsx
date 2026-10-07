@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Modal, AlertBar, EmptyState } from '@/components/ui'
 import { fmtDate, fmtQty } from '@/utils/helpers'
-import { qtyInputStep } from '@/utils/decimalPrecision'
+import { entryInputStep } from '@/utils/decimalPrecision'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import {
   computeAutoAllocation,
@@ -215,7 +215,7 @@ export default function BatchAllocationModal({
                           type="number"
                           min={0}
                           max={b.quantity}
-                          step={qtyInputStep()}
+                          step={entryInputStep()}
                           value={value}
                           onChange={(e) => patchQty(b.id, e.target.value)}
                           style={{

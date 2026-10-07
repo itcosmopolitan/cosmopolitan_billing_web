@@ -31,12 +31,12 @@ import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/Doc
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { emptyPurchaseLine, projectedBranchCost } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, formatAmountNumber, qtyInputStep, roundAmount, roundQty } from '@/utils/decimalPrecision'
+import { amountInputStep, entryInputStep, formatAmountNumber, roundAmount, roundQty } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput, purchaseLineGross } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
-const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
+const costLineGross = purchaseLineGross
 
 function lineBranchCostPreview(it) {
   if (!it.item_id || it.branchCost == null) return null
@@ -311,19 +311,20 @@ export default function BillFormModal({
                     </td>
                     <td>
                       <input className="form-input" type="number"
-                        min={qtyInputStep()}
-                        step={qtyInputStep()}
+                        min={entryInputStep()}
+                        step={entryInputStep()}
                         style={numInputStyle}
                         value={it.qty}
+                        title="Enter any decimals; line total uses settings rounding"
                         onChange={(e) => { const n = [...billForm.items]; n[i].qty = e.target.value; pbf('items', n) }} />
                     </td>
                     <td>
                       <input className="form-input" type="number"
                         min="0"
-                        step={amountInputStep()}
+                        step={entryInputStep()}
                         style={numInputStyle}
                         value={displayExclRate(it.cost, it.taxRate)}
-                        title="Cost excl. GST"
+                        title="Cost excl. GST — enter any decimals; line total uses settings rounding"
                         onChange={(e) => {
                           const n = [...billForm.items]
                           n[i].cost = inclusiveRateFromExclInput(e.target.value, it.taxRate)
@@ -448,7 +449,7 @@ export default function BillFormModal({
           entityDiscountType={billForm.discountType || '%'}
           onEntityDiscountChange={(v) => pbf('discount', v)}
           onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
-          lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+          lineGross={purchaseLineGross}
           showWhenEmpty
           marginOverride={purchaseMargin}
           notes={billForm.notes || ''}

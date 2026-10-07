@@ -14,7 +14,7 @@ import { purchasesAPI, AUTOCOMPLETE_VENDOR_URL, vendorsAPI, itemsAPI } from '@/a
 import { useQuickVendor } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
-import { qtyInputStep } from '@/utils/decimalPrecision'
+import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 
 const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Damaged', 'Other']
 
@@ -219,7 +219,7 @@ export default function VendorReturnFormPage() {
 
   const setQtyFor = (line, raw) => {
     const remaining = remainingFor(line)
-    const v = Math.max(0, Math.min(remaining, Math.floor(Number(raw) || 0)))
+    const v = Math.max(0, Math.min(remaining, Number(raw) || 0))
     setReturnQtys((cur) => ({ ...cur, [line.id]: v }))
   }
 
@@ -236,16 +236,16 @@ export default function VendorReturnFormPage() {
         lineCount += 1
       }
       const unitTotal = Number(li.lineTotal || 0) / Math.max(1, Number(li.qty || 1))
-      const lineTotalAmt = q * unitTotal
+      const lineTotalAmt = roundAmount(q * unitTotal)
       const taxFrac = Number(li.taxRate || 0) / (100 + Number(li.taxRate || 0))
-      const t = Math.round(lineTotalAmt * taxFrac * 100) / 100
-      subtotal += Math.round((lineTotalAmt - t) * 100) / 100
+      const t = roundAmount(lineTotalAmt * taxFrac)
+      subtotal += roundAmount(lineTotalAmt - t)
       tax += t
     }
     return {
-      subtotal: Math.round(subtotal * 100) / 100,
-      tax: Math.round(tax * 100) / 100,
-      total: Math.round((subtotal + tax) * 100) / 100,
+      subtotal: roundAmount(subtotal),
+      tax: roundAmount(tax),
+      total: roundAmount(subtotal + tax),
       anyReturned,
       lineCount,
     }
@@ -447,7 +447,7 @@ export default function VendorReturnFormPage() {
                         const remaining = remainingFor(li)
                         const q = returnQtys[li.id] || 0
                         const unitTotal = Number(li.lineTotal || 0) / Math.max(1, Number(li.qty || 1))
-                        const lineWithTax = Math.round(q * unitTotal * 100) / 100
+                        const lineWithTax = roundAmount(q * unitTotal)
                         const disabled = remaining === 0
                         return (
                           <tr key={li.id} style={disabled ? { opacity: 0.5 } : null}>
@@ -467,16 +467,17 @@ export default function VendorReturnFormPage() {
                                 type="number"
                                 min={0}
                                 max={remaining}
-                                step={qtyInputStep()}
+                                step={entryInputStep()}
                                 value={q}
                                 disabled={disabled}
                                 onChange={(e) => setQtyFor(li, e.target.value)}
                                 style={{ width: 80, textAlign: 'right', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' }}
+                                title="Enter any decimals; line total uses settings rounding"
                               />
                             </td>
                             <td className="text-right mono" style={{ fontSize: 12 }}>{fmt(li.cost)}</td>
                             <td className="text-right mono" style={{ fontSize: 12 }}>
-                              {fmt(Math.round(lineWithTax * 100) / 100)}
+                              {fmt(roundAmount(lineWithTax))}
                             </td>
                           </tr>
                         )

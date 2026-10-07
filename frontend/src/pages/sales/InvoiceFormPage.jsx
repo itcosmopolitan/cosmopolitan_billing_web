@@ -22,7 +22,7 @@ import {
   storeCreditApplyAmount,
   remainingAfterStoreCredit,
 } from '@/utils/storeCredit'
-import { computeDocumentTotals, entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 
@@ -285,7 +285,7 @@ export default function InvoiceFormPage() {
           batch_allocation: toApiPayload(i.batchAllocation),
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-          lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),
+          lineGross: saleLineGross,
         }),
         payment_mode: remaining > 0.001 && (form.paymentReceived || mustPay || creditUse > 0)
           ? form.paymentMethod

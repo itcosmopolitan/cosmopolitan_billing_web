@@ -4,10 +4,11 @@ import { itemsAPI } from '@/api'
 import MarginBadge from '@/components/MarginBadge'
 import {
   amountInputStep,
+  ENTRY_DECIMALS,
+  entryInputStep,
   formatAmountNumber,
-  inputStep,
   roundAmount,
-  roundToPrecision,
+  roundEntry,
 } from '@/utils/decimalPrecision'
 import {
   allocatableBatches,
@@ -23,12 +24,11 @@ import {
   storeInclusiveUnitRate,
   lineTaxAmount,
   lineTaxableAmount,
-  POS_ENTRY_DECIMALS,
 } from '@/utils/taxCalc'
 
 /** Qty/rate inputs accept full entry precision; totals use org amount rounding. */
-const entryStep = () => inputStep(POS_ENTRY_DECIMALS)
-const entryQty = (n) => roundToPrecision(n, POS_ENTRY_DECIMALS)
+const entryStep = entryInputStep
+const entryQty = roundEntry
 
 /** Move focus to the same column on the previous/next cart line (↑/↓). */
 function handleCartFieldArrowNav(e, field, cartIndex) {
@@ -89,7 +89,7 @@ export default function CartRow({
   const exclRate = displayExclusiveUnitRate(
     item.price,
     item.taxRate,
-    allowPriceEditing ? POS_ENTRY_DECIMALS : undefined,
+    allowPriceEditing ? ENTRY_DECIMALS : undefined,
   )
   const afterEntity = Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0)))
   const lineTax = lineTaxAmount(afterEntity, item.taxRate)
@@ -140,10 +140,10 @@ export default function CartRow({
   const commitPrice = (raw) => {
     const v = Number(raw)
     if (Number.isFinite(v) && v >= 0) {
-      onPriceChange?.(storeInclusiveUnitRate(v, item.taxRate, POS_ENTRY_DECIMALS))
+      onPriceChange?.(storeInclusiveUnitRate(v, item.taxRate, ENTRY_DECIMALS))
       return
     }
-    onPriceChange?.(storeInclusiveUnitRate(exclRate, item.taxRate, POS_ENTRY_DECIMALS))
+    onPriceChange?.(storeInclusiveUnitRate(exclRate, item.taxRate, ENTRY_DECIMALS))
   }
 
   // Stash the callbacks in refs so their identity (recreated on every
@@ -378,7 +378,7 @@ export default function CartRow({
               if (raw.trim() === '' || raw === '.' || raw.endsWith('.')) return
               const v = Number(raw)
               if (!Number.isFinite(v) || v < 0) return
-              onPriceChange?.(storeInclusiveUnitRate(v, item.taxRate, POS_ENTRY_DECIMALS))
+              onPriceChange?.(storeInclusiveUnitRate(v, item.taxRate, ENTRY_DECIMALS))
             }}
             onBlur={() => {
               commitPrice(priceText)

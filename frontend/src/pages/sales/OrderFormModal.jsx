@@ -27,9 +27,9 @@ import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing, WALK_IN_CUSTOMER_OPTION, WALK_IN_CUSTOMER_NAME } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
+import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput, saleLineGross } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 
 // Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
@@ -259,19 +259,20 @@ export default function OrderFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
-                      min={qtyInputStep()}
-                      step={qtyInputStep()}
+                      min={entryInputStep()}
+                      step={entryInputStep()}
                       style={numInputStyle}
                       value={it.qty}
+                      title="Enter any decimals; line total uses settings rounding"
                       onChange={e => { const n = [...orderForm.items]; n[i].qty = e.target.value; pof('items', n) }} />
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
                       min="0"
-                      step={amountInputStep()}
+                      step={entryInputStep()}
                       style={numInputStyle}
                       value={displayExclRate(it.price, it.taxRate)}
-                      title="Rate excl. GST"
+                      title="Rate excl. GST — enter any decimals; line total uses settings rounding"
                       onChange={e => {
                         const n = [...orderForm.items]
                         n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
@@ -347,7 +348,7 @@ export default function OrderFormModal({
           onEntityDiscountChange={readOnly ? undefined : (v) => pof('discount', v)}
           onEntityDiscountTypeChange={readOnly ? undefined : (t) => pof('discountType', t)}
           readOnly={readOnly}
-          lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          lineGross={saleLineGross}
           showWhenEmpty
           notes={orderForm.notes}
           onNotesChange={readOnly ? undefined : (v) => pof('notes', v)}

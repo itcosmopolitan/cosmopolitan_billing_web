@@ -15,9 +15,9 @@ import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
+import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput, saleLineGross } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 import {
   customerRequiresImmediatePayment,
@@ -380,10 +380,11 @@ export default function InvoiceFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number"
-                      min={qtyInputStep()}
-                      step={qtyInputStep()}
+                      min={entryInputStep()}
+                      step={entryInputStep()}
                       style={numInputStyle}
                       value={it.qty}
+                      title="Enter any decimals; line total uses settings rounding"
                       onChange={(e) => {
                         patchLine(i, {
                           qty: e.target.value,
@@ -394,10 +395,10 @@ export default function InvoiceFormModal({
                   <td>
                     <input className="form-input" type="number"
                       min="0"
-                      step={amountInputStep()}
+                      step={entryInputStep()}
                       style={numInputStyle}
                       value={displayExclRate(it.price, it.taxRate)}
-                      title="Rate excl. GST"
+                      title="Rate excl. GST — enter any decimals; line total uses settings rounding"
                       onChange={(e) => {
                         const n = [...invoiceForm.items]
                         n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
@@ -507,7 +508,7 @@ export default function InvoiceFormModal({
           entityDiscountType={invoiceForm.discountType || '%'}
           onEntityDiscountChange={(v) => pif('discount', v)}
           onEntityDiscountTypeChange={(t) => pif('discountType', t)}
-          lineGross={(it) => Number(it.qty || 0) * Number(it.price || 0)}
+          lineGross={saleLineGross}
           showWhenEmpty
           notes={invoiceForm.notes}
           onNotesChange={(v) => pif('notes', v)}

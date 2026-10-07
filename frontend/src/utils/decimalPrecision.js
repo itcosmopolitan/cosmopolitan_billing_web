@@ -71,6 +71,21 @@ export function qtyInputStep() {
   return inputStep(getQtyDecimals())
 }
 
+/**
+ * Qty/rate entry precision for POS and document forms.
+ * Inputs accept up to this many fraction digits; line/totals still use
+ * roundAmount / roundQty from org settings.
+ */
+export const ENTRY_DECIMALS = MAX_DECIMAL_PRECISION
+
+export function entryInputStep() {
+  return inputStep(ENTRY_DECIMALS)
+}
+
+export function roundEntry(n) {
+  return roundToPrecision(n, ENTRY_DECIMALS)
+}
+
 /** Fraction digits implied by an input `step` (e.g. "0.01" → 2, "1" → 0). */
 export function fractionDigitsFromStep(step) {
   if (step == null || step === '' || step === 'any') return null

@@ -1,7 +1,6 @@
 import {
   formatAmountInput,
   getAmountDecimals,
-  MAX_DECIMAL_PRECISION,
   roundAmount,
   roundToPrecision,
 } from '@/utils/decimalPrecision'
@@ -127,8 +126,8 @@ export function storeInclusiveUnitRate(exclusiveUnitPrice, taxRate, decimals) {
   return inclusiveFromExclusive(exclusiveUnitPrice, taxRate, decimals)
 }
 
-/** POS rate/qty entry precision — wider than org display rounding. */
-export const POS_ENTRY_DECIMALS = MAX_DECIMAL_PRECISION
+/** POS / document rate/qty entry precision — wider than org display rounding. */
+export { ENTRY_DECIMALS as POS_ENTRY_DECIMALS } from '@/utils/decimalPrecision'
 
 /** Split a document-level discount across inclusive line amounts. */
 export function allocateFlatShares(amounts, flat) {

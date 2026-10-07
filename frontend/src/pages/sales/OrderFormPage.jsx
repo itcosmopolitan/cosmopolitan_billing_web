@@ -15,7 +15,7 @@ import {
   quoteFromRow,
   lineDiscountToPercent,
 } from './salesFormShared'
-import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
 export default function OrderFormPage({ mode = 'create' }) {
@@ -162,7 +162,7 @@ export default function OrderFormPage({ mode = 'create' }) {
           discount: lineDiscountToPercent(i),
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-          lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),
+          lineGross: saleLineGross,
         }),
         notes: form.notes,
       }

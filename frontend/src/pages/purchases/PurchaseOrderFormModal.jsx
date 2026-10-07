@@ -22,12 +22,12 @@ import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import { emptyPurchaseLine } from './purchaseFormShared'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
+import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput } from '@/utils/documentFormTotals'
+import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput, purchaseLineGross } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
-const costLineGross = (it) => Number(it.qty || 0) * Number(it.cost || 0)
+const costLineGross = purchaseLineGross
 
 // Per-row discount via lineDiscountType. Backend stores percent only.
 
@@ -205,19 +205,20 @@ export default function PurchaseOrderFormModal({
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
-                      min={qtyInputStep()}
-                      step={qtyInputStep()}
+                      min={entryInputStep()}
+                      step={entryInputStep()}
                       style={numInputStyle}
                       value={it.qty}
+                      title="Enter any decimals; line total uses settings rounding"
                       onChange={e => { const n = [...poForm.items]; n[i].qty = e.target.value; ppof('items', n) }} />
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
                       min="0"
-                      step={amountInputStep()}
+                      step={entryInputStep()}
                       style={numInputStyle}
                       value={displayExclRate(it.cost, it.taxRate)}
-                      title="Cost excl. GST"
+                      title="Cost excl. GST — enter any decimals; line total uses settings rounding"
                       onChange={e => {
                         const n = [...poForm.items]
                         n[i].cost = inclusiveRateFromExclInput(e.target.value, it.taxRate)
@@ -287,7 +288,7 @@ export default function PurchaseOrderFormModal({
           onEntityDiscountChange={readOnly ? undefined : (v) => ppof('discount', v)}
           onEntityDiscountTypeChange={readOnly ? undefined : (t) => ppof('discountType', t)}
           readOnly={readOnly}
-          lineGross={(it) => Number(it.qty || 0) * Number(it.cost || 0)}
+          lineGross={purchaseLineGross}
           showWhenEmpty
           marginOverride={purchaseMargin}
           notes={poForm.notes}

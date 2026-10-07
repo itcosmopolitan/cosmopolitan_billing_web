@@ -13,7 +13,7 @@ import { salesAPI, AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
-import { qtyInputStep } from '@/utils/decimalPrecision'
+import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { lineTaxAmount } from '@/utils/taxCalc'
 
 export default function ReturnFormPage() {
@@ -147,7 +147,7 @@ export default function ReturnFormPage() {
 
   const fefoDistribute = (line, qty) => {
     const out = {}
-    let remaining = Math.max(0, Math.floor(Number(qty) || 0))
+    let remaining = Math.max(0, Number(qty) || 0)
     for (const b of sourceBatches(line)) {
       if (remaining <= 0) break
       const cap = Math.max(0, Number(b.consumed || 0))
@@ -261,7 +261,7 @@ export default function ReturnFormPage() {
 
   const setQtyFor = (line, raw) => {
     const remaining = remainingFor(line)
-    const v = Math.max(0, Math.min(remaining, Math.floor(Number(raw) || 0)))
+    const v = Math.max(0, Math.min(remaining, Number(raw) || 0))
     setReturnQtys((cur) => ({ ...cur, [line.id]: v }))
     if (sourceBatches(line).length > 0) {
       setBatchAllocByLine((cur) => ({ ...cur, [line.id]: fefoDistribute(line, v) }))
@@ -270,7 +270,7 @@ export default function ReturnFormPage() {
 
   const setBatchQtyFor = (line, batch, raw) => {
     const cap = Math.max(0, Number(batch.consumed || 0))
-    const v = Math.max(0, Math.min(cap, Math.floor(Number(raw) || 0)))
+    const v = Math.max(0, Math.min(cap, Number(raw) || 0))
     setBatchAllocByLine((cur) => ({
       ...cur,
       [line.id]: { ...(cur[line.id] || {}), [batch.batch_id]: v },
@@ -289,15 +289,15 @@ export default function ReturnFormPage() {
       const q = returnQtys[il.id] || 0
       if (q > 0) anyReturned = true
       // Sale prices are tax-inclusive — extract tax, do not add it on top.
-      const lineGross = Math.round(q * Number(il.price || 0) * 100) / 100
+      const lineGross = roundAmount(q * Number(il.price || 0))
       const t = lineTaxAmount(lineGross, il.taxRate || 0)
-      subtotal += Math.round((lineGross - t) * 100) / 100
+      subtotal += roundAmount(lineGross - t)
       tax += t
     }
     return {
-      subtotal: Math.round(subtotal * 100) / 100,
-      tax: Math.round(tax * 100) / 100,
-      total: Math.round((subtotal + tax) * 100) / 100,
+      subtotal: roundAmount(subtotal),
+      tax: roundAmount(tax),
+      total: roundAmount(subtotal + tax),
       anyReturned,
     }
   }, [invoice, returnQtys])
@@ -525,15 +525,16 @@ export default function ReturnFormPage() {
                                   type="number"
                                   min={0}
                                   max={remaining}
-                                  step={qtyInputStep()}
+                                  step={entryInputStep()}
                                   value={q}
                                   disabled={disabled}
                                   onChange={(e) => setQtyFor(il, e.target.value)}
                                   style={{ width: 70, textAlign: 'right', padding: '4px 6px' }}
+                                  title="Enter any decimals; line total uses settings rounding"
                                 />
                               </td>
                               <td className="text-right mono" style={{ fontSize: 12 }}>
-                                {fmt(Math.round(lineWithTax * 100) / 100)}
+                                {fmt(roundAmount(lineWithTax))}
                               </td>
                             </tr>
                             {showBatchPanel && (
@@ -570,7 +571,7 @@ export default function ReturnFormPage() {
                                                 type="number"
                                                 min={0}
                                                 max={b.consumed}
-                                                step={qtyInputStep()}
+                                                step={entryInputStep()}
                                                 value={(batchAllocByLine[il.id]?.[b.batch_id]) ?? 0}
                                                 onChange={(e) => setBatchQtyFor(il, b, e.target.value)}
                                                 style={{ width: 90, textAlign: 'right', padding: '4px 6px' }}

@@ -39,7 +39,7 @@ import toast from 'react-hot-toast'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown } from '@/components/ui'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import { fmt, fmtQty } from '@/utils/helpers'
-import { qtyInputStep } from '@/utils/decimalPrecision'
+import { entryInputStep } from '@/utils/decimalPrecision'
 import CashTenderFields from '@/components/CashTenderFields'
 import { cashTenderError } from '@/utils/cashTender'
 import { itemsAPI } from '@/api'
@@ -316,9 +316,9 @@ export default function ConvertToInvoiceModal({
                     <input
                       type="number"
                       className="form-input"
-                      min={qtyInputStep()}
+                      min={entryInputStep()}
                       max={line.qty}
-                      step={qtyInputStep()}
+                      step={entryInputStep()}
                       value={lineQtys[key] ?? line.qty}
                       onChange={(e) => setLineQtys((prev) => ({ ...prev, [key]: e.target.value }))}
                       style={{ width: 64, textAlign: 'right', fontSize: 12 }}

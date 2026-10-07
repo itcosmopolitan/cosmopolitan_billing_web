@@ -7,7 +7,7 @@ import {
   formatAllocationSummary,
   isAllocationValid,
 } from '@/utils/batchAllocation'
-import { qtyInputStep } from '@/utils/decimalPrecision'
+import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
 
 export default function TransferFormFields({
@@ -31,7 +31,7 @@ export default function TransferFormFields({
   const totalCostPrice = form.items.reduce((sum, row) => {
     const item = items.find((entry) => entry.id === row.item_id)
     const costPrice = Number(row.cost_price ?? item?.cost_price ?? item?.default_cost_price ?? 0)
-    return sum + (Number(row.qty) || 0) * costPrice
+    return sum + roundAmount((Number(row.qty) || 0) * costPrice)
   }, 0)
 
   return (
@@ -173,9 +173,10 @@ export default function TransferFormFields({
                       <input
                         className="form-input"
                         type="number"
-                        min={qtyInputStep()}
-                        step={qtyInputStep()}
+                        min={entryInputStep()}
+                        step={entryInputStep()}
                         placeholder="Qty"
+                        title="Enter any decimals; line value uses settings rounding"
                         value={row.qty}
                         onChange={(e) => patchItem(i, 'qty', e.target.value)}
                         disabled={disabled}
@@ -186,15 +187,16 @@ export default function TransferFormFields({
                         className="form-input"
                         type="number"
                         min="0"
-                        step="0.01"
+                        step={entryInputStep()}
                         placeholder="Cost price"
+                        title="Enter any decimals; line value uses settings rounding"
                         value={row.cost_price ?? (row.item_id ? costPrice : '')}
                         onChange={(e) => patchItem(i, 'cost_price', e.target.value)}
                         disabled={disabled || !row.item_id}
                         aria-label={`Cost price for ${picked?.name || `item ${i + 1}`}`}
                       />
                     </td>
-                    <td className="mono">{fmt(need * costPrice)}</td>
+                    <td className="mono">{fmt(roundAmount(need * costPrice))}</td>
                     <td>
                       {!tracked || !row.item_id ? (
                         <div className="transfer-form__allocation-empty">

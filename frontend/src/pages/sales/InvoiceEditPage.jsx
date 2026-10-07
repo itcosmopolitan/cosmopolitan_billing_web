@@ -7,7 +7,7 @@ import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import InvoiceFormModal from './InvoiceFormModal'
 import { invoiceFromRow, lineDiscountToPercent, canShowInvoiceEdit, invoiceEditPath, invoiceHasPayment, invoiceHasReturn, isPosInvoice } from './salesFormShared'
-import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'
 import { customerRequiresImmediatePayment } from '@/utils/storeCredit'
@@ -176,7 +176,7 @@ export default function InvoiceEditPage() {
           batch_allocation: toApiPayload(i.batchAllocation),
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-          lineGross: (it) => Number(it.qty || 0) * Number(it.price || 0),
+          lineGross: saleLineGross,
         }),
         payment_mode: form.paymentMethod || null,
         payment_ref: (form.paymentMethod === 'upi' || form.paymentMethod === 'bank_transfer')

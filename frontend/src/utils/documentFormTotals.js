@@ -1,16 +1,26 @@
 /** Line + document-level discount rollup for sales/purchase forms (POS parity). */
 import { allocateFlatShares, lineTaxAmount, exclusiveFromInclusive, inclusiveFromExclusive } from '@/utils/taxCalc'
-import { roundAmount } from '@/utils/decimalPrecision'
+import { ENTRY_DECIMALS, roundAmount } from '@/utils/decimalPrecision'
+
+/** Qty × unit price, rounded at line level (settings amount precision). */
+export function saleLineGross(it) {
+  return roundAmount((Number(it?.qty || 0) * Number(it?.price || 0)))
+}
+
+/** Qty × unit cost, rounded at line level (settings amount precision). */
+export function purchaseLineGross(it) {
+  return roundAmount((Number(it?.qty || 0) * Number(it?.cost || 0)))
+}
 
 export function lineDiscountAmount(it, gross) {
   const raw = Math.max(0, Number(it.lineDiscount || 0))
-  if (it.lineDiscountType === 'MVR') return Math.min(gross, raw)
-  return Math.min(gross, gross * (Math.min(raw, 100) / 100))
+  if (it.lineDiscountType === 'MVR') return roundAmount(Math.min(gross, raw))
+  return roundAmount(Math.min(gross, gross * (Math.min(raw, 100) / 100)))
 }
 
 /** Qty × unit − line discount (before document-level discount / tax display). */
 export function lineNetAmount(it, lineGross) {
-  const grossFn = lineGross || ((row) => Number(row.qty || 0) * Number(row.price || 0))
+  const grossFn = lineGross || saleLineGross
   const gross = grossFn(it)
   return roundAmount(Math.max(0, gross - lineDiscountAmount(it, gross)))
 }
@@ -27,14 +37,14 @@ export function lineTaxableDisplay(it, lineGross, entityDiscountShare = 0) {
   return roundAmount(after - lineTaxAmount(after, Number(it.taxRate || 0)))
 }
 
-/** Unit rate shown excl. GST (catalog/transaction prices stay inclusive). */
+/** Unit rate shown excl. GST — entry precision (line/totals still roundAmount). */
 export function displayExclRate(inclusiveUnit, taxRate) {
-  return exclusiveFromInclusive(inclusiveUnit, taxRate)
+  return exclusiveFromInclusive(inclusiveUnit, taxRate, ENTRY_DECIMALS)
 }
 
-/** Persist cashier excl. GST entry as inclusive unit price. */
+/** Persist excl. GST entry as inclusive unit price (entry precision). */
 export function inclusiveRateFromExclInput(exclusiveUnit, taxRate) {
-  return inclusiveFromExclusive(exclusiveUnit, taxRate)
+  return inclusiveFromExclusive(exclusiveUnit, taxRate, ENTRY_DECIMALS)
 }
 
 export function hasLineLevelDiscount(items) {
@@ -60,7 +70,7 @@ export function computeDocumentTotals(items, {
   lineGross,
   enforceExclusive = true,
 } = {}) {
-  const grossFn = lineGross || ((it) => Number(it.qty || 0) * Number(it.price || 0))
+  const grossFn = lineGross || saleLineGross
   const rows = items || []
 
   let gross = 0
@@ -69,9 +79,9 @@ export function computeDocumentTotals(items, {
   const rates = []
 
   for (const it of rows) {
-    const g = grossFn(it)
+    const g = roundAmount(grossFn(it))
     const disc = lineDiscountAmount(it, g)
-    const lineNet = Math.max(0, g - disc)
+    const lineNet = roundAmount(Math.max(0, g - disc))
     gross += g
     lineDiscount += disc
     lineNets.push(lineNet)

@@ -12,7 +12,7 @@ import {
   poFromRow,
   lineDiscountToPercent,
 } from './purchaseFormShared'
-import { entityDiscountToPayload } from '@/utils/documentFormTotals'
+import { entityDiscountToPayload, purchaseLineGross } from '@/utils/documentFormTotals'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const out = []
@@ -138,7 +138,7 @@ export default function BillFormPage({ mode = 'bill' }) {
             expiry_date: i.batchTracking ? (i.expiryDate || undefined) : undefined,
           })),
           discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-            lineGross: (it) => Number(it.qty || 0) * Number(it.cost || 0),
+            lineGross: purchaseLineGross,
           }),
           notes: form.notes || null,
         }
@@ -168,7 +168,7 @@ export default function BillFormPage({ mode = 'bill' }) {
             expiry_date: i.batchTracking ? (i.expiryDate || undefined) : undefined,
           })),
           discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
-            lineGross: (it) => Number(it.qty || 0) * Number(it.cost || 0),
+            lineGross: purchaseLineGross,
           }),
           payment_mode: form.paymentReceived ? form.paymentMethod : null,
           notes: form.notes || null,
