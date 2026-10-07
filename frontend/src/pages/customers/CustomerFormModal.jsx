@@ -420,7 +420,6 @@ export default function CustomerFormModal({
               className="form-input"
               value={newKamName}
               onChange={(e) => setNewKamName(e.target.value)}
-              placeholder="e.g. Aisha Mohamed"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {

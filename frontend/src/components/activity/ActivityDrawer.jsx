@@ -112,8 +112,11 @@ function getBadgeClass(event) {
     return 'activity-badge--void'
   }
   if (key === 'created') return 'activity-badge--created'
-  if (['confirmed', 'verified', 'approved', 'transit', 'sent', 'accepted', 'payment_recorded', 'refund_issued', 'quotation_sent'].includes(key)) {
+  if (['confirmed', 'verified', 'approved', 'transit', 'submitted', 'received', 'sent', 'accepted', 'payment_recorded', 'refund_issued', 'quotation_sent'].includes(key)) {
     return 'activity-badge--positive'
+  }
+  if (key === 'updated') {
+    return 'activity-badge--warning'
   }
   if (['item_changed', 'amount_changed', 'qty_changed', 'due_date_changed', 'status_changed', 'qty_received_recorded', 'stock_returned', 'pool_stock_draw', 'expired', 'quotation_expired', 'item_updated', 'item_branch_config_updated', 'item_branch_cost_averaged', 'branch_cost_averaged'].includes(key)) {
     return 'activity-badge--warning'
@@ -130,7 +133,10 @@ const EVENT_DEFINITIONS = {
   confirmed:         { label: 'Confirmed', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
   verified:          { label: 'Verified', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
   approved:          { label: 'Approved', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
-  transit:           { label: 'In transit', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
+  transit:           { label: 'Dispatched', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
+  submitted:         { label: 'Submitted', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
+  received:          { label: 'Received', bg: 'var(--blue-bg)', text: 'var(--blue)', icon: '✓' },
+  updated:           { label: 'Updated', bg: 'var(--amber-bg)', text: 'var(--amber)', icon: '✎' },
 
   // Conversion / linking (PURPLE)
   converted:         { label: 'Converted', bg: 'var(--purple-bg)', text: 'var(--purple)', icon: '⇄' },

@@ -274,6 +274,77 @@ async def _branch_names(
     )
 
 
+def _transfer_branch_label(name: Optional[str], branch_id: Optional[str]) -> str:
+    label = (name or "").strip()
+    return label or (branch_id or "Unknown branch")
+
+
+def _format_qty_label(qty) -> str:
+    n = as_qty(qty or 0)
+    if float(n).is_integer():
+        return str(int(n))
+    return f"{n:g}"
+
+
+def _transfer_lines_audit(lines) -> tuple[str, list[dict], float]:
+    """Human line summary + structured rows for transfer audit metadata."""
+    parts: list[str] = []
+    rows: list[dict] = []
+    total = 0.0
+    for line in lines or []:
+        name = (
+            getattr(line, "item_name", None)
+            or getattr(line, "name", None)
+            or "Item"
+        )
+        qty = as_qty(getattr(line, "qty", 0) or 0)
+        total += qty
+        qty_label = _format_qty_label(qty)
+        parts.append(f"{name} × {qty_label}")
+        rows.append({
+            "item_id": getattr(line, "item_id", None),
+            "item_name": name,
+            "qty": qty,
+        })
+    summary = ", ".join(parts) if parts else "no line items"
+    return summary, rows, as_qty(total)
+
+
+def _transfer_route_meta(
+    *,
+    from_branch_id: str,
+    from_branch_name: str,
+    to_branch_id: str,
+    to_branch_name: str,
+    lines=None,
+    extra: Optional[dict] = None,
+) -> dict:
+    line_summary, line_rows, qty_total = _transfer_lines_audit(lines or [])
+    meta = {
+        "from_branch_id": from_branch_id,
+        "from_branch_name": from_branch_name,
+        "to_branch_id": to_branch_id,
+        "to_branch_name": to_branch_name,
+        "qty_total": qty_total,
+        "line_count": len(line_rows),
+        "lines": line_rows,
+        "line_summary": line_summary,
+    }
+    if extra:
+        meta.update(extra)
+    return meta
+
+
+async def _load_transfer_lines(db: AsyncSession, transfer_id: str) -> list[TransferLineItem]:
+    return list(
+        (
+            await db.execute(
+                select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id)
+            )
+        ).scalars().all()
+    )
+
+
 async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optional[str]) -> Optional[list[str]]:
     if not getattr(user, "id", None):
         try:
@@ -538,6 +609,15 @@ async def create_transfer(
     for line in _add_transfer_lines(tid, data.items):
         db.add(line)
 
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(data.items)
+    from_label = _transfer_branch_label(from_name, data.from_branch_id)
+    to_label = _transfer_branch_label(to_name, data.to_branch_id)
+    create_detail = (
+        f"Created transfer {ref} from {from_label} to {to_label}. "
+        f"Items ({_format_qty_label(qty_total)} total): {line_summary}. "
+        f"No stock moved yet"
+        + (" — pending approval." if not direct else " — will dispatch immediately.")
+    )
     _log_transfer_history(
         db,
         user=user,
@@ -545,12 +625,20 @@ async def create_transfer(
         transfer_number=ref,
         event_type="created",
         action="Transfer created",
-        detail=f"Created transfer request {ref} from {data.from_branch_id} to {data.to_branch_id}",
-        metadata={
-            "from_branch_id": data.from_branch_id,
-            "to_branch_id": data.to_branch_id,
-            "priority": data.priority,
-        },
+        detail=create_detail,
+        metadata=_transfer_route_meta(
+            from_branch_id=data.from_branch_id,
+            from_branch_name=from_label,
+            to_branch_id=data.to_branch_id,
+            to_branch_name=to_label,
+            lines=data.items,
+            extra={
+                "priority": data.priority,
+                "status": "pending" if direct else "draft",
+                "stock_reduced": 0,
+                "stock_increased": 0,
+            },
+        ),
     )
     await db.flush()
     if direct:
@@ -623,7 +711,20 @@ async def update_transfer(
     for line in _add_transfer_lines(transfer_id, data.items):
         db.add(line)
 
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(data.items)
+    from_label = _transfer_branch_label(from_name, data.from_branch_id)
+    to_label = _transfer_branch_label(to_name, data.to_branch_id)
+    route_meta = _transfer_route_meta(
+        from_branch_id=data.from_branch_id,
+        from_branch_name=from_label,
+        to_branch_id=data.to_branch_id,
+        to_branch_name=to_label,
+        lines=data.items,
+        extra={"stock_reduced": 0, "stock_increased": 0, "status": t.status.value},
+    )
     if item_changes:
+        change_bits = [c.get("detail") for c in item_changes[:20] if c.get("detail")]
+        change_text = "; ".join(change_bits) if change_bits else f"{len(item_changes)} line change(s)"
         _log_transfer_history(
             db,
             user=user,
@@ -631,8 +732,11 @@ async def update_transfer(
             transfer_number=t.ref_number,
             event_type="item_changed",
             action="Transfer items updated",
-            detail=f"Updated transfer line items for {t.ref_number}",
-            metadata={"line_count": len(data.items), "changes": item_changes[:20]},
+            detail=(
+                f"Updated items on transfer {t.ref_number} "
+                f"({from_label} → {to_label}): {change_text}"
+            ),
+            metadata={**route_meta, "changes": item_changes[:20]},
         )
 
     _log_transfer_history(
@@ -642,7 +746,12 @@ async def update_transfer(
         transfer_number=t.ref_number,
         event_type="updated",
         action="Transfer updated",
-        detail=f"Edited transfer route, items, or notes for {t.ref_number}",
+        detail=(
+            f"Updated transfer {t.ref_number}: route {from_label} → {to_label}. "
+            f"Items ({_format_qty_label(qty_total)} total): {line_summary}. "
+            f"No stock moved yet."
+        ),
+        metadata=route_meta,
     )
     await db.commit()
     return {"id": transfer_id, "ref_number": t.ref_number, "status": t.status.value}
@@ -665,10 +774,31 @@ async def submit_transfer(
     t.status = TransferStatus.pending
     from src.notifications.store import emit_transfer_pending, notify_refresh
     await emit_transfer_pending(db, t)
+    lines = await _load_transfer_lines(db, transfer_id)
+    from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)
+    to_label = _transfer_branch_label(t.to_branch_name, t.to_branch_id)
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(lines)
     _log_transfer_history(
-        db, user=user, transfer_id=transfer_id, transfer_number=t.ref_number,
-        event_type="submitted", action="Transfer submitted",
-        detail=f"Transfer {t.ref_number} submitted for approval",
+        db,
+        user=user,
+        transfer_id=transfer_id,
+        transfer_number=t.ref_number,
+        event_type="submitted",
+        action="Transfer submitted",
+        detail=(
+            f"Submitted transfer {t.ref_number} for approval: "
+            f"{from_label} → {to_label}. "
+            f"Items ({_format_qty_label(qty_total)} total): {line_summary}. "
+            f"Stock will be reduced at {from_label} on approve/dispatch."
+        ),
+        metadata=_transfer_route_meta(
+            from_branch_id=t.from_branch_id,
+            from_branch_name=from_label,
+            to_branch_id=t.to_branch_id,
+            to_branch_name=to_label,
+            lines=lines,
+            extra={"stock_reduced": 0, "stock_increased": 0, "status": "pending"},
+        ),
     )
     await db.commit()
     await notify_refresh()
@@ -825,6 +955,33 @@ async def _dispatch_transfer(
                     source_ref=transfer_id,
                     notes=f"Transfer {t.ref_number} source clamp",
                 )
+    lines = await _load_transfer_lines(db, transfer_id)
+    from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)
+    to_label = _transfer_branch_label(t.to_branch_name, t.to_branch_id)
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(lines)
+    dispatch_detail = (
+        f"Approved and dispatched transfer {t.ref_number} by {approved_by}: "
+        f"{from_label} → {to_label}. "
+        f"Stock reduced at {from_label}: {line_summary} "
+        f"(total {_format_qty_label(qty_total)}). "
+        f"Stock at {to_label} will increase by the same quantities on receive."
+    )
+    dispatch_meta = _transfer_route_meta(
+        from_branch_id=t.from_branch_id,
+        from_branch_name=from_label,
+        to_branch_id=t.to_branch_id,
+        to_branch_name=to_label,
+        lines=lines,
+        extra={
+            "stock_reduced": qty_total,
+            "stock_increased": 0,
+            "stock_reduced_at": from_label,
+            "stock_pending_at": to_label,
+            "status": "transit",
+            "approved_by": approved_by,
+            "approver_id": user.id,
+        },
+    )
     _log_transfer_history(
         db,
         user=user,
@@ -832,25 +989,22 @@ async def _dispatch_transfer(
         transfer_number=t.ref_number,
         event_type="transit",
         action="Transfer dispatched",
-        detail=f"Transfer approved and dispatched by {approved_by}",
+        detail=dispatch_detail,
+        metadata=dispatch_meta,
     )
-    qty_total = as_qty((await db.execute(select(func.coalesce(func.sum(TransferLineItem.qty), 0)).where(TransferLineItem.transfer_id == transfer_id))).scalar() or 0)
     await db.commit()
     await _write_post_commit_audit(
         db,
         action="Stock Transfer Approved",
         reference_id=t.ref_number,
-        detail=f"Transfer approved and dispatched by {approved_by}",
+        detail=dispatch_detail,
         user=user,
         request=request,
         branch_id=t.from_branch_id,
         metadata={
             "transfer_id": transfer_id,
-            "from_branch_id": t.from_branch_id,
-            "to_branch_id": t.to_branch_id,
-            "qty_total": qty_total,
+            **dispatch_meta,
             "stock_value": 0,
-            "approver_id": user.id,
             "requester_id": None,
         },
     )
@@ -882,6 +1036,11 @@ async def reject_transfer(
         prefix = f"[Rejected by {body.rejected_by}] "
         t.notes = f"{prefix}{body.rejection_notes}" + (f"\n{t.notes}" if t.notes else "")
 
+    lines = await _load_transfer_lines(db, transfer_id)
+    from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)
+    to_label = _transfer_branch_label(t.to_branch_name, t.to_branch_id)
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(lines)
+    reject_note = f" Reason: {body.rejection_notes}." if body.rejection_notes else ""
     _log_transfer_history(
         db,
         user=user,
@@ -889,7 +1048,26 @@ async def reject_transfer(
         transfer_number=t.ref_number,
         event_type="rejected",
         action="Transfer rejected",
-        detail=f"Transfer rejected by {body.rejected_by}",
+        detail=(
+            f"Rejected transfer {t.ref_number} by {body.rejected_by}: "
+            f"{from_label} → {to_label}. "
+            f"Items ({_format_qty_label(qty_total)} total): {line_summary}. "
+            f"No stock was moved.{reject_note}"
+        ),
+        metadata=_transfer_route_meta(
+            from_branch_id=t.from_branch_id,
+            from_branch_name=from_label,
+            to_branch_id=t.to_branch_id,
+            to_branch_name=to_label,
+            lines=lines,
+            extra={
+                "stock_reduced": 0,
+                "stock_increased": 0,
+                "status": "rejected",
+                "rejected_by": body.rejected_by,
+                "rejection_notes": body.rejection_notes,
+            },
+        ),
     )
     from src.notifications.store import notify_refresh, resolve_notification
 
@@ -998,6 +1176,18 @@ async def receive_transfer(
             )
             # Ensure destination branch is listed for this item after receive
             await _upsert_branch_config(db, item_id=line.item_id, branch_id=t.to_branch_id, is_available=True)
+
+    lines = await _load_transfer_lines(db, transfer_id)
+    from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)
+    to_label = _transfer_branch_label(t.to_branch_name, t.to_branch_id)
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(lines)
+    receive_detail = (
+        f"Received transfer {t.ref_number} by {body.received_by}: "
+        f"{from_label} → {to_label}. "
+        f"Stock increased at {to_label}: {line_summary} "
+        f"(total {_format_qty_label(qty_total)}). "
+        f"These quantities were previously reduced at {from_label} on dispatch."
+    )
     _log_transfer_history(
         db,
         user=user,
@@ -1005,7 +1195,22 @@ async def receive_transfer(
         transfer_number=t.ref_number,
         event_type="received",
         action="Transfer received",
-        detail=f"Transfer received by {body.received_by}",
+        detail=receive_detail,
+        metadata=_transfer_route_meta(
+            from_branch_id=t.from_branch_id,
+            from_branch_name=from_label,
+            to_branch_id=t.to_branch_id,
+            to_branch_name=to_label,
+            lines=lines,
+            extra={
+                "stock_reduced": qty_total,
+                "stock_increased": qty_total,
+                "stock_reduced_at": from_label,
+                "stock_increased_at": to_label,
+                "status": "received",
+                "received_by": body.received_by,
+            },
+        ),
     )
     await db.commit()
     await notify_refresh()
@@ -1044,15 +1249,35 @@ async def delete_transfer(
             f"Only pending transfers can be deleted; this transfer is {status}",
         )
 
+    lines = await _load_transfer_lines(db, transfer_id)
+    from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)
+    to_label = _transfer_branch_label(t.to_branch_name, t.to_branch_id)
+    line_summary, _line_rows, qty_total = _transfer_lines_audit(lines)
     _log_transfer_history(
         db,
         user=user,
         transfer_id=transfer_id,
         transfer_number=t.ref_number,
         event_type="cancelled",
-        action="delete_transfer",
-        detail=f"Transfer {t.ref_number} deleted",
-        metadata={"reason": "deleted"},
+        action="Transfer deleted",
+        detail=(
+            f"Deleted transfer {t.ref_number}: {from_label} → {to_label}. "
+            f"Items ({_format_qty_label(qty_total)} total): {line_summary}. "
+            f"No stock was moved."
+        ),
+        metadata=_transfer_route_meta(
+            from_branch_id=t.from_branch_id,
+            from_branch_name=from_label,
+            to_branch_id=t.to_branch_id,
+            to_branch_name=to_label,
+            lines=lines,
+            extra={
+                "stock_reduced": 0,
+                "stock_increased": 0,
+                "status": "deleted",
+                "reason": "deleted",
+            },
+        ),
         risk="medium",
     )
     await db.delete(t)
