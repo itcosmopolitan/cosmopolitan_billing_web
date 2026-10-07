@@ -127,4 +127,8 @@ cd backend && python src/seed.py
 cd frontend && npm run build   # → frontend/dist/
 ```
 
+The Render Docker deployment installs Playwright and Chromium in the backend
+image for server-side PDF exports. Deploy using the repository `Dockerfile` so
+the browser runtime is included.
+
 MIT License

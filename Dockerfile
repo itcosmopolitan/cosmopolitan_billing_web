@@ -20,6 +20,7 @@ RUN npm run build
 WORKDIR /app/backend
 
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m playwright install --with-deps chromium
 
 # ---------------- Final ----------------
 WORKDIR /app
