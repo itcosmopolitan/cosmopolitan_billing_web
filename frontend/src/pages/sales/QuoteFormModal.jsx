@@ -17,12 +17,25 @@
  * implementation here is the same.
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
-import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing, WALK_IN_CUSTOMER_OPTION, WALK_IN_CUSTOMER_NAME } from './salesFormShared'
+import {
+  emptySaleLine,
+  discountPatternFromItem,
+  applyCustomerPricingToSaleLines,
+  customerPricingType,
+  customerClassification,
+  customerGstin,
+  isInternalTransferByGstin,
+  linePricingForCustomer,
+  resolveSaleLinePricing,
+  WALK_IN_CUSTOMER_OPTION,
+  WALK_IN_CUSTOMER_NAME,
+} from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -41,6 +54,13 @@ export default function QuoteFormModal({
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
+  const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const customerCtx = {
+    customer_type: quoteForm.customerType,
+    classification: quoteForm.customerClassification,
+    gst_in: quoteForm.customerGstin,
+  }
+  const internalTransfer = isInternalTransferByGstin(customerCtx, organisationGstin)
   const isEdit = !!editingNumber
   const title = readOnly
     ? `Quotation — ${editingNumber}`
@@ -61,21 +81,25 @@ export default function QuoteFormModal({
       pqf('customerName', c.name)
       pqf('customerType', type)
       pqf('customerClassification', customerClassification(c))
-      pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, c))
+      pqf('customerGstin', customerGstin(c))
+      pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, c, organisationGstin))
     },
   })
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
     const retailPrice = Number(inv.selling_price || 0) || 0
-    const resolved = resolveCategoryLinePricing(
-      { ...inv, ...pattern, retailPrice, price: retailPrice },
-      quoteForm.customerType,
+    const costPrice = Number(inv.cost_price ?? inv.costPrice ?? 0) || 0
+    const resolved = resolveSaleLinePricing(
+      { ...inv, ...pattern, retailPrice, price: retailPrice, costPrice },
+      customerCtx,
+      organisationGstin,
     )
     const priced = linePricingForCustomer(
       resolved.price,
       inv.tax_rate || 0,
-      quoteForm.customerClassification,
+      customerCtx,
+      organisationGstin,
     )
     const next = [...quoteForm.items]
     next[i] = {
@@ -83,7 +107,7 @@ export default function QuoteFormModal({
       item_id: inv.id,
       name: inv.name,
       retailPrice,
-      costPrice: inv.cost_price ?? inv.costPrice ?? 0,
+      costPrice,
       unit: inv.unit || '',
       ...pattern,
       ...priced,
@@ -147,22 +171,33 @@ export default function QuoteFormModal({
           <AutocompleteDropdown
             disabled={readOnly}
             value={quoteForm.customerId || ''}
-            onSelectOption={(opt) => {
+            onSelectOption={async (opt) => {
               if (!opt?.id) {
                 pqf('customerId', '')
                 pqf('customerName', WALK_IN_CUSTOMER_NAME)
                 pqf('customerType', 'retail')
                 pqf('customerClassification', 'external')
-                pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, 'retail'))
+                pqf('customerGstin', '')
+                pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, 'retail', organisationGstin))
                 return
               }
               const type = customerPricingType(opt.raw?.customer_type || 'retail')
               const cls = customerClassification(opt.raw)
+              const gst = customerGstin(opt.raw)
+              const ctx = { customer_type: type, classification: cls, gst_in: gst }
               pqf('customerId', opt.id)
               pqf('customerName', opt.label)
               pqf('customerType', type)
               pqf('customerClassification', cls)
-              pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, { customer_type: type, classification: cls }))
+              pqf('customerGstin', gst)
+              pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, ctx, organisationGstin))
+              try {
+                const c = await customersAPI.get(opt.id)
+                pqf('customerType', customerPricingType(c.customer_type || c.type || type))
+                pqf('customerClassification', customerClassification(c))
+                pqf('customerGstin', customerGstin(c))
+                pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, c, organisationGstin))
+              } catch { /* keep autocomplete fields */ }
             }}
             fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
             isSearchFieldRequired
@@ -172,11 +207,15 @@ export default function QuoteFormModal({
             footerAction={addCustomerAction}
             style={{ width: '100%' }}
           />
-          {quoteForm.customerClassification === 'internal' && (
+          {internalTransfer ? (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+              Same GSTIN as organisation — priced at cost (internal transfer), GST 0%
+            </div>
+          ) : quoteForm.customerClassification === 'internal' ? (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
               Internal customer — GST is subtracted from item amounts
             </div>
-          )}
+          ) : null}
         </FormGroup>
         <FormGroup label="Valid Until">
           <DatePicker disabled={readOnly}

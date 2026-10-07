@@ -402,6 +402,10 @@ def _is_internal_classification(value) -> bool:
     return str(value or "external").strip().lower() == "internal"
 
 
+def _normalize_gstin(value) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
 async def _customer_is_internal(db: AsyncSession, customer_id: Optional[str]) -> bool:
     if not customer_id:
         return False
@@ -411,6 +415,50 @@ async def _customer_is_internal(db: AsyncSession, customer_id: Optional[str]) ->
     return bool(customer) and _is_internal_classification(
         getattr(customer, "classification", None)
     )
+
+
+async def _customer_gstin_matches_org(
+    db: AsyncSession, customer_id: Optional[str],
+) -> bool:
+    """True when customer GSTIN equals organisation profile GSTIN (internal transfer)."""
+    if not customer_id:
+        return False
+    customer = (
+        await db.execute(select(Customer).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+    if not customer:
+        return False
+    org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    cust_gst = _normalize_gstin(getattr(customer, "gstin", None))
+    org_gst = _normalize_gstin(getattr(org, "gstin", None) if org else None)
+    return bool(cust_gst and org_gst and cust_gst == org_gst)
+
+
+async def _resolve_item_transfer_cost(
+    db: AsyncSession, item_id: Optional[str], branch_id: Optional[str],
+) -> float:
+    from src.item_branch import effective_cost_price
+
+    if not item_id:
+        return 0.0
+    item = (
+        await db.execute(select(Item).where(Item.id == item_id))
+    ).scalar_one_or_none()
+    if not item:
+        return 0.0
+    branch_cost = None
+    if branch_id:
+        cfg = (
+            await db.execute(
+                select(ItemBranchConfig).where(
+                    ItemBranchConfig.item_id == item_id,
+                    ItemBranchConfig.branch_id == branch_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if cfg is not None:
+            branch_cost = cfg.cost_price
+    return float(effective_cost_price(item.cost_price or 0, branch_cost) or 0)
 
 
 def _strip_gst_from_inclusive_items(items) -> None:
@@ -426,9 +474,25 @@ async def _apply_internal_customer_gst(
     db: AsyncSession,
     customer_id: Optional[str],
     items,
+    branch_id: Optional[str] = None,
 ) -> None:
-    """Internal customers pay excl. GST: strip tax from the item amount, then 0%."""
+    """Internal pricing adjustments before sales totals.
+
+    - Same GSTIN as organisation → charge branch/item cost at 0% GST
+      (internal transfer via sales docs).
+    - Classification `internal` → strip GST from selling price, bill at 0%.
+    """
     if not items:
+        return
+    if await _customer_gstin_matches_org(db, customer_id):
+        for item in items:
+            cost = await _resolve_item_transfer_cost(
+                db, getattr(item, "item_id", None), branch_id,
+            )
+            item.price = cost
+            item.tax_rate = 0
+            if hasattr(item, "line_discount"):
+                item.line_discount = 0
         return
     if await _customer_is_internal(db, customer_id):
         _strip_gst_from_inclusive_items(items)
@@ -1049,7 +1113,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     # source of conversion (it offers a %/MVR toggle and converts MVR → %
     # before POST). See OrderFormModal / QuoteFormModal.
     # Line discount first, then document discount, then GST extract.
-    await _apply_internal_customer_gst(db, data.customer_id, data.items)
+    await _apply_internal_customer_gst(db, data.customer_id, data.items, data.branch_id)
     line_rows = []  # list[(item, line_net, line_tax)]
     inclusives = []
     rates = []
@@ -1163,7 +1227,9 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     # (matches the invoice/sales convention); QuotationLineItem stores
     # discount as a number too — we mirror what's already done in
     # create_quotation.
-    await _apply_internal_customer_gst(db, data.customer_id, data.items)
+    await _apply_internal_customer_gst(
+        db, data.customer_id, data.items, data.branch_id or quote.branch_id,
+    )
     line_rows = []
     inclusives = []
     rates = []
@@ -1475,7 +1541,9 @@ async def update_invoice(
         next_customer_id = data.customer_id
     elif data.customer_name is not None:
         next_customer_id = None
-    await _apply_internal_customer_gst(db, next_customer_id, data.items)
+    await _apply_internal_customer_gst(
+        db, next_customer_id, data.items, data.branch_id or inv.branch_id,
+    )
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
 
     prev_customer_id = inv.customer_id
@@ -1680,7 +1748,7 @@ async def create_invoice(
             raise HTTPException(409, detail={"code": "branch_not_in_active_pool"})
     # Line amount after line discount; document discount is applied next,
     # then GST is extracted from the remaining inclusive amount.
-    await _apply_internal_customer_gst(db, data.customer_id, data.items)
+    await _apply_internal_customer_gst(db, data.customer_id, data.items, data.branch_id)
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
     is_credit_sale = data.payment_mode == "credit"
     is_paid_at_create = (
@@ -5661,7 +5729,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
     )
     data.customer_id = await _resolve_customer_id(db, data.customer_id)
     tax_mode = await _get_org_tax_mode(db)
-    await _apply_internal_customer_gst(db, data.customer_id, data.items)
+    await _apply_internal_customer_gst(db, data.customer_id, data.items, data.branch_id)
     line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -5798,7 +5866,9 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
 
     # Replace fields (status preserved). Recompute totals from new items.
     tax_mode = await _get_org_tax_mode(db)
-    await _apply_internal_customer_gst(db, data.customer_id, data.items)
+    await _apply_internal_customer_gst(
+        db, data.customer_id, data.items, data.branch_id or so.branch_id,
+    )
     line_rows, subtotal, tax_total = _calc_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
 

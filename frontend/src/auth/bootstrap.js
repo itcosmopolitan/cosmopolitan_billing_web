@@ -16,11 +16,12 @@ export async function bootstrapAuthenticatedData() {
     return { catalog: {}, branches: [], user: null, permissions: [], columnTables: {} }
   }
 
-  const [catalog, branches, me, columnPrefsRes] = await Promise.all([
+  const [catalog, branches, me, columnPrefsRes, organisation] = await Promise.all([
     permissionsAPI.catalog().catch(() => ({})),
     fetchAllList(branchesAPI.list).catch(() => []),
     authAPI.me().catch(() => null),
     settingsAPI.getColumnPrefs().catch(() => null),
+    settingsAPI.getOrganisation().catch(() => null),
   ])
 
   const columnTables = columnPrefsRes?.tables && typeof columnPrefsRes.tables === 'object'
@@ -33,18 +34,30 @@ export async function bootstrapAuthenticatedData() {
     user: me,
     permissions: me?.permissions || [],
     columnTables,
+    organisation: organisation || null,
   }
 }
 
 export function applyBootstrapToStore(
   data,
-  { setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs, setColumnTables },
+  {
+    setSession,
+    setPermCatalog,
+    setBranches,
+    setDecimalPrecisionPrefs,
+    setOrganisationProfile,
+    setColumnTables,
+  },
 ) {
   if (data.catalog) setPermCatalog(data.catalog)
   if (Array.isArray(data.branches)) setBranches(data.branches)
   if (data.columnTables != null) setColumnTables?.(data.columnTables)
-  if (data.user) {
+  if (data.organisation) {
+    setOrganisationProfile?.(data.organisation)
+  } else if (data.user) {
     setDecimalPrecisionPrefs?.(data.user)
+  }
+  if (data.user) {
     setSession({
       user: data.user,
       permissions: data.permissions || data.user.permissions || [],

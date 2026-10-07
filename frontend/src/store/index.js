@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { customerPricingType, discountPatternFromItem, resolveCategoryLinePricing, linePricingForCustomer } from '@/utils/pricingDiscounts'
+import {
+  discountPatternFromItem,
+  resolveSaleLinePricing,
+  linePricingForCustomer,
+} from '@/utils/pricingDiscounts'
 import {
   DEFAULT_AMOUNT_DECIMALS,
   DEFAULT_QTY_DECIMALS,
@@ -128,6 +132,8 @@ export const useAppStore = create(
 
       amountDecimalPrecision: DEFAULT_AMOUNT_DECIMALS,
       quantityDecimalPrecision: DEFAULT_QTY_DECIMALS,
+      /** Organisation profile GSTIN — used to detect same-GSTIN internal transfers. */
+      organisationGstin: '',
 
       // Per-user Customize Columns: tableKey → { columns, order, hidden }.
       // Hydrated at boot via GET /settings/column-prefs (server owns column defs).
@@ -187,6 +193,19 @@ export const useAppStore = create(
         set({
           amountDecimalPrecision: next.amountDecimalPrecision,
           quantityDecimalPrecision: next.quantityDecimalPrecision,
+        })
+      },
+      setOrganisationGstin: (gstin) => set({
+        organisationGstin: String(gstin || '').trim(),
+      }),
+      setOrganisationProfile: (payload) => {
+        if (!payload || typeof payload !== 'object') return
+        const next = parsePrecisionPayload(payload)
+        setDecimalPrecision(next)
+        set({
+          amountDecimalPrecision: next.amountDecimalPrecision,
+          quantityDecimalPrecision: next.quantityDecimalPrecision,
+          organisationGstin: String(payload.gstin || payload.gstIn || '').trim(),
         })
       },
       setColumnTables: (columnTables) => set({
@@ -269,12 +288,14 @@ export const usePOSStore = create(persist((set, get) => ({
 
   // Cart actions
   addItem: (product) => {
-    const { cart, customer } = get()
+    const { cart, customer, organisationGstin } = get()
     const pattern = discountPatternFromItem(product)
     const retailPrice = Number(pattern.retailPrice || product.price || 0) || 0
-    const resolved = resolveCategoryLinePricing(
-      { ...product, ...pattern, retailPrice, price: retailPrice },
-      customerPricingType(customer),
+    const costPrice = Number(product.costPrice ?? product.cost_price ?? 0) || 0
+    const resolved = resolveSaleLinePricing(
+      { ...product, ...pattern, retailPrice, price: retailPrice, costPrice },
+      customer,
+      organisationGstin,
     )
     const existing = cart.find((i) => i.id === product.id)
     if (existing) {
@@ -291,6 +312,7 @@ export const usePOSStore = create(persist((set, get) => ({
                 ...pattern,
                 name: i.name,
                 retailPrice: i.retailPrice ?? retailPrice,
+                costPrice: i.costPrice ?? costPrice,
                 qty: i.qty + 1,
                 batchAllocationCustom: false,
               })
@@ -305,6 +327,7 @@ export const usePOSStore = create(persist((set, get) => ({
             ...product,
             ...pattern,
             retailPrice,
+            costPrice,
             price: resolved.price,
             qty: 1,
             lineDiscountType: 'pct',
@@ -313,6 +336,7 @@ export const usePOSStore = create(persist((set, get) => ({
               resolved.price,
               product.taxRate ?? product.tax_rate,
               customer,
+              organisationGstin,
             ),
           }),
         ],
@@ -444,16 +468,20 @@ export const usePOSStore = create(persist((set, get) => ({
   },
 
   setCustomer: (customer) => {
-    const type = customerPricingType(customer)
     set((s) => ({
       customer,
       applyStoreCredit: customer?.id ? s.applyStoreCredit : false,
       cart: s.cart.map((i) => {
-        const resolved = resolveCategoryLinePricing(i, type)
+        const resolved = resolveSaleLinePricing(i, customer, s.organisationGstin)
         const catalogRate = Number(i.catalogTaxRate ?? i.taxRate) || 0
         return applyLineCalc({
           ...i,
-          ...linePricingForCustomer(resolved.price, catalogRate, customer),
+          ...linePricingForCustomer(
+            resolved.price,
+            catalogRate,
+            customer,
+            s.organisationGstin,
+          ),
           lineDiscountType: 'pct',
           lineDiscountValue: resolved.discountPct,
         })

@@ -48,6 +48,7 @@ async def autocomplete_customer(
             "description": phone,
             "customer_type": c.type,
             "classification": getattr(c, "classification", None) or "external",
+            "gst_in": getattr(c, "gstin", None) or None,
             "is_credit_eligible": bool(getattr(c, "is_credit_eligible", False)),
             "credit_limit": float(getattr(c, "credit_limit", 0) or 0),
             "outstanding": float(getattr(c, "outstanding", 0) or 0),

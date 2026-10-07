@@ -13,7 +13,7 @@ import { unwrapPaged } from '@/utils/pagination'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
 import { amountInputStep } from '@/utils/decimalPrecision'
-import { isInternalCustomer, internalGstReverseSummary } from '@/utils/pricingDiscounts'
+import { isInternalCustomer, isInternalTransferByGstin, internalGstReverseSummary } from '@/utils/pricingDiscounts'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
 import { Modal, ConfirmDialog, AutocompleteDropdown, FormGroup, Spinner, MultiSelect, AlertBar } from '@/components/ui'
@@ -232,7 +232,8 @@ export default function POSPage() {
   const setActiveBranch = useAppStore((s) => s.setActiveBranch)
   const branches = useAppStore((s) => s.branches)
   const cashierUser = useAppStore((s) => s.user)
-  const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
+  const setOrganisationProfile = useAppStore((s) => s.setOrganisationProfile)
+  const organisationGstin = useAppStore((s) => s.organisationGstin)
   const {
     cart,
     customer,
@@ -340,13 +341,13 @@ export default function POSPage() {
         const data = res?.data ?? res
         setAllowOverselling(data?.allowOverselling !== false)
         setAllowPriceEditing(data?.allowPriceEditing === true)
-        setDecimalPrecisionPrefs(data)
+        setOrganisationProfile(data)
       })
       .catch(() => {
         setAllowOverselling(true)
         setAllowPriceEditing(false)
       })
-  }, [])
+  }, [setOrganisationProfile])
 
   useEffect(() => {
     let cancelled = false
@@ -1446,7 +1447,26 @@ export default function POSPage() {
             size="sm"
             style={{ width: 168, maxWidth: '28vw', flexShrink: 0 }}
           />
-          {customer && isInternalCustomer(customer) && (
+          {customer && isInternalTransferByGstin(customer, organisationGstin) ? (
+            <span
+              className="pos-cart-toolbar__chip"
+              style={{
+                fontSize: 10,
+                padding: '0 7px',
+                height: 28,
+                display: 'inline-flex',
+                alignItems: 'center',
+                borderRadius: 6,
+                background: 'rgba(46,184,92,0.12)',
+                color: 'var(--green)',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}
+              title="Customer GSTIN matches organisation — priced at cost (internal transfer)"
+            >
+              Cost transfer
+            </span>
+          ) : customer && isInternalCustomer(customer) ? (
             <span
               className="pos-cart-toolbar__chip"
               style={{
@@ -1465,7 +1485,7 @@ export default function POSPage() {
             >
               GST reversed
             </span>
-          )}
+          ) : null}
           {customer?.id && Number(customer.credit_balance || 0) > 0 && (
             <span
               className="pos-cart-toolbar__chip"

@@ -5,13 +5,26 @@
 import { useState } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker, AlertBar } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
 import InventoryItemPicker from './InventoryItemPicker'
-import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing, WALK_IN_CUSTOMER_OPTION, WALK_IN_CUSTOMER_NAME } from './salesFormShared'
+import {
+  emptySaleLine,
+  discountPatternFromItem,
+  applyCustomerPricingToSaleLines,
+  customerPricingType,
+  customerClassification,
+  customerGstin,
+  isInternalTransferByGstin,
+  linePricingForCustomer,
+  resolveSaleLinePricing,
+  WALK_IN_CUSTOMER_OPTION,
+  WALK_IN_CUSTOMER_NAME,
+} from './salesFormShared'
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
@@ -38,6 +51,13 @@ export default function InvoiceFormModal({
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
+  const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const customerCtx = {
+    customer_type: invoiceForm.customerType,
+    classification: invoiceForm.customerClassification,
+    gst_in: invoiceForm.customerGstin,
+  }
+  const internalTransfer = isInternalTransferByGstin(customerCtx, organisationGstin)
   const title = editMode
     ? `Edit Invoice — ${invoiceForm.number || ''}`
     : conversionLabel
@@ -53,11 +73,12 @@ export default function InvoiceFormModal({
       pif('customerName', c.name)
       pif('customerType', type)
       pif('customerClassification', customerClassification(c))
+      pif('customerGstin', customerGstin(c))
       pif('customerCreditBalance', Number(c.credit_balance || 0))
       pif('customerCreditLimit', Number(c.credit_limit || 0))
       pif('customerOutstanding', Number(c.outstanding || 0))
       pif('customerCreditEligible', Boolean(c.is_credit_eligible ?? c.isCreditEligible))
-      pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
+      pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c, organisationGstin))
     },
   })
 
@@ -70,20 +91,23 @@ export default function InvoiceFormModal({
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
     const retailPrice = Number(inv.selling_price || 0) || 0
-    const resolved = resolveCategoryLinePricing(
-      { ...inv, ...pattern, retailPrice, price: retailPrice },
-      invoiceForm.customerType,
+    const costPrice = Number(inv.cost_price ?? inv.costPrice ?? 0) || 0
+    const resolved = resolveSaleLinePricing(
+      { ...inv, ...pattern, retailPrice, price: retailPrice, costPrice },
+      customerCtx,
+      organisationGstin,
     )
     const priced = linePricingForCustomer(
       resolved.price,
       inv.tax_rate || 0,
-      invoiceForm.customerClassification,
+      customerCtx,
+      organisationGstin,
     )
     patchLine(i, {
       item_id: inv.id,
       name: inv.name,
       retailPrice,
-      costPrice: inv.cost_price ?? inv.costPrice ?? 0,
+      costPrice,
       ...pattern,
       ...priced,
       lineDiscount: resolved.discountPct,
@@ -187,21 +211,25 @@ export default function InvoiceFormModal({
                   pif('customerName', WALK_IN_CUSTOMER_NAME)
                   pif('customerType', 'retail')
                   pif('customerClassification', 'external')
+                  pif('customerGstin', '')
                   pif('customerCreditBalance', 0)
                   pif('customerCreditLimit', 0)
                   pif('customerOutstanding', 0)
                   pif('customerCreditEligible', false)
-                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail'))
+                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail', organisationGstin))
                   return
                 }
                 const type = customerPricingType(opt.raw?.customer_type || 'retail')
                 const cls = customerClassification(opt.raw)
+                const gst = customerGstin(opt.raw)
+                const ctx = { customer_type: type, classification: cls, gst_in: gst }
                 pif('customerId', opt.id)
                 pif('customerName', opt.label)
                 pif('customerType', type)
                 pif('customerClassification', cls)
+                pif('customerGstin', gst)
                 pif('customerCreditEligible', Boolean(opt.raw?.is_credit_eligible))
-                pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, { customer_type: type, classification: cls }))
+                pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, ctx, organisationGstin))
                 try {
                   const c = await customersAPI.get(opt.id)
                   pif('customerCreditBalance', Number(c?.credit_balance || 0))
@@ -210,7 +238,8 @@ export default function InvoiceFormModal({
                   pif('customerCreditEligible', Boolean(c?.is_credit_eligible ?? c?.isCreditEligible))
                   pif('customerType', customerPricingType(c.customer_type || c.type || type))
                   pif('customerClassification', customerClassification(c))
-                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c))
+                  pif('customerGstin', customerGstin(c))
+                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c, organisationGstin))
                 } catch {
                   pif('customerCreditBalance', Number(opt.raw?.credit_balance || 0))
                   pif('customerCreditLimit', Number(opt.raw?.credit_limit || 0))
@@ -226,11 +255,15 @@ export default function InvoiceFormModal({
               footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />
-            {invoiceForm.customerClassification === 'internal' && (
+            {internalTransfer ? (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Same GSTIN as organisation — priced at cost (internal transfer), GST 0%
+              </div>
+            ) : invoiceForm.customerClassification === 'internal' ? (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
                 Internal customer — GST is subtracted from item amounts
               </div>
-            )}
+            ) : null}
           </FormGroup>
           <FormGroup label="Invoice Date">
             <DatePicker

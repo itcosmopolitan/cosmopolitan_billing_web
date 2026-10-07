@@ -20,12 +20,25 @@
  * operator can still review or × out and re-pick.
  */
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
-import { AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
+import { useAppStore } from '@/store'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import InventoryItemPicker from './InventoryItemPicker'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import DocumentTotalsStrip, { shouldDisableLineDiscount } from '@/components/DocumentTotalsStrip'
-import { emptySaleLine, discountPatternFromItem, applyCustomerPricingToSaleLines, customerPricingType, customerClassification, linePricingForCustomer, resolveCategoryLinePricing, WALK_IN_CUSTOMER_OPTION, WALK_IN_CUSTOMER_NAME } from './salesFormShared'
+import {
+  emptySaleLine,
+  discountPatternFromItem,
+  applyCustomerPricingToSaleLines,
+  customerPricingType,
+  customerClassification,
+  customerGstin,
+  isInternalTransferByGstin,
+  linePricingForCustomer,
+  resolveSaleLinePricing,
+  WALK_IN_CUSTOMER_OPTION,
+  WALK_IN_CUSTOMER_NAME,
+} from './salesFormShared'
 import { fmt } from '@/utils/helpers'
 import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
@@ -47,6 +60,13 @@ export default function OrderFormModal({
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
+  const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const customerCtx = {
+    customer_type: orderForm.customerType,
+    classification: orderForm.customerClassification,
+    gst_in: orderForm.customerGstin,
+  }
+  const internalTransfer = isInternalTransferByGstin(customerCtx, organisationGstin)
   const isEdit = !!editingNumber
   const title = readOnly
     ? `Sales Order — ${editingNumber}`
@@ -71,21 +91,25 @@ export default function OrderFormModal({
       pof('customerName', c.name)
       pof('customerType', type)
       pof('customerClassification', customerClassification(c))
-      pof('items', applyCustomerPricingToSaleLines(orderForm.items, c))
+      pof('customerGstin', customerGstin(c))
+      pof('items', applyCustomerPricingToSaleLines(orderForm.items, c, organisationGstin))
     },
   })
 
   const handlePick = (i, inv) => {
     const pattern = discountPatternFromItem(inv)
     const retailPrice = Number(inv.selling_price || 0) || 0
-    const resolved = resolveCategoryLinePricing(
-      { ...inv, ...pattern, retailPrice, price: retailPrice },
-      orderForm.customerType,
+    const costPrice = Number(inv.cost_price ?? inv.costPrice ?? 0) || 0
+    const resolved = resolveSaleLinePricing(
+      { ...inv, ...pattern, retailPrice, price: retailPrice, costPrice },
+      customerCtx,
+      organisationGstin,
     )
     const priced = linePricingForCustomer(
       resolved.price,
       inv.tax_rate || 0,
-      orderForm.customerClassification,
+      customerCtx,
+      organisationGstin,
     )
     const next = [...orderForm.items]
     next[i] = {
@@ -93,7 +117,7 @@ export default function OrderFormModal({
       item_id: inv.id,
       name: inv.name,
       retailPrice,
-      costPrice: inv.cost_price ?? inv.costPrice ?? 0,
+      costPrice,
       ...pattern,
       ...priced,
       lineDiscount: resolved.discountPct,
@@ -163,22 +187,33 @@ export default function OrderFormModal({
             <AutocompleteDropdown
               disabled={readOnly}
               value={orderForm.customerId || ''}
-              onSelectOption={(opt) => {
+              onSelectOption={async (opt) => {
                 if (!opt?.id) {
                   pof('customerId', '')
                   pof('customerName', WALK_IN_CUSTOMER_NAME)
                   pof('customerType', 'retail')
                   pof('customerClassification', 'external')
-                  pof('items', applyCustomerPricingToSaleLines(orderForm.items, 'retail'))
+                  pof('customerGstin', '')
+                  pof('items', applyCustomerPricingToSaleLines(orderForm.items, 'retail', organisationGstin))
                   return
                 }
                 const type = customerPricingType(opt.raw?.customer_type || 'retail')
                 const cls = customerClassification(opt.raw)
+                const gst = customerGstin(opt.raw)
+                const ctx = { customer_type: type, classification: cls, gst_in: gst }
                 pof('customerId', opt.id)
                 pof('customerName', opt.label)
                 pof('customerType', type)
                 pof('customerClassification', cls)
-                pof('items', applyCustomerPricingToSaleLines(orderForm.items, { customer_type: type, classification: cls }))
+                pof('customerGstin', gst)
+                pof('items', applyCustomerPricingToSaleLines(orderForm.items, ctx, organisationGstin))
+                try {
+                  const c = await customersAPI.get(opt.id)
+                  pof('customerType', customerPricingType(c.customer_type || c.type || type))
+                  pof('customerClassification', customerClassification(c))
+                  pof('customerGstin', customerGstin(c))
+                  pof('items', applyCustomerPricingToSaleLines(orderForm.items, c, organisationGstin))
+                } catch { /* keep autocomplete fields */ }
               }}
               fetchUrl={AUTOCOMPLETE_CUSTOMER_URL}
               isSearchFieldRequired
@@ -188,11 +223,15 @@ export default function OrderFormModal({
               footerAction={addCustomerAction}
               style={{ width: '100%' }}
             />
-            {orderForm.customerClassification === 'internal' && (
+            {internalTransfer ? (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Same GSTIN as organisation — priced at cost (internal transfer), GST 0%
+              </div>
+            ) : orderForm.customerClassification === 'internal' ? (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
                 Internal customer — GST is subtracted from item amounts
               </div>
-            )}
+            ) : null}
           </FormGroup>
           <FormGroup label="Expected Date">
             <DatePicker disabled={readOnly}

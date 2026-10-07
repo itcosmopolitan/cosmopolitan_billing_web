@@ -61,6 +61,7 @@ export default function LoginPage() {
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
+  const setOrganisationProfile = useAppStore((s) => s.setOrganisationProfile)
   const setColumnTables = useAppStore((s) => s.setColumnTables)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -89,6 +90,7 @@ export default function LoginPage() {
         setPermCatalog,
         setBranches,
         setDecimalPrecisionPrefs,
+        setOrganisationProfile,
         setColumnTables,
       })
       if (user.must_change_password) {

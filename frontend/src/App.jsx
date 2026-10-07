@@ -134,6 +134,7 @@ export default function App() {
   const setPermCatalog = useAppStore((s) => s.setPermCatalog)
   const setBranches = useAppStore((s) => s.setBranches)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
+  const setOrganisationProfile = useAppStore((s) => s.setOrganisationProfile)
   const setColumnTables = useAppStore((s) => s.setColumnTables)
   const location = useLocation()
   const [booting, setBooting] = useState(true)
@@ -170,6 +171,7 @@ export default function App() {
           setPermCatalog,
           setBranches,
           setDecimalPrecisionPrefs,
+          setOrganisationProfile,
           setColumnTables,
         })
       } finally {
@@ -182,7 +184,7 @@ export default function App() {
     return () => { cancelled = true }
   // Intentionally omit location.pathname — sidebar navigation must not re-bootstrap.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs, setColumnTables])
+  }, [setSession, setPermCatalog, setBranches, setDecimalPrecisionPrefs, setOrganisationProfile, setColumnTables])
 
   if (!setupStatusResolved || booting) return <BootSplash />
   if (setupRequired && location.pathname !== '/setup') return <Navigate to="/setup" replace />

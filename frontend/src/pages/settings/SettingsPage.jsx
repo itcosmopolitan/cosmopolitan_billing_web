@@ -131,6 +131,7 @@ export default function SettingsPage() {
 
   // RBAC: roles + permission catalog (Phase 1 of Users & Roles)
   const setDecimalPrecisionPrefs = useAppStore((s) => s.setDecimalPrecisionPrefs)
+  const setOrganisationProfile = useAppStore((s) => s.setOrganisationProfile)
   const storeBranches = useAppStore((s) => s.branches)
   const setStoreBranches = useAppStore((s) => s.setBranches)
   const roles = useAppStore((s) => s.roles)
@@ -494,7 +495,7 @@ export default function SettingsPage() {
         amount_decimal_precision: saved?.amountDecimalPrecision ?? prev.amount_decimal_precision,
         quantity_decimal_precision: saved?.quantityDecimalPrecision ?? prev.quantity_decimal_precision,
       }))
-      setDecimalPrecisionPrefs(saved)
+      setOrganisationProfile(saved)
       toast.success('Organisation profile saved')
     } catch (err) {
       console.error(err)
