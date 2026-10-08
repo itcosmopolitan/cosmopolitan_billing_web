@@ -26,7 +26,13 @@ from src.models import (  # noqa: E402
     SalesReturnStatus,
     User,
 )
-from src.routes.reports import daily_sales, product_sales, sales_lines, sales_register  # noqa: E402
+from src.routes.reports import (  # noqa: E402
+    daily_sales,
+    daily_sales_returns,
+    product_sales,
+    sales_lines,
+    sales_register,
+)
 from src.routes.sales import _validate_child_counter  # noqa: E402
 
 
@@ -239,6 +245,13 @@ async def _run() -> None:
             user=actor,
         )
         assert len(counter_lines["items"]) == 2
+        assert (await sales_lines(
+            date_from=today,
+            date_to=today,
+            child_counter_id="different-counter",
+            db=db,
+            user=actor,
+        ))["total"] == 0
 
         products = await product_sales(
             date_from=today,
@@ -250,6 +263,14 @@ async def _run() -> None:
         product = products["items"][0]
         assert float(product["quantity_sold"]) == 1
         assert float(product["sales_value"]) == 80
+        counter_products = await product_sales(
+            date_from=today,
+            date_to=today,
+            child_counter_id="different-counter",
+            db=db,
+            user=actor,
+        )
+        assert counter_products["total"] == 0
 
         daily = await daily_sales(
             date_from=today,
@@ -262,6 +283,31 @@ async def _run() -> None:
         assert int(day["invoice_count"]) == 2
         assert float(day["quantity_sold"]) == 1
         assert float(day["net_sales"]) == 80
+        counter_daily = await daily_sales(
+            date_from=today,
+            date_to=today,
+            child_counter_id="different-counter",
+            db=db,
+            user=actor,
+        )
+        assert counter_daily["total"] == 0
+
+        returns = await daily_sales_returns(
+            date_from=today,
+            date_to=today,
+            child_counter_id="counter-1",
+            db=db,
+            user=actor,
+        )
+        assert returns["total"] == 1
+        other_counter_returns = await daily_sales_returns(
+            date_from=today,
+            date_to=today,
+            child_counter_id="different-counter",
+            db=db,
+            user=actor,
+        )
+        assert other_counter_returns["total"] == 0
     finally:
         await db.close()
 

@@ -6,12 +6,14 @@ import { reportsAPI } from '@/api'
 import { fmt, fmtDate, fmtNum, fmtQty, statusLabel, exportToExcel } from '@/utils/helpers'
 import {
   Card, SearchBar, PaginationBar, SortableHeader, MultiSelect,
-  DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
+  DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, AutocompleteDropdown,
   CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { useAppStore } from '@/store'
+import { fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { searchReportRows } from './reportSearch'
 
 const FAVORITES_GROUP_ID = 'favorites'
 
@@ -1022,7 +1024,22 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     [storeBranches],
   )
   const allBranchIds = useMemo(() => branchOptions.map((b) => b.id), [branchOptions])
-  const supportsChildCounterFilter = ['salesRegister', 'salesLines'].includes(report.api)
+  const supportsChildCounterFilter = [
+    'salesRegister',
+    'salesLines',
+    'dailySales',
+    'dailySalesReturns',
+    'productSales',
+    'paymentSales',
+    'categorySales',
+    'branchSales',
+    'cashierSales',
+    'customerSales',
+    'outstandingReceivables',
+    'salesAging',
+    'salesAgingDetail',
+    'topCustomers',
+  ].includes(report.api)
 
   const txnTypeOptions = useMemo(
     () => TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS,
@@ -1067,6 +1084,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [runKey, setRunKey] = useState(Date.now())
+  const [searchQuery, setSearchQuery] = useState('')
+  const [appliedSearchQuery, setAppliedSearchQuery] = useState('')
+  const [searchRows, setSearchRows] = useState(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setAppliedSearchQuery(searchQuery.trim()), 250)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   const columnByKey = useMemo(() => {
     const map = new Map()
@@ -1211,6 +1236,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   useEffect(() => {
     let cancelled = false
     const fetchData = async () => {
+      if (appliedSearchQuery) return
       setLoading(true)
       try {
         // Prefer applied branch selection; fall back to URL for drill-down
@@ -1250,6 +1276,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     fetchData()
     return () => { cancelled = true }
   }, [
+    appliedSearchQuery,
     report,
     appliedBranchIdParam,
     appliedFilters.dateFrom,
@@ -1266,6 +1293,73 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     txnTypeOptions,
     supportsChildCounterFilter,
   ])
+
+  useEffect(() => {
+    if (!appliedSearchQuery) {
+      setSearchRows(null)
+      return undefined
+    }
+    let cancelled = false
+    setLoading(true)
+    setRows([])
+    setTotal(0)
+    setSearchRows(null)
+    const fetchSearchRows = async () => {
+      try {
+        const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
+        const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
+        const params = {
+          branch_id: appliedBranchId || null,
+          date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
+          date_to: appliedFilters.dateTo,
+          sort_by: sortBy,
+          sort_order: sortOrder,
+          ...drillFilters,
+          ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
+          ...(supportsChildCounterFilter && appliedFilters.childCounterId
+            ? { child_counter_id: appliedFilters.childCounterId }
+            : {}),
+        }
+        const allRows = await fetchAllList(
+          async (pageParams) => {
+            const response = await reportsAPI[report.api](pageParams)
+            return unwrapPaged(response?.data ?? response)
+          },
+          params,
+        )
+        if (!cancelled) setSearchRows(searchReportRows(allRows, appliedSearchQuery))
+      } catch (error) {
+        console.error(error)
+        if (!cancelled) setSearchRows([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    fetchSearchRows()
+    return () => { cancelled = true }
+  }, [
+    appliedSearchQuery,
+    report,
+    appliedBranchIdParam,
+    appliedFilters.dateFrom,
+    appliedFilters.dateTo,
+    appliedFilters.transactionTypes,
+    appliedFilters.childCounterId,
+    sortBy,
+    sortOrder,
+    runKey,
+    drillFilters,
+    urlFilters.branch_id,
+    txnTypeOptions,
+    isAsOfDate,
+    supportsChildCounterFilter,
+  ])
+
+  useEffect(() => {
+    if (!appliedSearchQuery || searchRows === null) return
+    setRows(searchRows.slice(skip, skip + limit))
+    setTotal(searchRows.length)
+  }, [appliedSearchQuery, searchRows, skip, limit])
 
   const applyFilters = () => {
     setSkip(0)
@@ -1424,6 +1518,21 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     }))
   }
 
+  const reportSearchField = (
+    <div style={{ width: 380, maxWidth: '100%' }}>
+      <label className="form-label">Search report rows</label>
+      <SearchBar
+        value={searchQuery}
+        onChange={(value) => {
+          setSearchQuery(value)
+          setSkip(0)
+        }}
+        placeholder="Invoice, order, customer, item..."
+        style={{ width: '100%' }}
+      />
+    </div>
+  )
+
   return (
     <div className="page-container page-container--list">
       <div className="section-hdr">
@@ -1554,6 +1663,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 gap: 12,
                 alignItems: 'end',
               }}>
+                {reportSearchField}
                 <div style={{ width: 220, maxWidth: '100%' }}>
                   <label className="form-label">Transaction Type</label>
                   <MultiSelect
@@ -1575,6 +1685,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 </button>
               </div>
             )}
+            {txnTypeOptions.length === 0 && reportSearchField}
           </div>
         ) : (
           <div style={{
@@ -1583,6 +1694,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             gap: 12,
             alignItems: 'end',
           }}>
+            {reportSearchField}
             <div style={{ width: 220, maxWidth: '100%' }}>
               {isAsOfDate ? (
                 <>
@@ -1621,10 +1733,18 @@ function ReportDetailPage({ report, reportMap, onBack }) {
             {supportsChildCounterFilter && (
               <div style={{ width: 220, maxWidth: '100%' }}>
                 <label className="form-label">Child Counter</label>
-                <select className="form-input" value={childCounterId} onChange={(e) => setChildCounterId(e.target.value)}>
-                  <option value="">All counters</option>
-                  {childCounterOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                </select>
+                <AutocompleteDropdown
+                  value={childCounterId}
+                  onChange={setChildCounterId}
+                  options={[
+                    { id: '', label: 'All counters' },
+                    ...childCounterOptions,
+                  ]}
+                  selectedLabel="All counters"
+                  placeholder="Select counter"
+                  searchPlaceholder="Search counters…"
+                  isSearchFieldRequired
+                />
               </div>
             )}
             {txnTypeOptions.length > 0 && (

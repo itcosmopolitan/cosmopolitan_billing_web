@@ -69,6 +69,7 @@ async def _seed(db: AsyncSession) -> date:
         customer_name="SILVER SPOON PVT LTD",
         branch_id="b1",
         branch_name="Main",
+        child_counter_id="counter-1",
         cashier="Aging Tester",
         date=(aged_as_of - timedelta(days=65)).isoformat(),
         due_date=(aged_as_of - timedelta(days=35)).isoformat(),
@@ -244,6 +245,16 @@ async def _run():
         )
         assert drilled["total"] == 2
         assert all(r["customer_id"] == "c1" for r in drilled["items"])
+
+        counter_filtered = await sales_aging_detail(
+            date_to=date_to,
+            child_counter_id="counter-1",
+            skip=0,
+            limit=50,
+            db=db,
+        )
+        assert counter_filtered["total"] == 1
+        assert counter_filtered["items"][0]["invoice_number"] == "MDV-0173600"
 
         p_detail = await purchase_aging_detail(
             date_to=date_to,

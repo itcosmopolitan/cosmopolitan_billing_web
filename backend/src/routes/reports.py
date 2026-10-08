@@ -440,6 +440,21 @@ def _paginate_rows(rows: list[dict[str, Any]], skip: int, limit: int):
     return paged(rows[sk:sk + lim], len(rows), sk, lim)
 
 
+def _apply_sales_child_counter_filter(
+    invoice_conditions: list,
+    return_conditions: list,
+    child_counter_id: Optional[str],
+) -> None:
+    if not child_counter_id:
+        return
+    invoice_conditions.append(SaleInvoice.child_counter_id == child_counter_id)
+    return_conditions.append(
+        SalesReturn.invoice_id.in_(
+            select(SaleInvoice.id).where(SaleInvoice.child_counter_id == child_counter_id)
+        )
+    )
+
+
 def _cn_filters(
     branch_id: Optional[str],
     search: Optional[str],
@@ -1779,6 +1794,7 @@ async def sales_lines(
 @router.get("/daily-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def daily_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -1810,6 +1826,7 @@ async def daily_sales(
     cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
     if cn_branch is not None:
         cn_conds.append(cn_branch)
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     if search:
         inv_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
         cn_conds.append(SaleInvoice.cashier.ilike(f"%{search}%"))
@@ -1858,6 +1875,7 @@ async def daily_sales(
 @router.get("/daily-sales-returns", dependencies=[Depends(require_perm("reports.view"))])
 async def daily_sales_returns(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -1882,6 +1900,12 @@ async def daily_sales_returns(
     branch_cond = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
     if branch_cond is not None:
         conds.append(branch_cond)
+    if child_counter_id:
+        conds.append(
+            SalesReturn.invoice_id.in_(
+                select(SaleInvoice.id).where(SaleInvoice.child_counter_id == child_counter_id)
+            )
+        )
     if search:
         conds.append(
             SalesReturn.number.ilike(f"%{search}%")
@@ -1949,6 +1973,7 @@ async def daily_sales_returns(
 @router.get("/product-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def product_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -1980,6 +2005,7 @@ async def product_sales(
     cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
     if cn_branch is not None:
         cn_conds.append(cn_branch)
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     if search:
         inv_conds.append(SaleLineItem.name.ilike(f"%{search}%"))
         cn_conds.append(SalesReturnLineItem.name.ilike(f"%{search}%"))
@@ -2475,6 +2501,7 @@ async def document_trail(
 @router.get("/payment-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def payment_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -2505,6 +2532,7 @@ async def payment_sales(
     if cn_branch is not None:
         cn_conds.append(cn_branch)
 
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
 
     sort_map = {
@@ -2560,6 +2588,7 @@ async def payment_sales(
 @router.get("/category-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def category_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -2591,6 +2620,7 @@ async def category_sales(
     cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
     if cn_branch is not None:
         cn_conds.append(cn_branch)
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     if search:
         inv_conds.append(Category.name.ilike(f"%{search}%"))
         cn_conds.append(Category.name.ilike(f"%{search}%"))
@@ -2635,6 +2665,7 @@ async def category_sales(
 @router.get("/branch-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def branch_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     sort_by: Optional[str] = None,
@@ -2665,6 +2696,7 @@ async def branch_sales(
     if cn_branch is not None:
         cn_conds.append(cn_branch)
 
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     sort_map = {
         "branch": docs.c.branch,
@@ -2702,6 +2734,7 @@ async def branch_sales(
 @router.get("/cashier-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def cashier_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     sort_by: Optional[str] = None,
@@ -2732,6 +2765,7 @@ async def cashier_sales(
     if cn_branch is not None:
         cn_conds.append(cn_branch)
 
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     sort_map = {
         "cashier": docs.c.cashier,
@@ -2773,6 +2807,7 @@ async def cashier_sales(
 @router.get("/customer-sales", dependencies=[Depends(require_perm("reports.view"))])
 async def customer_sales(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -2803,6 +2838,7 @@ async def customer_sales(
     cn_branch = _branch_condition(SalesReturn.branch_id, branch_id, branch_scope)
     if cn_branch is not None:
         cn_conds.append(cn_branch)
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     if search:
         inv_conds.append(SaleInvoice.customer_name.ilike(f"%{search}%"))
         cn_conds.append(SalesReturn.customer_name.ilike(f"%{search}%"))
@@ -3590,6 +3626,7 @@ async def expiry_batches(
 @router.get("/daily-tax", dependencies=[Depends(require_perm("reports.view"))])
 async def daily_tax(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -3604,6 +3641,8 @@ async def daily_tax(
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     if search:
         conds.append(SaleInvoice.number.ilike(f"%{search}%"))
 
@@ -3636,6 +3675,7 @@ async def daily_tax(
 @router.get("/monthly-tax", dependencies=[Depends(require_perm("reports.view"))])
 async def monthly_tax(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -3651,6 +3691,8 @@ async def monthly_tax(
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     if search:
         conds.append(SaleInvoice.number.ilike(f"%{search}%"))
 
@@ -3683,6 +3725,7 @@ async def monthly_tax(
 @router.get("/quarterly-tax", dependencies=[Depends(require_perm("reports.view"))])
 async def quarterly_tax(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -3698,6 +3741,8 @@ async def quarterly_tax(
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     if search:
         conds.append(SaleInvoice.number.ilike(f"%{search}%"))
 
@@ -3735,6 +3780,7 @@ async def quarterly_tax(
 @router.get("/gst-summary", dependencies=[Depends(require_perm("reports.view"))])
 async def gst_summary(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
@@ -3744,6 +3790,8 @@ async def gst_summary(
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
 
     gst_tax = float(
         (await db.execute(select(func.coalesce(func.sum(SaleInvoice.tax_total), 0)).where(and_(*conds)))).scalar() or 0
@@ -3763,6 +3811,7 @@ async def gst_summary(
 @router.get("/outstanding-receivables", dependencies=[Depends(require_perm("reports.view"))])
 async def outstanding_receivables(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -3781,6 +3830,8 @@ async def outstanding_receivables(
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     if search:
         conds.append(
             SaleInvoice.number.ilike(f"%{search}%")
@@ -3877,6 +3928,7 @@ async def outstanding_payables(
 async def _sales_aging_detail_rows(
     *,
     branch_id: Optional[str],
+    child_counter_id: Optional[str],
     search: Optional[str],
     date_from: Optional[str],
     date_to: Optional[str],
@@ -3896,6 +3948,8 @@ async def _sales_aging_detail_rows(
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
+    if child_counter_id:
+        conds.append(SaleInvoice.child_counter_id == child_counter_id)
     if customer_id is not None and str(customer_id).strip() != "":
         raw_customer = str(customer_id).strip()
         if raw_customer in ("__none__",):
@@ -4063,6 +4117,7 @@ def _summarize_purchase_aging(detail_rows: list[dict[str, Any]]) -> list[dict[st
 @router.get("/sales-aging-detail", dependencies=[Depends(require_perm("reports.view"))])
 async def sales_aging_detail(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
@@ -4076,6 +4131,7 @@ async def sales_aging_detail(
     """Open AR invoices aged by invoice date as of date_to."""
     rows, _aged_as_of = await _sales_aging_detail_rows(
         branch_id=branch_id,
+        child_counter_id=child_counter_id,
         search=search,
         date_from=date_from,
         date_to=date_to,
@@ -4089,6 +4145,7 @@ async def sales_aging_detail(
 @router.get("/sales-aging", dependencies=[Depends(require_perm("reports.view"))])
 async def sales_aging(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
@@ -4102,6 +4159,7 @@ async def sales_aging(
     """Customer-level AR aging totals. Row drill-down opens sales-aging-detail."""
     detail_rows, _aged_as_of = await _sales_aging_detail_rows(
         branch_id=branch_id,
+        child_counter_id=child_counter_id,
         search=search,
         date_from=date_from,
         date_to=date_to,
@@ -4225,6 +4283,7 @@ async def petty_cash(
 @router.get("/top-customers", dependencies=[Depends(require_perm("reports.view"))])
 async def top_customers(
     branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     sort_by: Optional[str] = None,
@@ -4255,6 +4314,7 @@ async def top_customers(
     if cn_branch is not None:
         cn_conds.append(cn_branch)
 
+    _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
     outstanding_amount = func.coalesce(func.sum(docs.c.outstanding), 0)
     quantity_sold = func.coalesce(func.sum(docs.c.quantity_sold), 0)
