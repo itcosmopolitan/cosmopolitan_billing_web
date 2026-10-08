@@ -4,8 +4,8 @@ import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
 import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt } from '@/utils/helpers'
-import { unwrapPaged } from '@/utils/pagination'
+import { fmt, exportToCSV } from '@/utils/helpers'
+import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { AlertBar, BarList, Card, Chip, EmptyState, Modal, RowActionsMenu, SectionHeader, Tabs, DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import CashEntryModal from './CashEntryModal'
 import CloseDayModal from './CloseDayModal'
@@ -45,6 +45,7 @@ export default function CashPage({ ledger = 'sales' }) {
   const [voidReason, setVoidReason] = useState('')
   const [entryBusy, setEntryBusy] = useState(false)
   const [voidSaving, setVoidSaving] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
 
   // Fetch categories once
   useEffect(() => {
@@ -87,6 +88,48 @@ export default function CashPage({ ledger = 'sales' }) {
   }, [tab, branchId, ledger, version])
 
   const refresh = () => setVersion((v) => v + 1)
+
+  const handleExport = async () => {
+    if (exportBusy || !branchId) return
+    setExportBusy(true)
+    try {
+      const rows = await fetchAllList(
+        (params) => cashAPI.entries(branchId, params),
+        {
+          date,
+          ledger,
+          child_counter_id: childCounterId || undefined,
+        },
+      )
+      if (rows.length === 0) {
+        toast.error(`No cash entries to export for ${date}`)
+        return
+      }
+
+      const filenameBranch = (activeBranch?.name || branchId).replace(/[^\w-]+/g, '_')
+      exportToCSV(rows.map((entry) => ({
+        Date: entry.date,
+        Time: entry.time,
+        'Entry #': entry.entry_number,
+        Type: entry.type === 'in' ? 'Cash In' : 'Cash Out',
+        Category: entry.category,
+        Description: entry.description,
+        Amount: entry.amount,
+        Reference: entry.ref,
+        Counter: entry.child_counter_name,
+        'Entered By': entry.by,
+        Source: entry.source_type,
+        'System Entry': entry.is_system ? 'Yes' : 'No',
+        Voided: entry.is_voided ? 'Yes' : 'No',
+        'Void Reason': entry.void_reason,
+      })), `${isPettyCash ? 'PettyCash' : 'TradeCash'}_${filenameBranch}_${date}.csv`)
+      toast.success(`Exported ${rows.length} cash entr${rows.length === 1 ? 'y' : 'ies'}`)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || err?.message || 'Export failed')
+    } finally {
+      setExportBusy(false)
+    }
+  }
 
   const dayStatus = summary.day_status || 'open'
   const isLocked = dayStatus === 'closed'
@@ -203,7 +246,7 @@ export default function CashPage({ ledger = 'sales' }) {
           </button>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
-          hideExport: true,
+          onExport: handleExport,
           onRefresh: () => {
             refresh()
             toast.success('List refreshed')
