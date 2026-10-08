@@ -1,6 +1,7 @@
 /** Shared helpers for purchase document form pages. */
 
 import { roundAmount } from '@/utils/decimalPrecision'
+import { todayISO } from '@/utils/batchDates'
 
 export function lineDiscountToPercent(line) {
   const qty = Number(line.qty || 0)
@@ -117,7 +118,7 @@ export function billFromRow(doc, branchId, { keepNumber = false } = {}) {
     // Conversion must leave number blank so DocumentNumberField / server
     // auto-allocate the next bill #. Keep only when editing an existing bill.
     number: keepNumber ? (doc.number || '') : '',
-    billDate: doc.date || new Date().toISOString().split('T')[0],
+    billDate: keepNumber ? (doc.date || todayISO()) : todayISO(),
     dueDate: doc.dueDate || '',
     items: mapPurchaseLines(doc.items),
     discount: doc.discount || 0,

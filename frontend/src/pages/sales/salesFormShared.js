@@ -3,6 +3,7 @@
 import { itemsAPI } from '@/api'
 import { unwrapPaged } from '@/utils/pagination'
 import { customerPricingType, customerClassification } from '@/utils/pricingDiscounts'
+import { todayISO } from '@/utils/batchDates'
 
 export {
   suggestedDiscountForCustomer,
@@ -205,7 +206,9 @@ export function invoiceFromRow(doc, branchId, { withOrderLineId = false, keepNum
     items: mapSaleLines(doc.items, { withOrderLineId }),
     discount: doc.discount || 0,
     discountType: 'MVR',
-    invoiceDate: doc.date || doc.invoiceDate || new Date().toISOString().split('T')[0],
+    invoiceDate: keepNumber
+      ? (doc.date || doc.invoiceDate || todayISO())
+      : todayISO(),
     dueDate: doc.dueDate || '',
     paymentReceived: Boolean(doc.paymentMode),
     paymentMethod: doc.paymentMode || null,

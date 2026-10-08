@@ -1696,6 +1696,11 @@ async def create_invoice(
         )
     elif data.sales_order_id:
         inv_origin_early = "sales_order"
+    invoice_date = (
+        today
+        if data.quotation_id or data.sales_order_id
+        else (data.date or today)
+    )
 
     await _resolve_branch_scope(user, db, data.branch_id)
     if data.client_request_id and inv_origin_early != "pos":
@@ -1765,7 +1770,7 @@ async def create_invoice(
         status = InvoiceStatus.draft.value
     due_date = None
     if status in ("pending", "partial"):
-        due_date = compute_due_date(data.date or today, None)
+        due_date = compute_due_date(invoice_date, None)
 
     if is_credit_sale and not data.allow_credit_over_limit:
         await _validate_unpaid_account_limit(db, data.customer_id, total)
@@ -1871,7 +1876,7 @@ async def create_invoice(
         child_counter_name=child_counter_name,
         cashier=(user.name if user is not None else data.cashier),
         created_by=(user.name if user is not None else data.cashier),
-        date=data.date or today,
+        date=invoice_date,
         subtotal=round(subtotal, 2),
         tax_total=round(tax_total, 2),
         discount=round(data.discount, 2),

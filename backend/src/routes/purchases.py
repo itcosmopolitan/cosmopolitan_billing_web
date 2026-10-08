@@ -768,6 +768,11 @@ async def create_bill(
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
+    bill_date = (
+        today
+        if data.grn_id or data.purchase_order_id
+        else (data.date or today)
+    )
     direct = await can_direct_commit(user, db, "purchases.approve")
 
     # Per-line net = gross × (1 − pct/100). Document discount is applied
@@ -803,7 +808,7 @@ async def create_bill(
             select(Vendor).where(Vendor.id == data.vendor_id)
         )).scalar_one_or_none()
         payment_terms = vendor_row.payment_terms if vendor_row else None
-        due_date = compute_due_date(data.date or today, payment_terms)
+        due_date = compute_due_date(bill_date, payment_terms)
 
     if data.grn_id and data.purchase_order_id:
         raise HTTPException(400, "Specify grn_id or purchase_order_id, not both")
@@ -849,6 +854,7 @@ async def create_bill(
         bill = await _create_bill_for_grn(
             db,
             grn,
+            date=bill_date,
             due_date=due_date,
             payment_mode=data.payment_mode,
             payment_ref=data.payment_ref or "",
@@ -943,7 +949,7 @@ async def create_bill(
                 vendor_name=data.vendor_name,
                 branch_id=data.branch_id,
                 branch_name=data.branch_name or data.branch_id,
-                date=data.date or today,
+                date=bill_date,
                 line_rows=line_rows,
                 discount=data.discount or 0,
                 notes=data.notes,
@@ -957,6 +963,7 @@ async def create_bill(
             bill = await _create_bill_for_grn(
                 db,
                 grn,
+                date=bill_date,
                 due_date=due_date,
                 payment_mode=data.payment_mode,
                 payment_ref=data.payment_ref or "",
@@ -982,7 +989,7 @@ async def create_bill(
                 vendor_name=data.vendor_name,
                 branch_id=data.branch_id,
                 branch_name=data.branch_name or data.branch_id,
-                date=data.date or today,
+                date=bill_date,
                 due_date=due_date,
                 subtotal=round(subtotal, 2),
                 tax_total=round(tax_total, 2),
@@ -1041,7 +1048,7 @@ async def create_bill(
             vendor_name=bill.vendor_name,
             branch_id=bill.branch_id,
             branch_name=bill.branch_name,
-            date=data.date or today,
+            date=bill_date,
             total_amount=round(paid_amount, 2),
             payment_mode=data.payment_mode,
             payment_ref=data.payment_ref or "",
@@ -1062,7 +1069,7 @@ async def create_bill(
                 db,
                 branch_id=require_cash_branch_id(bill.branch_id),
                 amount=round(paid_amount, 2),
-                date=data.date or today,
+                date=bill_date,
                 description=f"Bill payment {bill_num}",
                 category="Purchase — Cash Payment",
                 source_type="purchase_payment",
@@ -3532,6 +3539,7 @@ async def _create_bill_for_grn(
     db: AsyncSession,
     grn: GoodsReceiptNote,
     *,
+    date: str,
     due_date: Optional[str] = None,
     payment_mode: Optional[str] = None,
     payment_ref: str = "",
@@ -3548,7 +3556,7 @@ async def _create_bill_for_grn(
         vendor_name=grn.vendor_name,
         branch_id=grn.branch_id,
         branch_name=grn.branch_name,
-        date=grn.date,
+        date=date,
         due_date=due_date,
         subtotal=grn.subtotal,
         tax_total=grn.tax_total,
@@ -4119,6 +4127,7 @@ async def convert_order_to_bill(
     bill = await _create_bill_for_grn(
         db,
         grn,
+        date=today,
         due_date=data.due_date,
         payment_mode=payment_mode,
         payment_ref=data.payment_ref or "",
@@ -4788,6 +4797,7 @@ async def create_bill_from_grn(
 
     await enforce_branch_access(grn.branch_id, user=user, db=db)
     direct = await can_direct_commit(user, db, "purchases.approve")
+    today = datetime.now().strftime("%Y-%m-%d")
 
     if data.payment_received and not (data.payment_mode or "").strip():
         raise HTTPException(400, "Pick a payment method (or uncheck Payment Received)")
@@ -4799,11 +4809,12 @@ async def create_bill_from_grn(
         vendor_row = (await db.execute(
             select(Vendor).where(Vendor.id == grn.vendor_id)
         )).scalar_one_or_none()
-        due_date = compute_due_date(grn.date, vendor_row.payment_terms if vendor_row else None)
+        due_date = compute_due_date(today, vendor_row.payment_terms if vendor_row else None)
 
     bill = await _create_bill_for_grn(
         db,
         grn,
+        date=today,
         due_date=due_date,
         payment_mode=payment_mode,
         payment_ref=data.payment_ref or "",
