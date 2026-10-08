@@ -75,7 +75,12 @@ export default function TransferFormFields({
                 value={form.to_branch_id || ''}
                 onSelectOption={(opt) => patchForm('to_branch_id', opt?.id || '')}
                 fetchUrl={AUTOCOMPLETE_BRANCH_URL}
-                fetchParams={{ retail_only: true, exclude_id: form.from_branch_id || undefined }}
+                fetchParams={{
+                  retail_only: false,
+                  for_transfer_destination: true,
+                  exclude_id: form.from_branch_id || undefined,
+                  limit: 100,
+                }}
                 isSearchFieldRequired
                 searchPlaceholder="Search branch…"
                 selectedLabel={toLabel}
