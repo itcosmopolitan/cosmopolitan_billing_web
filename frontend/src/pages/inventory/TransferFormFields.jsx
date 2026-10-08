@@ -176,7 +176,7 @@ export default function TransferFormFields({
                         min={entryInputStep()}
                         step={entryInputStep()}
                         placeholder="Qty"
-                        title="Enter any decimals; line value uses settings rounding"
+                        title="Enter any decimals; shown as entered until save"
                         value={row.qty}
                         onChange={(e) => patchItem(i, 'qty', e.target.value)}
                         disabled={disabled}
@@ -189,7 +189,7 @@ export default function TransferFormFields({
                         min="0"
                         step={entryInputStep()}
                         placeholder="Cost price"
-                        title="Enter any decimals; line value uses settings rounding"
+                        title="Enter any decimals; shown as entered until save"
                         value={row.cost_price ?? (row.item_id ? costPrice : '')}
                         onChange={(e) => patchItem(i, 'cost_price', e.target.value)}
                         disabled={disabled || !row.item_id}

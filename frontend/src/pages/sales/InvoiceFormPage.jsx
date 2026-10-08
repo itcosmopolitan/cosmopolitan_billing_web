@@ -22,7 +22,12 @@ import {
   storeCreditApplyAmount,
   remainingAfterStoreCredit,
 } from '@/utils/storeCredit'
-import { computeDocumentTotals, entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
+import {
+  computeDocumentTotals,
+  entityDiscountToPayload,
+  roundSaleLineForApi,
+  saleLineGross,
+} from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 
@@ -266,6 +271,7 @@ export default function InvoiceFormPage() {
     }
     setSaving(true)
     try {
+      const persistItems = form.items.map((i) => ({ ...i, ...roundSaleLineForApi(i) }))
       const payload = {
         customer_name: form.customerName || 'Walk-in',
         customer_id: form.customerId || null,
@@ -275,16 +281,16 @@ export default function InvoiceFormPage() {
         child_counter_name: selectedCounter?.name || null,
         cashier: 'Staff',
         date: form.invoiceDate,
-        items: form.items.map((i) => ({
+        items: persistItems.map((i) => ({
           item_id: i.item_id || null,
           name: i.name,
-          qty: Number(i.qty),
-          price: Number(i.price),
+          qty: i.qty,
+          price: i.price,
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
           batch_allocation: toApiPayload(i.batchAllocation),
         })),
-        discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
+        discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
           lineGross: saleLineGross,
         }),
         payment_mode: remaining > 0.001 && (form.paymentReceived || mustPay || creditUse > 0)
@@ -316,9 +322,9 @@ export default function InvoiceFormPage() {
       if (fromQuoteId) payload.quotation_id = fromQuoteId
       if (fromOrderId) {
         payload.sales_order_id = fromOrderId
-        payload.source_order_lines = form.items
+        payload.source_order_lines = persistItems
           .filter((i) => i.orderLineId && Number(i.qty) > 0)
-          .map((i) => ({ order_line_id: i.orderLineId, qty: Number(i.qty) }))
+          .map((i) => ({ order_line_id: i.orderLineId, qty: i.qty }))
       }
       const res = await salesAPI.create(payload)
       toast.success(`Invoice ${res?.number || ''} created (${res?.status || ''})`)

@@ -13,7 +13,7 @@ import {
   quoteFromRow,
   lineDiscountToPercent,
 } from './salesFormShared'
-import { entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
+import { entityDiscountToPayload, roundSaleLineForApi, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 
 export default function QuoteFormPage({ mode = 'create' }) {
@@ -104,6 +104,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
     )
     setSaving(true)
     try {
+      const persistItems = form.items.map((i) => ({ ...i, ...roundSaleLineForApi(i) }))
       const payload = {
         customer_name: form.customerName || 'Walk-in',
         customer_id: form.customerId || null,
@@ -118,11 +119,11 @@ export default function QuoteFormPage({ mode = 'create' }) {
         shipment_method: form.shipmentMethod,
         prices_including_vat: Boolean(form.pricesIncludingVat),
         payment_discount_on_vat: Number(form.paymentDiscountOnVat || 0),
-        items: form.items.map((i) => ({
+        items: persistItems.map((i) => ({
           item_id: i.item_id || null,
           name: i.name,
-          qty: Number(i.qty),
-          price: Number(i.price),
+          qty: i.qty,
+          price: i.price,
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
           unit: i.unit || '',
@@ -130,7 +131,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
           allow_invoice_discount: i.allowInvoiceDiscount ?? true,
           hsn_code: i.hsnCode || i.hsn_code || '',
         })),
-        discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
+        discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
           lineGross: saleLineGross,
         }),
         notes: form.notes,

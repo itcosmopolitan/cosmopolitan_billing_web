@@ -26,9 +26,8 @@ import {
   lineTaxableAmount,
 } from '@/utils/taxCalc'
 
-/** Qty/rate inputs accept full entry precision; totals use org amount rounding. */
+/** Qty/rate keep entry precision in the UI; settings rounding happens on save. */
 const entryStep = entryInputStep
-const entryQty = roundEntry
 
 /** Move focus to the same column on the previous/next cart line (↑/↓). */
 function handleCartFieldArrowNav(e, field, cartIndex) {
@@ -85,12 +84,8 @@ export default function CartRow({
   stockMode = 'branch',
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
-  // Editable rates keep entry precision; read-only display uses org amount rounding.
-  const exclRate = displayExclusiveUnitRate(
-    item.price,
-    item.taxRate,
-    allowPriceEditing ? ENTRY_DECIMALS : undefined,
-  )
+  // Rates stay at entry precision in the cart; totals still use roundAmount.
+  const exclRate = displayExclusiveUnitRate(item.price, item.taxRate, ENTRY_DECIMALS)
   const afterEntity = Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0)))
   const lineTax = lineTaxAmount(afterEntity, item.taxRate)
   const lineTotalExcl = lineTaxableAmount(afterEntity, item.taxRate)
@@ -131,10 +126,10 @@ export default function CartRow({
   const commitQty = (raw) => {
     const v = Number(raw)
     if (Number.isFinite(v) && v > 0) {
-      onQtyChange(entryQty(v))
+      onQtyChange(roundEntry(v))
       return
     }
-    onQtyChange(entryQty(lastPositiveQtyRef.current || entryQty(1)))
+    onQtyChange(roundEntry(lastPositiveQtyRef.current || 1))
   }
 
   const commitPrice = (raw) => {
@@ -333,7 +328,7 @@ export default function CartRow({
           data-pos-cart-index={cartIndex}
           min={entryStep()}
           step={entryStep()}
-          value={qtyEditing ? qtyText : item.qty}
+          value={qtyEditing ? qtyText : (item.qty ?? '')}
           onFocus={(e) => {
             setQtyText(String(item.qty ?? ''))
             e.target.select()
@@ -344,7 +339,7 @@ export default function CartRow({
             if (raw.trim() === '' || raw === '.' || raw.endsWith('.')) return
             const v = Number(raw)
             if (!Number.isFinite(v) || v <= 0) return
-            onQtyChange(entryQty(v))
+            onQtyChange(roundEntry(v))
           }}
           onBlur={() => {
             commitQty(qtyText)
@@ -355,6 +350,7 @@ export default function CartRow({
             else handleCartFieldArrowNav(e, 'qty', cartIndex)
           }}
           aria-label={`Quantity for ${item.name || 'item'}`}
+          title="Enter any decimals; shown as entered until save (settings rounding on save)"
           style={{ width: 72, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />
       </td>
@@ -367,7 +363,7 @@ export default function CartRow({
             data-pos-cart-index={cartIndex}
             min={0}
             step={entryStep()}
-            value={priceEditing ? priceText : exclRate}
+            value={priceEditing ? priceText : (exclRate ?? '')}
             onFocus={(e) => {
               setPriceText(String(exclRate ?? ''))
               e.target.select()
@@ -390,7 +386,7 @@ export default function CartRow({
             }}
             style={{ width: 96, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
             aria-label={`Rate excl. GST for ${item.name}`}
-            title="Rate excl. GST — enter any decimals; line total uses settings rounding"
+            title="Rate excl. GST — enter any decimals; shown as entered until save (settings rounding on save)"
           />
         ) : (
           <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">

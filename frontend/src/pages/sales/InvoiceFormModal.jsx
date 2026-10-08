@@ -28,9 +28,18 @@ import {
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
+import { amountInputStep, ENTRY_DECIMALS, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput, saleLineGross } from '@/utils/documentFormTotals'
+import {
+  computeDocumentTotals,
+  lineTaxableDisplay,
+  lineTaxDisplay,
+  displayExclRate,
+  inclusiveRateFromExclInput,
+  commitSaleQty,
+  commitSaleExclRate,
+  saleLineGross,
+} from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 import {
   customerRequiresImmediatePayment,
@@ -417,10 +426,16 @@ export default function InvoiceFormModal({
                       step={entryInputStep()}
                       style={numInputStyle}
                       value={it.qty}
-                      title="Enter any decimals; line total uses settings rounding"
+                      title="Enter any decimals; shown as entered until save"
                       onChange={(e) => {
                         patchLine(i, {
                           qty: e.target.value,
+                          batchAllocationCustom: false,
+                        })
+                      }}
+                      onBlur={(e) => {
+                        patchLine(i, {
+                          qty: commitSaleQty(e.target.value, it.qty),
                           batchAllocationCustom: false,
                         })
                       }} />
@@ -430,11 +445,20 @@ export default function InvoiceFormModal({
                       min="0"
                       step={entryInputStep()}
                       style={numInputStyle}
-                      value={displayExclRate(it.price, it.taxRate)}
-                      title="Rate excl. GST — enter any decimals; line total uses settings rounding"
+                      value={displayExclRate(it.price, it.taxRate, ENTRY_DECIMALS)}
+                      title="Rate excl. GST — enter any decimals; shown as entered until save"
                       onChange={(e) => {
                         const n = [...invoiceForm.items]
-                        n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                        n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)
+                        pif('items', n)
+                      }}
+                      onBlur={(e) => {
+                        const n = [...invoiceForm.items]
+                        n[i].price = commitSaleExclRate(
+                          e.target.value,
+                          it.taxRate,
+                          displayExclRate(it.price, it.taxRate),
+                        )
                         pif('items', n)
                       }} />
                   </td>

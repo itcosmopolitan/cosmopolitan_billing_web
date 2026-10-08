@@ -19,9 +19,9 @@ const roundMoney = (n) => roundAmount(n)
 
 /** Pre-tax line amount after one line-level discount (pct or flat).
  *
- * Qty and unit price keep entry precision (up to org max); only the
- * computed money amounts (gross / discount / lineTotal) use settings
- * amount rounding — matching POS "enter many decimals, round totals".
+ * Qty / rate keep entry precision in cart/UI state. Line money amounts
+ * (gross / discount / lineTotal) use settings amount rounding. Persist
+ * paths round qty/rate with roundQty / roundAmount before the API.
  */
 export const applyLineCalc = (item) => {
   const qty = Math.max(0, roundToPrecision(Number(item.qty) || 0, MAX_DECIMAL_PRECISION))

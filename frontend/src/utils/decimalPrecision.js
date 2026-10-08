@@ -86,6 +86,20 @@ export function roundEntry(n) {
   return roundToPrecision(n, ENTRY_DECIMALS)
 }
 
+/** Normalize qty from an input for UI state (entry precision; settings round on save). */
+export function commitQtyInput(raw, { min = 0, fallback = 0 } = {}) {
+  const v = Number(raw)
+  if (!Number.isFinite(v)) return roundEntry(fallback)
+  return roundEntry(Math.max(min, v))
+}
+
+/** Normalize a money/rate amount for UI state (entry precision; settings round on save). */
+export function commitAmountInput(raw, { min = 0, fallback = 0 } = {}) {
+  const v = Number(raw)
+  if (!Number.isFinite(v)) return roundEntry(fallback)
+  return roundEntry(Math.max(min, v))
+}
+
 /** Fraction digits implied by an input `step` (e.g. "0.01" → 2, "1" → 0). */
 export function fractionDigitsFromStep(step) {
   if (step == null || step === '' || step === 'any') return null

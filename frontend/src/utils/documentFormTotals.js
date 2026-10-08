@@ -1,6 +1,6 @@
 /** Line + document-level discount rollup for sales/purchase forms (POS parity). */
 import { allocateFlatShares, lineTaxAmount, exclusiveFromInclusive, inclusiveFromExclusive } from '@/utils/taxCalc'
-import { ENTRY_DECIMALS, roundAmount } from '@/utils/decimalPrecision'
+import { ENTRY_DECIMALS, roundAmount, roundQty, roundToPrecision } from '@/utils/decimalPrecision'
 
 /** Qty × unit price, rounded at line level (settings amount precision). */
 export function saleLineGross(it) {
@@ -37,14 +37,49 @@ export function lineTaxableDisplay(it, lineGross, entityDiscountShare = 0) {
   return roundAmount(after - lineTaxAmount(after, Number(it.taxRate || 0)))
 }
 
-/** Unit rate shown excl. GST — entry precision (line/totals still roundAmount). */
-export function displayExclRate(inclusiveUnit, taxRate) {
-  return exclusiveFromInclusive(inclusiveUnit, taxRate, ENTRY_DECIMALS)
+/** Unit rate shown excl. GST — entry precision in the form UI. */
+export function displayExclRate(inclusiveUnit, taxRate, decimals) {
+  return exclusiveFromInclusive(inclusiveUnit, taxRate, decimals ?? ENTRY_DECIMALS)
 }
 
-/** Persist excl. GST entry as inclusive unit price (entry precision). */
-export function inclusiveRateFromExclInput(exclusiveUnit, taxRate) {
-  return inclusiveFromExclusive(exclusiveUnit, taxRate, ENTRY_DECIMALS)
+/**
+ * Persist excl. GST entry as inclusive unit price (entry precision in UI).
+ * Use roundSaleLineForApi / roundPurchaseLineForApi before saving to the DB.
+ */
+export function inclusiveRateFromExclInput(exclusiveUnit, taxRate, decimals) {
+  const d = decimals ?? ENTRY_DECIMALS
+  const excl = Math.max(0, roundToPrecision(Number(exclusiveUnit) || 0, d))
+  return inclusiveFromExclusive(excl, taxRate, d)
+}
+
+/** Blur/focus-out: keep multi-decimal qty in form state. */
+export function commitSaleQty(raw, fallback = 0) {
+  const v = Number(raw)
+  if (!Number.isFinite(v)) return roundToPrecision(Number(fallback) || 0, ENTRY_DECIMALS)
+  return roundToPrecision(Math.max(0, v), ENTRY_DECIMALS)
+}
+
+/** Blur/focus-out: keep multi-decimal excl. rate → inclusive at entry precision. */
+export function commitSaleExclRate(raw, taxRate, fallbackExclusive = 0) {
+  const v = Number(raw)
+  const excl = Number.isFinite(v) && v >= 0 ? v : fallbackExclusive
+  return inclusiveRateFromExclInput(excl, taxRate, ENTRY_DECIMALS)
+}
+
+/** Round sale line qty/price to org settings for API persistence. */
+export function roundSaleLineForApi(item) {
+  return {
+    qty: roundQty(Number(item?.qty) || 0),
+    price: roundAmount(Number(item?.price) || 0),
+  }
+}
+
+/** Round purchase line qty/cost to org settings for API persistence. */
+export function roundPurchaseLineForApi(item) {
+  return {
+    qty: roundQty(Number(item?.qty) || 0),
+    cost: roundAmount(Number(item?.cost) || 0),
+  }
 }
 
 export function hasLineLevelDiscount(items) {

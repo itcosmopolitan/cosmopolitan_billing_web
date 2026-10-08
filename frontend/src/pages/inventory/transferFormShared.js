@@ -3,6 +3,7 @@ import {
   isAllocationValid,
   toApiPayload,
 } from '@/utils/batchAllocation'
+import { roundAmount, roundQty } from '@/utils/decimalPrecision'
 
 export const EMPTY_LINE = {
   item_id: '',
@@ -107,8 +108,8 @@ export function buildTransferPayload(form, items, { requestedBy, refNumber } = {
       return {
         item_id: row.item_id,
         item_name: itm?.name || 'Unknown',
-        qty: Number(row.qty),
-        cost_price: Number(row.cost_price ?? itm?.cost_price ?? itm?.default_cost_price ?? 0),
+        qty: roundQty(Number(row.qty) || 0),
+        cost_price: roundAmount(Number(row.cost_price ?? itm?.cost_price ?? itm?.default_cost_price ?? 0)),
         batch_allocation: toApiPayload(row.batchAllocation),
       }
     }),

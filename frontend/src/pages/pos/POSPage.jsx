@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { usePOSStore, useAppStore } from '@/store'
+import { applyLineCalc, usePOSStore, useAppStore } from '@/store'
 import { itemsAPI, customersAPI, salesAPI, settingsAPI, stockPoolsAPI } from '@/api'
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
@@ -12,7 +12,7 @@ import { buildPosDisplayPayload, usePosDisplaySession } from '@/pages/display/di
 import { unwrapPaged } from '@/utils/pagination'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { calcCartTotals } from '@/utils/taxCalc'
-import { amountInputStep } from '@/utils/decimalPrecision'
+import { amountInputStep, roundAmount, roundQty } from '@/utils/decimalPrecision'
 import { isInternalCustomer, isInternalTransferByGstin, internalGstReverseSummary } from '@/utils/pricingDiscounts'
 import { posDocumentMargin, posEntityDiscountShares } from '@/utils/marginCalc'
 import MarginBadge from '@/components/MarginBadge'
@@ -594,7 +594,13 @@ export default function POSPage() {
       toast.error('Select a child counter for this sale')
       return
     }
-    const submitTotals = calcCartTotals(cart, { discountPct, discountAmt })
+    // UI may hold multi-decimal qty/rate; persist with org settings precision.
+    const persistCart = cart.map((i) => applyLineCalc({
+      ...i,
+      qty: roundQty(Number(i.qty) || 0),
+      price: roundAmount(Number(i.price) || 0),
+    }))
+    const submitTotals = calcCartTotals(persistCart, { discountPct, discountAmt })
     const submitTotal = submitTotals.total
     const creditAppliedNow = paymentMethod === 'credit'
       ? 0
@@ -666,7 +672,7 @@ export default function POSPage() {
     }
 
     if (!allowOverselling && stockMode !== 'clubbed' && !editingInvoice) {
-      for (const line of cart) {
+      for (const line of persistCart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
         if (line.qty > stock) {
           toast.error(`Insufficient stock for ${line.name}: need ${fmtQty(line.qty)}, available ${fmtQty(stock)}`)
@@ -677,7 +683,7 @@ export default function POSPage() {
 
     setCompleting(true)
     try {
-      const totals = calcCartTotals(cart, { discountPct, discountAmt })
+      const totals = calcCartTotals(persistCart, { discountPct, discountAmt })
       const { netSubtotal: sub, taxTotal: tax, discount: disc } = totals
       const notes = [
         store.notes?.trim(),
@@ -696,7 +702,7 @@ export default function POSPage() {
         child_counter_id: selectedCounter?.id || null,
         child_counter_name: selectedCounter?.name || null,
         cashier: 'Staff',
-        items: cart.map((i) => {
+        items: persistCart.map((i) => {
           const gross = i.qty * i.price
           const lineDiscountAmount = Math.max(0, Math.min(gross, gross - i.lineTotal))
           const effPct = gross > 0 ? Math.min(100, Math.max(0, (1 - i.lineTotal / gross) * 100)) : 0
@@ -707,7 +713,7 @@ export default function POSPage() {
             price: i.price,
             tax_rate: i.taxRate || 0,
             line_discount: Math.round(effPct * 10000) / 10000,
-            line_discount_amount: Math.round(lineDiscountAmount * 100) / 100,
+            line_discount_amount: roundAmount(lineDiscountAmount),
             packaging: i.packaging?.trim() || null,
             batch_allocation: toApiPayload(i.batchAllocation),
           }

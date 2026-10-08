@@ -40,9 +40,18 @@ import {
   WALK_IN_CUSTOMER_NAME,
 } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, entryInputStep } from '@/utils/decimalPrecision'
+import { amountInputStep, ENTRY_DECIMALS, entryInputStep } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
-import { computeDocumentTotals, lineTaxableDisplay, lineTaxDisplay, displayExclRate, inclusiveRateFromExclInput, saleLineGross } from '@/utils/documentFormTotals'
+import {
+  computeDocumentTotals,
+  lineTaxableDisplay,
+  lineTaxDisplay,
+  displayExclRate,
+  inclusiveRateFromExclInput,
+  commitSaleQty,
+  commitSaleExclRate,
+  saleLineGross,
+} from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
 
 // Per-row discount in % or MVR via lineDiscountType. Backend stores percent only.
@@ -302,19 +311,33 @@ export default function OrderFormModal({
                       step={entryInputStep()}
                       style={numInputStyle}
                       value={it.qty}
-                      title="Enter any decimals; line total uses settings rounding"
-                      onChange={e => { const n = [...orderForm.items]; n[i].qty = e.target.value; pof('items', n) }} />
+                      title="Enter any decimals; shown as entered until save"
+                      onChange={e => { const n = [...orderForm.items]; n[i].qty = e.target.value; pof('items', n) }}
+                      onBlur={e => {
+                        const n = [...orderForm.items]
+                        n[i].qty = commitSaleQty(e.target.value, it.qty)
+                        pof('items', n)
+                      }} />
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}
                       min="0"
                       step={entryInputStep()}
                       style={numInputStyle}
-                      value={displayExclRate(it.price, it.taxRate)}
-                      title="Rate excl. GST — enter any decimals; line total uses settings rounding"
+                      value={displayExclRate(it.price, it.taxRate, ENTRY_DECIMALS)}
+                      title="Rate excl. GST — enter any decimals; shown as entered until save"
                       onChange={e => {
                         const n = [...orderForm.items]
-                        n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate)
+                        n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)
+                        pof('items', n)
+                      }}
+                      onBlur={e => {
+                        const n = [...orderForm.items]
+                        n[i].price = commitSaleExclRate(
+                          e.target.value,
+                          it.taxRate,
+                          displayExclRate(it.price, it.taxRate),
+                        )
                         pof('items', n)
                       }} />
                   </td>

@@ -8,7 +8,11 @@ import { formatLabel } from '@/utils/helpers'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import PurchaseOrderFormModal from './PurchaseOrderFormModal'
 import { emptyPoForm, poFromRow, lineDiscountToPercent } from './purchaseFormShared'
-import { entityDiscountToPayload, purchaseLineGross } from '@/utils/documentFormTotals'
+import {
+  entityDiscountToPayload,
+  purchaseLineGross,
+  roundPurchaseLineForApi,
+} from '@/utils/documentFormTotals'
 import { enrichPurchaseLinesWithSellPrice } from '@/utils/enrichSaleLineCosts'
 
 export default function PurchaseOrderFormPage({ mode = 'create' }) {
@@ -82,6 +86,7 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
     }
     setSaving(true)
     try {
+      const persistItems = form.items.map((i) => ({ ...i, ...roundPurchaseLineForApi(i) }))
       const payload = {
         vendor_id: form.vendorId,
         vendor_name: form.vendorName,
@@ -89,15 +94,15 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
         branch_name: activeBranch?.name || '',
         created_by: 'Staff',
         expected_date: form.expectedDate || null,
-        items: form.items.map((i) => ({
+        items: persistItems.map((i) => ({
           item_id: i.item_id,
           name: i.name,
-          qty: Number(i.qty),
-          cost: Number(i.cost),
+          qty: i.qty,
+          cost: i.cost,
           tax_rate: Number(i.taxRate || 0),
           discount: lineDiscountToPercent(i),
         })),
-        discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
+        discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
           lineGross: purchaseLineGross,
         }),
         notes: form.notes || null,

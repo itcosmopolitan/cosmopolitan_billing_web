@@ -12,7 +12,11 @@ import {
   poFromRow,
   lineDiscountToPercent,
 } from './purchaseFormShared'
-import { entityDiscountToPayload, purchaseLineGross } from '@/utils/documentFormTotals'
+import {
+  entityDiscountToPayload,
+  purchaseLineGross,
+  roundPurchaseLineForApi,
+} from '@/utils/documentFormTotals'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const out = []
@@ -119,6 +123,7 @@ export default function BillFormPage({ mode = 'bill' }) {
     }
     setSaving(true)
     try {
+      const persistItems = form.items.map((i) => ({ ...i, ...roundPurchaseLineForApi(i) }))
       if (isGrn) {
         const payload = {
           vendor_id: form.vendorId,
@@ -126,18 +131,18 @@ export default function BillFormPage({ mode = 'bill' }) {
           branch_id: form.branchId,
           branch_name: activeBranch?.name || '',
           date: form.billDate,
-          items: form.items.map((i) => ({
+          items: persistItems.map((i) => ({
             item_id: i.item_id,
             name: i.name,
-            qty: Number(i.qty),
-            cost: Number(i.cost),
+            qty: i.qty,
+            cost: i.cost,
             tax_rate: Number(i.taxRate || 0),
             discount: lineDiscountToPercent(i),
             batch_number: i.batchTracking ? (i.batchNumber || undefined) : undefined,
             mfg_date: i.batchTracking ? (i.mfgDate || undefined) : undefined,
             expiry_date: i.batchTracking ? (i.expiryDate || undefined) : undefined,
           })),
-          discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
+          discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
             lineGross: purchaseLineGross,
           }),
           notes: form.notes || null,
@@ -156,18 +161,18 @@ export default function BillFormPage({ mode = 'bill' }) {
           branch_name: activeBranch?.name || '',
           date: form.billDate,
           due_date: form.dueDate || null,
-          items: form.items.map((i) => ({
+          items: persistItems.map((i) => ({
             item_id: i.item_id,
             name: i.name,
-            qty: Number(i.qty),
-            cost: Number(i.cost),
+            qty: i.qty,
+            cost: i.cost,
             tax_rate: Number(i.taxRate || 0),
             discount: lineDiscountToPercent(i),
             batch_number: i.batchTracking ? (i.batchNumber || undefined) : undefined,
             mfg_date: i.batchTracking ? (i.mfgDate || undefined) : undefined,
             expiry_date: i.batchTracking ? (i.expiryDate || undefined) : undefined,
           })),
-          discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {
+          discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
             lineGross: purchaseLineGross,
           }),
           payment_mode: form.paymentReceived ? form.paymentMethod : null,
