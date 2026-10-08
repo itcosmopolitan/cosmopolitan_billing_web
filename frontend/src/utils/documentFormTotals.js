@@ -1,6 +1,15 @@
 /** Line + document-level discount rollup for sales/purchase forms (POS parity). */
 import { allocateFlatShares, lineTaxAmount, exclusiveFromInclusive, inclusiveFromExclusive } from '@/utils/taxCalc'
-import { ENTRY_DECIMALS, roundAmount, roundQty, roundToPrecision } from '@/utils/decimalPrecision'
+import {
+  ENTRY_DECIMALS,
+  formatAmountFieldValue,
+  formatQtyFieldValue,
+  getAmountDecimals,
+  hasExtraAmountPrecision,
+  roundAmount,
+  roundQty,
+  roundToPrecision,
+} from '@/utils/decimalPrecision'
 
 /** Qty × unit price, rounded at line level (settings amount precision). */
 export function saleLineGross(it) {
@@ -37,9 +46,28 @@ export function lineTaxableDisplay(it, lineGross, entityDiscountShare = 0) {
   return roundAmount(after - lineTaxAmount(after, Number(it.taxRate || 0)))
 }
 
-/** Unit rate shown excl. GST — entry precision in the form UI. */
+/**
+ * Unit rate shown excl. GST.
+ * Loaded/settings-level inclusive → settings amount decimals; multi-decimal
+ * draft inclusive → entry decimals (so typed digits stay visible).
+ */
 export function displayExclRate(inclusiveUnit, taxRate, decimals) {
-  return exclusiveFromInclusive(inclusiveUnit, taxRate, decimals ?? ENTRY_DECIMALS)
+  if (decimals != null) return exclusiveFromInclusive(inclusiveUnit, taxRate, decimals)
+  const entryExcl = exclusiveFromInclusive(inclusiveUnit, taxRate, ENTRY_DECIMALS)
+  if (hasExtraAmountPrecision(Number(inclusiveUnit)) || hasExtraAmountPrecision(entryExcl)) {
+    return entryExcl
+  }
+  return exclusiveFromInclusive(inclusiveUnit, taxRate, getAmountDecimals())
+}
+
+/** Controlled qty input value for document forms. */
+export function qtyInputValue(qty) {
+  return formatQtyFieldValue(qty)
+}
+
+/** Controlled excl-rate input value for document forms. */
+export function exclRateInputValue(inclusiveUnit, taxRate) {
+  return formatAmountFieldValue(displayExclRate(inclusiveUnit, taxRate))
 }
 
 /**

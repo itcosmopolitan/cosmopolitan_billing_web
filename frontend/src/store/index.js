@@ -11,6 +11,7 @@ import {
   MAX_DECIMAL_PRECISION,
   parsePrecisionPayload,
   roundAmount,
+  roundQty,
   roundToPrecision,
   setDecimalPrecision,
 } from '@/utils/decimalPrecision'
@@ -53,8 +54,10 @@ export const applyLineCalc = (item) => {
 }
 
 const normalizeCartItem = (raw) => {
-  const qty = Math.max(0, Number(raw.qty) || 0)
-  const price = Number(raw.price ?? raw.selling_price) || 0
+  // Hydrated / held / catalog lines start at settings precision; live edits
+  // go through applyLineCalc and may keep entry multi-decimals until save.
+  const qty = Math.max(0, roundQty(Number(raw.qty) || 0))
+  const price = Math.max(0, roundAmount(Number(raw.price ?? raw.selling_price) || 0))
   let lineDiscountType = raw.lineDiscountType === 'flat' ? 'flat' : 'pct'
   let lineDiscountValue = Number(raw.lineDiscountValue) || 0
   const legacyPct = Number(raw.lineDiscountPct) || 0

@@ -2,6 +2,7 @@
 
 import { itemsAPI } from '@/api'
 import { unwrapPaged } from '@/utils/pagination'
+import { roundAmount, roundQty } from '@/utils/decimalPrecision'
 import { customerPricingType, customerClassification } from '@/utils/pricingDiscounts'
 import { todayISO } from '@/utils/batchDates'
 
@@ -66,9 +67,10 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
     ...emptySaleLine(),
     item_id: it.itemId || it.item_id || null,
     name: it.name || '',
-    qty: it.qty,
-    price: it.price,
-    costPrice: it.costPrice ?? it.cost_price ?? 0,
+    // DB may store extra decimals — show settings precision until the user edits.
+    qty: roundQty(Number(it.qty) || 0),
+    price: roundAmount(Number(it.price) || 0),
+    costPrice: roundAmount(Number(it.costPrice ?? it.cost_price ?? 0) || 0),
     taxRate: it.taxRate ?? 0,
     lineDiscount: it.discount ?? it.lineDiscount ?? 0,
     lineDiscountType: '%',

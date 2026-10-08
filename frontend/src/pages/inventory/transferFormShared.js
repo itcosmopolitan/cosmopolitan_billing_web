@@ -3,7 +3,12 @@ import {
   isAllocationValid,
   toApiPayload,
 } from '@/utils/batchAllocation'
-import { roundAmount, roundQty } from '@/utils/decimalPrecision'
+import {
+  formatAmountInput,
+  formatQtyInput,
+  roundAmount,
+  roundQty,
+} from '@/utils/decimalPrecision'
 
 export const EMPTY_LINE = {
   item_id: '',
@@ -41,8 +46,8 @@ export function formFromTransfer(transfer) {
     notes: transfer.notes || '',
     items: lines.map((line) => ({
       item_id: line.item_id || '',
-      qty: line.qty != null ? String(line.qty) : '',
-      cost_price: line.cost_price != null ? String(line.cost_price) : '',
+      qty: line.qty != null ? formatQtyInput(line.qty) : '',
+      cost_price: line.cost_price != null ? formatAmountInput(line.cost_price) : '',
       batchAllocation: [],
       batchAllocationCustom: Boolean(line.requested_allocation?.length),
       _requestedAllocation: line.requested_allocation || [],

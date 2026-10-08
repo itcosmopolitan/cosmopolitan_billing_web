@@ -1,6 +1,6 @@
 /** Shared helpers for purchase document form pages. */
 
-import { roundAmount } from '@/utils/decimalPrecision'
+import { roundAmount, roundQty } from '@/utils/decimalPrecision'
 import { todayISO } from '@/utils/batchDates'
 
 export function lineDiscountToPercent(line) {
@@ -37,8 +37,9 @@ export function mapPurchaseLines(items) {
     ...emptyPurchaseLine(),
     item_id: it.itemId || it.item_id || null,
     name: it.name || '',
-    qty: it.qty ?? it.receivedQty ?? 0,
-    cost: it.cost,
+    // DB may store extra decimals — show settings precision until the user edits.
+    qty: roundQty(Number(it.qty ?? it.receivedQty ?? 0) || 0),
+    cost: roundAmount(Number(it.cost) || 0),
     branchCost: it.branchCost ?? it.branch_cost ?? null,
     branchStock: it.branchStock ?? it.branch_stock ?? it.available_stock ?? null,
     sellingPrice: it.sellingPrice ?? it.selling_price ?? 0,

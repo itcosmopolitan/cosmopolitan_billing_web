@@ -44,9 +44,11 @@ import {
   lineTaxableDisplay,
   lineTaxDisplay,
   displayExclRate,
+  exclRateInputValue,
   inclusiveRateFromExclInput,
   commitSaleQty,
   commitSaleExclRate,
+  qtyInputValue,
   saleLineGross,
 } from '@/utils/documentFormTotals'
 import { entityDiscountShares, lineMargin } from '@/utils/marginCalc'
@@ -303,8 +305,8 @@ export default function QuoteFormModal({
                     />
                   </td>
                   <td><input className="form-input" type="number" disabled={readOnly} min={entryInputStep()} step={entryInputStep()} style={numInputStyle}
-                    title="Enter any decimals; shown as entered until save"
-                    value={it.qty}
+                    title="Multi-decimal while editing; settings precision when loaded"
+                    value={qtyInputValue(it.qty)}
                     onChange={e => { const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n) }}
                     onBlur={e => {
                       const n = [...quoteForm.items]
@@ -312,8 +314,8 @@ export default function QuoteFormModal({
                       pqf('items', n)
                     }} /></td>
                   <td><input className="form-input" type="number" disabled={readOnly} min="0" step={entryInputStep()} style={numInputStyle}
-                    value={displayExclRate(it.price, it.taxRate, ENTRY_DECIMALS)}
-                    title="Rate excl. GST — enter any decimals; shown as entered until save"
+                    value={exclRateInputValue(it.price, it.taxRate)}
+                    title="Rate excl. GST — multi-decimal while editing; settings precision when loaded"
                     onChange={e => {
                       const n = [...quoteForm.items]
                       n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)

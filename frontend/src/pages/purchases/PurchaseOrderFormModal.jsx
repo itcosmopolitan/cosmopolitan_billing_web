@@ -29,10 +29,12 @@ import {
   lineTaxableDisplay,
   lineTaxDisplay,
   displayExclRate,
+  exclRateInputValue,
   inclusiveRateFromExclInput,
   commitSaleQty,
   commitSaleExclRate,
   purchaseLineGross,
+  qtyInputValue,
 } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
 
@@ -217,8 +219,8 @@ export default function PurchaseOrderFormModal({
                       min={entryInputStep()}
                       step={entryInputStep()}
                       style={numInputStyle}
-                      value={it.qty}
-                      title="Enter any decimals; shown as entered until save"
+                      value={qtyInputValue(it.qty)}
+                      title="Multi-decimal while editing; settings precision when loaded"
                       onChange={e => { const n = [...poForm.items]; n[i].qty = e.target.value; ppof('items', n) }}
                       onBlur={e => {
                         const n = [...poForm.items]
@@ -231,8 +233,8 @@ export default function PurchaseOrderFormModal({
                       min="0"
                       step={entryInputStep()}
                       style={numInputStyle}
-                      value={displayExclRate(it.cost, it.taxRate, ENTRY_DECIMALS)}
-                      title="Cost excl. GST — enter any decimals; shown as entered until save"
+                      value={exclRateInputValue(it.cost, it.taxRate)}
+                      title="Cost excl. GST — multi-decimal while editing; settings precision when loaded"
                       onChange={e => {
                         const n = [...poForm.items]
                         n[i].cost = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)

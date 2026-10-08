@@ -154,6 +154,45 @@ export function formatQtyInput(n) {
   return roundQty(value).toFixed(getQtyDecimals())
 }
 
+/** True when value carries more fraction digits than org qty settings. */
+export function hasExtraQtyPrecision(n) {
+  const value = Number(n)
+  if (!Number.isFinite(value)) return false
+  return roundEntry(value) !== roundQty(value)
+}
+
+/** True when value carries more fraction digits than org amount settings. */
+export function hasExtraAmountPrecision(n) {
+  const value = Number(n)
+  if (!Number.isFinite(value)) return false
+  return roundEntry(value) !== roundAmount(value)
+}
+
+/**
+ * Qty input display: settings precision for loaded/saved values; keep
+ * multi-decimal draft text while the operator is editing (string or extra digits).
+ */
+export function formatQtyFieldValue(n) {
+  if (n == null || n === '') return ''
+  if (typeof n === 'string') return n
+  const value = Number(n)
+  if (!Number.isFinite(value)) return ''
+  if (hasExtraQtyPrecision(value)) return String(roundEntry(value))
+  return formatQtyInput(value)
+}
+
+/**
+ * Rate/amount input display: settings precision unless a multi-decimal draft.
+ */
+export function formatAmountFieldValue(n) {
+  if (n == null || n === '') return ''
+  if (typeof n === 'string') return n
+  const value = Number(n)
+  if (!Number.isFinite(value)) return ''
+  if (hasExtraAmountPrecision(value)) return String(roundEntry(value))
+  return formatAmountInput(value)
+}
+
 export function formatQtyNumber(n, decimals) {
   if (n === null || n === undefined || n === '') return '—'
   const value = Number(n)

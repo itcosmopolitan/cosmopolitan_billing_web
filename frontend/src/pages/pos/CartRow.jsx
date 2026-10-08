@@ -6,7 +6,11 @@ import {
   amountInputStep,
   ENTRY_DECIMALS,
   entryInputStep,
+  formatAmountFieldValue,
   formatAmountNumber,
+  formatQtyFieldValue,
+  getAmountDecimals,
+  hasExtraAmountPrecision,
   roundAmount,
   roundEntry,
 } from '@/utils/decimalPrecision'
@@ -84,8 +88,12 @@ export default function CartRow({
   stockMode = 'branch',
 }) {
   const margin = posLineMargin(item, entityDiscountShare)
-  // Rates stay at entry precision in the cart; totals still use roundAmount.
-  const exclRate = displayExclusiveUnitRate(item.price, item.taxRate, ENTRY_DECIMALS)
+  // Loaded rates use settings decimals; typed multi-decimal drafts keep entry precision.
+  const exclRate = displayExclusiveUnitRate(
+    item.price,
+    item.taxRate,
+    hasExtraAmountPrecision(item.price) ? ENTRY_DECIMALS : getAmountDecimals(),
+  )
   const afterEntity = Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0)))
   const lineTax = lineTaxAmount(afterEntity, item.taxRate)
   const lineTotalExcl = lineTaxableAmount(afterEntity, item.taxRate)
@@ -328,7 +336,7 @@ export default function CartRow({
           data-pos-cart-index={cartIndex}
           min={entryStep()}
           step={entryStep()}
-          value={qtyEditing ? qtyText : (item.qty ?? '')}
+          value={qtyEditing ? qtyText : formatQtyFieldValue(item.qty)}
           onFocus={(e) => {
             setQtyText(String(item.qty ?? ''))
             e.target.select()
@@ -350,7 +358,7 @@ export default function CartRow({
             else handleCartFieldArrowNav(e, 'qty', cartIndex)
           }}
           aria-label={`Quantity for ${item.name || 'item'}`}
-          title="Enter any decimals; shown as entered until save (settings rounding on save)"
+          title="Multi-decimal while editing; settings precision when loaded; rounded on save"
           style={{ width: 72, padding: '4px 6px', fontSize: 12, textAlign: 'center', fontFamily: 'DM Mono, monospace' }}
         />
       </td>
@@ -363,7 +371,7 @@ export default function CartRow({
             data-pos-cart-index={cartIndex}
             min={0}
             step={entryStep()}
-            value={priceEditing ? priceText : (exclRate ?? '')}
+            value={priceEditing ? priceText : formatAmountFieldValue(exclRate)}
             onFocus={(e) => {
               setPriceText(String(exclRate ?? ''))
               e.target.select()
@@ -386,7 +394,7 @@ export default function CartRow({
             }}
             style={{ width: 96, padding: '4px 7px', fontSize: 12, fontFamily: 'DM Mono, monospace' }}
             aria-label={`Rate excl. GST for ${item.name}`}
-            title="Rate excl. GST — enter any decimals; shown as entered until save (settings rounding on save)"
+            title="Rate excl. GST — multi-decimal while editing; settings precision when loaded; rounded on save"
           />
         ) : (
           <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 12, fontWeight: 600 }} title="Rate excl. GST">
