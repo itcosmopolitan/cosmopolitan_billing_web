@@ -575,9 +575,10 @@ async def create_transfer(
 ):
     if data.from_branch_id == data.to_branch_id:
         raise HTTPException(400, "Source and destination branches must differ")
-    # Validate requested branches are within the user's scope
+    # The user must have access to the source, where inventory is deducted.
+    # Destinations may be outside their assigned branches; destination users
+    # remain responsible for receiving the dispatched stock.
     await _resolve_branch_scope(user, db, data.from_branch_id)
-    await _resolve_branch_scope(user, db, data.to_branch_id)
     child_counter_id, child_counter_name = await validate_child_counter(
         db, data.from_branch_id, data.child_counter_id, data.child_counter_name,
     )
@@ -681,9 +682,9 @@ async def update_transfer(
             f"Only draft/pending transfers can be edited; this transfer is {t.status.value}",
         )
 
-    # Validate the requested branches are within the user's scope
+    # Editing a transfer still requires source-branch access, but not access
+    # to its destination.
     await _resolve_branch_scope(user, db, data.from_branch_id)
-    await _resolve_branch_scope(user, db, data.to_branch_id)
     child_counter_id, child_counter_name = await validate_child_counter(
         db, data.from_branch_id, data.child_counter_id, data.child_counter_name,
     )

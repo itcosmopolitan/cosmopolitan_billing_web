@@ -103,6 +103,11 @@ export default function TransferFormPage({ mode = 'create' }) {
     const branchId = form.from_branch_id
     if (lastLoadedFromBranchRef.current === branchId) return
     lastLoadedFromBranchRef.current = branchId
+    if (!branchId) {
+      setItems([])
+      setItemsLoading(false)
+      return
+    }
     loadItems(branchId)
   }, [form.from_branch_id, loadItems])
 
