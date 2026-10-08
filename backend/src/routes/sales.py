@@ -6504,8 +6504,7 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
         raise HTTPException(400, f"Quotation is {quote.status.value}; cannot convert")
 
     today = datetime.now().strftime("%Y-%m-%d")
-    count = (await db.execute(select(func.count(SalesOrder.id)))).scalar() or 0
-    so_num = f"SO-{datetime.now().year}-{1000 + count}"
+    so_num = await next_free_prefixed_number(db, SalesOrder, doc_prefix="SO", min_seq=1000)
 
     so = SalesOrder(
         id=str(uuid.uuid4()), number=so_num,

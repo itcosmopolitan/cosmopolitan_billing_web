@@ -322,11 +322,11 @@ async def preview_document_number(
         number = await next_free_prefixed_number(db, SalesOrder, doc_prefix="SO")
         return {"doc_type": dt, "number": number}
     if dt == "purchase_order":
-        count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
-        return {"doc_type": dt, "number": f"PO-{year}-{1000 + count:04d}"}
+        number = await next_free_prefixed_number(db, PurchaseOrder, doc_prefix="PO", min_seq=1000, width=4)
+        return {"doc_type": dt, "number": number}
     if dt == "grn":
-        count = (await db.execute(select(func.count(GoodsReceiptNote.id)))).scalar() or 0
-        return {"doc_type": dt, "number": f"GRN-{year}-{500 + count:04d}"}
+        number = await next_free_prefixed_number(db, GoodsReceiptNote, doc_prefix="GRN", min_seq=500, width=4)
+        return {"doc_type": dt, "number": number}
     raise HTTPException(400, f"Unknown document type: {doc_type}")
 
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
-from src.document_numbering import allocate_number, resolve_number
+from src.document_numbering import allocate_number, next_free_prefixed_number, resolve_number
 from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
 from src.models import (
     AuditLog,
@@ -1040,10 +1040,10 @@ async def create_bill(
     # left no payment row, so it was missing from the Payments tab.
     # Draft bills: skip payment recording — deferred to approval.
     if paid_at_create:
-        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        vpay_num = await _next_vendor_payment_number(db)
         bpay = VendorPayment(
             id=str(uuid.uuid4()),
-            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=vpay_num,
             vendor_id=bill.vendor_id,
             vendor_name=bill.vendor_name,
             branch_id=bill.branch_id,
@@ -1164,10 +1164,10 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
     b.payment_mode = data.mode
     b.status = "paid" if b.paid_amount >= b.total else "partial"
 
-    pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+    vpay_num = await _next_vendor_payment_number(db)
     pay = VendorPayment(
         id=str(uuid.uuid4()),
-        number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+        number=vpay_num,
         vendor_id=b.vendor_id,
         vendor_name=b.vendor_name,
         branch_id=b.branch_id,
@@ -1377,10 +1377,10 @@ async def approve_bill(
 
     # Apply payment if one was specified at create time
     if payment_mode is not None:
-        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        vpay_num = await _next_vendor_payment_number(db)
         bpay = VendorPayment(
             id=str(uuid.uuid4()),
-            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=vpay_num,
             vendor_id=bill.vendor_id, vendor_name=bill.vendor_name,
             branch_id=bill.branch_id, branch_name=bill.branch_name,
             date=today_str, total_amount=round(total, 2),
@@ -2289,8 +2289,7 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
         total_credit += excess
         total_amount += float(a.amount)
 
-    count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
-    pay_num = f"VPAY-{datetime.now().year}-{1000 + count:04d}"
+    pay_num = await _next_vendor_payment_number(db)
 
     if total_credit > 0:
         await adjust_vendor_credit(
@@ -3334,13 +3333,21 @@ def _po_terminal(po) -> bool:
 
 
 async def _next_grn_number(db: AsyncSession) -> str:
-    count = (await db.execute(select(func.count(GoodsReceiptNote.id)))).scalar() or 0
-    return f"GRN-{datetime.now().year}-{500 + count:04d}"
+    return await next_free_prefixed_number(
+        db, GoodsReceiptNote, doc_prefix="GRN", min_seq=500, width=4,
+    )
 
 
 async def _next_bill_number(db: AsyncSession) -> str:
-    count = (await db.execute(select(func.count(PurchaseBill.id)))).scalar() or 0
-    return f"PUR-{datetime.now().year}-{400 + count:04d}"
+    return await next_free_prefixed_number(
+        db, PurchaseBill, doc_prefix="PUR", min_seq=400, width=4,
+    )
+
+
+async def _next_vendor_payment_number(db: AsyncSession) -> str:
+    return await next_free_prefixed_number(
+        db, VendorPayment, doc_prefix="VPAY", min_seq=1000, width=4,
+    )
 
 
 async def _next_vendor_return_number(db: AsyncSession) -> str:
@@ -3740,15 +3747,13 @@ async def create_order(
     today = datetime.now().strftime("%Y-%m-%d")
     direct = await can_direct_commit(user, db, "purchases.approve")
 
-    async def _alloc_po() -> str:
-        count = (await db.execute(select(func.count(PurchaseOrder.id)))).scalar() or 0
-        return f"PO-{datetime.now().year}-{1000 + count:04d}"
-
     po_num = await resolve_number(
         db,
         requested=data.number,
         model=PurchaseOrder,
-        allocate=_alloc_po,
+        allocate=lambda: next_free_prefixed_number(
+            db, PurchaseOrder, doc_prefix="PO", min_seq=1000, width=4,
+        ),
     )
 
     tax_mode = await _get_org_tax_mode(db)
@@ -4144,10 +4149,10 @@ async def convert_order_to_bill(
     )
 
     if data.payment_received and paid > 0:
-        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        vpay_num = await _next_vendor_payment_number(db)
         bpay = VendorPayment(
             id=str(uuid.uuid4()),
-            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=vpay_num,
             vendor_id=bill.vendor_id,
             vendor_name=bill.vendor_name,
             branch_id=bill.branch_id,
@@ -4836,10 +4841,10 @@ async def create_bill_from_grn(
             po.converted_bill_id = bill.id
 
     if data.payment_received and paid > 0:
-        pay_count = (await db.execute(select(func.count(VendorPayment.id)))).scalar() or 0
+        vpay_num = await _next_vendor_payment_number(db)
         bpay = VendorPayment(
             id=str(uuid.uuid4()),
-            number=f"VPAY-{datetime.now().year}-{1000 + pay_count:04d}",
+            number=vpay_num,
             vendor_id=bill.vendor_id,
             vendor_name=bill.vendor_name,
             branch_id=bill.branch_id,
