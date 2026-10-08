@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, exportToCSV, formatLabel } from '@/utils/helpers'
+import { fmt, exportToExcel } from '@/utils/helpers'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TablePanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, ConfirmDialog } from '@/components/ui'
 
 const CUSTOMER_TABS = [
@@ -203,6 +203,68 @@ export default function CustomersPage() {
     return 'var(--text-primary)'
   }
 
+  const handleExport = async () => {
+    try {
+      const exportCustomers = await fetchAllList(customersAPI.list, {
+        branch_id: null,
+        search: search || undefined,
+        customer_type: typeF || undefined,
+        status: tab === 'inactive' ? 'inactive' : 'active',
+      })
+      if (exportCustomers.length === 0) {
+        toast.error('No customers available to export.')
+        return
+      }
+
+      const headers = [
+        'Customer Name',
+        'Phone',
+        'Email',
+        'GST Reg No',
+        'Street 1',
+        'Street 2',
+        'Street 3',
+        'City',
+        'State/Province',
+        'Country',
+        'Postal Code',
+        'Credit Limit',
+        'Customer Type',
+        'Classification',
+        'Key Account Manager',
+        'Credit Terms',
+      ]
+      const rows = exportCustomers.map((customer) => ({
+        'Customer Name': customer.name,
+        Phone: customer.phone,
+        Email: customer.email,
+        'GST Reg No': customer.gst_in,
+        'Street 1': customer.street1,
+        'Street 2': customer.street2,
+        'Street 3': customer.street3,
+        City: customer.city,
+        'State/Province': customer.state_province,
+        Country: customer.country,
+        'Postal Code': customer.postal_code,
+        'Credit Limit': customer.credit_limit,
+        'Customer Type': customer.customer_type,
+        Classification: customer.classification,
+        'Key Account Manager': customer.key_account_manager,
+        'Credit Terms': customer.credit_terms,
+      }))
+
+      exportToExcel(
+        rows,
+        `Customers_${new Date().toISOString().split('T')[0]}.xlsx`,
+        headers,
+      )
+      toast.success('Customers exported')
+    } catch (err) {
+      console.error('Failed to export customers:', err)
+      if (!err?.response) toast.error(err?.message || 'Failed to export customers')
+    }
+  }
+
   return (
     <div className="page-container">
       <SectionHeader title="Customer Master" subtitle="Manage customers, credit limits, and outstanding balances">
@@ -213,21 +275,7 @@ export default function CustomersPage() {
           </>
         )}
         <PageActionsMenu actions={buildListPageMenuActions({
-          onExport: () => {
-            exportToCSV(customers.map((c) => ({
-              Name: c.name,
-              Phone: c.phone || '—',
-              Email: c.email || '—',
-              Address: c.address || '—',
-              'GST Reg No': c.gstIn || '—',
-              Type: formatLabel(c.type || 'Retail'),
-              'Customer type': CUSTOMER_CLASSIFICATION_LABELS[c.classification] || 'External',
-              'Account Limit (MVR)': c.creditLimit || 0,
-              'Outstanding (MVR)': c.outstanding || 0,
-              'Total Purchases (MVR)': c.totalPurchases || 0,
-            })), `Customers_${new Date().toISOString().split('T')[0]}.csv`)
-            toast.success('Customers exported')
-          },
+          onExport: handleExport,
           onRefresh: () => {
             setListVersion((v) => v + 1)
             toast.success('List refreshed')

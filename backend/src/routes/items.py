@@ -1801,7 +1801,7 @@ def _read_import_rows(content: bytes) -> list[tuple]:
         wb.close()
 
 
-@router.get("/import/template", dependencies=[Depends(require_perm("item_master.create"))])
+@router.get("/import/template", dependencies=[Depends(require_perm(*ITEM_CATALOG_READ))])
 async def download_import_template(db: AsyncSession = Depends(get_db)):
     """Generate an Excel import template that includes current branches as per-branch columns."""
     res = await db.execute(select(Branch).order_by(asc(Branch.name)))

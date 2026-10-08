@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import * as XLSX from 'xlsx'
 import { itemsAPI, adjustmentsAPI, AUTOCOMPLETE_BRANCH_URL, AUTOCOMPLETE_CATEGORY_URL } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt, fmtDate, fmtQty, stockStatus, exportToCSV } from '@/utils/helpers'
+import { fmt, fmtDate, fmtQty, stockStatus, exportToCSV, exportToExcel } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import {
@@ -50,7 +51,6 @@ export default function ItemsPage({ mode = 'branch' }) {
   const can = useCan()
   const columnPrefs = useColumnPrefs(isMaster ? 'item_master.list' : 'items.list')
   const canActivity = can('history.view', 'comments.view')
-  const branches = useAppStore((s) => s.branches)
   const activeBranch = useAppStore((s) => s.activeBranch)
   const user = useAppStore((s) => s.user)
   const branchId = activeBranch?.id
@@ -376,7 +376,61 @@ export default function ItemsPage({ mode = 'branch' }) {
     }
   }
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    if (isMaster) {
+      if (filtered.length === 0) {
+        toast.error('No items available to export.')
+        return
+      }
+
+      try {
+        const template = await itemsAPI.downloadTemplate()
+        const workbook = XLSX.read(await template.arrayBuffer(), { type: 'array' })
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+        const [headers] = XLSX.utils.sheet_to_json(worksheet, { header: 1 })
+        if (!headers?.length) throw new Error('The item import template has no header row.')
+
+        const rows = filtered.map((item) => {
+          const sellingPrice = Number(item.default_selling_price ?? item.selling_price ?? 0)
+          const wholesaleRate = item.wholesale_pricing_mode === 'price'
+            ? (item.wholesale_price ?? 0)
+            : sellingPrice * (1 - Number(item.wholesale_discount_pct || 0) / 100)
+          const staffRate = item.staff_pricing_mode === 'price'
+            ? (item.staff_price ?? 0)
+            : sellingPrice * (1 - Number(item.staff_discount_pct || 0) / 100)
+          return {
+            Name: item.name,
+            SKU: item.sku,
+            Barcode: item.barcode,
+            Category: item.categoryId ? item.categoryName : null,
+            Brand: item.brand,
+            Unit: item.unit,
+            Packing: item.packaging,
+            'Cost Price': item.default_cost_price ?? item.cost_price,
+            'Selling Price': item.default_selling_price ?? item.selling_price,
+            'Wholesale Rate': wholesaleRate,
+            'Staff Rate': staffRate,
+            'Tax Rate': item.tax_rate,
+            'Reorder Level': item.default_reorder_level ?? item.reorder_level,
+            'Batch Tracking': item.batch_tracking,
+            'Expiry Tracking': item.expiry_tracking,
+            Active: item.active,
+          }
+        })
+
+        exportToExcel(
+          rows,
+          `ItemMaster_${new Date().toISOString().split('T')[0]}.xlsx`,
+          headers,
+        )
+        toast.success('Items exported')
+      } catch (err) {
+        console.error('Failed to export items:', err)
+        if (!err?.response) toast.error(err?.message || 'Failed to export items')
+      }
+      return
+    }
+
     exportToCSV(filtered.map((item) => ({
       'Item Name': item.name,
       SKU: item.sku || '—',
