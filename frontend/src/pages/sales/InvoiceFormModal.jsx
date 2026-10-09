@@ -447,15 +447,17 @@ export default function InvoiceFormModal({
                       min="0"
                       step={entryInputStep()}
                       style={numInputStyle}
-                      value={exclRateInputValue(it.price, it.taxRate)}
+                      value={it._rateText ?? exclRateInputValue(it.price, it.taxRate)}
                       title="Rate excl. GST — type any decimals; rounded to settings on blur"
                       onChange={(e) => {
                         const n = [...invoiceForm.items]
+                        n[i]._rateText = e.target.value
                         n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)
                         pif('items', n)
                       }}
                       onBlur={(e) => {
                         const n = [...invoiceForm.items]
+                        delete n[i]._rateText
                         n[i].price = commitSaleExclRate(
                           e.target.value,
                           it.taxRate,
