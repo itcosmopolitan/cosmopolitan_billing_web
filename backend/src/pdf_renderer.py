@@ -10,7 +10,7 @@ import asyncio
 import logging
 import re
 import shutil
-from asyncio.subprocess import PIPE
+import subprocess
 from enum import Enum
 
 from src import config
@@ -144,13 +144,18 @@ def _render_slots() -> asyncio.Semaphore:
     return _slots[1]
 
 
-async def _stop(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is None:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-    await proc.wait()
+def _run_wkhtmltopdf(command: list[str], html: bytes, timeout: float) -> subprocess.CompletedProcess:
+    # Runs in a worker thread: asyncio's subprocess support misbehaves under uvloop
+    # (used by the production gunicorn/uvicorn worker), producing empty output.
+    # subprocess.run kills the child on timeout.
+    return subprocess.run(
+        command,
+        input=html,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        check=False,
+    )
 
 
 async def render_pdf(html: str, mode: PdfMode) -> bytes:
@@ -159,34 +164,28 @@ async def render_pdf(html: str, mode: PdfMode) -> bytes:
 
     async with _render_slots():
         try:
-            proc = await asyncio.create_subprocess_exec(*command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+            completed = await asyncio.to_thread(_run_wkhtmltopdf, command, html.encode("utf-8"), timeout)
         except FileNotFoundError as exc:
             logger.error("wkhtmltopdf binary not found: %s", command[0])
             raise PdfRendererUnavailable("PDF renderer is not installed on the server.") from exc
-
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(html.encode("utf-8")), timeout=timeout)
-        except asyncio.TimeoutError as exc:
-            await _stop(proc)
+        except subprocess.TimeoutExpired as exc:
             logger.error("wkhtmltopdf timed out after %ss (mode=%s)", timeout, mode.value)
             raise PdfRenderTimeout("PDF rendering timed out.") from exc
-        except asyncio.CancelledError:
-            await _stop(proc)
-            raise
 
-    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    stdout = completed.stdout
+    stderr_text = completed.stderr.decode("utf-8", errors="replace").strip()
     if not stdout.startswith(PDF_MAGIC):
         logger.error(
             "wkhtmltopdf produced no PDF (exit=%s, mode=%s): %s",
-            proc.returncode,
+            completed.returncode,
             mode.value,
             stderr_text[:4000],
         )
         raise PdfRenderFailed("PDF rendering failed.")
-    if proc.returncode != 0:
+    if completed.returncode != 0:
         logger.warning(
             "wkhtmltopdf exited with %s but produced a PDF (mode=%s): %s",
-            proc.returncode,
+            completed.returncode,
             mode.value,
             stderr_text[:4000],
         )

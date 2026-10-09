@@ -217,3 +217,10 @@ def test_real_render_page_sizes(mode, expected):
     width, height = _media_box(pdf)
     assert abs(width - expected[0]) < 1.5
     assert abs(height - expected[1]) < 1.5
+
+
+@pytest.mark.skipif(not pdf_renderer.is_binary_available(), reason="wkhtmltopdf is not installed")
+def test_real_render_works_under_uvloop():
+    uvloop = pytest.importorskip("uvloop")
+    pdf = uvloop.run(render_pdf(SAMPLE_HTML, PdfMode.EXPORT))
+    assert pdf.startswith(b"%PDF")
