@@ -326,7 +326,7 @@ export default function BillFormModal({
                         step={entryInputStep()}
                         style={numInputStyle}
                         value={qtyInputValue(it.qty)}
-                        title="Multi-decimal while editing; settings precision when loaded"
+                        title="Type any decimals; rounded to settings on blur"
                         onChange={(e) => { const n = [...billForm.items]; n[i].qty = e.target.value; pbf('items', n) }}
                         onBlur={(e) => {
                           const n = [...billForm.items]
@@ -340,7 +340,7 @@ export default function BillFormModal({
                         step={entryInputStep()}
                         style={numInputStyle}
                         value={exclRateInputValue(it.cost, it.taxRate)}
-                        title="Cost excl. GST — multi-decimal while editing; settings precision when loaded"
+                        title="Cost excl. GST — type any decimals; rounded to settings on blur"
                         onChange={(e) => {
                           const n = [...billForm.items]
                           n[i].cost = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)

@@ -8,11 +8,9 @@ import {
 import {
   DEFAULT_AMOUNT_DECIMALS,
   DEFAULT_QTY_DECIMALS,
-  MAX_DECIMAL_PRECISION,
   parsePrecisionPayload,
   roundAmount,
   roundQty,
-  roundToPrecision,
   setDecimalPrecision,
 } from '@/utils/decimalPrecision'
 
@@ -20,13 +18,12 @@ const roundMoney = (n) => roundAmount(n)
 
 /** Pre-tax line amount after one line-level discount (pct or flat).
  *
- * Qty / rate keep entry precision in cart/UI state. Line money amounts
- * (gross / discount / lineTotal) use settings amount rounding. Persist
- * paths round qty/rate with roundQty / roundAmount before the API.
+ * Qty / rate are rounded to org settings on blur. Line money amounts
+ * (gross / discount / lineTotal) use settings amount rounding.
  */
 export const applyLineCalc = (item) => {
-  const qty = Math.max(0, roundToPrecision(Number(item.qty) || 0, MAX_DECIMAL_PRECISION))
-  const price = Math.max(0, roundToPrecision(Number(item.price) || 0, MAX_DECIMAL_PRECISION))
+  const qty = Math.max(0, roundQty(Number(item.qty) || 0))
+  const price = Math.max(0, roundAmount(Number(item.price) || 0))
   const gross = roundMoney(qty * price)
   const lineDiscountType = item.lineDiscountType === 'flat' ? 'flat' : 'pct'
   const rawValue = Number(

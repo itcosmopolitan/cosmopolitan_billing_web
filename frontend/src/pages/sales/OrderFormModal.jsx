@@ -313,7 +313,7 @@ export default function OrderFormModal({
                       step={entryInputStep()}
                       style={numInputStyle}
                       value={qtyInputValue(it.qty)}
-                      title="Multi-decimal while editing; settings precision when loaded"
+                      title="Type any decimals; rounded to settings on blur"
                       onChange={e => { const n = [...orderForm.items]; n[i].qty = e.target.value; pof('items', n) }}
                       onBlur={e => {
                         const n = [...orderForm.items]
@@ -327,7 +327,7 @@ export default function OrderFormModal({
                       step={entryInputStep()}
                       style={numInputStyle}
                       value={exclRateInputValue(it.price, it.taxRate)}
-                      title="Rate excl. GST — multi-decimal while editing; settings precision when loaded"
+                      title="Rate excl. GST — type any decimals; rounded to settings on blur"
                       onChange={e => {
                         const n = [...orderForm.items]
                         n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)

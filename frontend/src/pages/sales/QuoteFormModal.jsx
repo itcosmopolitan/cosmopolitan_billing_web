@@ -305,7 +305,7 @@ export default function QuoteFormModal({
                     />
                   </td>
                   <td><input className="form-input" type="number" disabled={readOnly} min={entryInputStep()} step={entryInputStep()} style={numInputStyle}
-                    title="Multi-decimal while editing; settings precision when loaded"
+                    title="Type any decimals; rounded to settings on blur"
                     value={qtyInputValue(it.qty)}
                     onChange={e => { const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n) }}
                     onBlur={e => {
@@ -315,7 +315,7 @@ export default function QuoteFormModal({
                     }} /></td>
                   <td><input className="form-input" type="number" disabled={readOnly} min="0" step={entryInputStep()} style={numInputStyle}
                     value={exclRateInputValue(it.price, it.taxRate)}
-                    title="Rate excl. GST — multi-decimal while editing; settings precision when loaded"
+                    title="Rate excl. GST — type any decimals; rounded to settings on blur"
                     onChange={e => {
                       const n = [...quoteForm.items]
                       n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)

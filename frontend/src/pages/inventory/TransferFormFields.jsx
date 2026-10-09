@@ -181,7 +181,7 @@ export default function TransferFormFields({
                         min={entryInputStep()}
                         step={entryInputStep()}
                         placeholder="Qty"
-                        title="Multi-decimal while editing; settings precision when loaded"
+                        title="Type any decimals; rounded to settings on blur"
                         value={row.qty}
                         onChange={(e) => patchItem(i, 'qty', e.target.value)}
                         disabled={disabled}
@@ -194,7 +194,7 @@ export default function TransferFormFields({
                         min="0"
                         step={entryInputStep()}
                         placeholder="Cost price"
-                        title="Multi-decimal while editing; settings precision when loaded"
+                        title="Type any decimals; rounded to settings on blur"
                         value={row.cost_price ?? (row.item_id ? costPrice : '')}
                         onChange={(e) => patchItem(i, 'cost_price', e.target.value)}
                         disabled={disabled || !row.item_id}

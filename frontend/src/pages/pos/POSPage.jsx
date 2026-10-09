@@ -594,7 +594,7 @@ export default function POSPage() {
       toast.error('Select a child counter for this sale')
       return
     }
-    // UI may hold multi-decimal qty/rate; persist with org settings precision.
+    // Qty/rate are already settings-rounded on blur; re-round as a safety net.
     const persistCart = cart.map((i) => applyLineCalc({
       ...i,
       qty: roundQty(Number(i.qty) || 0),

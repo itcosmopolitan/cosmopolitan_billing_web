@@ -86,18 +86,18 @@ export function roundEntry(n) {
   return roundToPrecision(n, ENTRY_DECIMALS)
 }
 
-/** Normalize qty from an input for UI state (entry precision; settings round on save). */
+/** Blur: round qty to org settings precision. */
 export function commitQtyInput(raw, { min = 0, fallback = 0 } = {}) {
   const v = Number(raw)
-  if (!Number.isFinite(v)) return roundEntry(fallback)
-  return roundEntry(Math.max(min, v))
+  if (!Number.isFinite(v)) return roundQty(fallback)
+  return roundQty(Math.max(min, v))
 }
 
-/** Normalize a money/rate amount for UI state (entry precision; settings round on save). */
+/** Blur: round amount to org settings precision. */
 export function commitAmountInput(raw, { min = 0, fallback = 0 } = {}) {
   const v = Number(raw)
-  if (!Number.isFinite(v)) return roundEntry(fallback)
-  return roundEntry(Math.max(min, v))
+  if (!Number.isFinite(v)) return roundAmount(fallback)
+  return roundAmount(Math.max(min, v))
 }
 
 /** Fraction digits implied by an input `step` (e.g. "0.01" → 2, "1" → 0). */
@@ -169,33 +169,28 @@ export function hasExtraAmountPrecision(n) {
 }
 
 /**
- * Qty input display: settings precision for loaded/saved values; keep
- * multi-decimal draft text while the operator is editing (string or extra digits).
- *
- * Returns a plain number (no trailing-zero padding) so `<input type="number">`
- * doesn't fight the cursor position. Display-only spots use formatQtyInput.
+ * Qty input display value — settings precision, no trailing-zero padding.
+ * While focused the user can type any decimals; on blur `commitSaleQty`
+ * rounds to settings, and this renders the result.
  */
 export function formatQtyFieldValue(n) {
   if (n == null || n === '') return ''
   if (typeof n === 'string') return n
   const value = Number(n)
   if (!Number.isFinite(value)) return ''
-  if (hasExtraQtyPrecision(value)) return String(roundEntry(value))
   return String(roundQty(value))
 }
 
 /**
- * Rate/amount input display: settings precision unless a multi-decimal draft.
- *
- * Returns a plain number (no trailing-zero padding) so `<input type="number">`
- * doesn't fight the cursor position. Display-only spots use formatAmountInput.
+ * Rate/amount input display value — settings precision, no trailing-zero padding.
+ * While focused the user can type any decimals; on blur the value is
+ * settings-rounded, and this renders the result.
  */
 export function formatAmountFieldValue(n) {
   if (n == null || n === '') return ''
   if (typeof n === 'string') return n
   const value = Number(n)
   if (!Number.isFinite(value)) return ''
-  if (hasExtraAmountPrecision(value)) return String(roundEntry(value))
   return String(roundAmount(value))
 }
 

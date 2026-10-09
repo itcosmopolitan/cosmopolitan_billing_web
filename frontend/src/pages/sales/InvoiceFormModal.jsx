@@ -428,7 +428,7 @@ export default function InvoiceFormModal({
                       step={entryInputStep()}
                       style={numInputStyle}
                       value={qtyInputValue(it.qty)}
-                      title="Multi-decimal while editing; settings precision when loaded; totals round on display/save"
+                      title="Type any decimals; rounded to settings on blur"
                       onChange={(e) => {
                         patchLine(i, {
                           qty: e.target.value,
@@ -448,7 +448,7 @@ export default function InvoiceFormModal({
                       step={entryInputStep()}
                       style={numInputStyle}
                       value={exclRateInputValue(it.price, it.taxRate)}
-                      title="Rate excl. GST — multi-decimal while editing; settings precision when loaded"
+                      title="Rate excl. GST — type any decimals; rounded to settings on blur"
                       onChange={(e) => {
                         const n = [...invoiceForm.items]
                         n[i].price = inclusiveRateFromExclInput(e.target.value, it.taxRate, ENTRY_DECIMALS)
