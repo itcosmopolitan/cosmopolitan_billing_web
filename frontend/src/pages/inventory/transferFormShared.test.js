@@ -9,8 +9,8 @@ describe('transfer cost price', () => {
       items: [{ item_id: 'item-1', qty: 3, cost_price: 12.5 }],
     })
 
-    expect(form.items[0].cost_price).toBe('12.50')
-    expect(form.items[0].qty).toBe('3.00')
+    expect(form.items[0].cost_price).toBe('12.5')
+    expect(form.items[0].qty).toBe('3')
   })
 
   it('includes the edited cost price in the saved transfer payload', () => {

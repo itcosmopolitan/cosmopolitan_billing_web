@@ -1,5 +1,5 @@
 import { FormGroup } from '@/components/ui'
-import { amountInputStep, formatAmountInput } from '@/utils/decimalPrecision'
+import { amountInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { cashTenderSummary } from '@/utils/cashTender'
 import { fmt } from '@/utils/helpers'
 
@@ -22,7 +22,7 @@ export default function CashTenderFields({
       value={value ?? ''}
       autoFocus={autoFocus}
       onChange={(e) => onChange(e.target.value)}
-      placeholder={formatAmountInput(due)}
+      placeholder={String(roundAmount(Number(due) || 0))}
       inputMode="decimal"
     />
   )

@@ -16,7 +16,7 @@ import { useAppStore } from '@/store'
 import { useQuickVendor } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
-import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
+import { roundAmount, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_METHOD_WITH_CREDIT_OPTIONS } from '@/utils/dropdownOptions'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
@@ -89,7 +89,7 @@ export default function VendorPaymentFormPage() {
         setCheckedIds(new Set(Object.keys(allocMap)))
         const seed = {}
         Object.entries(allocMap).forEach(([id, amt]) => {
-          seed[id] = formatAmountInput(amt)
+          seed[id] = String(roundAmount(amt))
         })
         setApplyById(seed)
         if (pay.vendorId) {
@@ -149,7 +149,7 @@ export default function VendorPaymentFormPage() {
           const seed = {}
           rows.forEach((b) => {
             const balance = (b.total || 0) - (b.paidAmount || 0)
-            seed[b.id] = formatAmountInput(Math.max(0, balance))
+            seed[b.id] = String(roundAmount(Math.max(0, balance)))
           })
           setApplyById(seed)
         } else {
@@ -159,7 +159,7 @@ export default function VendorPaymentFormPage() {
               if (next[b.id] != null) return
               const mine = editAllocByBill[b.id] || 0
               const balance = Math.max(0, (b.total || 0) - (b.paidAmount || 0) + mine)
-              next[b.id] = formatAmountInput(balance)
+              next[b.id] = String(roundAmount(balance))
             })
             return next
           })
@@ -218,7 +218,7 @@ export default function VendorPaymentFormPage() {
   const seedApplyToBalances = () => {
     const seed = {}
     bills.forEach((b) => {
-      seed[b.id] = formatAmountInput(balanceFor(b))
+      seed[b.id] = String(roundAmount(balanceFor(b)))
     })
     setApplyById(seed)
   }

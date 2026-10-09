@@ -14,7 +14,7 @@ import { useAppStore } from '@/store'
 import { useQuickCustomer } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
-import { formatAmountInput, amountInputStep } from '@/utils/decimalPrecision'
+import { roundAmount, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { cashTenderError } from '@/utils/cashTender'
@@ -91,7 +91,7 @@ export default function PaymentFormPage() {
         setCheckedIds(new Set(Object.keys(allocMap)))
         const seed = {}
         Object.entries(allocMap).forEach(([id, amt]) => {
-          seed[id] = formatAmountInput(amt)
+          seed[id] = String(roundAmount(amt))
         })
         setApplyById(seed)
         if (pay.customerId) {
@@ -151,7 +151,7 @@ export default function PaymentFormPage() {
           const seed = {}
           rows.forEach((inv) => {
             const balance = (inv.total || 0) - (inv.paidAmount || 0)
-            seed[inv.id] = formatAmountInput(Math.max(0, balance))
+            seed[inv.id] = String(roundAmount(Math.max(0, balance)))
           })
           setApplyById(seed)
         } else {
@@ -161,7 +161,7 @@ export default function PaymentFormPage() {
               if (next[inv.id] != null) return
               const mine = editAllocByInvoice[inv.id] || 0
               const balance = Math.max(0, (inv.total || 0) - (inv.paidAmount || 0) + mine)
-              next[inv.id] = formatAmountInput(balance)
+              next[inv.id] = String(roundAmount(balance))
             })
             return next
           })
@@ -222,7 +222,7 @@ export default function PaymentFormPage() {
   const seedApplyToBalances = () => {
     const seed = {}
     invoices.forEach((inv) => {
-      seed[inv.id] = formatAmountInput(balanceFor(inv))
+      seed[inv.id] = String(roundAmount(balanceFor(inv)))
     })
     setApplyById(seed)
   }

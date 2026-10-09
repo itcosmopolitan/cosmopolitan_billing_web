@@ -171,6 +171,9 @@ export function hasExtraAmountPrecision(n) {
 /**
  * Qty input display: settings precision for loaded/saved values; keep
  * multi-decimal draft text while the operator is editing (string or extra digits).
+ *
+ * Returns a plain number (no trailing-zero padding) so `<input type="number">`
+ * doesn't fight the cursor position. Display-only spots use formatQtyInput.
  */
 export function formatQtyFieldValue(n) {
   if (n == null || n === '') return ''
@@ -178,11 +181,14 @@ export function formatQtyFieldValue(n) {
   const value = Number(n)
   if (!Number.isFinite(value)) return ''
   if (hasExtraQtyPrecision(value)) return String(roundEntry(value))
-  return formatQtyInput(value)
+  return String(roundQty(value))
 }
 
 /**
  * Rate/amount input display: settings precision unless a multi-decimal draft.
+ *
+ * Returns a plain number (no trailing-zero padding) so `<input type="number">`
+ * doesn't fight the cursor position. Display-only spots use formatAmountInput.
  */
 export function formatAmountFieldValue(n) {
   if (n == null || n === '') return ''
@@ -190,7 +196,7 @@ export function formatAmountFieldValue(n) {
   const value = Number(n)
   if (!Number.isFinite(value)) return ''
   if (hasExtraAmountPrecision(value)) return String(roundEntry(value))
-  return formatAmountInput(value)
+  return String(roundAmount(value))
 }
 
 export function formatQtyNumber(n, decimals) {
