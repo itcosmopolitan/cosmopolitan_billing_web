@@ -629,5 +629,9 @@ export const usePOSStore = create(persist((set, get) => ({
   },
 }), {
   name: 'retailos-pos',
-  partialize: (s) => ({ heldBills: s.heldBills }),
+  partialize: (s) => ({
+    heldBills: s.heldBills,
+    selectedChildCounter: s.selectedChildCounter,
+    childCounterBranchId: s.childCounterBranchId,
+  }),
 }))

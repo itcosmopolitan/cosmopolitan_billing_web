@@ -61,7 +61,6 @@ export default function InvoiceEditPage() {
 
   useEffect(() => {
     setChildCounterBranchId(form?.branchId || '', form?.childCounterId || '')
-    return () => setChildCounterBranchId('')
   }, [form?.branchId, form?.childCounterId, setChildCounterBranchId])
 
   useEffect(() => {

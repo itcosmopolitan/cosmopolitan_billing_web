@@ -81,7 +81,6 @@ export default function ComplimentaryFormPage() {
 
   useEffect(() => {
     setChildCounterBranchId(activeBranchId || '')
-    return () => setChildCounterBranchId('')
   }, [activeBranchId, setChildCounterBranchId])
 
   const handlePick = async (i, inv) => {

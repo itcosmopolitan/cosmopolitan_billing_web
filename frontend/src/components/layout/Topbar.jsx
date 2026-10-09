@@ -4,7 +4,7 @@ import { useAppStore, usePOSStore } from '@/store'
 import { notificationsAPI } from '@/api'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import * as Icon from '@/components/ui/Icons'
-import { AutocompleteDropdown, Modal } from '@/components/ui'
+import { Modal } from '@/components/ui'
 import {
   getChildCounterBranch,
   getConfiguredChildCounters,
@@ -54,6 +54,8 @@ export default function Topbar() {
 
   const [notifOpen, setNotifOpen]   = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
+  const [counterOpen, setCounterOpen] = useState(false)
+  const counterRef = useRef(null)
   const [pendingBranch, setPendingBranch] = useState(null)
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
@@ -213,6 +215,14 @@ export default function Topbar() {
     || isTransferFormRoute
   ) && childCounters.length > 0
 
+  const counterOptions = [
+    ...(isCounterFilterRoute ? [{ id: '', label: 'All counters' }] : []),
+    ...childCounters.map((counter) => ({ id: counter.id, label: counter.name })),
+  ]
+  const selectedCounterLabel = counterOptions.find(
+    (opt) => String(opt.id) === String(selectedChildCounter || ''),
+  )?.label || 'Select counter'
+
   useEffect(() => {
     setChildCounterBranchId(hasCustomCounterBranch ? (childCounterBranchId || activeBranch?.id || '') : (activeBranch?.id || ''))
   }, [activeBranch?.id, childCounterBranchId, hasCustomCounterBranch, setChildCounterBranchId])
@@ -226,14 +236,15 @@ export default function Topbar() {
 
   // Single click-outside handler that closes whichever menu is open.
   useEffect(() => {
-    if (!notifOpen && !branchOpen) return
+    if (!notifOpen && !branchOpen && !counterOpen) return
     const onClick = (e) => {
       if (notifRef.current  && !notifRef.current.contains(e.target))  setNotifOpen(false)
       if (branchRef.current && !branchRef.current.contains(e.target)) setBranchOpen(false)
+      if (counterRef.current && !counterRef.current.contains(e.target)) setCounterOpen(false)
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [notifOpen, branchOpen])
+  }, [notifOpen, branchOpen, counterOpen])
 
   return (
     <header style={{
@@ -373,22 +384,112 @@ export default function Topbar() {
       )}
 
       {showChildCounter && (
-        <AutocompleteDropdown
-          value={selectedChildCounter}
-          onChange={setSelectedChildCounter}
-          options={[
-            ...(isCounterFilterRoute ? [{ id: '', label: 'All counters' }] : []),
-            ...childCounters.map((counter) => ({
-              id: counter.id,
-              label: counter.name,
-            })),
-          ]}
-          selectedLabel={isCounterFilterRoute && !selectedChildCounter ? 'All counters' : undefined}
-          placeholder="Select counter"
-          searchPlaceholder="Search counters…"
-          isSearchFieldRequired
-          style={{ width: 148, maxWidth: '28vw', flexShrink: 0 }}
-        />
+        <div style={{ position: 'relative' }} ref={counterRef}>
+          <button
+            onClick={() => setCounterOpen((v) => !v)}
+            title="Switch counter"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 9,
+              height: 34, padding: '0 12px',
+              background: counterOpen ? 'var(--bg-hover)' : 'var(--bg-raised)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 8,
+              cursor: 'pointer',
+              fontSize: 12.5, fontWeight: 500,
+              color: 'var(--text-secondary)',
+              transition: 'background 120ms ease',
+            }}
+            onMouseEnter={(e) => { if (!counterOpen) e.currentTarget.style.background = 'var(--bg-hover)' }}
+            onMouseLeave={(e) => { if (!counterOpen) e.currentTarget.style.background = 'var(--bg-raised)' }}
+          >
+            <span style={{ display: 'inline-flex', color: 'var(--text-muted)' }}>
+              <Icon.Receipt size={15} />
+            </span>
+            <span style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+              lineHeight: 1.15,
+            }}>
+              <span style={{
+                fontSize: 9.5, fontWeight: 600,
+                color: 'var(--text-muted)',
+                letterSpacing: '0.08em', textTransform: 'uppercase',
+              }}>
+                Counter
+              </span>
+              <span style={{
+                maxWidth: 160, whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis',
+                color: 'var(--text-primary)', fontWeight: 600, fontSize: 12.5,
+              }}>
+                {selectedCounterLabel}
+              </span>
+            </span>
+            <Icon.ChevronDown size={13} style={{
+              color: 'var(--text-muted)',
+              transform: counterOpen ? 'rotate(180deg)' : 'none',
+              transition: 'transform 150ms ease',
+            }} />
+          </button>
+
+          {counterOpen && (
+            <div style={{
+              position: 'absolute', left: 0, top: 'calc(100% + 8px)',
+              minWidth: 260,
+              maxHeight: 360, overflowY: 'auto',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 10,
+              boxShadow: 'var(--shadow-md)',
+              zIndex: 200,
+            }}>
+              <div style={{
+                padding: '10px 14px',
+                borderBottom: '1px solid var(--border-subtle)',
+                fontSize: 10.5, fontWeight: 600,
+                color: 'var(--text-muted)',
+                letterSpacing: '0.08em', textTransform: 'uppercase',
+              }}>
+                Switch counter
+              </div>
+              {counterOptions.map((opt) => {
+                const active = String(opt.id) === String(selectedChildCounter || '')
+                return (
+                  <button
+                    key={opt.id || 'all'}
+                    onClick={() => { setSelectedChildCounter(opt.id); setCounterOpen(false) }}
+                    style={{
+                      width: '100%', padding: '10px 14px',
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      background: active ? 'var(--accent-bg)' : 'transparent',
+                      border: 'none', cursor: 'pointer',
+                      color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                      fontSize: 12.5, fontWeight: active ? 600 : 500,
+                      textAlign: 'left',
+                      transition: 'background 120ms ease',
+                    }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--bg-hover)' }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <Icon.Receipt size={15} />
+                    <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {opt.label}
+                    </span>
+                    {active && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700,
+                        padding: '2px 7px', borderRadius: 10,
+                        background: 'var(--accent)', color: '#fff',
+                        letterSpacing: '0.04em',
+                      }}>
+                        ACTIVE
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Spacer */}
