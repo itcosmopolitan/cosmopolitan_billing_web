@@ -108,6 +108,9 @@
 <div id="document"></div>
 <script>
 (function () {
+  const DEFAULT_ASSETS = { logo: '/assets/cosmopolitan-logo.png', seal: '/assets/gold-100-seal.png' }
+  let brandAssets = DEFAULT_ASSETS
+
   function escapeHtml(str) {
     if (str === null || str === undefined) return ''
     return String(str)
@@ -217,7 +220,7 @@
     const badge = branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl || ''
     const badgeHtml = badge
       ? `<img class="badge-img" src="${escapeHtml(badge)}" alt="Badge" />`
-      : `<img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='inline-block'" />
+      : `<img id="goldSealImg" class="badge-img" src="${brandAssets.seal}" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='inline-block'" />
         <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
           <div class="gold-corporate">Corporate Maldives</div>
           <div class="gold-text">GOLD</div>
@@ -228,7 +231,7 @@
       <table class="header">
         <tr>
           <td style="width:30%;">
-            <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+            <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || brandAssets.logo)}" alt="Cosmopolitan" />
             <div class="logo-tag">"where quality and service matters"</div>
           </td>
           <td class="company-info" style="width:44%;">
@@ -356,6 +359,7 @@
   }
 
   function renderQuotePayload(payload) {
+    brandAssets = { ...DEFAULT_ASSETS, ...(payload?.assets || {}) }
     const quote = payload?.quote || {}
     const sourceBranch = payload?.branch || {}
     const branch = {
@@ -445,7 +449,7 @@
     if (needsBranchLoad) {
       branch = { ...branch, ...(await fetchBranchById(branchId)) }
     }
-    renderQuotePayload({ quote, branch })
+    renderQuotePayload({ quote, branch, assets: payload.assets })
   })
 })();
 </script>

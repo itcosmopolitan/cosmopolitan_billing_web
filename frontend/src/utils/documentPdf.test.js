@@ -20,6 +20,19 @@ function lastRequestBody(fetchMock) {
   return JSON.parse(init.body)
 }
 
+const TEMPLATE_HTML = '<!doctype html><html><head></head><body></body></html>'
+const PDF_ENDPOINT_URL = '/api/v1/documents/invoice-pdf'
+
+// Routes the template and brand-image loads, so each test only controls the PDF replies.
+function mockFetch(pdfReplies = []) {
+  const queue = [...pdfReplies]
+  return vi.fn(async (url) => {
+    if (url === PDF_ENDPOINT_URL) return queue.shift() ?? new Response(pdfBlob(), { status: 200 })
+    if (url.startsWith('/document-templates/')) return new Response(TEMPLATE_HTML, { status: 200 })
+    return new Response(new Blob(['png'], { type: 'image/png' }), { status: 200 })
+  })
+}
+
 // Drives the hidden render iframe the way the real template would: wait for the iframe
 // to be attached, fire its load event, write the rendered markup, then send the ready message.
 async function completeRender(readyType, markup) {
@@ -67,7 +80,7 @@ describe('requestDocumentPdf', () => {
   let fetchMock
 
   beforeEach(() => {
-    fetchMock = vi.fn(async () => new Response(pdfBlob(), { status: 200 }))
+    fetchMock = mockFetch()
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -90,7 +103,8 @@ describe('requestDocumentPdf', () => {
   })
 
   it('surfaces the server detail message on failure', async () => {
-    fetchMock.mockResolvedValueOnce(jsonError(413, 'PDF request is too large.'))
+    fetchMock = mockFetch([jsonError(413, 'PDF request is too large.')])
+    vi.stubGlobal('fetch', fetchMock)
     await expect(requestDocumentPdf({ html: 'x', fileName: 'a.pdf', mode: 'export' }))
       .rejects.toThrow('PDF request is too large.')
   })
@@ -109,7 +123,7 @@ describe('downloadDocumentPdf', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click() {
       clicks.push(this.download)
     })
-    fetchMock = vi.fn(async () => new Response(pdfBlob(), { status: 200 }))
+    fetchMock = mockFetch()
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -132,8 +146,24 @@ describe('downloadDocumentPdf', () => {
     expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull()
   })
 
+  it('does not refetch the template or brand images on the next export', async () => {
+    const first = downloadDocumentPdf('Tax Invoice', { sale: { number: 'INV-0001' }, branch: {} })
+    await completeRender('invoiceRendered', '<div>One</div>')
+    await first
+
+    const before = fetchMock.mock.calls.length
+    const second = downloadDocumentPdf('Tax Invoice', { sale: { number: 'INV-0002' }, branch: {} })
+    await completeRender('invoiceRendered', '<div>Two</div>')
+    await second
+
+    const newUrls = fetchMock.mock.calls.slice(before).map(([url]) => url)
+    expect(newUrls).toEqual([PDF_ENDPOINT_URL])
+    expect(clicks).toEqual(['Tax_Invoice_INV-0001.pdf', 'Tax_Invoice_INV-0002.pdf'])
+  })
+
   it('does not download anything when the server rejects the request', async () => {
-    fetchMock.mockResolvedValueOnce(jsonError(504, 'PDF generation timed out.'))
+    fetchMock = mockFetch([jsonError(504, 'PDF generation timed out.')])
+    vi.stubGlobal('fetch', fetchMock)
     const job = downloadDocumentPdf('Quote', { quote: { number: 'QT-0001' } })
     await completeRender('quoteRendered', '<div>Quote</div>')
 
@@ -150,7 +180,7 @@ describe('printDocumentPdf', () => {
       createObjectURL: vi.fn(() => 'blob:print'),
       revokeObjectURL: vi.fn(),
     }))
-    fetchMock = vi.fn(async () => new Response(pdfBlob(), { status: 200 }))
+    fetchMock = mockFetch()
     vi.stubGlobal('fetch', fetchMock)
   })
 

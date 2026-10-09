@@ -30,6 +30,11 @@ const TEMPLATES = {
   },
 }
 
+const BRAND_ASSET_PATHS = {
+  logo: '/assets/cosmopolitan-logo.png',
+  seal: '/assets/gold-100-seal.png',
+}
+
 const RENDER_TIMEOUT_MS = 15000
 const IMAGE_FETCH_TIMEOUT_MS = 10000
 const PRINT_CLEANUP_DELAY_MS = 60000
@@ -113,6 +118,52 @@ function blobToDataUrl(blob) {
   })
 }
 
+// Template text and brand images are static, so they are fetched once per page session.
+// Failed loads are dropped from the cache so the next attempt can retry.
+const memo = new Map()
+
+function memoize(key, load) {
+  if (!memo.has(key)) {
+    memo.set(key, load().catch((error) => {
+      memo.delete(key)
+      throw error
+    }))
+  }
+  return memo.get(key)
+}
+
+async function fetchOk(url, ms) {
+  const response = await withTimeout(
+    fetch(url, { credentials: 'same-origin' }),
+    ms,
+    `Request timed out: ${url}`,
+  )
+  if (!response.ok) throw new Error(`Request failed (${response.status}): ${url}`)
+  return response
+}
+
+function loadTemplateText(template) {
+  return memoize(`template:${template.url}`, async () => (await fetchOk(template.url, RENDER_TIMEOUT_MS)).text())
+}
+
+function loadImageDataUrl(src) {
+  return memoize(`image:${src}`, async () => blobToDataUrl(await (await fetchOk(src, IMAGE_FETCH_TIMEOUT_MS)).blob()))
+}
+
+// Templates are passed these as data URIs so they render without any image requests.
+// A missing asset falls back to the template's own default path.
+async function loadBrandAssets() {
+  const entries = await Promise.all(Object.entries(BRAND_ASSET_PATHS).map(async ([key, path]) => {
+    try {
+      return [key, await loadImageDataUrl(path)]
+    } catch (error) {
+      console.warn(`Brand image unavailable for PDF (${key}):`, error)
+      return null
+    }
+  }))
+  return Object.fromEntries(entries.filter(Boolean))
+}
+
 // Images must be data URIs: the server sanitizer drops every non-data image source.
 async function inlineImages(doc) {
   const images = Array.from(doc.images)
@@ -145,8 +196,16 @@ function serializeDocument(doc) {
 
 // Renders the shared template off-screen, waits for the template to report it is ready,
 // then returns the fully inlined HTML for the server.
+// The template is loaded from a blob URL built from its text. A blob iframe keeps the page
+// origin, which the template's postMessage checks need. The <base> tag makes relative
+// URLs (API calls, default asset paths) resolve against the app origin, not the blob.
 export async function renderDocumentHtml(documentType, data) {
-  const template = TEMPLATES[templateKeyFor(documentType)]
+  const templateKey = templateKeyFor(documentType)
+  const template = TEMPLATES[templateKey]
+  const [templateText, assets] = await Promise.all([loadTemplateText(template), loadBrandAssets()])
+  const templateHtml = templateText.replace(/<head>/i, `<head><base href="${window.location.origin}/">`)
+  const templateUrl = URL.createObjectURL(new Blob([templateHtml], { type: 'text/html' }))
+
   const frame = document.createElement('iframe')
   frame.title = `${documentType} render`
   frame.setAttribute('aria-hidden', 'true')
@@ -155,7 +214,7 @@ export async function renderDocumentHtml(documentType, data) {
 
   try {
     const loaded = new Promise((resolve) => frame.addEventListener('load', resolve, { once: true }))
-    frame.src = template.url
+    frame.src = templateUrl
     await withTimeout(loaded, RENDER_TIMEOUT_MS, `${documentType} template did not load.`)
 
     const frameWindow = frame.contentWindow
@@ -168,9 +227,9 @@ export async function renderDocumentHtml(documentType, data) {
       }
       window.addEventListener('message', onMessage)
     })
-    const payload = templateKeyFor(documentType) === 'quotation'
-      ? { quote: data.quote, branch: data.branch }
-      : { sale: data.sale, branch: data.branch, documentType }
+    const payload = templateKey === 'quotation'
+      ? { quote: data.quote, branch: data.branch, assets }
+      : { sale: data.sale, branch: data.branch, documentType, assets }
     frameWindow.postMessage({ type: template.renderMessage, payload }, window.location.origin)
     await withTimeout(rendered, RENDER_TIMEOUT_MS, `${documentType} template did not finish rendering.`)
 
@@ -180,6 +239,7 @@ export async function renderDocumentHtml(documentType, data) {
     return serializeDocument(doc)
   } finally {
     frame.remove()
+    URL.revokeObjectURL(templateUrl)
   }
 }
 
