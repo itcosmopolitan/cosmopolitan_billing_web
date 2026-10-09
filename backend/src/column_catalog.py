@@ -100,6 +100,17 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("status", "Status", locked=True),
         _col("returns", "Returns"),
     ],
+    "sales.complimentary": [
+        _col("number", "Complimentary #", locked=True),
+        _col("customer", "Customer"),
+        _col("branch", "Branch"),
+        _col("counter", "Counter"),
+        _col("date", "Date"),
+        _col("reason", "Reason"),
+        _col("lines", "Lines"),
+        _col("cashier", "Cashier"),
+        _col("amount", "Amount"),
+    ],
     "sales.quotes": [
         _col("number", "Quote #", locked=True),
         _col("customer", "Customer"),

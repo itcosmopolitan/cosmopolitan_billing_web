@@ -4102,6 +4102,8 @@ async def _consume_sale_line_stock(
     invoice_id: str,
     invoice_number: str,
     allow_oversell: bool,
+    movement_type: str = "sale",
+    source_type: str = "sale_invoice",
 ) -> None:
     """Deduct stock for one invoice line and persist batch_allocation when known."""
     if not item.item_id:
@@ -4133,8 +4135,8 @@ async def _consume_sale_line_stock(
                 strategy=strategy,
                 preferred_batch_id=item.batch_id,
                 explicit_allocation=explicit,
-                movement_type="sale",
-                source_type="sale_invoice",
+                movement_type=movement_type,
+                source_type=source_type,
                 source_ref=invoice_id,
             )
             consumed_ok = True
@@ -4149,8 +4151,8 @@ async def _consume_sale_line_stock(
                         strategy=strategy,
                         preferred_batch_id=item.batch_id,
                         explicit_allocation=None,
-                        movement_type="sale",
-                        source_type="sale_invoice",
+                        movement_type=movement_type,
+                        source_type=source_type,
                         source_ref=invoice_id,
                     )
                     consumed_ok = True
@@ -4183,8 +4185,8 @@ async def _consume_sale_line_stock(
                 db,
                 item_id=item.item_id,
                 branch_id=branch_id,
-                movement_type="sale",
-                source_type="sale_invoice",
+                movement_type=movement_type,
+                source_type=source_type,
                 source_ref=invoice_id,
                 notes=f"Oversell clamp on {invoice_number}",
             )
@@ -4195,8 +4197,8 @@ async def _consume_sale_line_stock(
                 item_id=item.item_id,
                 branch_id=branch_id,
                 delta=-item.qty,
-                movement_type="sale",
-                source_type="sale_invoice",
+                movement_type=movement_type,
+                source_type=source_type,
                 source_ref=invoice_id,
             )
         except ValueError:
@@ -4209,14 +4211,21 @@ async def _consume_sale_line_stock(
                 db,
                 item_id=item.item_id,
                 branch_id=branch_id,
-                movement_type="sale",
-                source_type="sale_invoice",
+                movement_type=movement_type,
+                source_type=source_type,
                 source_ref=invoice_id,
                 notes=f"Oversell clamp on {invoice_number}",
             )
 
 
-async def _restock_invoice_lines(db, inv, line_items) -> float:
+async def _restock_invoice_lines(
+    db,
+    inv,
+    line_items,
+    *,
+    reversal_movement_type: str = "sale_reversal",
+    source_type: str = "sale_invoice",
+) -> float:
     """Reverse stock deducted at invoice create/convert. Uses the per-line
     batch_allocation ledger when present; otherwise aggregate add-back."""
     restored = 0.0
@@ -4244,8 +4253,8 @@ async def _restock_invoice_lines(db, inv, line_items) -> float:
                     try:
                         await adjust_stock_atomic(
                             db, item_id=li.item_id, branch_id=inv.branch_id, delta=qty,
-                            movement_type="sale_reversal",
-                            source_type="sale_invoice",
+                            movement_type=reversal_movement_type,
+                            source_type=source_type,
                             source_ref=inv.id,
                         )
                     except ValueError:
@@ -4256,8 +4265,8 @@ async def _restock_invoice_lines(db, inv, line_items) -> float:
                 line_qty = as_qty(li.qty)
                 await adjust_stock_atomic(
                     db, item_id=li.item_id, branch_id=inv.branch_id, delta=line_qty,
-                    movement_type="sale_reversal",
-                    source_type="sale_invoice",
+                    movement_type=reversal_movement_type,
+                    source_type=source_type,
                     source_ref=inv.id,
                 )
                 restored += line_qty

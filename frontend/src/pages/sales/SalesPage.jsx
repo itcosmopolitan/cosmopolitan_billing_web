@@ -33,6 +33,7 @@ import ExportListModal from '@/components/ExportListModal'
 import SalesTxnDetailPanel from './SalesTxnDetailPanel'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from './ListFilters'
+import ComplimentaryList from './ComplimentaryList'
 import {
   canShowCreditNoteAction,
   canShowDeletePayment,
@@ -57,6 +58,7 @@ const TABS = [
   // recorded (single-invoice via the row Pay button OR multi-invoice
   // via + New Payment). See PaymentFormPage for the create flow.
   { id: 'payments',  label: 'Payments' },
+  { id: 'complimentary', label: 'Complimentary' },
 ]
 
 const INVOICE_FILTER_FIELDS = ['customer', 'status', 'paymentMode', 'category', 'discount', 'date']
@@ -172,6 +174,7 @@ export default function SalesPage() {
   const [orderListVersion, setOrderListVersion] = useState(0)
   const [retListVersion, setRetListVersion] = useState(0)
   const [payListVersion, setPayListVersion] = useState(0)
+  const [compListVersion, setCompListVersion] = useState(0)
 
   const [invLoading, setInvLoading] = useState(false)
   const [quoteLoading, setQuoteLoading] = useState(false)
@@ -992,6 +995,9 @@ export default function SalesPage() {
     if (tab === 'payments' && can('invoices.edit')) {
       return { label: '+ New Payment', onClick: () => navigate('/sales/payments/new') }
     }
+    if (tab === 'complimentary' && can('invoices.create')) {
+      return { label: '+ New Complimentary', onClick: () => navigate('/sales/complimentary/new') }
+    }
     return null
   }
 
@@ -1003,6 +1009,7 @@ export default function SalesPage() {
     else if (tab === 'quotes') setQuoteListVersion((v) => v + 1)
     else if (tab === 'returns') setRetListVersion((v) => v + 1)
     else if (tab === 'payments') setPayListVersion((v) => v + 1)
+    else if (tab === 'complimentary') setCompListVersion((v) => v + 1)
     toast.success('List refreshed')
   }
 
@@ -1102,6 +1109,7 @@ export default function SalesPage() {
   const listMenuActions = buildListPageMenuActions({
     onExport: openExportModal,
     onRefresh: refreshCurrentTab,
+    hideExport: tab === 'complimentary',
   })
 
   const listToolbarActions = (
@@ -1406,6 +1414,10 @@ export default function SalesPage() {
           </Card>
           </div>
         </>
+      )}
+
+      {tab === 'complimentary' && (
+        <ComplimentaryList toolbarActions={listToolbarActions} refreshKey={compListVersion} branches={branches} />
       )}
 
       {tab === 'quotes' && (

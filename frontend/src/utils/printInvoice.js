@@ -164,6 +164,36 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
   return payload
 }
 
+export async function prepareComplimentaryPayload(entry, branch) {
+  const sale = {
+    id: entry?.id,
+    number: entry?.number,
+    date: entry?.date,
+    customerName: entry?.customer_name || 'Walk-in',
+    branchName: entry?.branch_name,
+    childCounterId: entry?.child_counter_id,
+    childCounterName: entry?.child_counter_name,
+    cashier: entry?.created_by,
+    createdBy: entry?.created_by,
+    notes: entry?.notes || '',
+    isComplimentary: true,
+    subtotal: 0,
+    taxTotal: 0,
+    total: 0,
+    items: (entry?.items || []).map((line) => ({
+      name: line.name,
+      units: line.unit,
+      packaging: line.packaging,
+      packing: line.packing,
+      qty: line.qty,
+      price: line.cost_price,
+      taxRate: 0,
+      discount: 0,
+    })),
+  }
+  return prepareInvoicePayload(sale, branch, { fetchSale: false })
+}
+
 export async function prepareStockTransferPayload(transfer, branch = {}) {
   if (typeof window === 'undefined') return null
   if (!transfer?.id) throw new Error('A stock transfer ID is required to print the transfer.')

@@ -37,13 +37,15 @@ const navItems = [
       { prefix: '/sales/quotations', tab: 'quotes' },
       { prefix: '/sales/returns', tab: 'returns' },
       { prefix: '/sales/payments', tab: 'payments' },
+      { prefix: '/sales/complimentary', tab: 'complimentary' },
     ],
     children: [
       { path: '/sales?tab=quotes', label: 'Quotations', tab: 'quotes' },
       { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders' },
       { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices' },
+      { path: '/sales?tab=complimentary', label: 'Complimentary', tab: 'complimentary' },
       { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments' },
-      { path: '/sales?tab=returns', label: 'Credit Notes', tab: 'returns' }
+      { path: '/sales?tab=returns', label: 'Credit Notes', tab: 'returns' },
     ],
   },
   {

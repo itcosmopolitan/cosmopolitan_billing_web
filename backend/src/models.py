@@ -852,6 +852,48 @@ class QuotationLineItem(Base):
     item      = relationship("Item", back_populates="quotation_lines")
 
 
+# ─── Complimentary / Sample issues ───────────────────────────────────────────
+# Stock given away free (reason = Complimentary or Sample). Kept in its own
+# tables rather than sale_invoices so no sales, tax, revenue or customer
+# report picks it up. Stock still leaves inventory through the stock ledger
+# under movement_type="complimentary".
+class ComplimentaryEntry(Base):
+    __tablename__ = "complimentary_entries"
+    id            = Column(String, primary_key=True)
+    number        = Column(String, unique=True, nullable=False)
+    reason        = Column(String, nullable=False)
+    customer_id   = Column(String, ForeignKey("customers.id"), nullable=True)
+    customer_name = Column(String, default="Walk-in")
+    branch_id     = Column(String, ForeignKey("branches.id"), nullable=False)
+    branch_name   = Column(String)
+    child_counter_id   = Column(String, nullable=True)
+    child_counter_name = Column(String, nullable=True)
+    created_by    = Column(String)
+    date          = Column(String, nullable=False)
+    total_cost    = Column(Float, default=0)
+    notes         = Column(Text)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+    customer   = relationship("Customer")
+    line_items = relationship("ComplimentaryLineItem", back_populates="entry", cascade="all, delete-orphan")
+
+
+class ComplimentaryLineItem(Base):
+    __tablename__ = "complimentary_line_items"
+    id               = Column(String, primary_key=True)
+    entry_id         = Column(String, ForeignKey("complimentary_entries.id"), nullable=False)
+    item_id          = Column(String, ForeignKey("items.id"), nullable=False)
+    name             = Column(String, nullable=False)
+    unit             = Column(String, default="")
+    qty              = Column(Float, default=1)
+    cost_price       = Column(Float, default=0)
+    cost_total       = Column(Float, default=0)
+    batch_allocation = Column(Text)
+
+    entry = relationship("ComplimentaryEntry", back_populates="line_items")
+    item  = relationship("Item")
+
+
 # ─── Sales Order ──────────────────────────────────────────────────────────────
 # Intent-to-invoice: lets a customer (or salesperson) reserve a basket of
 # items + agreed prices that will become an invoice later. No stock side-

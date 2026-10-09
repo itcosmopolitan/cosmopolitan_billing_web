@@ -85,6 +85,14 @@ DEFAULT_NUMBERING: list[dict[str, Any]] = [
         "scope": "per_branch",
         "next_seq": 89,
     },
+    {
+        "doc_type": "complimentary",
+        "label": "Complimentary",
+        "prefix": "CMP",
+        "format": "CMP-BRANCH-YYYY-####",
+        "scope": "per_branch",
+        "next_seq": 1,
+    },
 ]
 
 

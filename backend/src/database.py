@@ -425,6 +425,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("adjustment_requests", "child_counter_name", "VARCHAR"),
     ("cash_entries", "child_counter_id", "VARCHAR"),
     ("cash_entries", "child_counter_name", "VARCHAR"),
+    ("complimentary_entries", "child_counter_id", "VARCHAR"),
+    ("complimentary_entries", "child_counter_name", "VARCHAR"),
     # 2026-06-09: soft void for payments (audit trail vs hard delete).
     ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("customer_payments", "voided_at", "VARCHAR"),

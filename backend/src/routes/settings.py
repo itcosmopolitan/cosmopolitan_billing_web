@@ -314,7 +314,7 @@ async def preview_document_number(
 ):
     """Peek the next document number without reserving it (form default)."""
     dt = doc_type.strip().lower()
-    if dt in ("quotation", "sales_invoice", "purchase_bill", "pos_receipt", "credit_note", "stock_transfer", "stock_adjustment"):
+    if dt in ("quotation", "complimentary", "sales_invoice", "purchase_bill", "pos_receipt", "credit_note", "stock_transfer", "stock_adjustment"):
         number = await peek_next_number(db, dt, branch_id=branch_id)
         return {"doc_type": dt, "number": number}
     year = datetime.now().year

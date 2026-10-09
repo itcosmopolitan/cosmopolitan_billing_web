@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import get_db
 from src.models import (
     Branch,
+    ComplimentaryEntry,
     Customer,
     CustomerCreditEntry,
     CustomerImportJob,
@@ -146,6 +147,8 @@ async def _customer_delete_blockers(db: AsyncSession, customer_id: str) -> list[
         blockers.append("customer has quotations")
     if await _count(SalesOrder):
         blockers.append("customer has sales orders")
+    if await _count(ComplimentaryEntry):
+        blockers.append("customer has complimentary entries")
     if await _count(CustomerPayment):
         blockers.append("customer has payments")
     if await _count(SalesReturn):

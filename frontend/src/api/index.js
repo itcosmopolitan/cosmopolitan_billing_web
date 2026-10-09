@@ -379,6 +379,12 @@ export const salesAPI = {
     convertToOrder: (id)         => api.post(`/sales/quotations/${id}/convert-to-order`),
     convertToInvoice: (id, body) => api.post(`/sales/quotations/${id}/convert-to-invoice`, body),
   },
+  complimentary: {
+    list:   (params) => api.get('/sales/complimentary/', { params }),
+    get:    (id)     => api.get(`/sales/complimentary/${id}`),
+    create: (data)   => api.post('/sales/complimentary/', data),
+    remove: (id)     => api.delete(`/sales/complimentary/${id}`),
+  },
 }
 
 export const stockPoolsAPI = {

@@ -32,6 +32,7 @@ from src.routes import (
     purchases,
     reports,
     roles,
+    complimentary,
     sales,
     settings as settings_routes,
     setup,
@@ -130,6 +131,7 @@ app.include_router(items.router,      prefix=f"{PREFIX}/items",     tags=["Items
 app.include_router(customers.router,  prefix=f"{PREFIX}/customers", tags=["Customers"])
 app.include_router(autocomplete.router, prefix=f"{PREFIX}/autocomplete", tags=["Autocomplete"])
 app.include_router(vendors.router,    prefix=f"{PREFIX}/vendors",   tags=["Vendors"])
+app.include_router(complimentary.router, prefix=f"{PREFIX}/sales/complimentary", tags=["Complimentary"])
 app.include_router(sales.router,      prefix=f"{PREFIX}/sales",     tags=["Sales"])
 app.include_router(purchases.router,  prefix=f"{PREFIX}/purchases", tags=["Purchases"])
 app.include_router(transfers.router,  prefix=f"{PREFIX}/transfers", tags=["Transfers"])

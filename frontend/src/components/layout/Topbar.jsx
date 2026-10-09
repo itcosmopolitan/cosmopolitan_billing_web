@@ -182,6 +182,7 @@ export default function Topbar() {
     || /^\/sales\/invoices\/[^/]+\/edit$/.test(location.pathname)
   )
   const salesTab = new URLSearchParams(location.search).get('tab') || 'quotes'
+  const isComplimentaryRoute = location.pathname === '/sales/complimentary/new'
   const isSalesDocumentRoute = (
     /^\/sales\/(quotations|orders)\/(new|[^/]+\/edit)$/.test(location.pathname)
   )
@@ -191,13 +192,13 @@ export default function Topbar() {
   )
   const isTransferFormRoute = /^\/transfers\/(new|[^/]+\/edit)$/.test(location.pathname)
   const isCounterFilterRoute = (
-    (location.pathname === '/sales' && ['quotes', 'orders', 'invoices'].includes(salesTab))
+    (location.pathname === '/sales' && ['quotes', 'orders', 'invoices', 'complimentary'].includes(salesTab))
     || location.pathname === '/transfers'
     || location.pathname === '/adjustments'
     || location.pathname === '/cash'
     || location.pathname === '/petty-cash'
   )
-  const hasCustomCounterBranch = isInvoiceRoute || isSalesDocumentRoute || isTransferFormRoute
+  const hasCustomCounterBranch = isInvoiceRoute || isSalesDocumentRoute || isTransferFormRoute || isComplimentaryRoute
   const counterBranchId = hasCustomCounterBranch && !followsActiveBranch && childCounterBranchId
     ? childCounterBranchId
     : activeBranch?.id
@@ -206,6 +207,7 @@ export default function Topbar() {
   const showChildCounter = (
     location.pathname === '/pos'
     || isInvoiceRoute
+    || isComplimentaryRoute
     || isCounterFilterRoute
     || isSalesDocumentRoute
     || isTransferFormRoute

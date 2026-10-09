@@ -98,6 +98,7 @@
   table.totals .totals-payment { text-align: left; font-size: 9.5px; line-height: 1.35; padding-right: 12px; }
   .discount-note { margin-top: 10px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
   .amount-words { margin-top: 6px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .free-of-charge-note { margin-top: 4px; font-size: 10.5px; font-weight: bold; font-style: italic; color: #1b3e6f; }
   .payment-section { margin-top: 18px; border-top: 1px solid #333; padding-top: 8px; font-size: 10.5px; }
   .bank-details { line-height: 1.5; }
   .terms { margin-top: 14px; font-size: 9.5px; color: #333; line-height: 1.6; }
@@ -318,9 +319,11 @@
       sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0,
     )
     const lineAmounts = items.map((item, index) => getLineAmounts(item, documentDiscountShares[index]))
-    const netAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
+    // Complimentary and sample slips show cost-based lines but carry no taxable value.
+    const isComplimentary = sale.isComplimentary === true
+    const netAmount = isComplimentary ? 0 : roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
     const discountAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + (line.discount || 0), 0))
-    const taxTotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
+    const taxTotal = isComplimentary ? 0 : roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
     const total = roundNumber(netAmount + taxTotal)
     const grandLabel = isPurchaseOrder ? 'Purchase Order Total (Inc. GST)'
       : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)'
@@ -409,6 +412,7 @@
         </table>
         ${discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(discountAmount)}</div>` : ''}
         <div class="amount-words">${escapeHtml(amountToWords(total))}</div>
+        ${isComplimentary ? '<div class="free-of-charge-note">Free of charge. No amount payable.</div>' : ''}
         ${isPurchaseDocument ? '' : `<div class="payment-section">
           <div class="bank-details">
             Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977

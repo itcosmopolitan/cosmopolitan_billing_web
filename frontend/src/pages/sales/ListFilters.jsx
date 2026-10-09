@@ -20,6 +20,7 @@ import {
 export const EMPTY_LIST_FILTERS = {
   status: '',
   paymentMode: '',
+  reason: '',
   customerId: '',
   customerLabel: '',
   vendorId: '',
@@ -27,9 +28,10 @@ export const EMPTY_LIST_FILTERS = {
   categoryId: '',
   categoryLabel: '',
   discount: '',
-  dateFrom: '',
   dateTo: '',
 }
+
+const NO_REASON_OPTIONS = []
 
 /** @deprecated use EMPTY_LIST_FILTERS */
 export const EMPTY_SALES_LIST_FILTERS = EMPTY_LIST_FILTERS
@@ -48,7 +50,7 @@ function optionLabel(options, id, fallback) {
   return options.find((o) => o.id === id)?.label || fallback || id
 }
 
-function buildChips(filters, fieldSet, statusOpts) {
+function buildChips(filters, fieldSet, statusOpts, reasonOpts) {
   const chips = []
   if (fieldSet.has('customer') && filters.customerId) {
     chips.push({
@@ -72,6 +74,12 @@ function buildChips(filters, fieldSet, statusOpts) {
     chips.push({
       key: 'paymentMode',
       label: `Payment method is ${optionLabel(PAYMENT_METHOD_WITH_CREDIT_OPTIONS, filters.paymentMode)}`,
+    })
+  }
+  if (fieldSet.has('reason') && filters.reason) {
+    chips.push({
+      key: 'reason',
+      label: `Reason is ${optionLabel(reasonOpts, filters.reason)}`,
     })
   }
   if (fieldSet.has('category') && filters.categoryId) {
@@ -111,6 +119,7 @@ export default function ListFilters({
   toolbarActions = null,
   fields = ['status', 'date'],
   statusOptions: statusOpts = INVOICE_STATUS_OPTIONS,
+  reasonOptions = NO_REASON_OPTIONS,
 }) {
   const fieldSet = useMemo(() => new Set(fields), [fields])
   const [open, setOpen] = useState(false)
@@ -121,8 +130,8 @@ export default function ListFilters({
   }, [open, filters])
 
   const chips = useMemo(
-    () => buildChips(filters, fieldSet, statusOpts),
-    [filters, fieldSet, statusOpts],
+    () => buildChips(filters, fieldSet, statusOpts, reasonOptions),
+    [filters, fieldSet, statusOpts, reasonOptions],
   )
   const activeCount = chips.length
   const filtersActive = activeCount > 0
@@ -293,6 +302,22 @@ export default function ListFilters({
                 placeholder="All Methods"
                 clearable
                 onClear={() => setDraftField('paymentMode', '')}
+                style={{ width: '100%' }}
+              />
+            </FormGroup>
+          )}
+
+          {fieldSet.has('reason') && (
+            <FormGroup label="Reason">
+              <AutocompleteDropdown
+                value={draft.reason}
+                onChange={(id) => setDraftField('reason', id)}
+                options={reasonOptions}
+                prependOptions={[{ id: '', label: 'All Reasons' }]}
+                isSearchFieldRequired={false}
+                placeholder="All Reasons"
+                clearable
+                onClear={() => setDraftField('reason', '')}
                 style={{ width: '100%' }}
               />
             </FormGroup>
