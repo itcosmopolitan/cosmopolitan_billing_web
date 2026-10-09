@@ -7,6 +7,7 @@ import {
   printDocumentPdf,
   requestDocumentPdf,
   safePdfName,
+  warmDocumentPdf,
 } from './documentPdf'
 
 const pdfBlob = () => new Blob(['%PDF-1.4 test'], { type: 'application/pdf' })
@@ -28,8 +29,9 @@ function mockFetch(pdfReplies = []) {
   const queue = [...pdfReplies]
   return vi.fn(async (url) => {
     if (url === PDF_ENDPOINT_URL) return queue.shift() ?? new Response(pdfBlob(), { status: 200 })
-    if (url.startsWith('/document-templates/')) return new Response(TEMPLATE_HTML, { status: 200 })
-    return new Response(new Blob(['png'], { type: 'image/png' }), { status: 200 })
+    if (url.includes('/document-templates/')) return new Response(TEMPLATE_HTML, { status: 200 })
+    // A jsdom Blob is needed here: FileReader stringifies Blobs created by Node's Response.
+    return { ok: true, status: 200, blob: async () => new Blob(['png'], { type: 'image/png' }) }
   })
 }
 
@@ -169,6 +171,54 @@ describe('downloadDocumentPdf', () => {
 
     await expect(job).rejects.toThrow('PDF generation timed out.')
     expect(clicks).toEqual([])
+  })
+})
+
+describe('warmDocumentPdf', () => {
+  let fetchMock
+
+  beforeEach(() => {
+    vi.stubGlobal('URL', Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:export'),
+      revokeObjectURL: vi.fn(),
+    }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('starts the branch logo load before the render, so the render needs no extra fetches', async () => {
+    await warmDocumentPdf('Tax Invoice', { logo: '/uploads/warm-logo.png' })
+    const warmedUrls = fetchMock.mock.calls.map(([url]) => url)
+    expect(warmedUrls).toEqual(expect.arrayContaining([expect.stringContaining('/uploads/warm-logo.png')]))
+
+    const before = fetchMock.mock.calls.length
+    const job = downloadDocumentPdf('Tax Invoice', { sale: { number: 'INV-0003' }, branch: { logo: '/uploads/warm-logo.png' } })
+    await completeRender('invoiceRendered', '<div>Warm</div>')
+    await job
+
+    const newUrls = fetchMock.mock.calls.slice(before).map(([url]) => url)
+    expect(newUrls).toEqual([PDF_ENDPOINT_URL])
+  })
+
+  it('passes the branch logo to the template as a data URI', async () => {
+    const job = downloadDocumentPdf('Tax Invoice', { sale: { number: 'INV-0004' }, branch: { logo: '/uploads/render-logo.png' } })
+    await vi.waitFor(() => {
+      if (!document.querySelector('iframe[aria-hidden="true"]')) throw new Error('render frame not attached')
+    })
+    const frame = document.querySelector('iframe[aria-hidden="true"]')
+    const post = vi.spyOn(frame.contentWindow, 'postMessage')
+    await completeRender('invoiceRendered', '<div>Logo</div>')
+    await job
+
+    const renderMessage = post.mock.calls.find(([message]) => message?.type)?.[0]
+    expect(renderMessage.payload.branch.logo).toMatch(/^data:image\/png;base64,/)
   })
 })
 

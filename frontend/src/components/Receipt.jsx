@@ -4,7 +4,7 @@ import { fmtDate } from '@/utils/helpers'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { prepareDocumentPayload } from '@/utils/printInvoice'
-import { downloadDocumentPdf, downloadElementPdf, printDocumentPdf } from '@/utils/documentPdf'
+import { downloadDocumentPdf, downloadElementPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
 import { settingsAPI } from '@/api'
 import { formatSettlementLabel } from '@/utils/storeCredit'
 import { calcInvoiceSummary, lineTaxableFromInclusive } from '@/utils/taxCalc'
@@ -146,11 +146,13 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
       return
     }
     if (pdfBusy) return
+    warmDocumentPdf(documentType, branch)
     runPdfJob('print', async () => printDocumentPdf(documentType, await buildPdfPayload()))
   }
 
   const exportPdf = async () => {
     if (!sale || pdfBusy) return false
+    if (invoiceFormat !== 'thermal') warmDocumentPdf(documentType, branch)
     return runPdfJob('export', async () => {
       if (invoiceFormat === 'thermal') {
         await downloadElementPdf(ref.current, documentType, { sale })

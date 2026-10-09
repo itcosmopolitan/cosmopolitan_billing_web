@@ -76,6 +76,43 @@ describe('prepareInvoicePayload for Sales Orders', () => {
   })
 })
 
+describe('prepareInvoicePayload detail loading', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads items from one detail request when a list row has no items', async () => {
+    const fetch = vi.fn(async (url) => {
+      if (url === '/api/v1/sales/s-1') {
+        return { ok: true, json: async () => ({ id: 's-1', number: 'INV-1', items: [{ name: 'Rice', qty: 1, price: 10 }] }) }
+      }
+      if (url === '/api/v1/settings/organisation') return { ok: false, json: async () => ({}) }
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('window', { localStorage: { getItem: () => null } })
+    vi.stubGlobal('fetch', fetch)
+
+    const payload = await prepareInvoicePayload({ id: 's-1', number: 'INV-1' }, {}, { documentType: 'Tax Invoice' })
+
+    const detailCalls = fetch.mock.calls.filter(([url]) => url.startsWith('/api/v1/sales/s-1'))
+    expect(detailCalls).toHaveLength(1)
+    expect(payload.sale.items[0].name).toBe('Rice')
+  })
+
+  it('throws instead of printing an empty document when the detail request fails', async () => {
+    const fetch = vi.fn(async (url) => {
+      if (url === '/api/v1/sales/s-2') return { ok: false, status: 500, json: async () => ({}) }
+      if (url === '/api/v1/settings/organisation') return { ok: false, json: async () => ({}) }
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('window', { localStorage: { getItem: () => null } })
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(prepareInvoicePayload({ id: 's-2', number: 'INV-2' }, {}, { documentType: 'Tax Invoice' }))
+      .rejects.toThrow('Could not load the document details')
+  })
+})
+
 describe('prepareInvoicePayload for Purchase Orders', () => {
   afterEach(() => {
     vi.unstubAllGlobals()

@@ -62,6 +62,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
   const orgPromise = loadOrganisation(authHeaders)
 
   let fullSale = sale
+  let detailsFailed = false
   try {
     const isPurchaseOrder = documentType === 'Purchase Order'
     const isPurchaseBill = documentType === 'Purchase Bill'
@@ -71,8 +72,9 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     const paymentMode = String(sale?.paymentMode || sale?.payment_mode || '').toLowerCase()
     const needsCashPaymentDetails = paymentMode === 'cash' && sale?.cashCollected == null
     const needsPurchaseOrderFetch = sale?.id && (!Array.isArray(sale?.items) || sale.items.length === 0)
+    // List rows carry no line items, so the detail fetch here is the only sale load.
     const needsInvoiceFetch = !sale || (sale?.id && (
-      needsCashPaymentDetails || (!sale.customerPhone && !sale.customer_phone) || !sale.salesperson || !sale.email || !sale.phoneNo ||
+      needsCashPaymentDetails || !sale.items?.length || (!sale.customerPhone && !sale.customer_phone) || !sale.salesperson || !sale.email || !sale.phoneNo ||
       !sale.orderNo || !sale.purchaseOrderNo || (!sale.gstNo && !sale.gst_no && !sale.gst)
     ))
     const needsFetch = fetchSale && (isPurchaseDocument ? needsPurchaseOrderFetch : needsInvoiceFetch)
@@ -94,9 +96,16 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
             cashCollected: sale.cashCollected ?? fetchedSale.cashCollected,
             cashChange: sale.cashChange ?? fetchedSale.cashChange,
           })
+      } else {
+        detailsFailed = true
       }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    detailsFailed = true
+  }
+  if (detailsFailed && !fullSale?.items?.length) {
+    throw new Error('Could not load the document details. Please try again.')
+  }
 
   fullSale = withCashTender(fullSale)
   if (['Purchase Order', 'Purchase Bill', 'GRN Receipt'].includes(documentType)) {
@@ -192,14 +201,21 @@ export async function prepareQuotePayload(quote, branch) {
   const orgPromise = loadOrganisation(authHeaders)
 
   let fullQuote = quote
+  let detailsFailed = false
   try {
     const missingCustomerAddress = !quote?.customerAddress && !quote?.customer_address && !quote?.customerStreet1 && !quote?.customer_street1 && !quote?.customerCity && !quote?.customer_country
     const needsFetch = !quote || (quote?.id && (missingCustomerAddress || (!quote.customerPhone && !quote.customer_phone) || !quote.customerName || !quote.total || !quote.items || !quote.items.length))
     if (needsFetch && quote?.id) {
       const res = await fetch(`/api/v1/sales/quotations/${quote.id}`, { headers: { Accept: 'application/json', ...authHeaders } })
       if (res.ok) fullQuote = await res.json()
+      else detailsFailed = true
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    detailsFailed = true
+  }
+  if (detailsFailed && !fullQuote?.items?.length) {
+    throw new Error('Could not load the document details. Please try again.')
+  }
 
   const org = await orgPromise
 

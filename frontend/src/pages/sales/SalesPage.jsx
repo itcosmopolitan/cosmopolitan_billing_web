@@ -26,7 +26,7 @@ import {
   SALES_EXPORT_MAPPERS,
 } from '@/utils/listExport'
 import { prepareDocumentPayload } from '@/utils/printInvoice'
-import { downloadDocumentPdf, printDocumentPdf } from '@/utils/documentPdf'
+import { downloadDocumentPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
@@ -789,18 +789,11 @@ export default function SalesPage() {
 
   const saleDocumentType = (kind) => (kind === 'order' ? 'Sales Order' : kind === 'quote' ? 'Quote' : 'Tax Invoice')
 
-  const loadSaleDocument = async (invoice, kind) => {
-    if (invoice?.items?.length) return invoice
-    if (kind === 'order') return salesAPI.orders.get(invoice.id)
-    if (kind === 'quote') return salesAPI.quotations.get(invoice.id)
-    return salesAPI.get(invoice.id)
-  }
-
   const runSaleDocumentPdf = async (invoice, branch, kind, mode) => {
     const documentType = saleDocumentType(kind)
+    warmDocumentPdf(documentType, branch)
     try {
-      const sale = await loadSaleDocument(invoice, kind)
-      const data = await prepareDocumentPayload(documentType, sale, branch)
+      const data = await prepareDocumentPayload(documentType, invoice, branch)
       if (mode === 'print') await printDocumentPdf(documentType, data)
       else await downloadDocumentPdf(documentType, data)
     } catch (error) {

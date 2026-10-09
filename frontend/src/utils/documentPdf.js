@@ -38,6 +38,8 @@ const BRAND_ASSET_PATHS = {
 const RENDER_TIMEOUT_MS = 15000
 const IMAGE_FETCH_TIMEOUT_MS = 10000
 const PRINT_CLEANUP_DELAY_MS = 60000
+const MEMO_TTL_MS = 5 * 60 * 1000
+const BRANCH_IMAGE_KEYS = ['logo', 'logo_url', 'badge', 'badge_url', 'badgeImage', 'badgeUrl']
 
 const inFlight = new Map()
 
@@ -118,18 +120,21 @@ function blobToDataUrl(blob) {
   })
 }
 
-// Template text and brand images are static, so they are fetched once per page session.
+// Template text and images are cached briefly, so repeat exports skip the round trips while
+// a changed logo or a redeployed template is picked up within the TTL.
 // Failed loads are dropped from the cache so the next attempt can retry.
 const memo = new Map()
 
 function memoize(key, load) {
-  if (!memo.has(key)) {
-    memo.set(key, load().catch((error) => {
-      memo.delete(key)
-      throw error
-    }))
-  }
-  return memo.get(key)
+  const cached = memo.get(key)
+  if (cached && Date.now() - cached.loadedAt < MEMO_TTL_MS) return cached.promise
+  const entry = { loadedAt: Date.now(), promise: null }
+  entry.promise = load().catch((error) => {
+    if (memo.get(key) === entry) memo.delete(key)
+    throw error
+  })
+  memo.set(key, entry)
+  return entry.promise
 }
 
 async function fetchOk(url, ms) {
@@ -146,8 +151,10 @@ function loadTemplateText(template) {
   return memoize(`template:${template.url}`, async () => (await fetchOk(template.url, RENDER_TIMEOUT_MS)).text())
 }
 
+// Keyed by absolute URL, so a branch logo warmed on click is reused by the render.
 function loadImageDataUrl(src) {
-  return memoize(`image:${src}`, async () => blobToDataUrl(await (await fetchOk(src, IMAGE_FETCH_TIMEOUT_MS)).blob()))
+  const url = new URL(src, `${window.location.origin}/`).href
+  return memoize(`image:${url}`, async () => blobToDataUrl(await (await fetchOk(url, IMAGE_FETCH_TIMEOUT_MS)).blob()))
 }
 
 // Templates are passed these as data URIs so they render without any image requests.
@@ -162,6 +169,23 @@ async function loadBrandAssets() {
     }
   }))
   return Object.fromEntries(entries.filter(Boolean))
+}
+
+// Branch logos and badges are inlined before the render, so the template does not load them
+// inside the iframe. An image that cannot be loaded keeps its original URL, as before.
+async function inlineBranchImages(branch) {
+  const source = branch || {}
+  const resolved = { ...source }
+  await Promise.all(BRANCH_IMAGE_KEYS.map(async (key) => {
+    const value = source[key]
+    if (typeof value !== 'string' || !value || value.startsWith('data:')) return
+    try {
+      resolved[key] = await loadImageDataUrl(value)
+    } catch (error) {
+      console.warn(`Branch image unavailable for PDF (${key}):`, error)
+    }
+  }))
+  return resolved
 }
 
 // Images must be data URIs: the server sanitizer drops every non-data image source.
@@ -194,6 +218,18 @@ function serializeDocument(doc) {
   return `<!doctype html>\n${doc.documentElement.outerHTML}`
 }
 
+// Starts the template, brand and branch image loads. Callers run it synchronously on click,
+// before awaiting their data, so these requests overlap with the data requests.
+// It never rejects: a failed load is retried when the render runs.
+export function warmDocumentPdf(documentType, branch) {
+  const template = TEMPLATES[templateKeyFor(documentType)]
+  return Promise.allSettled([
+    loadTemplateText(template),
+    loadBrandAssets(),
+    inlineBranchImages(branch),
+  ]).then(() => undefined)
+}
+
 // Renders the shared template off-screen, waits for the template to report it is ready,
 // then returns the fully inlined HTML for the server.
 // The template is loaded from a blob URL built from its text. A blob iframe keeps the page
@@ -202,7 +238,11 @@ function serializeDocument(doc) {
 export async function renderDocumentHtml(documentType, data) {
   const templateKey = templateKeyFor(documentType)
   const template = TEMPLATES[templateKey]
-  const [templateText, assets] = await Promise.all([loadTemplateText(template), loadBrandAssets()])
+  const [templateText, assets, branch] = await Promise.all([
+    loadTemplateText(template),
+    loadBrandAssets(),
+    inlineBranchImages(data.branch),
+  ])
   const templateHtml = templateText.replace(/<head>/i, `<head><base href="${window.location.origin}/">`)
   const templateUrl = URL.createObjectURL(new Blob([templateHtml], { type: 'text/html' }))
 
@@ -228,8 +268,8 @@ export async function renderDocumentHtml(documentType, data) {
       window.addEventListener('message', onMessage)
     })
     const payload = templateKey === 'quotation'
-      ? { quote: data.quote, branch: data.branch, assets }
-      : { sale: data.sale, branch: data.branch, documentType, assets }
+      ? { quote: data.quote, branch, assets }
+      : { sale: data.sale, branch, documentType, assets }
     frameWindow.postMessage({ type: template.renderMessage, payload }, window.location.origin)
     await withTimeout(rendered, RENDER_TIMEOUT_MS, `${documentType} template did not finish rendering.`)
 

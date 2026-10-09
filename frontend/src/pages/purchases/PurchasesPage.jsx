@@ -43,7 +43,7 @@ import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
 import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
 import { prepareInvoicePayload } from '@/utils/printInvoice'
-import { downloadDocumentPdf, printDocumentPdf } from '@/utils/documentPdf'
+import { downloadDocumentPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
 import {
@@ -347,8 +347,9 @@ export default function PurchasesPage() {
   const purchaseDocumentType = (kind) => (kind === 'bill' ? 'Purchase Bill' : kind === 'grn' ? 'GRN Receipt' : 'Purchase Order')
 
   const printPurchaseDocument = (doc, kind) => runRowAction(doc.id, 'print', async () => {
+    const documentType = purchaseDocumentType(kind)
+    warmDocumentPdf(documentType, activeBranch)
     try {
-      const documentType = purchaseDocumentType(kind)
       await printDocumentPdf(documentType, await prepareInvoicePayload(doc, activeBranch, { documentType }))
     } catch (error) {
       console.error('Failed to print purchase document:', error)
@@ -357,8 +358,9 @@ export default function PurchasesPage() {
   })
 
   const exportPurchaseDocument = (doc, kind) => runRowAction(doc.id, 'export', async () => {
+    const documentType = purchaseDocumentType(kind)
+    warmDocumentPdf(documentType, activeBranch)
     try {
-      const documentType = purchaseDocumentType(kind)
       await downloadDocumentPdf(documentType, await prepareInvoicePayload(doc, activeBranch, { documentType }))
     } catch (error) {
       console.error('Failed to export purchase document PDF:', error)
