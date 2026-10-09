@@ -3,7 +3,7 @@ import { AUTOCOMPLETE_CATEGORY_URL, AUTOCOMPLETE_UNIT_URL, AUTOCOMPLETE_TAX_RATE
 import BranchPricingSection from './BranchPricingSection'
 import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './TaxedPriceInput'
 import { qtyInputStep } from '@/utils/decimalPrecision'
-import { catalogInclusiveAmount } from '@/utils/taxCalc'
+import { catalogExclusiveAmount, catalogInclusiveAmount } from '@/utils/taxCalc'
 import { profitPercentage } from './itemFormShared'
 
 function SegmentedControl({ value, options, onChange, ariaLabel }) {
@@ -48,9 +48,10 @@ export default function ItemFormFields({
   const dropdownStyle = { flex: 1, width: '100%', minWidth: 0 }
   const priceTaxMode = normalizeTaxMode(form.priceTaxMode)
   const categoryMode = form.categoryPricingMode === 'price' ? 'price' : 'pct'
-  const costIncl = catalogInclusiveAmount(form.cost_price, priceTaxMode, form.tax_rate)
+  const costExcl = catalogExclusiveAmount(form.cost_price, priceTaxMode, form.tax_rate)
   const sellIncl = catalogInclusiveAmount(form.selling_price, priceTaxMode, form.tax_rate)
-  const retailGp = profitPercentage(costIncl, sellIncl)
+  const toExcl = (incl) => catalogExclusiveAmount(incl, 'inclusive', form.tax_rate)
+  const retailGp = profitPercentage(costExcl, toExcl(sellIncl))
   const wholesaleFilled = categoryMode === 'price'
     ? form.wholesale_price !== '' && form.wholesale_price != null
     : form.wholesale_discount_pct !== '' && form.wholesale_discount_pct != null
@@ -67,8 +68,8 @@ export default function ItemFormFields({
       ? catalogInclusiveAmount(form.staff_price || 0, priceTaxMode, form.tax_rate)
       : sellIncl * (1 - Number(form.staff_discount_pct || 0) / 100))
     : null
-  const wholesaleGp = wholesaleFilled ? profitPercentage(costIncl, wholesaleAmount) : null
-  const staffGp = staffFilled ? profitPercentage(costIncl, staffAmount) : null
+  const wholesaleGp = wholesaleFilled ? profitPercentage(costExcl, toExcl(wholesaleAmount)) : null
+  const staffGp = staffFilled ? profitPercentage(costExcl, toExcl(staffAmount)) : null
 
   const setPriceTaxMode = (next) => {
     const normalized = normalizeTaxMode(next)

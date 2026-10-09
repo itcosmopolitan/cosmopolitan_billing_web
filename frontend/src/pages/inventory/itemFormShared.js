@@ -1,4 +1,4 @@
-import { catalogInclusiveAmount } from '@/utils/taxCalc'
+import { catalogExclusiveAmount, catalogInclusiveAmount, convertEnteredTaxAmount } from '@/utils/taxCalc'
 
 /** Normalize GST rate for form/dropdown ids (``8`` not ``8.0``). */
 export function normalizeTaxRateValue(rate, fallback = '8') {
@@ -26,12 +26,12 @@ let rowSeq = 0
 export const retailBranches = (branches) =>
   (branches || []).filter((b) => b.code !== 'WH')
 
-/** GP% from inclusive cost/sell; null when not computable. */
+/** GP% = (price − cost) / price, both GST-exclusive; null when not computable. */
 export function profitPercentage(cost, price) {
   const c = Number(cost)
   const p = Number(price)
-  if (!Number.isFinite(c) || !Number.isFinite(p) || c === 0) return null
-  return ((p - c) / c) * 100
+  if (!Number.isFinite(c) || !Number.isFinite(p) || p === 0) return null
+  return ((p - c) / p) * 100
 }
 
 /** One editable branch row on create / edit pages. */
@@ -59,8 +59,8 @@ export const createBranchRow = (branch = null, overrides = {}) => {
   }
 }
 
-/** Map GET /items/{id}/branches row → form row (edit, listed only). */
-export const branchRowFromApi = (br) => {
+/** Map GET /items/{id}/branches row → form row (edit, listed only). Cost is stored excl. GST. */
+export const branchRowFromApi = (br, taxRate) => {
   const wholesaleMode = br.wholesale_pricing_mode || ''
   const staffMode = br.staff_pricing_mode || ''
   const categoryMode =
@@ -71,7 +71,7 @@ export const branchRowFromApi = (br) => {
     { id: br.branch_id, name: br.branch_name },
     {
       is_available: true,
-      cost_price: br.cost_price ?? '',
+      cost_price: convertEnteredTaxAmount(br.cost_price ?? '', 'exclusive', 'inclusive', taxRate) ?? '',
       selling_price: br.selling_price ?? '',
       opening_stock: '',
       reorder_level: br.reorder_level ?? '',
@@ -97,7 +97,12 @@ export function formFromItem(item) {
     categoryName: item.categoryName || item.category?.name || '',
     brand: item.brand || '',
     unit: item.unit || '',
-    cost_price: item.default_cost_price ?? item.cost_price ?? '',
+    cost_price: convertEnteredTaxAmount(
+      item.default_cost_price ?? item.cost_price ?? '',
+      'exclusive',
+      'inclusive',
+      item.tax_rate,
+    ),
     selling_price: item.default_selling_price ?? item.selling_price ?? '',
     categoryPricingMode:
       item.wholesale_pricing_mode === 'price' || item.staff_pricing_mode === 'price'
@@ -219,7 +224,7 @@ function branchConfigFields(bc, { includeOpeningStock = false, taxRate, priceTax
   const out = {
     branch_id: bc.branch_id,
     is_available: true,
-    cost_price: catalogInclusiveAmount(bc.cost_price, priceTaxMode, taxRate),
+    cost_price: catalogExclusiveAmount(bc.cost_price, priceTaxMode, taxRate),
     selling_price: catalogInclusiveAmount(bc.selling_price, priceTaxMode, taxRate),
     reorder_level: bc.reorder_level === '' || bc.reorder_level == null ? null : Number(bc.reorder_level),
     ...branchCategoryPayload(bc, { taxRate, priceTaxMode }),
@@ -241,7 +246,7 @@ export function buildCatalogPayload(form, branchFilter) {
     category_id: form.categoryId,
     brand: form.brand,
     unit: form.unit,
-    cost_price: catalogInclusiveAmount(form.cost_price, form.priceTaxMode, form.tax_rate),
+    cost_price: catalogExclusiveAmount(form.cost_price, form.priceTaxMode, form.tax_rate),
     selling_price: catalogInclusiveAmount(form.selling_price, form.priceTaxMode, form.tax_rate),
     wholesale_pricing_mode: form.categoryPricingMode === 'price' ? 'price' : 'pct',
     wholesale_discount_pct: form.categoryPricingMode === 'price' ? 0 : Number(form.wholesale_discount_pct || 0),

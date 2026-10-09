@@ -19,7 +19,10 @@ GROUP BY si.branch_id, si.date::date;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_daily_sales_summary
 ON mv_daily_sales_summary (branch_id, sale_date);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_product_sales_summary AS
+-- Profit and margin use GST-exclusive revenue against GST-exclusive cost.
+-- Drop and recreate after deploying this definition; an existing view keeps the old columns.
+DROP MATERIALIZED VIEW IF EXISTS mv_product_sales_summary;
+CREATE MATERIALIZED VIEW mv_product_sales_summary AS
 SELECT
     si.branch_id,
     si.date::date AS sale_date,
@@ -29,7 +32,15 @@ SELECT
     i.brand,
     SUM(sli.qty) AS quantity_sold,
     SUM(sli.line_total) AS revenue,
-    SUM(sli.line_total - (COALESCE(i.cost_price, 0) * sli.qty)) AS profit
+    SUM(
+        CASE WHEN COALESCE(sli.tax_rate, 0) <= 0 THEN sli.line_total
+             ELSE sli.line_total * 100.0 / (100.0 + sli.tax_rate) END
+    ) AS taxable_revenue,
+    SUM(
+        CASE WHEN COALESCE(sli.tax_rate, 0) <= 0 THEN sli.line_total
+             ELSE sli.line_total * 100.0 / (100.0 + sli.tax_rate) END
+        - (COALESCE(i.cost_price, 0) * sli.qty)
+    ) AS profit
 FROM sale_line_items sli
 JOIN sale_invoices si ON si.id = sli.invoice_id
 LEFT JOIN items i ON i.id = sli.item_id

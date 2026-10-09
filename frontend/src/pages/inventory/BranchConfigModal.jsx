@@ -3,7 +3,7 @@ import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
-import { catalogInclusiveAmount, convertEnteredTaxAmount } from '@/utils/taxCalc'
+import { catalogExclusiveAmount, catalogInclusiveAmount, convertEnteredTaxAmount } from '@/utils/taxCalc'
 import { Modal, AlertBar } from '@/components/ui'
 import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './TaxedPriceInput'
 
@@ -46,7 +46,7 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
           if (existing) {
             return {
               ...existing,
-              cost_price: existing.cost_price ?? '',
+              cost_price: convertEnteredTaxAmount(existing.cost_price ?? '', 'exclusive', 'inclusive', item?.tax_rate) ?? '',
               selling_price: existing.selling_price ?? '',
               reorder_level: existing.reorder_level ?? '',
             }
@@ -87,7 +87,7 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
     setPriceTaxMode(normalized)
   }
 
-  const shownDefaultCost = convertEnteredTaxAmount(defaultCost, 'inclusive', priceTaxMode, item?.tax_rate)
+  const shownDefaultCost = convertEnteredTaxAmount(defaultCost, 'exclusive', priceTaxMode, item?.tax_rate)
   const shownDefaultPrice = convertEnteredTaxAmount(defaultPrice, 'inclusive', priceTaxMode, item?.tax_rate)
 
   const save = async () => {
@@ -97,7 +97,7 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
         branches: rows.map((r) => ({
           branch_id: r.branch_id,
           is_available: Boolean(r.is_available),
-          cost_price: catalogInclusiveAmount(r.cost_price, priceTaxMode, item?.tax_rate),
+          cost_price: catalogExclusiveAmount(r.cost_price, priceTaxMode, item?.tax_rate),
           selling_price: catalogInclusiveAmount(r.selling_price, priceTaxMode, item?.tax_rate),
           reorder_level: r.reorder_level === '' || r.reorder_level == null
             ? null

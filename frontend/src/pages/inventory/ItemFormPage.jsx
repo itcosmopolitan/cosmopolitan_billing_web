@@ -126,7 +126,7 @@ export default function ItemFormPage({ mode = 'create' }) {
         setEditWasTracked(Boolean(item.batch_tracking))
 
         const listed = (branchData.branches || []).filter((b) => b.is_available)
-        const rows = listed.map(branchRowFromApi)
+        const rows = listed.map((b) => branchRowFromApi(b, item.tax_rate))
         const ids = listed.map((b) => b.branch_id)
         setBranchConfigs(rows)
         setInitialListedIds(ids)

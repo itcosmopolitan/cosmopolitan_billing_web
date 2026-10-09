@@ -4,10 +4,25 @@ import { itemsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, fmtQty, stockStatus, formatLabel } from '@/utils/helpers'
-import { exclusiveFromInclusive } from '@/utils/taxCalc'
+import { exclusiveFromInclusive, inclusiveFromExclusive } from '@/utils/taxCalc'
 import { Chip, EmptyState } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import { unwrapPaged } from '@/utils/pagination'
+
+/** Costs are stored GST-exclusive. */
+function catalogCostLabel(exclusive, taxRate) {
+  const exc = Number(exclusive)
+  if (!Number.isFinite(exc)) return '—'
+  const rate = Number(taxRate) || 0
+  if (rate <= 0) return fmt(exc)
+  const inc = inclusiveFromExclusive(exc, rate)
+  return (
+    <span>
+      {fmt(exc)} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>excl.</span>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{fmt(inc)} incl. GST</div>
+    </span>
+  )
+}
 
 function catalogPriceLabel(inclusive, taxRate) {
   const inc = Number(inclusive)
@@ -204,7 +219,7 @@ export default function ItemDetailPanel({
 
           <DetailSection title="Pricing">
             <DetailFields fields={[
-              { label: 'Default cost (MVR)', value: catalogPriceLabel(detail?.default_cost_price ?? detail?.cost_price, detail?.tax_rate) },
+              { label: 'Default cost (MVR)', value: catalogCostLabel(detail?.default_cost_price ?? detail?.cost_price, detail?.tax_rate) },
               { label: 'Default selling — retail (MVR)', value: catalogPriceLabel(detail?.default_selling_price ?? detail?.selling_price, detail?.tax_rate) },
               {
                 label: 'Wholesale',

@@ -688,6 +688,8 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
 
 def _signed_sales_lines_query(inv_conds, cn_conds):
     """Invoice lines (positive qty/value) UNION credit-note lines (negative)."""
+    _, inv_taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
+    _, cn_taxable, _ = _tax_line_exprs(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate)
     inv_q = (
         select(
             SaleInvoice.id.label("invoice_id"),
@@ -706,9 +708,10 @@ def _signed_sales_lines_query(inv_conds, cn_conds):
             SaleLineItem.price.label("unit_price"),
             SaleLineItem.discount.label("discount"),
             SaleLineItem.line_total.label("line_total"),
+            inv_taxable.label("taxable_total"),
             (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty).label("cost_value"),
             (
-                SaleLineItem.line_total
+                inv_taxable
                 - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
             ).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
@@ -743,11 +746,12 @@ def _signed_sales_lines_query(inv_conds, cn_conds):
             SalesReturnLineItem.price.label("unit_price"),
             literal(0.0).label("discount"),
             (-func.coalesce(SalesReturnLineItem.line_total, 0)).label("line_total"),
+            (-cn_taxable).label("taxable_total"),
             (
                 -func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0)
             ).label("cost_value"),
             (
-                -func.coalesce(SalesReturnLineItem.line_total, 0)
+                -cn_taxable
                 + (func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0))
             ).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),

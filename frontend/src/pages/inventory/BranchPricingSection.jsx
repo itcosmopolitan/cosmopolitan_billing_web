@@ -8,7 +8,7 @@ import {
   retailBranches,
 } from './itemFormShared'
 import BranchPricingModal from './BranchPricingModal'
-import { catalogInclusiveAmount } from '@/utils/taxCalc'
+import { catalogExclusiveAmount, catalogInclusiveAmount } from '@/utils/taxCalc'
 import { fmt, fmtQty } from '@/utils/helpers'
 
 /**
@@ -130,17 +130,16 @@ export default function BranchPricingSection({
   const canAddMore = branchConfigs.length < options.length
 
   const resolveAmounts = (row) => {
-    const cost = catalogInclusiveAmount(
-      row.cost_price === '' || row.cost_price == null ? defaultCost : row.cost_price,
-      priceTaxMode,
-      taxRate,
-    )
+    const costExcl = row.cost_price === '' || row.cost_price == null
+      ? catalogExclusiveAmount(defaultCost, priceTaxMode, taxRate)
+      : catalogExclusiveAmount(row.cost_price, priceTaxMode, taxRate)
     const price = catalogInclusiveAmount(
       row.selling_price === '' || row.selling_price == null ? defaultPrice : row.selling_price,
       priceTaxMode,
       taxRate,
     )
-    return { cost, price, gp: profitPercentage(cost, price) }
+    const cost = catalogInclusiveAmount(costExcl, 'exclusive', taxRate)
+    return { cost, price, gp: profitPercentage(costExcl, catalogExclusiveAmount(price, 'inclusive', taxRate)) }
   }
 
   const categorySummary = (row) => {

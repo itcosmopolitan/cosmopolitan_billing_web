@@ -1,6 +1,11 @@
-/** Line / document margin from tax-inclusive sell amounts and unit cost. */
-import { computeDocumentTotals, lineDiscountAmount, lineNetAmount } from '@/utils/documentFormTotals'
-import { allocateFlatShares } from '@/utils/taxCalc'
+/** Line / document margin: revenue excl. GST against unit cost (also excl. GST). */
+import {
+  computeDocumentTotals,
+  lineDiscountAmount,
+  lineNetAmount,
+  lineTaxableDisplay,
+} from '@/utils/documentFormTotals'
+import { allocateFlatShares, lineTaxableAmount } from '@/utils/taxCalc'
 import { roundAmount } from '@/utils/decimalPrecision'
 
 /**
@@ -27,22 +32,22 @@ export function lineMargin(it, opts = {}) {
   if (!Number.isFinite(costPrice)) return null
 
   const grossFn = opts.lineGross || ((row) => Number(row.qty || 0) * Number(row.price || 0))
-  let revenue = lineNetAmount(it, grossFn)
   const share = Math.max(0, Number(opts.entityDiscountShare) || 0)
-  if (share > 0) revenue = roundAmount(Math.max(0, revenue - share))
+  const revenue = lineTaxableDisplay(it, grossFn, share)
 
   const cost = roundAmount(qty * costPrice)
   return marginFromRevenueAndCost(revenue, cost)
 }
 
 /**
- * POS cart line: `lineTotal` is already after line discount.
+ * POS cart line: `lineTotal` is already after line discount (GST-inclusive).
  */
 export function posLineMargin(item, entityDiscountShare = 0) {
   const qty = Number(item.qty || 0)
   const costPrice = Number(item.costPrice ?? item.cost_price ?? 0)
-  let revenue = Number(item.lineTotal || 0)
-  if (entityDiscountShare > 0) revenue = roundAmount(Math.max(0, revenue - entityDiscountShare))
+  let inclusive = Number(item.lineTotal || 0)
+  if (entityDiscountShare > 0) inclusive = roundAmount(Math.max(0, inclusive - entityDiscountShare))
+  const revenue = lineTaxableAmount(inclusive, item.taxRate ?? item.tax_rate ?? 0)
   const cost = roundAmount(qty * costPrice)
   return marginFromRevenueAndCost(revenue, cost)
 }
@@ -66,7 +71,7 @@ export function entityDiscountShares(items, entityDiscFlat, lineGross) {
  */
 export function documentMargin(items, opts = {}) {
   const totals = computeDocumentTotals(items, opts)
-  const revenue = totals.total
+  const revenue = totals.netSubtotal
   const cost = roundAmount((items || []).reduce((s, it) => {
     const qty = Number(it.qty || 0)
     const unit = Number(it.costPrice ?? it.cost_price ?? 0)
@@ -85,7 +90,11 @@ export function posDocumentMargin(cart, { discountPct = 0, discountAmt = 0 } = {
   const disc = roundAmount(
     (Number(discountAmt) || 0) + gross * ((Number(discountPct) || 0) / 100),
   )
-  const revenue = Math.max(0, roundAmount(gross - disc))
+  const shares = posEntityDiscountShares(cart, disc)
+  const revenue = roundAmount((cart || []).reduce((s, i, idx) => {
+    const inclusive = Math.max(0, (Number(i.lineTotal) || 0) - (shares[idx] || 0))
+    return s + lineTaxableAmount(inclusive, i.taxRate ?? i.tax_rate ?? 0)
+  }, 0))
   const cost = roundAmount((cart || []).reduce((s, i) => {
     return s + (Number(i.qty) || 0) * (Number(i.costPrice ?? i.cost_price) || 0)
   }, 0))
@@ -112,7 +121,7 @@ export function purchaseLineMargin(it, opts = {}) {
   const qty = Number(it.qty || 0)
   const sell = Number(it.sellingPrice ?? it.selling_price ?? 0)
   if (sell <= 0 || qty <= 0) return null
-  const revenue = roundAmount(qty * sell)
+  const revenue = lineTaxableAmount(roundAmount(qty * sell), it.taxRate ?? it.tax_rate ?? 0)
   let cost = lineNetAmount(it, costLineGross)
   const share = Math.max(0, Number(opts.entityDiscountShare) || 0)
   if (share > 0) cost = roundAmount(Math.max(0, cost - share))
@@ -127,7 +136,8 @@ export function purchaseDocumentMargin(items, opts = {}) {
   })
   const cost = totals.total
   const revenue = roundAmount((items || []).reduce((s, it) => {
-    return s + (Number(it.qty) || 0) * (Number(it.sellingPrice ?? it.selling_price) || 0)
+    const inclusive = roundAmount((Number(it.qty) || 0) * (Number(it.sellingPrice ?? it.selling_price) || 0))
+    return s + lineTaxableAmount(inclusive, it.taxRate ?? it.tax_rate ?? 0)
   }, 0))
   const m = marginFromRevenueAndCost(revenue, cost)
   if (!m) return null

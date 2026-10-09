@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AutocompleteDropdown, FormGroup, Modal } from '@/components/ui'
 import TaxedPriceInput from './TaxedPriceInput'
 import { createBranchRow, profitPercentage, retailBranches } from './itemFormShared'
-import { catalogInclusiveAmount } from '@/utils/taxCalc'
+import { catalogExclusiveAmount, catalogInclusiveAmount } from '@/utils/taxCalc'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
 
@@ -102,17 +102,16 @@ export default function BranchPricingModal({
   }
 
   const categoryMode = draft.categoryPricingMode === 'price' ? 'price' : 'pct'
-  const costIncl = catalogInclusiveAmount(
-    draft.cost_price === '' || draft.cost_price == null ? defaultCost : draft.cost_price,
-    priceTaxMode,
-    taxRate,
-  )
+  const costExcl = draft.cost_price === '' || draft.cost_price == null
+    ? catalogExclusiveAmount(defaultCost, priceTaxMode, taxRate)
+    : catalogExclusiveAmount(draft.cost_price, priceTaxMode, taxRate)
+  const toExcl = (incl) => catalogExclusiveAmount(incl, 'inclusive', taxRate)
   const sellIncl = catalogInclusiveAmount(
     draft.selling_price === '' || draft.selling_price == null ? defaultPrice : draft.selling_price,
     priceTaxMode,
     taxRate,
   )
-  const retailGp = profitPercentage(costIncl, sellIncl)
+  const retailGp = profitPercentage(costExcl, toExcl(sellIncl))
 
   const wholesaleTouched = categoryMode === 'price'
     ? draft.wholesale_price !== '' && draft.wholesale_price != null
@@ -131,8 +130,8 @@ export default function BranchPricingModal({
     : categoryMode === 'price'
       ? catalogInclusiveAmount(draft.staff_price, priceTaxMode, taxRate)
       : sellIncl * (1 - Number(draft.staff_discount_pct || 0) / 100)
-  const wholesaleGp = wholesaleTouched ? profitPercentage(costIncl, wholesaleAmount) : null
-  const staffGp = staffTouched ? profitPercentage(costIncl, staffAmount) : null
+  const wholesaleGp = wholesaleTouched ? profitPercentage(costExcl, toExcl(wholesaleAmount)) : null
+  const staffGp = staffTouched ? profitPercentage(costExcl, toExcl(staffAmount)) : null
 
   const handleSave = () => {
     if (!draft.branch_id) {

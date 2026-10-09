@@ -36,6 +36,7 @@ from src.models import (
     UserBranch,
 )
 from src.security import _has_global_branch_access, current_user, get_allowed_branch_ids
+from src.routes.reports import _tax_line_exprs
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.dashboard")
 _DASHBOARD_CACHE: dict[str, tuple[datetime, dict]] = {}
@@ -312,13 +313,14 @@ async def _line_profit_summary(
 ) -> dict:
     if not _database_supports_materialized_views(db):
         conds = _line_conditions(filters, allowed_branch_ids, period)
+        _, taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
         row = (
             await db.execute(
                 select(
-                    func.coalesce(func.sum(SaleLineItem.line_total), 0).label("line_revenue"),
+                    func.coalesce(func.sum(taxable), 0).label("taxable_revenue"),
                     func.coalesce(
                         func.sum(
-                            SaleLineItem.line_total
+                            taxable
                             - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
                         ),
                         0,
@@ -341,18 +343,18 @@ async def _line_profit_summary(
         row = (
             await db.execute(
                 select(
-                    func.coalesce(func.sum(ProductSalesSummary.revenue), 0).label("line_revenue"),
+                    func.coalesce(func.sum(ProductSalesSummary.taxable_revenue), 0).label("taxable_revenue"),
                     func.coalesce(func.sum(ProductSalesSummary.profit), 0).label("profit"),
                 )
                 .where(and_(*conds))
             )
         ).one()
-    line_revenue = float(row.line_revenue or 0)
+    taxable_revenue = float(row.taxable_revenue or 0)
     profit = float(row.profit or 0)
     return {
-        "line_revenue": line_revenue,
+        "taxable_revenue": taxable_revenue,
         "profit": profit,
-        "profit_margin": round((profit / line_revenue) * 100, 1) if line_revenue else 0,
+        "profit_margin": round((profit / taxable_revenue) * 100, 1) if taxable_revenue else 0,
     }
 
 
@@ -431,13 +433,14 @@ async def _revenue_vs_profit(
 ) -> list[dict]:
     if not _database_supports_materialized_views(db):
         conds = _line_conditions(filters, allowed_branch_ids, period)
+        _, taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
         result = await db.execute(
             select(
                 SaleInvoice.date.label("date"),
                 func.coalesce(func.sum(SaleLineItem.line_total), 0).label("revenue"),
                 func.coalesce(
                     func.sum(
-                        SaleLineItem.line_total
+                        taxable
                         - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
                     ),
                     0,

@@ -748,6 +748,7 @@ class ProductSalesSummary(Base):
     brand = Column(String)
     quantity_sold = Column(Integer)
     revenue = Column(Float)
+    taxable_revenue = Column(Float)
     profit = Column(Float)
 
 

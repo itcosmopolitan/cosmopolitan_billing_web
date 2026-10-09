@@ -48,12 +48,20 @@ export function priceTaxBreakdown(entered, mode, taxRate) {
   }
 }
 
-/** Catalog amounts are always stored GST-inclusive. */
+/** Selling prices are stored GST-inclusive. */
 export function catalogInclusiveAmount(entered, mode, taxRate) {
   if (entered === '' || entered == null) return null
   const n = Number(entered)
   if (!Number.isFinite(n)) return null
   return priceTaxBreakdown(n, mode === 'exclusive' ? 'exclusive' : 'inclusive', taxRate).inclusive
+}
+
+/** Costs are stored GST-exclusive. */
+export function catalogExclusiveAmount(entered, mode, taxRate) {
+  if (entered === '' || entered == null) return null
+  const n = Number(entered)
+  if (!Number.isFinite(n)) return null
+  return priceTaxBreakdown(n, mode === 'exclusive' ? 'exclusive' : 'inclusive', taxRate).exclusive
 }
 
 /** Re-express a stored GST-inclusive catalog amount in another entry mode (for display). */
