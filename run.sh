@@ -90,7 +90,9 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 python -m pip install -r requirements.txt -q
-python -m playwright install chromium
+if ! command -v wkhtmltopdf >/dev/null 2>&1; then
+  echo -e "${YELLOW}⚠ wkhtmltopdf not found. PDF export/print will fail until it is installed (0.12.6.1 with patched Qt).${RESET}"
+fi
 echo -e "${GREEN}✓ Backend dependencies installed${RESET}"
 
 echo ""

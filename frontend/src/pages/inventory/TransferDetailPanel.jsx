@@ -4,8 +4,7 @@ import toast from 'react-hot-toast'
 import { transfersAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtDate, fmtQty } from '@/utils/helpers'
-import { openStockTransferPrintWindow } from '@/utils/printInvoice'
-import { exportStockTransferPdf } from '@/utils/exportStockTransferPdf'
+import { exportStockTransferPdf, printStockTransferPdf } from '@/utils/exportStockTransferPdf'
 import { Chip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 
@@ -94,7 +93,7 @@ export default function TransferDetailPanel({
     setDocumentBusy(true)
     setDocumentAction('print')
     try {
-      await openStockTransferPrintWindow(detail, activeBranch)
+      await printStockTransferPdf(detail, activeBranch)
     } catch (error) {
       console.error('Failed to print stock transfer:', error)
       toast.error(error.message || 'Failed to print stock transfer')

@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Quote</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body {
+    font-family: "Liberation Sans", Arial, Helvetica, sans-serif;
+    font-size: 11px;
+    color: #222;
+  }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { vertical-align: top; padding: 0; }
+  img { border: 0; }
+  .num { text-align: right; }
+  .center { text-align: center; }
+  .wrap { word-wrap: break-word; word-break: break-word; }
+  .keep-together { page-break-inside: avoid; }
+
+  /* Header */
+  table.header td { padding: 0 4px; }
+  .logo-img { display: block; width: 100%; max-width: 40mm; height: auto; }
+  .logo-tag { font-size: 7px; font-style: italic; color: #444; margin-top: 4px; }
+  .company-info { text-align: center; padding-top: 4px; }
+  .company-name { color: #47aa1c; font-weight: bold; font-size: 15px; margin-bottom: 4px; line-height: 1.2; }
+  .company-line { font-size: 8px; color: #222; line-height: 1.4; }
+  .badge-cell { text-align: right; }
+  .badge-img { display: inline-block; width: 19mm; height: auto; }
+  .gold-seal {
+    display: inline-block;
+    width: 19mm;
+    height: 19mm;
+    border-radius: 50%;
+    border: 2px solid #c89b43;
+    background: #fff;
+    color: #8b6a00;
+    text-align: center;
+    padding-top: 3mm;
+    box-sizing: border-box;
+  }
+  .gold-seal .gold-corporate { font-size: 6px; letter-spacing: 0.4px; }
+  .gold-seal .gold-text { font-size: 9px; font-weight: bold; margin-top: 1px; }
+  .gold-seal .gold-100 { font-size: 18px; font-weight: bold; line-height: 1; }
+  .gold-seal .gold-year { font-size: 7px; color: #6d6d6d; margin-top: 1px; }
+
+  /* Title */
+  h1.doc-title {
+    text-align: center;
+    font-size: 16px;
+    margin: 8px 0 0 0;
+    color: #111;
+    letter-spacing: 0.4px;
+    font-weight: bold;
+  }
+
+  /* Parties */
+  table.parties { margin-top: 12px; }
+  td.party-left { width: 56%; padding-right: 10px; }
+  td.party-right { width: 44%; }
+  .details-box {
+    border: 1px solid #e3e3e3;
+    border-radius: 6px;
+    background: #fbfbfb;
+    padding: 8px 10px;
+  }
+  .details-title { font-size: 11px; font-weight: bold; color: #1b3e6f; margin-bottom: 6px; }
+  .details-box h2 { font-size: 14px; margin: 0 0 6px 0; font-weight: bold; line-height: 1.2; }
+  .details-box table td { font-size: 10px; padding: 2px 0; }
+  .details-box table td.label {
+    width: 38%;
+    font-weight: bold;
+    font-size: 9.8px;
+    color: #333;
+    padding-right: 6px;
+  }
+  .addr-line { font-size: 10.5px; line-height: 1.35; margin-top: 2px; }
+
+  /* Items */
+  table.items { table-layout: auto; margin-top: 12px; font-size: 10.5px; }
+  table.items thead { display: table-header-group; }
+  table.items thead tr { border-top: 1.5px solid #1b3e6f; border-bottom: 1.5px solid #1b3e6f; }
+  table.items th { text-align: left; padding: 5px 4px; font-weight: bold; color: #1b3e6f; }
+  table.items td { padding: 4px; }
+  table.items tr { page-break-inside: avoid; }
+  table.items tbody tr { border-bottom: 1px solid #eee; }
+  table.items th.num, table.items td.num { text-align: right; }
+  
+  /* Totals and footer */
+  table.totals { margin-top: 4px; }
+  table.totals td { padding: 3px 4px; font-size: 10.5px; }
+  table.totals .tlabel { text-align: right; padding-right: 10px; }
+  table.totals .tval { text-align: right; }
+  table.totals .grand-row td { border-top: 1.5px solid #1b3e6f; }
+  table.totals .grand { font-weight: bold; }
+  .discount-note { margin-top: 10px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .amount-words { margin-top: 6px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .payment-section { margin-top: 18px; border-top: 1px solid #333; padding-top: 8px; font-size: 10.5px; }
+  .bank-details { line-height: 1.5; }
+  .terms { margin-top: 14px; font-size: 9.5px; color: #333; line-height: 1.6; }
+  .thankyou { margin-top: 20px; text-align: center; font-style: italic; font-weight: bold; font-size: 11px; }
+  .signoff { margin-top: 36px; font-size: 10.5px; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="document"></div>
+<script>
+(function () {
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return ''
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+  }
+
+  function formatDate(dateString) {
+    if (!dateString) return ''
+    const d = new Date(dateString)
+    if (Number.isNaN(d.getTime())) return dateString
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  }
+
+  function formatNumber(value) {
+    const n = Number(value)
+    if (Number.isNaN(n)) return '0.00'
+    return n.toLocaleString('en-MV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+
+  function amountToWords(value, invalidFallback = 'ZERO RUFIYAA AND ZERO LAARI ONLY') {
+    const number = Number(value ?? 0)
+    if (Number.isNaN(number)) return invalidFallback
+    const rupees = Math.floor(number)
+    const laari = Math.round((number - rupees) * 100)
+    const ones = [
+      'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
+      'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN',
+      'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN',
+    ]
+    const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY']
+    const chunk = (n) => {
+      if (n < 20) return ones[n]
+      if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ` ${ones[n % 10]}` : '')
+      const remainder = n % 100
+      return `${ones[Math.floor(n / 100)]} HUNDRED${remainder ? ` ${chunk(remainder)}` : ''}`
+    }
+    if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
+    const parts = []
+    let remaining = rupees
+    let scaleIndex = 0
+    const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
+    while (remaining > 0) {
+      const part = remaining % 1000
+      if (part > 0) parts.unshift(`${chunk(part)}${scale[scaleIndex] ? ` ${scale[scaleIndex]}` : ''}`)
+      remaining = Math.floor(remaining / 1000)
+      scaleIndex += 1
+    }
+    return `${parts.join(' ') || 'ZERO'} RUFIYAA AND ${laari === 0 ? 'ZERO' : chunk(laari)} LAARI ONLY`
+  }
+
+  function roundNumber(n) {
+    return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100
+  }
+
+  function quoteLineDiscountPct(line) {
+    return Math.min(100, Math.max(0, Number(line.discount || line.line_discount || line.discPercent || 0)))
+  }
+
+  function quoteLineAmount(line) {
+    const qty = Number(line.qty || 0)
+    const price = Number(line.price || 0)
+    const discountPct = quoteLineDiscountPct(line)
+    const gross = roundNumber(qty * price)
+    const fromDisc = roundNumber(gross * (1 - discountPct / 100))
+    const stored = Number(line.lineTotal ?? line.total ?? 0)
+    if (discountPct > 0) return fromDisc
+    if (stored > 0) return roundNumber(stored)
+    return fromDisc
+  }
+
+  function exclusiveFromInclusive(inclusive, taxRate) {
+    const amount = Number(inclusive) || 0
+    const rate = Number(taxRate) || 0
+    if (amount <= 0) return 0
+    if (rate <= 0) return roundNumber(amount)
+    return roundNumber((amount * 100) / (100 + rate))
+  }
+
+  function quoteLineVatAmount(line, _pricesIncludingVat) {
+    const amount = quoteLineAmount(line)
+    const rate = Number(line.taxRate || line.tax_rate || 0)
+    if (!rate || amount <= 0) return 0
+    return roundNumber(amount * rate / (100 + rate))
+  }
+
+  function quoteLineTaxable(line) {
+    return roundNumber(quoteLineAmount(line) - quoteLineVatAmount(line))
+  }
+
+  function quoteExclusiveRate(line) {
+    return exclusiveFromInclusive(Number(line.price || 0), Number(line.taxRate || line.tax_rate || 0))
+  }
+
+  function brandHeader(branch) {
+    const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
+    const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
+    const branchCountry = branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const badge = branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl || ''
+    const badgeHtml = badge
+      ? `<img class="badge-img" src="${escapeHtml(badge)}" alt="Badge" />`
+      : `<img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='inline-block'" />
+        <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+          <div class="gold-corporate">Corporate Maldives</div>
+          <div class="gold-text">GOLD</div>
+          <div class="gold-100">100</div>
+          <div class="gold-year">2023</div>
+        </div>`
+    return `
+      <table class="header">
+        <tr>
+          <td style="width:30%;">
+            <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+            <div class="logo-tag">"where quality and service matters"</div>
+          </td>
+          <td class="company-info" style="width:44%;">
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            <div class="company-line">${escapeHtml(`${branchStreet2}, ${branchStreet3}, ${branchCountry}`)}</div>
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
+          </td>
+          <td class="badge-cell" style="width:26%;">${badgeHtml}</td>
+        </tr>
+      </table>`
+  }
+
+  const ITEM_COLUMN_WIDTHS = ['5%', '27%', '10%', '7%', '7%', '11%', '7%', '11%', '15%']
+
+  function renderQuoteDocument(quote, branch, totals) {
+    const hasValue = (value) => value != null && String(value).trim() !== ''
+    const customerPhone = quote.customerPhone || quote.customer_phone || ''
+    const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
+    const addressParts = [
+      quote.customerStreet1 || quote.customer_street1,
+      quote.customerStreet2 || quote.customer_street2,
+      quote.customerStreet3 || quote.customer_street3,
+      quote.customerCity || quote.customer_city || quote.city,
+      quote.customerStateProvince || quote.customer_state_province,
+      quote.customerCountry || quote.customer_country || quote.country,
+      quote.customerPostalCode || quote.customer_postal_code || quote.postal_code,
+    ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+    const customerAddress = (rawAddress ? (Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress) : addressParts.join(', ')).toString().trim()
+    const customerCode = quote.customerCode || quote.customer_code || ''
+    const customerGstin = quote.customerGstin || quote.customer_gstin || quote.gstin || quote.gstNo || quote.gst_no || ''
+    const quoteNumber = quote.number || quote.quote_no || ''
+    const quoteDate = quote.date || quote.quote_date || ''
+    const customerName = (quote.customerName || quote.customer_name || quote.customer || quote.name || '').toString().trim()
+    const isWalkIn = ['walkin', 'walk-in', 'walk in', 'walkin customer', 'cash customer'].includes(customerName.toLowerCase())
+    const salesperson = quote.salesperson || quote.createdBy || quote.created_by || quote.customerKeyAccountManagerName || quote.customer_key_account_manager_name || quote.customerKeyAccountManager || quote.customer_key_account_manager || ''
+    const paymentDiscountOnVat = Number(quote.paymentDiscountOnVat ?? quote.payment_discount_on_vat ?? 0)
+    const items = quote.items || []
+
+    return `
+      ${brandHeader(branch)}
+
+      <h1 class="doc-title">Quote</h1>
+
+      <table class="parties">
+        <tr>
+          <td class="party-left">
+            <div class="details-box">
+              <div class="details-title">Customer Details</div>
+              <h2>${escapeHtml(customerName)}</h2>
+              ${hasValue(customerPhone) ? `<div class="addr-line">${escapeHtml(customerPhone)}</div>` : ''}
+              <table style="margin-top:4px;">
+                ${hasValue(customerCode) && !isWalkIn ? `<tr><td class="label">Customer No.</td><td class="wrap">${escapeHtml(customerCode)}</td></tr>` : ''}
+                ${hasValue(customerGstin) ? `<tr><td class="label">GST Number</td><td class="wrap">${escapeHtml(customerGstin)}</td></tr>` : ''}
+                ${hasValue(quoteNumber) ? `<tr><td class="label">Quote No.</td><td class="wrap">${escapeHtml(quoteNumber)}</td></tr>` : ''}
+                ${hasValue(customerAddress) ? `<tr><td class="label">Address</td><td class="wrap">${escapeHtml(customerAddress).replace(/\n/g, '<br/>')}</td></tr>` : ''}
+              </table>
+            </div>
+          </td>
+          <td class="party-right">
+            <div class="details-box">
+              <table>
+                ${hasValue(quoteDate) ? `<tr><td class="label">Quote Date</td><td>${escapeHtml(formatDate(quoteDate))}</td></tr>` : ''}
+                ${hasValue(quoteNumber) ? `<tr><td class="label">Quotation No.</td><td class="wrap">${escapeHtml(quoteNumber)}</td></tr>` : ''}
+                ${hasValue(salesperson) ? `<tr><td class="label">Sales Person</td><td class="wrap">${escapeHtml(salesperson)}</td></tr>` : ''}
+              </table>
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <table class="items">
+        <colgroup>${ITEM_COLUMN_WIDTHS.map((width) => `<col style="width:${width};" />`).join('')}</colgroup>
+        <thead>
+          <tr>
+            <th>S.No</th>
+            <th>Description</th>
+            <th>Packing</th>
+            <th>Units</th>
+            <th class="num">Qty</th>
+            <th class="num">Rate (Excl. GST)</th>
+            <th class="num">Disc %</th>
+            <th class="num">GST</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((line, index) => `
+            <tr>
+              <td>${index + 1}</td>
+              <td class="wrap">${escapeHtml(line.name || '')}</td>
+              <td class="wrap">${escapeHtml(line.packing ?? '')}</td>
+              <td class="wrap">${escapeHtml(line.unit || line.units || '')}</td>
+              <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
+              <td class="num">${formatNumber(quoteExclusiveRate(line))}</td>
+              <td class="num">${quoteLineDiscountPct(line) ? `${formatNumber(quoteLineDiscountPct(line), { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : ''}</td>
+              <td class="num">${formatNumber(quoteLineVatAmount(line, true))}</td>
+              <td class="num">${formatNumber(quoteLineTaxable(line))}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+
+      <div class="keep-together">
+        <table class="totals">
+          <colgroup><col style="width:46%;" /><col style="width:32%;" /><col style="width:22%;" /></colgroup>
+          <tr><td></td><td class="tlabel">Subtotal</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
+          <tr><td></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
+          ${paymentDiscountOnVat > 0 ? `<tr><td></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>` : ''}
+          <tr class="grand-row"><td></td><td class="tlabel grand">Total Payable (Inc. GST)</td><td class="tval grand">${formatNumber(totals.total)}</td></tr>
+        </table>
+        ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
+        <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
+        <div class="payment-section">
+          <div class="bank-details">
+            Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
+          </div>
+        </div>
+        <div class="terms">
+          Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day
+        </div>
+        <div class="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
+        <div class="signoff">Received By</div>
+      </div>`
+  }
+
+  function renderQuotePayload(payload) {
+    const quote = payload?.quote || {}
+    const sourceBranch = payload?.branch || {}
+    const branch = {
+      ...sourceBranch,
+      gstin: sourceBranch.gstin || sourceBranch.gst || sourceBranch.gstNo || sourceBranch.gst_no || '',
+      email: sourceBranch.email || sourceBranch.emailAddress || sourceBranch.email_address || '',
+      website: sourceBranch.website || sourceBranch.homePage || sourceBranch.homepage || sourceBranch.url || '',
+      homePage: sourceBranch.homePage || sourceBranch.homepage || sourceBranch.website || sourceBranch.url || '',
+      phone: sourceBranch.phone || sourceBranch.phoneNo || sourceBranch.phone_no || sourceBranch.tel || '',
+    }
+    document.title = `Quote ${quote.number || quote.quote_no || quote.id || ''}`.trim()
+
+    // Recompute GST from discounted inclusive line totals (ignore stale taxTotal).
+    const items = quote.items || []
+    let taxTotal = 0
+    let taxable = 0
+    let payable = 0
+    items.forEach((line) => {
+      const amount = quoteLineAmount(line)
+      const tax = quoteLineVatAmount(line, true)
+      taxTotal += tax
+      taxable += roundNumber(amount - tax)
+      payable += amount
+    })
+    taxTotal = roundNumber(taxTotal)
+    const subtotal = roundNumber(taxable)
+    const total = roundNumber(payable)
+    const exclGross = roundNumber(items.reduce((sum, line) => sum + Number(line.qty || 0) * quoteExclusiveRate(line), 0))
+    const discountAmount = roundNumber(Math.max(0, exclGross - subtotal))
+    const taxPercent = quote.taxPercent ?? quote.tax_percent ?? (subtotal ? Math.round((taxTotal / subtotal) * 100) : 0)
+    const totals = {
+      subtotal,
+      taxTotal,
+      total,
+      discountAmount,
+      taxLabel: `${taxPercent}% GST`,
+    }
+
+    document.getElementById('document').innerHTML = renderQuoteDocument(quote, branch, totals)
+    notifyRendered('quoteRendered')
+  }
+
+  function notifyRendered(type) {
+    const pending = Array.from(document.images)
+      .filter((img) => !img.complete)
+      .map((img) => new Promise((resolve) => {
+        img.addEventListener('load', resolve, { once: true })
+        img.addEventListener('error', resolve, { once: true })
+      }))
+    Promise.all(pending).then(() => {
+      if (window.parent === window) return
+      window.parent.postMessage({ type, height: document.documentElement.scrollHeight }, window.location.origin)
+    })
+  }
+
+  function getAuthHeaders() {
+    const headers = { Accept: 'application/json' }
+    try {
+      const token = window.localStorage.getItem('retailos_token')
+      if (token) headers.Authorization = `Bearer ${token}`
+    } catch (e) {}
+    return headers
+  }
+
+  async function fetchBranchById(branchId) {
+    if (!branchId) return {}
+    try {
+      const response = await fetch(`/api/v1/branches/${encodeURIComponent(branchId)}`, {
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) return await response.json()
+    } catch (e) {
+      // Branch details are optional; the header falls back to defaults.
+    }
+    return {}
+  }
+
+  window.addEventListener('message', async (ev) => {
+    if (ev.origin !== window.location.origin) return
+    const msg = ev.data || {}
+    if (msg.type !== 'renderQuote') return
+    const payload = msg.payload || {}
+    const quote = payload.quote || {}
+    let branch = payload.branch || {}
+    const branchId = branch.id || quote.branchId || quote.branch_id
+    const needsBranchLoad = branchId && (!branch.phone || !branch.email || !branch.website || !branch.gstin)
+    if (needsBranchLoad) {
+      branch = { ...branch, ...(await fetchBranchById(branchId)) }
+    }
+    renderQuotePayload({ quote, branch })
+  })
+})();
+</script>
+</body>
+</html>

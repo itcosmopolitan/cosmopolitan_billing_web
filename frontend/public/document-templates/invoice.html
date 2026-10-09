@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Document</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body {
+    font-family: "Liberation Sans", Arial, Helvetica, sans-serif;
+    font-size: 11px;
+    color: #222;
+  }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { vertical-align: top; padding: 0; }
+  img { border: 0; }
+  .num { text-align: right; }
+  .center { text-align: center; }
+  .wrap { word-wrap: break-word; word-break: break-word; }
+  .keep-together { page-break-inside: avoid; }
+
+  /* Header */
+  table.header td { padding: 0 4px; }
+  .logo-img { display: block; width: 100%; max-width: 40mm; height: auto; }
+  .logo-tag { font-size: 7px; font-style: italic; color: #444; margin-top: 4px; }
+  .company-info { text-align: center; padding-top: 4px; }
+  .company-name { color: #47aa1c; font-weight: bold; font-size: 15px; margin-bottom: 4px; line-height: 1.2; }
+  .company-line { font-size: 8px; color: #222; line-height: 1.4; }
+  .badge-cell { text-align: right; }
+  .badge-img { display: inline-block; width: 19mm; height: auto; }
+  .gold-seal {
+    display: inline-block;
+    width: 19mm;
+    height: 19mm;
+    border-radius: 50%;
+    border: 2px solid #c89b43;
+    background: #fff;
+    color: #8b6a00;
+    text-align: center;
+    padding-top: 3mm;
+    box-sizing: border-box;
+  }
+  .gold-seal .gold-corporate { font-size: 6px; letter-spacing: 0.4px; }
+  .gold-seal .gold-text { font-size: 9px; font-weight: bold; margin-top: 1px; }
+  .gold-seal .gold-100 { font-size: 18px; font-weight: bold; line-height: 1; }
+  .gold-seal .gold-year { font-size: 7px; color: #6d6d6d; margin-top: 1px; }
+
+  /* Title */
+  h1.doc-title {
+    text-align: center;
+    font-size: 16px;
+    margin: 8px 0 0 0;
+    color: #111;
+    letter-spacing: 0.4px;
+    font-weight: bold;
+  }
+
+  /* Parties */
+  table.parties { margin-top: 12px; }
+  td.party-left { width: 56%; padding-right: 10px; }
+  td.party-right { width: 44%; }
+  .details-box {
+    border: 1px solid #e3e3e3;
+    border-radius: 6px;
+    background: #fbfbfb;
+    padding: 8px 10px;
+  }
+  .details-title { font-size: 11px; font-weight: bold; color: #1b3e6f; margin-bottom: 6px; }
+  .details-box h2 { font-size: 14px; margin: 0 0 6px 0; font-weight: bold; line-height: 1.2; }
+  .details-box table td { font-size: 10px; padding: 2px 0; }
+  .details-box table td.label {
+    width: 38%;
+    font-weight: bold;
+    font-size: 9.8px;
+    color: #333;
+    padding-right: 6px;
+  }
+  .addr-line { font-size: 10.5px; line-height: 1.35; margin-top: 2px; }
+
+  /* Items */
+  table.items { table-layout: auto; margin-top: 12px; font-size: 10.5px; }
+  table.items thead { display: table-header-group; }
+  table.items thead tr { border-top: 1.5px solid #1b3e6f; border-bottom: 1.5px solid #1b3e6f; }
+  table.items th { text-align: left; padding: 5px 4px; font-weight: bold; color: #1b3e6f; }
+  table.items td { padding: 4px; }
+  table.items tr { page-break-inside: avoid; }
+  table.items tbody tr { border-bottom: 1px solid #eee; }
+  table.items th.num, table.items td.num { text-align: right; }
+  
+  /* Totals and footer */
+  table.totals { margin-top: 4px; }
+  table.totals td { padding: 3px 4px; font-size: 10.5px; }
+  table.totals .tlabel { text-align: right; padding-right: 10px; }
+  table.totals .tval { text-align: right; }
+  table.totals .grand-row td { border-top: 1.5px solid #1b3e6f; }
+  table.totals .grand { font-weight: bold; }
+  table.totals .totals-payment { text-align: left; font-size: 9.5px; line-height: 1.35; padding-right: 12px; }
+  .discount-note { margin-top: 10px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .amount-words { margin-top: 6px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .payment-section { margin-top: 18px; border-top: 1px solid #333; padding-top: 8px; font-size: 10.5px; }
+  .bank-details { line-height: 1.5; }
+  .terms { margin-top: 14px; font-size: 9.5px; color: #333; line-height: 1.6; }
+  .thankyou { margin-top: 20px; text-align: center; font-style: italic; font-weight: bold; font-size: 11px; }
+  .signoff { margin-top: 36px; font-size: 10.5px; font-weight: bold; }
+  .transfer-notes { margin-top: 12px; font-size: 10.5px; }
+</style>
+</head>
+<body>
+<div id="document"></div>
+<script>
+(function () {
+  function roundNumber(value) {
+    const n = Number(value || 0)
+    if (Number.isNaN(n)) return 0
+    return Math.round((n + Number.EPSILON) * 100) / 100
+  }
+
+  function formatNumber(value, opts = {}) {
+    const n = Number(value || 0)
+    if (Number.isNaN(n)) return '0.00'
+    return n.toLocaleString('en-MV', {
+      minimumFractionDigits: opts.minimumFractionDigits ?? 2,
+      maximumFractionDigits: opts.maximumFractionDigits ?? 2,
+    })
+  }
+
+  function formatDate(value) {
+    if (!value) return ''
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+
+    return `${day}/${month}/${year}`
+  }
+
+  function amountToWords(value, invalidFallback = 'ZERO RUFIYAA AND ZERO LAARI ONLY') {
+    const number = Number(value ?? 0)
+    if (Number.isNaN(number)) return invalidFallback
+    const rupees = Math.floor(number)
+    const laari = Math.round((number - rupees) * 100)
+    const ones = [
+      'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN',
+      'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN',
+      'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN',
+    ]
+    const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY']
+    const chunk = (n) => {
+      if (n < 20) return ones[n]
+      if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ` ${ones[n % 10]}` : '')
+      const remainder = n % 100
+      return `${ones[Math.floor(n / 100)]} HUNDRED${remainder ? ` ${chunk(remainder)}` : ''}`
+    }
+    if (rupees === 0 && laari === 0) return 'ZERO RUFIYAA AND ZERO LAARI ONLY'
+    const parts = []
+    let remaining = rupees
+    let scaleIndex = 0
+    const scale = ['', 'THOUSAND', 'MILLION', 'BILLION']
+    while (remaining > 0) {
+      const part = remaining % 1000
+      if (part > 0) parts.unshift(`${chunk(part)}${scale[scaleIndex] ? ` ${scale[scaleIndex]}` : ''}`)
+      remaining = Math.floor(remaining / 1000)
+      scaleIndex += 1
+    }
+    return `${parts.join(' ') || 'ZERO'} RUFIYAA AND ${laari === 0 ? 'ZERO' : chunk(laari)} LAARI ONLY`
+  }
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  // GST is extracted from the discounted inclusive amount, never from the pre-discount base.
+  function getLineAmounts(item, documentDiscountShare = 0) {
+    const qty = Number(item.qty || item.quantity || 0)
+    const inclusiveRate = Number(item.price || item.rate || 0)
+    const discountPct = Math.min(100, Math.max(0, Number(item.discount ?? item.discPercent ?? item.disc_percent ?? item.discount_pct ?? 0)))
+    const gstRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    const rate = roundNumber(gstRate > 0 ? inclusiveRate * 100 / (100 + gstRate) : inclusiveRate)
+    const gross = roundNumber(qty * rate)
+    const inclusiveGross = roundNumber(qty * inclusiveRate)
+    const inclusiveAfterLineDiscount = roundNumber(inclusiveGross * (1 - discountPct / 100))
+    const inclusiveNet = roundNumber(Math.max(0, inclusiveAfterLineDiscount - documentDiscountShare))
+    const gst = gstRate > 0 ? roundNumber(inclusiveNet * gstRate / (100 + gstRate)) : 0
+    const net = roundNumber(inclusiveNet - gst)
+    const discount = roundNumber(Math.max(0, gross - net))
+    return { qty, rate, discountPct, gross, net, gst, discount, inclusiveAfterLineDiscount }
+  }
+
+  function allocateFlatAmount(amounts, flat) {
+    if (!amounts.length) return []
+    const normalized = amounts.map((amount) => Math.max(0, Number(amount) || 0))
+    const total = roundNumber(normalized.reduce((sum, amount) => sum + amount, 0))
+    const discount = Math.min(total, roundNumber(Math.max(0, Number(flat) || 0)))
+    if (discount <= 0 || total <= 0) return normalized.map(() => 0)
+    const lastIndex = normalized.reduce((last, amount, index) => amount > 0 ? index : last, 0)
+    const shares = normalized.map(() => 0)
+    let allocated = 0
+    normalized.forEach((amount, index) => {
+      if (index === lastIndex || amount <= 0) return
+      shares[index] = Math.min(amount, roundNumber(amount / total * discount))
+      allocated += shares[index]
+    })
+    shares[lastIndex] = Math.min(normalized[lastIndex], Math.max(0, roundNumber(discount - allocated)))
+    return shares
+  }
+
+  function brandHeader(branch, useCounterAddress = true) {
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const branchTel = phoneParts?.[1] || branchPhone
+    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const defaultAddress = `${branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'}, ${branch.street3 || branch.street_3 || "Hulhumale'"}, ${branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'}`
+    const addressLines = useCounterAddress && branch.invoiceAddressUsesCounter
+      ? (Array.isArray(branch.invoiceAddressLines) ? branch.invoiceAddressLines : [])
+      : [defaultAddress]
+    const badge = branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl || ''
+    const badgeHtml = badge
+      ? `<img class="badge-img" src="${escapeHtml(badge)}" alt="Badge" />`
+      : `<img id="goldSealImg" class="badge-img" src="/assets/gold-100-seal.png" alt="Gold 100 seal" onerror="this.style.display='none';document.getElementById('goldSealFallback').style.display='inline-block'" />
+        <div id="goldSealFallback" class="gold-seal" role="img" aria-label="Gold 100 seal" style="display:none;">
+          <div class="gold-corporate">Corporate Maldives</div>
+          <div class="gold-text">GOLD</div>
+          <div class="gold-100">100</div>
+          <div class="gold-year">2023</div>
+        </div>`
+    return `
+      <table class="header">
+        <tr>
+          <td style="width:30%;">
+            <img class="logo-img" src="${escapeHtml(branch.logo || branch.logo_url || '/assets/cosmopolitan-logo.png')}" alt="Cosmopolitan" />
+            <div class="logo-tag">"where quality and service matters"</div>
+          </td>
+          <td class="company-info" style="width:44%;">
+            <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
+            ${addressLines.map((line) => `<div class="company-line">${escapeHtml(line)}</div>`).join('')}
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
+          </td>
+          <td class="badge-cell" style="width:26%;">${badgeHtml}</td>
+        </tr>
+      </table>`
+  }
+
+  function renderItemRows(items, lineAmounts) {
+    return items.map((it, index) => {
+      const amounts = lineAmounts[index]
+      return `<tr>
+          <td>${index + 1}</td>
+          <td class="wrap">${escapeHtml(it.name || it.description || '')}</td>
+          <td class="wrap">${escapeHtml(it.packaging || it.packing || it.package || '')}</td>
+          <td class="wrap">${escapeHtml(it.units || it.unit || '')}</td>
+          <td class="num">${formatNumber(amounts.qty, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
+          <td class="num">${formatNumber(amounts.rate)}</td>
+          <td class="num">${amounts.discountPct ? `${formatNumber(amounts.discountPct, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : ''}</td>
+          <td class="num">${formatNumber(amounts.gst)}</td>
+          <td class="num">${formatNumber(amounts.net)}</td>
+        </tr>`
+    }).join('')
+  }
+
+  const ITEM_COLUMN_WIDTHS = ['5%', '27%', '10%', '7%', '7%', '11%', '7%', '11%', '15%']
+  const TRANSFER_COLUMN_WIDTHS = ['5%', '30%', '13%', '8%', '8%', '18%', '18%']
+
+  function colgroup(widths) {
+    return `<colgroup>${widths.map((width) => `<col style="width:${width};" />`).join('')}</colgroup>`
+  }
+
+  function renderInvoiceDocument(sale, branch) {
+    const documentType = sale.documentType || 'Tax Invoice'
+    const isPurchaseOrder = documentType === 'Purchase Order'
+    const isPurchaseBill = documentType === 'Purchase Bill'
+    const isGrnReceipt = documentType === 'GRN Receipt'
+    const isPurchaseDocument = isPurchaseOrder || isPurchaseBill || isGrnReceipt
+    const isSalesOrder = documentType === 'Sales Order'
+    const hasValue = (value) => value != null && String(value).trim() !== ''
+    const documentNumberLabel = isPurchaseOrder ? 'Purchase Order No.' : isPurchaseBill ? 'Bill No.' : isGrnReceipt ? 'GRN No.' : isSalesOrder ? 'Sales Order No.' : 'Invoice No.'
+    const purchaseOrderNumber = sale.purchaseOrderNumber || sale.purchase_order_number || sale.poNumber || sale.po_number || ''
+    const paymentTerms = sale.customerCreditTerms || sale.customer_credit_terms || sale.paymentTerms || sale.payment_terms || ''
+    const displayPaymentTerms = /^\d+(?:\.\d+)?$/.test(String(paymentTerms).trim()) ? `${String(paymentTerms).trim()} days` : paymentTerms
+    const customerPhone = sale.customerPhone || sale.customer_phone || ''
+    const customerGstin = sale.customerGstin || sale.customer_gstin || sale.customerGSTIN || sale.customer_gst_in || ''
+    const invoiceNumber = sale.number || sale.invoiceNumber || sale.invoice_no || ''
+    const rawAddress = sale.customerAddress || sale.customer_address || sale.address || sale.shippingAddress || sale.address_lines || sale.addressLines || ''
+    const addressParts = [
+      sale.customerStreet1 || sale.customer_street1,
+      sale.customerStreet2 || sale.customer_street2,
+      sale.customerStreet3 || sale.customer_street3,
+      sale.customerCity || sale.customer_city || sale.city,
+      sale.customerStateProvince || sale.customer_state_province,
+      sale.customerCountry || sale.customer_country || sale.country,
+      sale.customerPostalCode || sale.customer_postal_code || sale.postal_code,
+    ].filter((part) => typeof part === 'string' && part.trim()).map((part) => part.trim())
+    const customerAddress = rawAddress ? Array.isArray(rawAddress) ? rawAddress.filter(Boolean).join(', ') : rawAddress : addressParts.join(', ')
+    const remarks = sale.notes || sale.remark || sale.remarks || ''
+    const quotationNumber = sale.quotationNumber || sale.quotation_number || sale.quotationNo || sale.quotation_no || ''
+    const salesPerson = sale.customerKeyAccountManagerName || sale.customer_key_account_manager_name || sale.customerKeyAccountManager || sale.customer_key_account_manager || ''
+    const cashier = sale.cashier || sale.cashierName || sale.cashier_name || ''
+    const createdBy = sale.createdBy || sale.created_by || ''
+    const invoiceDate = sale.date || sale.invoiceDate || sale.invoice_date || ''
+    const paymentMode = String(sale.paymentMode || sale.payment_mode || sale.method || '').toLowerCase()
+    const paymentDetails = isPurchaseDocument ? '' : paymentMode === 'cash'
+      ? `<strong>Cash Collected:</strong> ${formatNumber(sale.cashCollected || 0)}<br/><strong>Cash Refunded:</strong> ${formatNumber(sale.cashChange || sale.cash_change || 0)}`
+      : ['card', 'upi', 'bank_transfer'].includes(paymentMode) && (sale.paymentRef || sale.payment_ref)
+        ? `<strong>Payment Ref:</strong> ${escapeHtml(sale.paymentRef || sale.payment_ref)}`
+        : ''
+
+    const items = sale.items || []
+    const baseLineAmounts = items.map((item) => getLineAmounts(item, 0))
+    const documentDiscountShares = allocateFlatAmount(
+      baseLineAmounts.map((line) => line.inclusiveAfterLineDiscount),
+      sale.discount ?? sale.discount_amount ?? sale.discount_amt ?? 0,
+    )
+    const lineAmounts = items.map((item, index) => getLineAmounts(item, documentDiscountShares[index]))
+    const netAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + line.net, 0))
+    const discountAmount = roundNumber(lineAmounts.reduce((sum, line) => sum + (line.discount || 0), 0))
+    const taxTotal = roundNumber(lineAmounts.reduce((sum, line) => sum + line.gst, 0))
+    const total = roundNumber(netAmount + taxTotal)
+    const grandLabel = isPurchaseOrder ? 'Purchase Order Total (Inc. GST)'
+      : isPurchaseBill ? 'Purchase Bill Total (Inc. GST)'
+        : isGrnReceipt ? 'Goods Receipt Total (Inc. GST)'
+          : isSalesOrder ? 'Total Order Value (Inc. GST)'
+            : 'Total Payable (Inc. GST)'
+    const footerText = isPurchaseOrder ? 'Please quote this purchase order number on all invoices and correspondence.'
+      : isPurchaseBill ? 'Please retain this purchase bill for your records.'
+        : isGrnReceipt ? 'Please verify the quantities and condition of the goods received.'
+          : 'Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day'
+    const dateLabel = isPurchaseOrder ? 'PO Date' : isPurchaseBill ? 'Bill Date' : isGrnReceipt ? 'Receipt Date' : isSalesOrder ? 'Order Date' : 'Invoice Date'
+
+    return `
+      ${brandHeader(branch)}
+
+      <h1 class="doc-title">${escapeHtml(documentType)}</h1>
+
+      <table class="parties">
+        <tr>
+          <td class="party-left">
+            <div class="details-box">
+              <div class="details-title">${isPurchaseDocument ? 'Vendor Details' : 'Customer Details'}</div>
+              <h2>${escapeHtml(sale.customerName || sale.customer_name || sale.customer || sale.name || '')}</h2>
+              ${isPurchaseDocument || !hasValue(customerPhone) ? '' : `<div class="addr-line">${escapeHtml(customerPhone)}</div>`}
+              <table style="margin-top:4px;">
+                ${!isPurchaseDocument && hasValue(customerGstin) ? `<tr><td class="label">GST Number</td><td class="wrap">${escapeHtml(customerGstin)}</td></tr>` : ''}
+                ${hasValue(invoiceNumber) ? `<tr><td class="label">${documentNumberLabel}</td><td class="wrap">${escapeHtml(invoiceNumber)}</td></tr>` : ''}
+                ${!isPurchaseDocument && hasValue(customerAddress) ? `<tr><td class="label">Address</td><td class="wrap">${escapeHtml(String(customerAddress)).replace(/\n/g, '<br/>')}</td></tr>` : ''}
+                ${hasValue(remarks) ? `<tr><td class="label">${isPurchaseDocument ? 'Notes' : 'Remarks'}</td><td class="wrap">${escapeHtml(remarks)}</td></tr>` : ''}
+              </table>
+            </div>
+          </td>
+          <td class="party-right">
+            <div class="details-box">
+              <table>
+                ${hasValue(invoiceDate) ? `<tr><td class="label">${dateLabel}</td><td>${formatDate(invoiceDate)}</td></tr>` : ''}
+                ${(isSalesOrder || isPurchaseOrder) && hasValue(sale.expectedDate || sale.expected_date) ? `<tr><td class="label">Expected Date</td><td>${formatDate(sale.expectedDate || sale.expected_date)}</td></tr>` : ''}
+                ${isPurchaseBill && hasValue(sale.dueDate || sale.due_date) ? `<tr><td class="label">Due Date</td><td>${formatDate(sale.dueDate || sale.due_date)}</td></tr>` : ''}
+                ${(isPurchaseBill || isGrnReceipt) && purchaseOrderNumber ? `<tr><td class="label">Purchase Order</td><td class="wrap">${escapeHtml(purchaseOrderNumber)}</td></tr>` : ''}
+                ${!isPurchaseDocument && hasValue(quotationNumber) ? `<tr><td class="label">Quotation No.</td><td class="wrap">${escapeHtml(quotationNumber)}</td></tr>` : ''}
+                ${!isPurchaseDocument && hasValue(displayPaymentTerms) ? `<tr><td class="label">Payment Terms</td><td class="wrap">${escapeHtml(displayPaymentTerms)}</td></tr>` : ''}
+                ${isPurchaseOrder && hasValue(createdBy) ? `<tr><td class="label">Created By</td><td class="wrap">${escapeHtml(createdBy)}</td></tr>` : !isPurchaseDocument && hasValue(salesPerson) ? `<tr><td class="label">Sales Person</td><td class="wrap">${escapeHtml(salesPerson)}</td></tr>` : ''}
+                ${!isPurchaseDocument && hasValue(cashier) ? `<tr><td class="label">Cashier</td><td class="wrap">${escapeHtml(cashier)}</td></tr>` : ''}
+              </table>
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <table class="items">
+        ${colgroup(ITEM_COLUMN_WIDTHS)}
+        <thead>
+          <tr>
+            <th>S.No</th>
+            <th>Description</th>
+            <th>Packing</th>
+            <th>Units</th>
+            <th class="num">Qty</th>
+            <th class="num">Rate (Excl. GST)</th>
+            <th class="num">Disc %</th>
+            <th class="num">GST</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${renderItemRows(items, lineAmounts)}
+        </tbody>
+      </table>
+
+      <div class="keep-together">
+        <table class="totals">
+          ${colgroup(['46%', '32%', '22%'])}
+          <tr>
+            <td class="totals-payment" rowspan="3">${paymentDetails}</td>
+            <td class="tlabel">Subtotal</td>
+            <td class="tval">${formatNumber(netAmount)}</td>
+          </tr>
+          <tr>
+            <td class="tlabel">GST</td>
+            <td class="tval">${formatNumber(taxTotal)}</td>
+          </tr>
+          <tr class="grand-row">
+            <td class="tlabel grand">${grandLabel}</td>
+            <td class="tval grand">${formatNumber(total)}</td>
+          </tr>
+        </table>
+        ${discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(discountAmount)}</div>` : ''}
+        <div class="amount-words">${escapeHtml(amountToWords(total))}</div>
+        ${isPurchaseDocument ? '' : `<div class="payment-section">
+          <div class="bank-details">
+            Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
+          </div>
+        </div>`}
+        <div class="terms">${footerText}</div>
+        <div class="thankyou">${isPurchaseDocument ? 'Thank you for your partnership' : 'Thank you for choosing Cosmopolitan as your preferred partner'}</div>
+        <div class="signoff">${isGrnReceipt ? 'Received By' : isPurchaseDocument ? 'Authorized By' : 'Received By'}</div>
+      </div>`
+  }
+
+  function renderTransferDocument(transfer, branch) {
+    const fromBranch = transfer.from_branch_name || transfer.from_branch_id || ''
+    const toBranch = transfer.to_branch_name || transfer.to_branch_id || ''
+    const refNumber = transfer.ref_number || transfer.number || transfer.id || ''
+    const transferDate = transfer.request_date || transfer.created_at || ''
+    const status = String(transfer.status || '').replace(/_/g, ' ')
+    const items = transfer.items || []
+    const totalCostPrice = items.reduce((sum, item) => {
+      const qty = Number(item.qty ?? item.quantity ?? 0)
+      const costPrice = Number(item.cost_price ?? item.unit_cost ?? 0)
+      return sum + qty * costPrice
+    }, 0)
+    const itemRows = items.map((item, index) => `
+        <tr>
+          <td>${index + 1}</td>
+          <td class="wrap">${escapeHtml(item.name || item.item_name || '')}</td>
+          <td class="wrap">${escapeHtml(item.packing || item.packaging || '')}</td>
+          <td class="wrap">${escapeHtml(item.unit || item.units || '')}</td>
+          <td class="num">${formatNumber(item.qty ?? item.quantity ?? 0, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
+          <td class="num">${formatNumber(item.cost_price ?? item.unit_cost ?? 0)}</td>
+          <td class="num">${formatNumber(Number(item.qty ?? item.quantity ?? 0) * Number(item.cost_price ?? item.unit_cost ?? 0))}</td>
+        </tr>`).join('')
+
+    return `
+      ${brandHeader(branch, false)}
+
+      <h1 class="doc-title">Stock Transfer</h1>
+
+      <table class="parties">
+        <tr>
+          <td class="party-left">
+            <div class="details-box">
+              <div class="details-title">From Branch</div>
+              <h2>${escapeHtml(fromBranch)}</h2>
+              <table style="margin-top:4px;">
+                <tr><td class="label">Transfer #</td><td class="wrap">${escapeHtml(refNumber)}</td></tr>
+                ${transfer.requested_by ? `<tr><td class="label">Requested By</td><td class="wrap">${escapeHtml(transfer.requested_by)}</td></tr>` : ''}
+                ${transfer.approved_by ? `<tr><td class="label">Approved By</td><td class="wrap">${escapeHtml(transfer.approved_by)}</td></tr>` : ''}
+              </table>
+            </div>
+          </td>
+          <td class="party-right">
+            <div class="details-box">
+              <div class="details-title">To Branch</div>
+              <h2>${escapeHtml(toBranch)}</h2>
+              <table>
+                ${transferDate ? `<tr><td class="label">Transfer Date</td><td>${formatDate(transferDate)}</td></tr>` : ''}
+                ${status ? `<tr><td class="label">Status</td><td class="wrap">${escapeHtml(status)}</td></tr>` : ''}
+                ${transfer.priority ? `<tr><td class="label">Priority</td><td class="wrap">${escapeHtml(transfer.priority)}</td></tr>` : ''}
+              </table>
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <table class="items">
+        ${colgroup(TRANSFER_COLUMN_WIDTHS)}
+        <thead>
+          <tr>
+            <th>S.No</th>
+            <th>Description</th>
+            <th>Packing</th>
+            <th>Units</th>
+            <th class="num">Qty</th>
+            <th class="num">Cost Price</th>
+            <th class="num">Total Cost Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemRows}
+          <tr>
+            <td colspan="6" class="num"><strong>Total Cost Price</strong></td>
+            <td class="num"><strong>${formatNumber(totalCostPrice)}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="keep-together">
+        ${transfer.notes ? `<div class="transfer-notes"><strong>Notes:</strong> ${escapeHtml(transfer.notes).replace(/\n/g, '<br/>')}</div>` : ''}
+        <div class="signoff">Authorized By</div>
+      </div>`
+  }
+
+  function normalizeInvoicePayload(payload) {
+    const sale = { ...(payload?.sale || {}) }
+    const sourceBranch = payload?.branch || {}
+    const organisation = sale.organisation || sale.organization || {}
+    const branch = { ...organisation, ...sourceBranch }
+
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no ||
+      organisation.phone || ''
+    const salePhone = sale.phoneNo || sale.phone_no || ''
+    const email = sale.email ||
+      branch.email || branch.emailAddress || branch.email_address ||
+      organisation.email || ''
+    const website = sale.website || sale.homePage || sale.homepage ||
+      branch.website || branch.homePage || branch.homepage || branch.url ||
+      organisation.website || organisation.homePage || ''
+    const branchGst = sourceBranch.gstRegNo || sourceBranch.gst || sourceBranch.gstin ||
+      sourceBranch.gstNo || sourceBranch.gst_no || organisation.gstin ||
+      organisation.gstNo || organisation.gst_no || ''
+    const salesperson = sale.salesperson || sale.salesPerson ||
+      sale.salesperson_name || sale.cashier || sale.cashierName || ''
+
+    Object.assign(branch, {
+      company: sourceBranch.company || sourceBranch.companyName || '',
+      address: sourceBranch.address || sourceBranch.address_lines || sourceBranch.addressLines || '',
+      phone: branchPhone,
+      phoneNo: branch.phoneNo || branchPhone,
+      website,
+      homePage: branch.homePage || website,
+      gstin: branchGst,
+      gst: branchGst,
+      gstNo: branchGst,
+      gst_no: branchGst,
+      email,
+    })
+
+    Object.assign(sale, {
+      salesperson,
+      phoneNo: salePhone,
+      email,
+      website,
+    })
+
+    return { ...payload, sale, branch }
+  }
+
+  function notifyRendered(type) {
+    const pending = Array.from(document.images)
+      .filter((img) => !img.complete)
+      .map((img) => new Promise((resolve) => {
+        img.addEventListener('load', resolve, { once: true })
+        img.addEventListener('error', resolve, { once: true })
+      }))
+    Promise.all(pending).then(() => {
+      if (window.parent === window) return
+      window.parent.postMessage({ type, height: document.documentElement.scrollHeight }, window.location.origin)
+    })
+  }
+
+  function renderInvoicePayload(payload) {
+    const sale = payload?.sale || {}
+    sale.documentType = payload?.documentType || 'Tax Invoice'
+    const branch = payload?.branch || {}
+    document.title = `${sale.documentType} ${sale.number || (sale.documentType === 'Stock Transfer' ? sale.ref_number : '') || sale.invoiceNumber || sale.invoice_no || sale.id || ''}`.trim()
+    const html = sale.documentType === 'Stock Transfer'
+      ? renderTransferDocument(sale, branch)
+      : renderInvoiceDocument(sale, branch)
+    document.getElementById('document').innerHTML = html
+    notifyRendered('invoiceRendered')
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.origin !== window.location.origin) return
+    const msg = ev.data || {}
+    if (msg.type !== 'renderInvoice') return
+    renderInvoicePayload(normalizeInvoicePayload(msg.payload))
+  })
+})();
+</script>
+</body>
+</html>

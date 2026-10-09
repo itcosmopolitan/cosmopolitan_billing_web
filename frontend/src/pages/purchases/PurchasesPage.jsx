@@ -18,7 +18,7 @@
  * mid-edit branch swaps changing the picker results. Purchases mirror
  * the same pattern via openCreatePO / openCreateBill helpers.
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { purchasesAPI } from '@/api'
@@ -42,12 +42,8 @@ const inFlightPurchasesRequests = new Map()
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
 import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
-import { Receipt } from '@/components/Receipt'
-import {
-  openGrnPrintWindow,
-  openPurchaseBillPrintWindow,
-  openPurchaseOrderPrintWindow,
-} from '@/utils/printInvoice'
+import { prepareInvoicePayload } from '@/utils/printInvoice'
+import { downloadDocumentPdf, printDocumentPdf } from '@/utils/documentPdf'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
 import {
@@ -322,8 +318,6 @@ export default function PurchasesPage() {
 
   // Modals + sub-state
   const [purchaseDoc, setPurchaseDoc] = useState(null) // { kind: 'bill'|'order'|'grn'|'return', data }
-  const [exportPurchaseDocument, setExportPurchaseDocument] = useState(null)
-  const exportPurchaseDocumentRef = useRef(null)
 
   const [showPay, setShowPay]   = useState(null)
   const [showCancel, setShowCancel] = useState(null)
@@ -338,39 +332,6 @@ export default function PurchasesPage() {
 
   const isRowBusy = useCallback((id) => actionBusy === id, [actionBusy])
 
-  const requestPurchaseDocumentExport = async (document, kind) => {
-    try {
-      const fullDocument = Array.isArray(document?.items) && document.items.length
-        ? document
-        : kind === 'bill'
-          ? await purchasesAPI.get(document.id)
-          : kind === 'grn' ? await purchasesAPI.grns.get(document.id) : await purchasesAPI.orders.get(document.id)
-      const documentType = kind === 'bill' ? 'Purchase Bill' : kind === 'grn' ? 'GRN Receipt' : 'Purchase Order'
-      setExportPurchaseDocument({ document: fullDocument, documentType })
-    } catch (error) {
-      console.error('Failed to load purchase document for export:', error)
-      toast.error('Could not prepare the purchase document PDF.')
-    }
-  }
-
-  useEffect(() => {
-    if (!exportPurchaseDocument || !exportPurchaseDocumentRef.current) return
-    let cancelled = false
-    const run = async () => {
-      try {
-        const exported = await exportPurchaseDocumentRef.current.exportPdf()
-        if (!exported) toast.error('Could not download the purchase document PDF. Please try again.')
-      } catch (error) {
-        console.error('Failed to export purchase document PDF:', error)
-        toast.error('Could not download the purchase document PDF. Please try again.')
-      } finally {
-        if (!cancelled) setExportPurchaseDocument(null)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [exportPurchaseDocument])
-
   const runRowAction = useCallback(async (id, kind, fn) => {
     if (actionBusy) return
     setActionBusy(id)
@@ -382,6 +343,29 @@ export default function PurchasesPage() {
       setActionKind(null)
     }
   }, [actionBusy])
+
+  const purchaseDocumentType = (kind) => (kind === 'bill' ? 'Purchase Bill' : kind === 'grn' ? 'GRN Receipt' : 'Purchase Order')
+
+  const printPurchaseDocument = (doc, kind) => runRowAction(doc.id, 'print', async () => {
+    try {
+      const documentType = purchaseDocumentType(kind)
+      await printDocumentPdf(documentType, await prepareInvoicePayload(doc, activeBranch, { documentType }))
+    } catch (error) {
+      console.error('Failed to print purchase document:', error)
+      toast.error(error.message || 'Could not print the purchase document.')
+    }
+  })
+
+  const exportPurchaseDocument = (doc, kind) => runRowAction(doc.id, 'export', async () => {
+    try {
+      const documentType = purchaseDocumentType(kind)
+      await downloadDocumentPdf(documentType, await prepareInvoicePayload(doc, activeBranch, { documentType }))
+    } catch (error) {
+      console.error('Failed to export purchase document PDF:', error)
+      toast.error('Could not download the purchase document PDF. Please try again.')
+    }
+  })
+
 
   // Payment modal state — same shape as SalesPage's pay-flow.
   const [payAmt, setPayAmt]     = useState('')
@@ -1109,12 +1093,12 @@ export default function PurchasesPage() {
                               {
                                 label: 'Print Bill',
                                 disabled: isRowBusy(b.id),
-                                onClick: () => openPurchaseBillPrintWindow(b, activeBranch),
+                                onClick: () => printPurchaseDocument(b, 'bill'),
                               },
                               {
                                 label: 'Export Bill',
                                 disabled: isRowBusy(b.id),
-                                onClick: () => requestPurchaseDocumentExport(b, 'bill'),
+                                onClick: () => exportPurchaseDocument(b, 'bill'),
                               },
                               {
                                 label: 'Activity',
@@ -1342,12 +1326,12 @@ export default function PurchasesPage() {
                                 {
                                   label: 'Print Purchase Order',
                                   disabled: isRowBusy(o.id),
-                                  onClick: () => openPurchaseOrderPrintWindow(o, activeBranch),
+                                  onClick: () => printPurchaseDocument(o, 'order'),
                                 },
                                 {
                                   label: 'Export Purchase Order',
                                   disabled: isRowBusy(o.id),
-                                  onClick: () => requestPurchaseDocumentExport(o, 'order'),
+                                  onClick: () => exportPurchaseDocument(o, 'order'),
                                 },
                                 {
                                   label: 'Activity',
@@ -1521,12 +1505,12 @@ export default function PurchasesPage() {
                               {
                                 label: 'Print GRN Receipt',
                                 disabled: isRowBusy(g.id),
-                                onClick: () => openGrnPrintWindow(g, activeBranch),
+                                onClick: () => printPurchaseDocument(g, 'grn'),
                               },
                               {
                                 label: 'Export GRN Receipt',
                                 disabled: isRowBusy(g.id),
-                                onClick: () => requestPurchaseDocumentExport(g, 'grn'),
+                                onClick: () => exportPurchaseDocument(g, 'grn'),
                               },
                               {
                                 label: 'Activity',
@@ -1907,24 +1891,14 @@ export default function PurchasesPage() {
         onDeleteReturn={(b) => setShowDeleteReturn(b)}
         onVoidReturn={voidVendorReturn}
         onBillFromGrn={billFromGrn}
-        onPrintOrder={(order) => openPurchaseOrderPrintWindow(order, activeBranch)}
-        onExportOrder={(order) => requestPurchaseDocumentExport(order, 'order')}
-        onPrintBill={(bill) => openPurchaseBillPrintWindow(bill, activeBranch)}
-        onExportBill={(bill) => requestPurchaseDocumentExport(bill, 'bill')}
-        onPrintGrn={(grn) => openGrnPrintWindow(grn, activeBranch)}
-        onExportGrn={(grn) => requestPurchaseDocumentExport(grn, 'grn')}
+        onPrintOrder={(order) => printPurchaseDocument(order, 'order')}
+        onExportOrder={(order) => exportPurchaseDocument(order, 'order')}
+        onPrintBill={(bill) => printPurchaseDocument(bill, 'bill')}
+        onExportBill={(bill) => exportPurchaseDocument(bill, 'bill')}
+        onPrintGrn={(grn) => printPurchaseDocument(grn, 'grn')}
+        onExportGrn={(grn) => exportPurchaseDocument(grn, 'grn')}
       />
 
-      {exportPurchaseDocument && (
-        <div style={{ position: 'fixed', left: '-10000px', top: 0, width: 920, pointerEvents: 'none' }} aria-hidden="true">
-          <Receipt
-            ref={exportPurchaseDocumentRef}
-            sale={exportPurchaseDocument.document}
-            branch={activeBranch}
-            documentType={exportPurchaseDocument.documentType}
-          />
-        </div>
-      )}
 
       {/* ── Payment Modal ─────────────────────────────────────────── */}
       <Modal open={!!showPay} onClose={() => setShowPay(null)} title="Record Vendor Payment" icon="💳" size="sm" busy={paySaving}

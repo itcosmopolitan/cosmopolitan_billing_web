@@ -1,5 +1,35 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { prepareInvoicePayload, prepareStockTransferPayload } from './printInvoice'
+import { clearOrganisationCache, loadOrganisation, prepareInvoicePayload, prepareStockTransferPayload } from './printInvoice'
+
+afterEach(() => {
+  clearOrganisationCache()
+})
+
+describe('loadOrganisation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('reuses one organisation request for repeated calls', async () => {
+    const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ gstin: 'G1' }) }))
+    vi.stubGlobal('fetch', fetch)
+    const first = await loadOrganisation({})
+    const second = await loadOrganisation({})
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(first).toEqual({ gstin: 'G1' })
+    expect(second).toEqual({ gstin: 'G1' })
+  })
+
+  it('does not cache a failed organisation request', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ gstin: 'G2' }) })
+    vi.stubGlobal('fetch', fetch)
+    expect(await loadOrganisation({})).toBeNull()
+    expect(await loadOrganisation({})).toEqual({ gstin: 'G2' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('prepareInvoicePayload for Sales Orders', () => {
   afterEach(() => {

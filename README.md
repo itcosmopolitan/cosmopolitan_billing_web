@@ -127,8 +127,10 @@ cd backend && python src/seed.py
 cd frontend && npm run build   # → frontend/dist/
 ```
 
-The Render Docker deployment installs Playwright and Chromium in the backend
-image for server-side PDF exports. Deploy using the repository `Dockerfile` so
-the browser runtime is included.
+PDF exports and prints are rendered on the server with wkhtmltopdf (official
+0.12.6.1 build with patched Qt). The repository `Dockerfile` installs it along
+with `fonts-liberation`. For local runs, install wkhtmltopdf and make sure it is
+on `PATH` (or set `WKHTMLTOPDF_BINARY`). Page sizes and margins are defined once
+in `PAGE_PRESETS` in `backend/src/pdf_renderer.py`.
 
 MIT License

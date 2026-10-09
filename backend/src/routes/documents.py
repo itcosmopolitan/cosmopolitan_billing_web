@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import json
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from src import config
+from src.pdf_renderer import PdfMode, PdfRenderError, render_pdf, sanitize_html
 from src.security import current_user, require_perm
 
 router = APIRouter()
 
 
 class PdfRenderRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     html: str = Field(..., min_length=1)
     file_name: str = Field(default="Tax_Invoice.pdf", max_length=160)
+    mode: PdfMode = PdfMode.EXPORT
 
 
 def _safe_pdf_filename(value: str) -> str:
@@ -25,11 +31,23 @@ def _safe_pdf_filename(value: str) -> str:
     return name
 
 
-def _with_base_href(html: str, base_url: str) -> str:
-    base_tag = f'<base href="{base_url.rstrip("/")}/">'
-    if "<head>" in html:
-        return html.replace("<head>", f"<head>{base_tag}", 1)
-    return f"<!doctype html><html><head>{base_tag}</head><body>{html}</body></html>"
+async def _read_limited_body(request: Request, max_bytes: int) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > max_bytes:
+        raise HTTPException(status_code=413, detail=_too_large_detail(max_bytes))
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail=_too_large_detail(max_bytes))
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _too_large_detail(max_bytes: int) -> str:
+    return f"PDF request exceeds the {max_bytes // (1024 * 1024)} MB limit."
 
 
 @router.post(
@@ -37,38 +55,20 @@ def _with_base_href(html: str, base_url: str) -> str:
     dependencies=[Depends(require_perm("sales.view", "reports.view"))],
 )
 async def render_invoice_pdf(
-    payload: PdfRenderRequest,
     request: Request,
     _user=Depends(current_user),
 ):
+    raw = await _read_limited_body(request, config.get().pdf_max_payload_bytes)
     try:
-        from playwright.async_api import async_playwright
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="PDF export renderer is not installed. Install Playwright and its Chromium browser.",
-        ) from exc
+        payload = PdfRenderRequest.model_validate(json.loads(raw or b"{}"))
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid PDF request body.") from exc
 
-    browser = None
+    html = sanitize_html(payload.html)
     try:
-        html = _with_base_href(payload.html, str(request.base_url))
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(args=["--no-sandbox"])
-            page = await browser.new_page(viewport={"width": 794, "height": 1123})
-            await page.emulate_media(media="print")
-            await page.set_content(html, wait_until="networkidle")
-            await page.evaluate("document.fonts && document.fonts.ready")
-            pdf = await page.pdf(
-                format="A4",
-                print_background=True,
-                prefer_css_page_size=True,
-                margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
-            )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not render invoice PDF: {exc}") from exc
-    finally:
-        if browser is not None:
-            await browser.close()
+        pdf = await render_pdf(html, payload.mode)
+    except PdfRenderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     filename = _safe_pdf_filename(payload.file_name)
     return Response(

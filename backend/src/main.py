@@ -14,7 +14,7 @@ from pathlib import Path
 
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
-from src import config
+from src import config, pdf_renderer
 from src.database import assert_activity_audit_schema, init_schema
 from src.middleware.audit_middleware import AuditContextMiddleware
 from src.routes import (
@@ -176,6 +176,12 @@ async def _notification_scan_loop() -> None:
 @app.on_event("startup")
 async def startup():
     logger.info("Starting FastAPI application startup")
+    if not pdf_renderer.is_binary_available():
+        logger.error(
+            "wkhtmltopdf binary '%s' not found; PDF exports will fail. "
+            "Install wkhtmltopdf or set WKHTMLTOPDF_BINARY.",
+            pdf_renderer.binary_path(),
+        )
     try:
         await init_schema()
         await assert_activity_audit_schema()

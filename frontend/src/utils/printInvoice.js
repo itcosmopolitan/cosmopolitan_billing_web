@@ -27,6 +27,29 @@ function roundCurrency(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
 }
 
+const ORG_CACHE_TTL_MS = 5 * 60 * 1000
+let orgCache = { promise: null, key: null, at: 0 }
+
+export function clearOrganisationCache() {
+  orgCache = { promise: null, key: null, at: 0 }
+}
+
+export function loadOrganisation(authHeaders) {
+  const key = authHeaders?.Authorization || ''
+  const now = Date.now()
+  if (orgCache.promise && orgCache.key === key && now - orgCache.at < ORG_CACHE_TTL_MS) return orgCache.promise
+
+  const promise = fetch('/api/v1/settings/organisation', { headers: { Accept: 'application/json', ...authHeaders } })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((org) => {
+      if (!org && orgCache.promise === promise) clearOrganisationCache()
+      return org
+    })
+  orgCache = { promise, key, at: now }
+  return promise
+}
+
 function calculatePrintedInvoiceTotal(sale) {
   return calcInvoiceSummary(sale?.items || [], sale).total
 }
@@ -35,6 +58,8 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
   if (typeof window === 'undefined') return null
   const authToken = window.localStorage.getItem('retailos_token')
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
+
+  const orgPromise = loadOrganisation(authHeaders)
 
   let fullSale = sale
   try {
@@ -88,12 +113,8 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     }
   }
 
-  // fetch organisation as fallback
-  let org = null
-  try {
-    const r = await fetch('/api/v1/settings/organisation', { headers: { Accept: 'application/json', ...authHeaders } })
-    if (r.ok) org = await r.json()
-  } catch (e) { /* ignore */ }
+  // fetch organisation as fallback (started above, in parallel with the sale fetch)
+  const org = await orgPromise
 
   const branchMerged = { ...(branch || {}) }
   const counterAddress = childCounterInvoiceAddress(branchMerged, fullSale)
@@ -134,57 +155,6 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
   return payload
 }
 
-async function openDocumentPrintWindow(sale, branch, documentType, fetchSale) {
-  if (typeof window === 'undefined') return
-  const win = window.open('/invoice-print-a5.html', '_blank')
-  const payload = await prepareInvoicePayload(sale, branch, { documentType, fetchSale })
-  if (!payload) return
-
-  const sendPayload = () => {
-    try {
-      if (!win || win.closed) return false
-      win.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
-      return true
-    } catch (e) {
-      return false
-    }
-  }
-
-  const interval = setInterval(() => {
-    if (!win || win.closed) { clearInterval(interval); return }
-    if (sendPayload()) { clearInterval(interval) }
-  }, 200)
-
-  if (win) {
-    win.addEventListener('load', () => {
-      sendPayload()
-      clearInterval(interval)
-    })
-  }
-
-  setTimeout(() => { try { win.focus() } catch (e) {} }, 500)
-}
-
-export function openInvoicePrintWindow(sale, branch) {
-  return openDocumentPrintWindow(sale, branch, 'Tax Invoice', true)
-}
-
-export function openSalesOrderPrintWindow(order, branch) {
-  return openDocumentPrintWindow(order, branch, 'Sales Order', true)
-}
-
-export function openPurchaseOrderPrintWindow(order, branch) {
-  return openDocumentPrintWindow(order, branch, 'Purchase Order', true)
-}
-
-export function openPurchaseBillPrintWindow(bill, branch) {
-  return openDocumentPrintWindow(bill, branch, 'Purchase Bill', true)
-}
-
-export function openGrnPrintWindow(grn, branch) {
-  return openDocumentPrintWindow(grn, branch, 'GRN Receipt', true)
-}
-
 export async function prepareStockTransferPayload(transfer, branch = {}) {
   if (typeof window === 'undefined') return null
   if (!transfer?.id) throw new Error('A stock transfer ID is required to print the transfer.')
@@ -214,35 +184,12 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
   return { sale, branch: branch || {}, documentType: 'Stock Transfer' }
 }
 
-export async function openStockTransferPrintWindow(transfer, branch) {
-  if (typeof window === 'undefined') return
-  const win = window.open('/invoice-print-a5.html', '_blank')
-  if (!win) throw new Error('The stock transfer print window was blocked.')
-  let payload
-  try {
-    payload = await prepareStockTransferPayload(transfer, branch)
-  } catch (error) {
-    win.close()
-    throw error
-  }
-  const sendPayload = () => {
-    if (win.closed) return false
-    win.postMessage({ type: 'renderInvoice', payload }, window.location.origin)
-    return true
-  }
-  const interval = setInterval(() => {
-    if (win.closed || sendPayload()) clearInterval(interval)
-  }, 200)
-  win.addEventListener('load', () => {
-    sendPayload()
-    clearInterval(interval)
-  }, { once: true })
-}
-
 export async function prepareQuotePayload(quote, branch) {
   if (typeof window === 'undefined') return
   const authToken = window.localStorage.getItem('retailos_token')
   const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {}
+
+  const orgPromise = loadOrganisation(authHeaders)
 
   let fullQuote = quote
   try {
@@ -254,11 +201,7 @@ export async function prepareQuotePayload(quote, branch) {
     }
   } catch (e) { /* ignore */ }
 
-  let org = null
-  try {
-    const r = await fetch('/api/v1/settings/organisation', { headers: { Accept: 'application/json', ...authHeaders } })
-    if (r.ok) org = await r.json()
-  } catch (e) { /* ignore */ }
+  const org = await orgPromise
 
   const branchMerged = { ...(branch || {}) }
   if (org) {
@@ -290,38 +233,8 @@ export async function prepareQuotePayload(quote, branch) {
   return { quote: quoteToSend, branch: branchMerged, printedAt: new Date().toISOString() }
 }
 
-export async function openQuotePrintWindow(quote, branch) {
-  if (typeof window === 'undefined') return
-  const payload = await prepareQuotePayload(quote, branch)
-  if (!payload) return
-  const fullQuote = payload.quote
-  const quoteId = fullQuote?.id ?? quote?.id
-  const printUrl = quoteId ? `/quote-cosmo.html?quote_id=${encodeURIComponent(String(quoteId))}` : '/quote-cosmo.html'
-
-  const win = window.open(printUrl, '_blank')
-  const sendPayload = () => {
-    try {
-      if (!win || win.closed) return false
-      win.postMessage({ type: 'renderQuote', payload }, window.location.origin)
-      return true
-    } catch (e) {
-      return false
-    }
-  }
-
-  const interval = setInterval(() => {
-    if (!win || win.closed) { clearInterval(interval); return }
-    if (sendPayload()) { clearInterval(interval) }
-  }, 200)
-
-  if (win) {
-    win.addEventListener('load', () => {
-      sendPayload()
-      clearInterval(interval)
-    })
-  }
-
-  setTimeout(() => { try { win.focus() } catch (e) {} }, 500)
+export function prepareDocumentPayload(documentType, document, branch) {
+  return documentType === 'Quote'
+    ? prepareQuotePayload(document, branch)
+    : prepareInvoicePayload(document, branch, { documentType })
 }
-
-export default openInvoicePrintWindow

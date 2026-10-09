@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     s3_pdf_prefix: str = "receipts-pdf/"
     s3_payment_proof_prefix: str = "payment-proofs/"
 
+    # ─── PDF rendering (wkhtmltopdf) ───────────────────────────────────────
+    wkhtmltopdf_binary: str = "wkhtmltopdf"
+    pdf_max_payload_bytes: int = 5 * 1024 * 1024
+    pdf_timeout_seconds: float = 30
+    pdf_max_concurrency: int = 4
+
 # ─── Global Config Instance ────────────────────────────────────────────────
 _settings: Settings = None
 

@@ -1,38 +1,21 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { fmtDate, fmtDateTime } from '@/utils/helpers'
-import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
+import { fmtDate } from '@/utils/helpers'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import { ThermalReceipt } from '@/components/ThermalReceipt'
-import { resolveInvoiceItemField } from '@/utils/invoiceItemMetadata'
-import openInvoicePrintWindow, { prepareInvoicePayload, prepareQuotePayload } from '@/utils/printInvoice'
-import { exportInvoicePdf } from '@/utils/exportInvoicePdf'
-import amountToWords from '@/utils/amountToWords'
+import { prepareDocumentPayload } from '@/utils/printInvoice'
+import { downloadDocumentPdf, downloadElementPdf, printDocumentPdf } from '@/utils/documentPdf'
 import { settingsAPI } from '@/api'
 import { formatSettlementLabel } from '@/utils/storeCredit'
-import { calcInvoiceSummary, displayExclusiveUnitRate, lineGstFromInclusive, lineTaxableFromInclusive } from '@/utils/taxCalc'
-
-const formatNumber = (value, options = {}) => {
-  const number = Number(value)
-  if (value === null || value === undefined || Number.isNaN(number)) return '—'
-  const amountDecimals = getAmountDecimals()
-  return number.toLocaleString('en-MV', {
-    minimumFractionDigits: options.minimumFractionDigits ?? amountDecimals,
-    maximumFractionDigits: options.maximumFractionDigits ?? amountDecimals,
-  })
-}
-
-const formatCurrency = (value) => formatAmountNumber(value)
+import { calcInvoiceSummary, lineTaxableFromInclusive } from '@/utils/taxCalc'
 
 // ─── Invoice Print Component ────────────────────────────────────────────────
 export const Receipt = forwardRef(function Receipt({ sale, branch, documentType = 'Tax Invoice' }, forwardedRef) {
   const ref = useRef(null)
   const standardPreviewRef = useRef(null)
-  const standardPreviewReadyRef = useRef(false)
-  const standardPreviewWaitersRef = useRef([])
   const thermalRef = useRef(null)
   const [invoiceFormat, setInvoiceFormat] = useState('standard') // 'standard' or 'thermal'
-  const [standardPreviewReady, setStandardPreviewReady] = useState(false)
+  const [pdfBusy, setPdfBusy] = useState(null) // 'export' | 'print' | null
   const [orgProfile, setOrgProfile] = useState(null)
   const config = useInvoiceConfig()
   const columns = getColumnDefinitions(config)
@@ -77,8 +60,6 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     let frameLoaded = frame.contentDocument?.readyState === 'complete'
     let payload = null
     const isQuote = documentType === 'Quote'
-    standardPreviewReadyRef.current = false
-    setStandardPreviewReady(false)
 
     const sendPayload = () => {
       if (!active || !frameLoaded || !payload || !frame.contentWindow) return
@@ -92,17 +73,11 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
       if (event.source !== frame.contentWindow || event.origin !== window.location.origin) return
       if (event.data?.type !== (isQuote ? 'quoteRendered' : 'invoiceRendered')) return
       frame.style.height = `${Math.max(900, Number(event.data.height) || 0)}px`
-      standardPreviewReadyRef.current = true
-      setStandardPreviewReady(true)
-      standardPreviewWaitersRef.current.splice(0).forEach((resolve) => resolve(true))
     }
 
     frame.addEventListener('load', handleLoad)
     window.addEventListener('message', handleMessage)
-    const preparedPayload = isQuote
-      ? prepareQuotePayload(sale, branch)
-      : prepareInvoicePayload(sale, branch, { documentType })
-    preparedPayload
+    prepareDocumentPayload(documentType, sale, branch)
       .then((preparedPayload) => {
         if (!active) return
         payload = preparedPayload
@@ -118,276 +93,6 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
       window.removeEventListener('message', handleMessage)
     }
   }, [sale, branch, documentType])
-
-  const getInvoiceCellValue = (item, key) => {
-    const qty = Number(item.qty || item.quantity || 0)
-    const inclusiveRate = Number(item.price || item.rate || 0)
-    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
-    const discountPct = Number(item.discount || item.discPercent || 0)
-    switch (key) {
-      case 'description': return item.name || ''
-      case 'hsn': return item.hsnCode || item.hsn_code || ''
-      case 'attr': return item.attribute || item.batch || item.attr || ''
-      case 'packing': return item.size || item.package || item.packing || ''
-      case 'origin': return item.origin || item.country || item.manufacturer || ''
-      case 'units': return item.units || item.unit || ''
-      case 'qty': return qty
-      case 'rate': return displayExclusiveUnitRate(inclusiveRate, taxRate)
-      case 'disc': return discountPct
-      case 'gst': return lineGstFromInclusive(item)
-      case 'amount': return lineTaxableFromInclusive(item)
-      default: return ''
-    }
-  }
-
-  const printInvoice = () => {
-    const printedAt = fmtDateTime(new Date())
-    const company = branch?.company || 'Champa Brothers Maldives Pvt Ltd'
-    const shopName = branch?.name || 'C.Shop'
-    const address = branch?.address || 'LOT11155 / HULHUMALE PHASE 01'
-    const phone = branch?.phone || '3350000'
-    const gstNo = branch?.gst || branch?.gstin || '1017548GST501'
-    const billTo = sale.customerName && sale.customerName !== 'Walk-in' ? sale.customerName : 'Walk-in'
-    const billToAddressLines = [
-      sale.customerStreet1 || sale.customer_street1,
-      sale.customerStreet2 || sale.customer_street2,
-      sale.customerStreet3 || sale.customer_street3,
-      sale.customerCity || sale.customer_city || sale.city,
-      sale.customerStateProvince || sale.customer_state_province,
-      sale.customerCountry || sale.customer_country || sale.country,
-      sale.customerPostalCode || sale.customer_postal_code || sale.postal_code,
-    ];
-
-    // delegate to shared helper
-    openInvoicePrintWindow(sale, branch);
-
-    if (!billToAddressLines.length || billToAddressLines.every(l => !l)) {
-      billToAddressLines.push(...(sale.addressLines || sale.address_lines || (sale.customerAddress ? [sale.customerAddress] : []) || (sale.customer_address ? [sale.customer_address] : []) || []));
-    }
-    const logoUrl = branch?.logo || branch?.logo_url
-    const invoiceDate = sale.date || sale.invoiceDate || sale.invoice_date || ''
-    const dueDate = sale.dueDate || sale.due_date || null
-    const paymentTerms = sale.paymentTerms || sale.payment_terms || '30 DAYS'
-    const customerId = sale.customerCode || sale.customer_code || sale.customerId || sale.customer_id || '—'
-    const invoiceSummary = calcInvoiceSummary(sale.items || [], sale)
-    const totalInWords = amountToWords(invoiceSummary.total, '—')
-    const taxPercent = Number(sale.taxRate ?? sale.tax_rate ?? sale.taxPercent ?? sale.tax_percent ?? 0)
-      || (invoiceSummary.subtotal ? Math.round((invoiceSummary.taxTotal / invoiceSummary.subtotal) * 100) : 0)
-
-    const columns = getColumnDefinitions(config)
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Invoice ${sale.number}</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: Arial, sans-serif; font-size: 11px; background: white; color: #000; padding: 16px; width: 100%; max-width: 770px; margin: 0 auto; }
-          .center { text-align: center; }
-          .right { text-align: right; }
-          .bold { font-weight: 700; }
-          .divider { border-top: 1px solid #000; margin: 10px 0; }
-          .title { font-size: 18px; font-weight: 700; letter-spacing: 0.4px; }
-          .subtle { font-size: 10px; color: #333; }
-          .small { font-size: 10px; }
-          table { width: 100%; border-collapse: collapse; font-size: 10.6px; }
-          td, th { padding: 4px 4px; vertical-align: top; }
-          th { font-weight: 700; border-bottom: 1px solid #000; }
-          .item-cell { padding: 6px 4px; }
-          .summary td { padding: 3px 0; }
-          .footer-note { font-size: 10px; margin-top: 8px; line-height: 1.4; }
-          .terms { font-size: 9.5px; line-height: 1.4; margin-top: 10px; }
-          .terms strong { display: block; margin-bottom: 4px; }
-          @page { size: A5; margin: 15mm; }
-          html, body { height: 100%; }
-          .print-header,
-          .print-footer { position: fixed; left: 0; right: 0; background: white; z-index: 10; }
-          .print-header { top: 0; padding: 12px 16px 10px; border-bottom: 1px solid #000; }
-          .print-footer { bottom: 0; padding: 8px 16px; border-top: 1px solid #000; font-size: 9px; }
-          .page-counter { white-space: nowrap; }
-          .page-counter::after { content: 'Page ' counter(page); }
-          @media print {
-            body { padding: 0; }
-            body > .print-main { margin-top: 175px; margin-bottom: 110px; }
-            thead { display: table-header-group; }
-            tfoot { display: table-footer-group; }
-            tr { page-break-inside: avoid; }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="print-header">
-          <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;font-size:10px;">
-            <div style="line-height:1.3;">
-              <div class="bold" style="font-size:13px;">${shopName}</div>
-              <div>${company}</div>
-              <div>${address}</div>
-              <div>Phone: ${phone}</div>
-              <div>GST No: ${gstNo}</div>
-            </div>
-            <div style="text-align:right; line-height:1.4;">
-              ${config.showPrintedDate ? `<div>Printed: ${printedAt}</div>` : ''}
-              ${config.showStore ? `<div>Store: ${shopName}</div>` : ''}
-              ${config.showCashier ? `<div>Cashier: Admin</div>` : ''}
-              <div style="margin-top:6px;"><span class="bold">Invoice No.</span> ${sale.number || '—'}</div>
-              <div><span class="bold">Posting Date</span> ${fmtDate(invoiceDate)}</div>
-              <div><span class="bold">Bill-to Customer No.</span> ${customerId}</div>
-              <div><span class="bold">GST Reg no</span> ${gstNo}</div>
-              <div class="page-counter" style="margin-top:6px;"></div>
-            </div>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top: 10px; font-size: 11px;">
-            <div class="bold" style="font-size:13px;">Tax Invoice</div>
-            ${paymentTerms ? `<div style="font-size:10px;">${paymentTerms}</div>` : ''}
-          </div>
-        </div>
-        <div class="print-main">
-        ${config.headerStyle === 'logo' ? `
-          <div class="center" style="margin-bottom:12px;">
-            ${logoUrl ? `<img src="${logoUrl}" alt="${shopName}" style="max-width:140px;max-height:60px;object-fit:contain;" />` : `<div class="title">${shopName}</div>`}
-          </div>
-        ` : `
-          <div class="center title" style="margin-bottom:6px;">${shopName}</div>
-          ${config.headerStyle === 'full' ? `
-            <div class="center invoice-header-line">${company}</div>
-            <div class="center invoice-header-line">${address}</div>
-            <div class="center invoice-header-line">PHONE : ${phone}</div>
-            <div class="center invoice-header-line">TIN: ${gstNo}</div>
-          ` : ''}
-        `}
-        <div class="center bold" style="margin:10px 0 4px;">TAX INVOICE</div>
-
-        <div class="divider"></div>
-        ${config.showCustomer ? `<div style="margin:6px 0 4px;"><span class="bold">Bill To:</span> ${billTo}${billToAddressLines && billToAddressLines.length ? `<div style="margin-top:4px; font-size:10px;">${billToAddressLines.filter(Boolean).map(line => line.trim()).filter(Boolean).join('<br/>')}</div>` : ''}</div>` : ''}
-        <div class="divider"></div>
-
-        <table>
-          <thead>
-            <tr>
-              ${columns.map((col) => `<th style="width:${col.width}; text-align:${col.align};">${col.label}</th>`).join('')}
-            </tr>
-          </thead>
-          <tbody>
-            ${(sale.items || []).map((item, index) => {
-              const row = columns.map((col) => {
-                const raw = col.key === 'no' ? index + 1 : (col.key === 'packing' || col.key === 'origin' || col.key === 'units'
-                  ? resolveInvoiceItemField(item, col.key)
-                  : getInvoiceCellValue(item, col.key))
-                if (col.key === 'rate' || col.key === 'gst' || col.key === 'amount') {
-                  return `<td class="item-cell right">${formatCurrency(raw)}</td>`
-                }
-                if (col.key === 'qty') {
-                  return `<td class="item-cell right">${formatQtyNumber(raw)}</td>`
-                }
-                if (col.key === 'disc') {
-                  return `<td class="item-cell right">${raw}%</td>`
-                }
-                return `<td class="item-cell" style="text-align:${col.align};">${raw}</td>`
-              }).join('')
-              return `<tr>${row}</tr>`
-            }).join('')}
-          </tbody>
-        </table>
-
-        <div class="divider"></div>
-        <table class="summary">
-          <tr>
-            <td>Subtotal</td>
-              <td class="right">${formatNumber(invoiceSummary.subtotal)}</td>
-          </tr>
-          ${`
-            <tr>
-              <td>${taxPercent}% GST</td>
-              <td class="right">${formatNumber(invoiceSummary.taxTotal)}</td>
-            </tr>
-          `}
-          <tr class="bold">
-            <td>TOTAL</td>
-            <td class="right">${formatNumber(invoiceSummary.total)}</td>
-          </tr>
-        </table>
-
-        ${invoiceSummary.discountAmount ? `
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:8px;font-weight:700;">
-            <div>Discount Amount</div>
-            <div style="text-align:right">-${formatNumber(invoiceSummary.discountAmount)}</div>
-          </div>
-        ` : ''}
-
-        ${config.showPayment ? `
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:8px;">
-            <div>Payment</div>
-            <div style="text-align:right">${formatSettlementLabel({
-              paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
-              storeCreditApplied: sale.storeCreditApplied,
-              payments: sale.payments,
-            })}</div>
-          </div>
-          ${Number(sale.storeCreditApplied || 0) > 0 ? `
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:4px;">
-            <div>Account credit applied</div>
-            <div style="text-align:right">${formatNumber(sale.storeCreditApplied)}</div>
-          </div>
-          ` : ''}
-          ${sale.cashCollected != null && Number(sale.cashCollected) > 0 ? `
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:11px;margin-top:4px;">
-            <div>Cash collected</div>
-            <div style="text-align:right">${formatNumber(sale.cashCollected)}</div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:12px;margin-top:4px;font-weight:700;">
-            <div>Change</div>
-            <div style="text-align:right">${formatNumber(sale.cashChange || 0)}</div>
-          </div>
-          ` : ''}
-        ` : ''}
-
-        ${paymentTerms ? `
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:10px;margin-top:8px;">
-            <div>Payment Terms</div>
-            <div style="text-align:right">${paymentTerms}</div>
-          </div>
-        ` : ''}
-
-        ${dueDate ? `
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;font-size:10px;margin-top:4px;">
-            <div>Payment Due Date :</div>
-            <div style="text-align:right">${fmtDate(dueDate)}</div>
-          </div>
-        ` : ''}
-
-        <div style="text-align:center; margin-top:6px; margin-bottom:4px; font-size:10px;">
-          <div style="text-align:center; margin-bottom:6px; font-weight:700;">***</div>
-          <div style="font-weight:700;">${totalInWords}</div>
-          <div style="text-align:center; margin-top:6px; font-weight:700;">***</div>
-        </div>
-
-        <div class="terms">
-          <div>Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977</div>
-          <div style="margin-top:6px;">Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day</div>
-        </div>
-
-        <div class="divider"></div>
-        <div style="font-size:10px; margin-top:8px; text-align:center;">Thank you for choosing Cosmopolitan as your preferred partner</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr; gap:16px; font-size:10px; margin-top:16px;">
-          <div style="text-align:right;">Received By</div>
-        </div>
-      </div>
-      <div class="print-footer">
-        <div style="display:flex; justify-content:space-between; gap: 16px; font-size: 10px;">
-          <div>Hulhumale', Maldives. LOT NO-10627, Haivakaru Magu, Cosmopolitan Champa Brothers Maldives Pvt Ltd</div>
-          <div></div>
-        </div>
-      </div>
-      </body>
-      </html>
-    `
-
-    const win = window.open('', '_blank', 'width=560,height=900')
-    win.document.write(html)
-    win.document.close()
-    win.focus()
-    setTimeout(() => { win.print(); win.close() }, 500)
-  }
 
   const shareWhatsApp = () => {
     const summary = calcInvoiceSummary(sale.items || [], sale)
@@ -419,51 +124,45 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')
   }
 
-  const handlePrint = () => {
-    if (invoiceFormat === 'standard') {
-      openInvoicePrintWindow(sale, branch)
-    } else if (invoiceFormat === 'thermal' && thermalRef.current) {
-      thermalRef.current.print()
+  const buildPdfPayload = () => prepareDocumentPayload(documentType, sale, branch)
+
+  const runPdfJob = async (kind, job) => {
+    setPdfBusy(kind)
+    try {
+      await job()
+      return true
+    } catch (error) {
+      console.error(`Failed to ${kind} PDF:`, error)
+      toast.error(error?.message || `Could not ${kind} this document.`)
+      return false
+    } finally {
+      setPdfBusy(null)
     }
   }
 
-  const exportPdf = async () => {
-    if (!sale || !ref.current) return false
-    try {
-      if (invoiceFormat === 'standard' && !standardPreviewReadyRef.current) {
-        const ready = await new Promise((resolve) => {
-          const timeoutId = setTimeout(() => resolve(false), 15000)
-          standardPreviewWaitersRef.current.push((result) => {
-            clearTimeout(timeoutId)
-            resolve(result)
-          })
-        })
-        if (!ready) throw new Error('The invoice preview did not finish rendering.')
-      }
-
-      const docNumber = sale.number || sale.quote_no || sale.invoiceNumber || sale.invoice_no || sale.id || (documentType === 'Quote' ? 'quote' : 'invoice')
-      const fileName = documentType === 'Tax Invoice'
-        ? `Tax_Invoice_${docNumber}`
-        : `${documentType.replace(/\s+/g, '_')}_${docNumber}`
-      const previewContainerId = documentType === 'Quote' ? 'quotePages' : 'invoicePages'
-      const invoicePages = invoiceFormat === 'standard'
-        ? standardPreviewRef.current?.contentDocument?.getElementById(previewContainerId)
-        : ref.current
-      if (!invoicePages) return false
-      await exportInvoicePdf(invoicePages, fileName)
-      return true
-    } catch (error) {
-      console.error('Failed to export invoice PDF:', error)
-      toast.error('Could not export this document as PDF.')
-      return false
+  const handlePrint = () => {
+    if (invoiceFormat === 'thermal') {
+      thermalRef.current?.print()
+      return
     }
+    if (pdfBusy) return
+    runPdfJob('print', async () => printDocumentPdf(documentType, await buildPdfPayload()))
+  }
+
+  const exportPdf = async () => {
+    if (!sale || pdfBusy) return false
+    return runPdfJob('export', async () => {
+      if (invoiceFormat === 'thermal') {
+        await downloadElementPdf(ref.current, documentType, { sale })
+        return
+      }
+      await downloadDocumentPdf(documentType, await buildPdfPayload())
+    })
   }
 
   useImperativeHandle(forwardedRef, () => ({ exportPdf }))
 
   if (!sale) return null
-
-  const handleExportPdf = exportPdf
 
   return (
     <div>
@@ -487,8 +186,8 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <button className="btn btn-secondary" onClick={handleExportPdf} disabled={invoiceFormat === 'standard' && !standardPreviewReady} style={{ flexShrink: 0 }}>📤 Export</button>
-          <button className="btn btn-primary" onClick={handlePrint} style={{ flexShrink: 0 }}>🖨 Print</button>
+          <button className="btn btn-secondary" onClick={exportPdf} disabled={pdfBusy !== null} style={{ flexShrink: 0 }}>{pdfBusy === 'export' ? 'Generating PDF…' : '📤 Export'}</button>
+          <button className="btn btn-primary" onClick={handlePrint} disabled={pdfBusy !== null} style={{ flexShrink: 0 }}>{pdfBusy === 'print' ? 'Preparing PDF…' : '🖨 Print'}</button>
         </div>
       </div>
 
@@ -503,7 +202,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
         <iframe
           ref={standardPreviewRef}
           title={documentType === 'Quote' ? 'Quote preview' : 'Standard invoice preview'}
-          src={documentType === 'Quote' ? '/quote-export-a4.html?preview=1' : '/invoice-export-a4.html?preview=1'}
+          src={documentType === 'Quote' ? '/document-templates/quotation.html' : '/document-templates/invoice.html'}
           style={{
             width: '100%',
             height: 900,

@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, customersAPI } from '@/api'
-import { Receipt } from '@/components/Receipt'
 import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, statusLabel, exportToCSV, formatLabel, conversionStatusDisplay, linkedDocNumber } from '@/utils/helpers'
@@ -26,7 +25,8 @@ import {
   SALES_EXPORT_FILENAMES,
   SALES_EXPORT_MAPPERS,
 } from '@/utils/listExport'
-import openInvoicePrintWindow, { openQuotePrintWindow, openSalesOrderPrintWindow } from '@/utils/printInvoice'
+import { prepareDocumentPayload } from '@/utils/printInvoice'
+import { downloadDocumentPdf, printDocumentPdf } from '@/utils/documentPdf'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
@@ -134,8 +134,6 @@ export default function SalesPage() {
   const [paymentProofFile, setPaymentProofFile] = useState(null)
   const [paymentProofUploading, setPaymentProofUploading] = useState(false)
   const [proofUploadInvoice, setProofUploadInvoice] = useState(null)
-  const [exportInvoice, setExportInvoice] = useState(null)
-  const exportReceiptRef = useRef(null)
   const [activityTarget, setActivityTarget] = useState(null)
   // 2026-05-30: customer's available credit balance, fetched when the
   // Record Payment modal opens for a customer invoice. The invoice row
@@ -789,38 +787,36 @@ export default function SalesPage() {
     }
   }
 
-  const requestInvoiceExport = async (invoice, branch, kind = 'invoice') => {
+  const saleDocumentType = (kind) => (kind === 'order' ? 'Sales Order' : kind === 'quote' ? 'Quote' : 'Tax Invoice')
+
+  const loadSaleDocument = async (invoice, kind) => {
+    if (invoice?.items?.length) return invoice
+    if (kind === 'order') return salesAPI.orders.get(invoice.id)
+    if (kind === 'quote') return salesAPI.quotations.get(invoice.id)
+    return salesAPI.get(invoice.id)
+  }
+
+  const runSaleDocumentPdf = async (invoice, branch, kind, mode) => {
+    const documentType = saleDocumentType(kind)
     try {
-      const fullInvoice = invoice?.items?.length
-        ? invoice
-        : kind === 'order'
-          ? await salesAPI.orders.get(invoice.id)
-          : kind === 'quote' ? await salesAPI.quotations.get(invoice.id) : await salesAPI.get(invoice.id)
-      const documentType = kind === 'order' ? 'Sales Order' : kind === 'quote' ? 'Quote' : 'Tax Invoice'
-      setExportInvoice({ sale: fullInvoice, branch, documentType })
+      const sale = await loadSaleDocument(invoice, kind)
+      const data = await prepareDocumentPayload(documentType, sale, branch)
+      if (mode === 'print') await printDocumentPdf(documentType, data)
+      else await downloadDocumentPdf(documentType, data)
     } catch (error) {
-      console.error('Failed to load document for export:', error)
-      toast.error('Could not prepare the PDF.')
+      console.error(`Failed to ${mode} ${documentType} PDF:`, error)
+      toast.error(mode === 'print' ? 'Could not print this document.' : 'Could not download the PDF. Please try again.')
     }
   }
 
-  useEffect(() => {
-    if (!exportInvoice || !exportReceiptRef.current) return
-    let cancelled = false
-    const run = async () => {
-      try {
-        const exported = await exportReceiptRef.current.exportPdf()
-        if (!exported) toast.error('Could not download the PDF. Please try again.')
-      } catch (error) {
-        console.error('Failed to export document PDF:', error)
-        toast.error('Could not download the PDF. Please try again.')
-      } finally {
-        if (!cancelled) setExportInvoice(null)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [exportInvoice])
+  const printSaleDocument = (invoice, branch, kind = 'invoice') =>
+    runRowAction(invoice.id, `print-${kind}`, () => runSaleDocumentPdf(invoice, branch, kind, 'print'))
+
+  const exportSaleDocument = (invoice, branch, kind = 'invoice') =>
+    runRowAction(invoice.id, `export-${kind}`, () => runSaleDocumentPdf(invoice, branch, kind, 'export'))
+
+  const pdfActionLabel = (id, kind, idleLabel, busyLabel) =>
+    actionBusy === id && actionKind === kind ? busyLabel : idleLabel
 
   const goEditInvoice = (inv) => {
     if (invoiceHasPayment(inv)) {
@@ -1302,9 +1298,9 @@ export default function SalesPage() {
                           actions={[
                             { label: 'View', disabled: isRowBusy(inv.id), onClick: () => setSalesDoc({ kind: 'invoice', data: inv }) },
                             {
-                              label: 'Export PDF',
+                              label: pdfActionLabel(inv.id, 'export-invoice', 'Export PDF', 'Generating PDF…'),
                               disabled: isRowBusy(inv.id),
-                              onClick: () => requestInvoiceExport(inv, branches.find((branch) => branch.id === inv.branchId)),
+                              onClick: () => exportSaleDocument(inv, branches.find((branch) => branch.id === inv.branchId)),
                             },
                             {
                               label: 'Activity',
@@ -1568,13 +1564,13 @@ export default function SalesPage() {
                                 label: 'Print quote',
                                 hidden: false,
                                 disabled: isRowBusy(q.id),
-                                onClick: () => openQuotePrintWindow(q, branches.find((b) => b.id === q.branchId)),
+                                onClick: () => printSaleDocument(q, branches.find((b) => b.id === q.branchId), 'quote'),
                               },
                               {
-                                label: 'Export Quote',
+                                label: pdfActionLabel(q.id, 'export-quote', 'Export Quote', 'Generating PDF…'),
                                 hidden: false,
                                 disabled: isRowBusy(q.id),
-                                onClick: () => requestInvoiceExport(q, branches.find((b) => b.id === q.branchId), 'quote'),
+                                onClick: () => exportSaleDocument(q, branches.find((b) => b.id === q.branchId), 'quote'),
                               },
                               {
                                 label: 'View',
@@ -2268,10 +2264,8 @@ export default function SalesPage() {
             navigate(`/sales?tab=${tab}`, { replace: true })
           }
         }}
-        onPrint={(doc, branch, kind) => kind === 'order'
-          ? openSalesOrderPrintWindow(doc, branch)
-          : openInvoicePrintWindow(doc, branch)}
-        onExport={(doc, branch, kind) => requestInvoiceExport(doc, branch, kind)}
+        onPrint={(doc, branch, kind) => printSaleDocument(doc, branch, kind)}
+        onExport={(doc, branch, kind) => exportSaleDocument(doc, branch, kind)}
         onCancelInvoice={(inv) => setShowCancelInvoice(inv)}
         onRecordPayment={(inv) => setShowPayment(inv)}
         onUploadProof={(inv) => { setProofUploadInvoice(inv); setSalesDoc(null) }}
@@ -2458,11 +2452,6 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      {exportInvoice && (
-        <div style={{ position: 'fixed', left: '-10000px', top: 0, width: 920, pointerEvents: 'none' }} aria-hidden="true">
-          <Receipt ref={exportReceiptRef} sale={exportInvoice.sale} branch={exportInvoice.branch} documentType={exportInvoice.documentType} />
-        </div>
-      )}
 
     </div>
   )
