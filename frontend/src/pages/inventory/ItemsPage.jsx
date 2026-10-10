@@ -838,6 +838,10 @@ export default function ItemsPage({ mode = 'branch' }) {
                                 onClick: () => setShowDetail(p),
                               },
                               {
+                                label: 'Transaction history',
+                                onClick: () => navigate(`/items/${p.id}/history`),
+                              },
+                              {
                                 label: 'Activity',
                                 hidden: !canActivity,
                                 disabled: itemActionBusy === p.id,
@@ -858,6 +862,10 @@ export default function ItemsPage({ mode = 'branch' }) {
                               {
                                 label: 'View details',
                                 onClick: () => setShowDetail(p),
+                              },
+                              {
+                                label: 'Transaction history',
+                                onClick: () => navigate(`/items/${p.id}/history`),
                               },
                               {
                                 label: 'Request adjustment',

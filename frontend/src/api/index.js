@@ -257,6 +257,8 @@ export const itemsAPI = {
     patch:       (batchId, data)  => api.patch(`/items/batches/${batchId}`, data),
     nearExpiry:  (params)         => api.get('/items/batches/near-expiry', { params }),
   },
+  historySummary: (itemId, params) => api.get(`/items/${itemId}/history/summary`, { params }),
+  historyTransactions: (itemId, params) => api.get(`/items/${itemId}/history/transactions`, { params }),
   categories: {
     list:   ()     => api.get('/items/categories'),
     create: (data) => api.post('/items/categories', data),

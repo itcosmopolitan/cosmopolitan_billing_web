@@ -39,8 +39,10 @@ from src.models import (
     PurchaseOrderLineItem,
     Quotation,
     QuotationLineItem,
+    ComplimentaryEntry,
     ComplimentaryLineItem,
     ReturnLineItem,
+    VendorReturn,
     SaleInvoice,
     SaleLineItem,
     SalesOrder,
@@ -2887,3 +2889,310 @@ async def near_expiry_batches(
         d["expired"]   = bool(b.expiry_date and b.expiry_date < today_str)
         out.append(d)
     return {"items": out, "total": len(out), "within_days": within_days, "today": today_str}
+
+
+# ─── Item History ─────────────────────────────────────────────────────────────
+#
+# Two endpoints:
+#   /summary      – date-grouped aggregates (like Daily Sales report)
+#   /transactions – individual document rows (drilldown for a single date)
+#
+# Both query all line-item tables that reference an inventory item, filtered
+# by category, doc_kind (transaction type), branch, and date range.
+
+def _hist_should_query(target_cat, target_kind, category, doc_kind):
+    if category and category != target_cat:
+        return False
+    if doc_kind and doc_kind != target_kind:
+        return False
+    return True
+
+
+async def _collect_item_history(
+    db, item_id, allowed_branches, category, doc_kind,
+    from_date, to_date, branch_id,
+):
+    """Run all sub-queries and return list[dict] of movement rows."""
+
+    def bf(col):
+        return [col.in_(allowed_branches)] if allowed_branches else []
+
+    def df(col):
+        c = []
+        if from_date:
+            c.append(col >= from_date)
+        if to_date:
+            c.append(col <= to_date)
+        return c
+
+    sq = lambda cat, kind: _hist_should_query(cat, kind, category, doc_kind)
+    rows = []
+
+    # ── Sales: Invoices
+    if sq("sales", "Invoice"):
+        q = (
+            select(SaleLineItem.id, SaleInvoice.number, SaleInvoice.customer_name,
+                   SaleInvoice.date, SaleLineItem.qty, SaleLineItem.line_total,
+                   SaleInvoice.branch_id, SaleInvoice.created_at, SaleInvoice.created_by)
+            .join(SaleInvoice, SaleInvoice.id == SaleLineItem.invoice_id)
+            .where(SaleLineItem.item_id == item_id, *bf(SaleInvoice.branch_id), *df(SaleInvoice.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "sales", "docKind": "Invoice",
+                         "docNumber": r.number, "party": r.customer_name,
+                         "date": r.date, "qty": -(r.qty or 0), "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Sales: Quotations
+    if sq("sales", "Quotation"):
+        q = (
+            select(QuotationLineItem.id, Quotation.number, Quotation.customer_name,
+                   Quotation.date, QuotationLineItem.qty, QuotationLineItem.line_total,
+                   Quotation.branch_id, Quotation.created_at, Quotation.created_by)
+            .join(Quotation, Quotation.id == QuotationLineItem.quotation_id)
+            .where(QuotationLineItem.item_id == item_id, *bf(Quotation.branch_id), *df(Quotation.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "sales", "docKind": "Quotation",
+                         "docNumber": r.number, "party": r.customer_name,
+                         "date": r.date, "qty": r.qty, "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Sales: Sales Orders
+    if sq("sales", "Sales Order"):
+        q = (
+            select(SalesOrderLineItem.id, SalesOrder.number, SalesOrder.customer_name,
+                   SalesOrder.date, SalesOrderLineItem.qty, SalesOrderLineItem.line_total,
+                   SalesOrder.branch_id, SalesOrder.created_at, SalesOrder.created_by)
+            .join(SalesOrder, SalesOrder.id == SalesOrderLineItem.order_id)
+            .where(SalesOrderLineItem.item_id == item_id, *bf(SalesOrder.branch_id), *df(SalesOrder.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "sales", "docKind": "Sales Order",
+                         "docNumber": r.number, "party": r.customer_name,
+                         "date": r.date, "qty": r.qty, "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Sales: Sales Returns
+    if sq("sales", "Sales Return"):
+        q = (
+            select(SalesReturnLineItem.id, SalesReturn.number, SalesReturn.customer_name,
+                   SalesReturn.date, SalesReturnLineItem.return_qty, SalesReturnLineItem.line_total,
+                   SalesReturn.branch_id, SalesReturn.created_at, SalesReturn.created_by)
+            .join(SalesReturn, SalesReturn.id == SalesReturnLineItem.return_id)
+            .where(SalesReturnLineItem.item_id == item_id, *bf(SalesReturn.branch_id), *df(SalesReturn.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "sales", "docKind": "Sales Return",
+                         "docNumber": r.number, "party": r.customer_name,
+                         "date": r.date, "qty": r.return_qty or 0, "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Purchase: Bills
+    if sq("purchase", "Bill"):
+        q = (
+            select(PurchaseLineItem.id, PurchaseBill.number, PurchaseBill.vendor_name,
+                   PurchaseBill.date, PurchaseLineItem.qty, PurchaseLineItem.line_total,
+                   PurchaseBill.branch_id, PurchaseBill.created_at, PurchaseBill.created_by)
+            .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
+            .where(PurchaseLineItem.item_id == item_id, *bf(PurchaseBill.branch_id), *df(PurchaseBill.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "purchase", "docKind": "Bill",
+                         "docNumber": r.number, "party": r.vendor_name,
+                         "date": r.date, "qty": r.qty or 0, "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Purchase: Purchase Orders
+    if sq("purchase", "Purchase Order"):
+        q = (
+            select(PurchaseOrderLineItem.id, PurchaseOrder.number, PurchaseOrder.vendor_name,
+                   PurchaseOrder.date, PurchaseOrderLineItem.qty, PurchaseOrderLineItem.line_total,
+                   PurchaseOrder.branch_id, PurchaseOrder.created_at, PurchaseOrder.created_by)
+            .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLineItem.order_id)
+            .where(PurchaseOrderLineItem.item_id == item_id, *bf(PurchaseOrder.branch_id), *df(PurchaseOrder.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "purchase", "docKind": "Purchase Order",
+                         "docNumber": r.number, "party": r.vendor_name,
+                         "date": r.date, "qty": r.qty or 0, "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Purchase: GRNs
+    if sq("purchase", "GRN"):
+        q = (
+            select(GRNLineItem.id, GoodsReceiptNote.number, GoodsReceiptNote.vendor_name,
+                   GoodsReceiptNote.date, GRNLineItem.received_qty, GRNLineItem.line_total,
+                   GoodsReceiptNote.branch_id, GoodsReceiptNote.created_at, GoodsReceiptNote.created_by)
+            .join(GoodsReceiptNote, GoodsReceiptNote.id == GRNLineItem.grn_id)
+            .where(GRNLineItem.item_id == item_id, *bf(GoodsReceiptNote.branch_id), *df(GoodsReceiptNote.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "purchase", "docKind": "GRN",
+                         "docNumber": r.number, "party": r.vendor_name,
+                         "date": r.date, "qty": r.received_qty or 0, "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Purchase: Vendor Returns
+    if sq("purchase", "Vendor Return"):
+        q = (
+            select(ReturnLineItem.id, VendorReturn.number, VendorReturn.vendor_name,
+                   VendorReturn.date, ReturnLineItem.return_qty, ReturnLineItem.line_total,
+                   VendorReturn.branch_id, VendorReturn.created_at)
+            .join(VendorReturn, VendorReturn.id == ReturnLineItem.return_id)
+            .where(ReturnLineItem.item_id == item_id, *bf(VendorReturn.branch_id), *df(VendorReturn.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "purchase", "docKind": "Vendor Return",
+                         "docNumber": r.number, "party": r.vendor_name,
+                         "date": r.date, "qty": -(r.return_qty or 0), "amount": r.line_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": None})
+
+    # ── Complimentary
+    if sq("complimentary", "Complimentary"):
+        q = (
+            select(ComplimentaryLineItem.id, ComplimentaryEntry.number, ComplimentaryEntry.customer_name,
+                   ComplimentaryEntry.date, ComplimentaryLineItem.qty, ComplimentaryLineItem.cost_total,
+                   ComplimentaryEntry.branch_id, ComplimentaryEntry.created_at, ComplimentaryEntry.created_by)
+            .join(ComplimentaryEntry, ComplimentaryEntry.id == ComplimentaryLineItem.entry_id)
+            .where(ComplimentaryLineItem.item_id == item_id, *bf(ComplimentaryEntry.branch_id), *df(ComplimentaryEntry.date))
+        )
+        for r in (await db.execute(q)).all():
+            rows.append({"id": r.id, "category": "complimentary", "docKind": "Complimentary",
+                         "docNumber": r.number, "party": r.customer_name,
+                         "date": r.date, "qty": -(r.qty or 0), "amount": r.cost_total,
+                         "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
+
+    # ── Transfers
+    if sq("transfer", "Transfer"):
+        q = (
+            select(TransferLineItem.id, StockTransfer.ref_number, StockTransfer.from_branch_name,
+                   StockTransfer.to_branch_name, StockTransfer.request_date, TransferLineItem.qty,
+                   TransferLineItem.cost_price, StockTransfer.from_branch_id, StockTransfer.to_branch_id,
+                   StockTransfer.created_at, StockTransfer.requested_by)
+            .join(StockTransfer, StockTransfer.id == TransferLineItem.transfer_id)
+            .where(TransferLineItem.item_id == item_id)
+        )
+        if allowed_branches:
+            q = q.where(or_(StockTransfer.from_branch_id.in_(allowed_branches),
+                            StockTransfer.to_branch_id.in_(allowed_branches)))
+        if from_date:
+            q = q.where(StockTransfer.request_date >= from_date)
+        if to_date:
+            q = q.where(StockTransfer.request_date <= to_date)
+        for r in (await db.execute(q)).all():
+            is_out = branch_id and r.from_branch_id == branch_id
+            rows.append({"id": r.id, "category": "transfer", "docKind": "Transfer",
+                         "docNumber": r.ref_number, "party": f"{r.from_branch_name} → {r.to_branch_name}",
+                         "date": r.request_date, "qty": -(r.qty or 0) if is_out else (r.qty or 0),
+                         "amount": (r.qty or 0) * (r.cost_price or 0),
+                         "branchId": r.from_branch_id, "createdAt": r.created_at, "createdBy": r.requested_by})
+
+    # ── Adjustments
+    if sq("adjustment", "Adjustment") or sq("adjustment", "Opening Stock"):
+        adj_types = []
+        if not doc_kind or doc_kind == "Adjustment":
+            adj_types += ["adjustment", "manual"]
+        if not doc_kind or doc_kind == "Opening Stock":
+            adj_types.append("opening")
+        if adj_types:
+            conds = [StockMovement.item_id == item_id, StockMovement.movement_type.in_(adj_types)]
+            if allowed_branches:
+                conds.append(StockMovement.branch_id.in_(allowed_branches))
+            if from_date:
+                conds.append(StockMovement.created_at >= from_date)
+            if to_date:
+                conds.append(StockMovement.created_at < to_date + "T23:59:59.999999")
+            for m in (await db.execute(select(StockMovement).where(and_(*conds)))).scalars().all():
+                rows.append({"id": m.id, "category": "adjustment",
+                             "docKind": "Opening Stock" if m.movement_type == "opening" else "Adjustment",
+                             "docNumber": None, "party": None,
+                             "date": m.created_at.strftime("%Y-%m-%d") if m.created_at else None,
+                             "qty": m.delta, "amount": None,
+                             "branchId": m.branch_id, "createdAt": m.created_at, "createdBy": m.created_by})
+
+    return rows
+
+
+async def _resolve_hist_branches(user, db, branch_id):
+    if branch_id:
+        return [branch_id]
+    ids = await get_allowed_branch_ids(user, db)
+    return ids or None
+
+
+@router.get("/{item_id}/history/summary")
+async def item_history_summary(
+    item_id: str,
+    branch_id: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    doc_kind: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query("date"),
+    sort_order: Optional[str] = Query("desc"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Date-wise summary of item transactions (like Daily Sales)."""
+    allowed = await _resolve_hist_branches(user, db, branch_id)
+    rows = await _collect_item_history(db, item_id, allowed, category, doc_kind,
+                                       from_date, to_date, branch_id)
+
+    groups = {}
+    for r in rows:
+        d = r.get("date") or "unknown"
+        if d not in groups:
+            groups[d] = {"date": d, "count": 0, "totalQty": 0, "totalAmount": 0}
+        groups[d]["count"] += 1
+        groups[d]["totalQty"] += float(r.get("qty") or 0)
+        groups[d]["totalAmount"] += float(r.get("amount") or 0)
+
+    result = list(groups.values())
+    rev = sort_order != "asc"
+    key = sort_by or "date"
+    result.sort(key=lambda r: r.get(key, ""), reverse=rev)
+
+    total = len(result)
+    return {"items": result[skip : skip + limit], "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/{item_id}/history/transactions")
+async def item_history_transactions(
+    item_id: str,
+    date: Optional[str] = Query(None),
+    branch_id: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    doc_kind: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Individual transactions for drilldown (optionally filtered to one date)."""
+    eff_from = date or from_date
+    eff_to = date or to_date
+    allowed = await _resolve_hist_branches(user, db, branch_id)
+    rows = await _collect_item_history(db, item_id, allowed, category, doc_kind,
+                                       eff_from, eff_to, branch_id)
+
+    rows.sort(key=lambda r: (r.get("date") or "", (r.get("createdAt") or "").isoformat() if hasattr(r.get("createdAt"), "isoformat") else ""), reverse=True)
+    total = len(rows)
+    page = rows[skip : skip + limit]
+
+    out = []
+    for r in page:
+        ca = r.get("createdAt")
+        out.append({
+            "id": r["id"], "date": r.get("date"),
+            "time": ca.strftime("%H:%M:%S") if ca else None,
+            "category": r["category"], "docKind": r["docKind"],
+            "docNumber": r.get("docNumber"), "party": r.get("party"),
+            "qty": r.get("qty"), "amount": r.get("amount"),
+            "branchId": r.get("branchId"), "createdBy": r.get("createdBy"),
+        })
+    return {"items": out, "total": total, "skip": skip, "limit": limit}

@@ -358,6 +358,7 @@ export default function ItemDetailPanel({
           )}
         </DetailSection>
       )}
+
     </RecordDetailDrawer>
   )
 }
