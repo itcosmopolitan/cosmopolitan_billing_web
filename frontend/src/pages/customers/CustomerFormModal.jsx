@@ -25,17 +25,20 @@ const emptyForm = (branchId) => ({
   customer_type: 'retail',
   classification: 'external',
   is_credit_eligible: false,
-  key_account_manager: '',
+  key_account_managers: {},
   credit_terms: '',
 })
 
-function kamDisplayName(customer) {
-  return (
-    customer?.keyAccountManager
-    || customer?.key_account_manager_name
-    || customer?.key_account_manager
-    || ''
-  ).trim()
+// {branchId: display name}; prefers the resolved name over a stored user id.
+function branchKamsFromCustomer(customer) {
+  const stored = customer?.key_account_managers || customer?.keyAccountManagers || {}
+  const names = customer?.key_account_manager_names || customer?.keyAccountManagerNames || {}
+  const result = {}
+  Object.entries(stored).forEach(([branchId, value]) => {
+    const label = (names[branchId] || value || '').trim()
+    if (label) result[branchId] = label
+  })
+  return result
 }
 
 function formFromCustomer(customer) {
@@ -68,8 +71,7 @@ function formFromCustomer(customer) {
       customer.is_credit_eligible ?? customer.isCreditEligible
       ?? (Number(customer.credit_limit || 0) > 0),
     ),
-    // Free-text name (prefer resolved display name over legacy user id).
-    key_account_manager: kamDisplayName(customer),
+    key_account_managers: branchKamsFromCustomer(customer),
     credit_terms: customer.credit_terms || customer.creditTerms || '',
   }
 }
@@ -92,14 +94,19 @@ export default function CustomerFormModal({
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(() => emptyForm(defaultBranchId || activeBranch?.id || branches[0]?.id || ''))
   const [showAddKam, setShowAddKam] = useState(false)
+  const [addKamBranchId, setAddKamBranchId] = useState('')
   const [newKamName, setNewKamName] = useState('')
   const [extraKamOptions, setExtraKamOptions] = useState([])
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const resolvedBranchId = form.branch_id || defaultBranchId || activeBranch?.id || branches[0]?.id || ''
+  const kamBranches = branches.filter((b) => b.active !== false)
+  const kamRows = []
+  for (let i = 0; i < kamBranches.length; i += 2) kamRows.push(kamBranches.slice(i, i + 2))
 
   useEffect(() => {
     if (!open) return
     setShowAddKam(false)
+    setAddKamBranchId('')
     setNewKamName('')
     setExtraKamOptions([])
     if (customer?.id) {
@@ -109,9 +116,12 @@ export default function CustomerFormModal({
     setForm(emptyForm(defaultBranchId || activeBranch?.id || branches[0]?.id || ''))
   }, [open, customer, defaultBranchId, activeBranch?.id, branches])
 
-  const applyKam = (name) => {
+  const applyKam = (branchId, name) => {
     const value = (name || '').trim()
-    pf('key_account_manager', value)
+    setForm((f) => ({
+      ...f,
+      key_account_managers: { ...f.key_account_managers, [branchId]: value },
+    }))
     if (value) {
       const key = value.toLowerCase()
       setExtraKamOptions((prev) => (
@@ -128,9 +138,15 @@ export default function CustomerFormModal({
       toast.error('Key account manager name is required')
       return
     }
-    applyKam(name)
+    applyKam(addKamBranchId, name)
     setShowAddKam(false)
     setNewKamName('')
+  }
+
+  const openAddKam = (branchId) => {
+    setNewKamName('')
+    setAddKamBranchId(branchId)
+    setShowAddKam(true)
   }
 
   const save = async () => {
@@ -161,7 +177,9 @@ export default function CustomerFormModal({
       credit_limit: form.is_credit_eligible ? (Number(form.credit_limit) || 0) : 0,
       customer_type: form.customer_type,
       classification: form.classification === 'internal' ? 'internal' : 'external',
-      key_account_manager: form.key_account_manager?.trim() || null,
+      key_account_managers: Object.fromEntries(
+        kamBranches.map((b) => [b.id, form.key_account_managers?.[b.id]?.trim() || null]),
+      ),
       credit_terms: form.is_credit_eligible
         ? (form.credit_terms === '' ? null : Number(form.credit_terms))
         : null,
@@ -315,40 +333,50 @@ export default function CustomerFormModal({
             isSearchFieldRequired={false}
           />
         </FormGroup>
-        <FormGroup label="Key Account Manager">
-          <AutocompleteDropdown
-            value={form.key_account_manager}
-            onChange={(v) => applyKam(v || '')}
-            onSelectOption={(opt) => {
-              if (!opt?.id) {
-                applyKam('')
-                return
-              }
-              applyKam(opt.label || opt.id)
-            }}
-            fetchUrl={AUTOCOMPLETE_KEY_ACCOUNT_MANAGERS_URL}
-            prependOptions={[
-              { id: '', label: 'None' },
-              ...extraKamOptions,
-            ]}
-            isSearchFieldRequired
-            selectedLabel={form.key_account_manager || undefined}
-            clearable
-            onClear={() => applyKam('')}
-            placeholder="Select or add…"
-            searchPlaceholder="Search key account managers…"
-            emptyLabel="No key account managers yet"
-            noMatchLabel="No matches"
-            footerAction={{
-              label: '+ Add key account manager',
-              onClick: () => {
-                setNewKamName('')
-                setShowAddKam(true)
-              },
-            }}
-          />
-        </FormGroup>
       </FormRow>
+      <div className="form-label" style={{ marginBottom: 2 }}>Key Account Manager (per branch)</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+        Each branch has its own key account manager, used for sales in that branch.
+      </div>
+      {kamBranches.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>No active branches.</div>
+      )}
+      {kamRows.map((row) => (
+        <FormRow key={row[0].id}>
+          {row.map((branch) => (
+            <FormGroup key={branch.id} label={branch.name || branch.code}>
+              <AutocompleteDropdown
+                value={form.key_account_managers?.[branch.id] || ''}
+                onChange={(v) => applyKam(branch.id, v || '')}
+                onSelectOption={(opt) => {
+                  if (!opt?.id) {
+                    applyKam(branch.id, '')
+                    return
+                  }
+                  applyKam(branch.id, opt.label || opt.id)
+                }}
+                fetchUrl={AUTOCOMPLETE_KEY_ACCOUNT_MANAGERS_URL}
+                prependOptions={[
+                  { id: '', label: 'None' },
+                  ...extraKamOptions,
+                ]}
+                isSearchFieldRequired
+                selectedLabel={form.key_account_managers?.[branch.id] || undefined}
+                clearable
+                onClear={() => applyKam(branch.id, '')}
+                placeholder="Select or add…"
+                searchPlaceholder="Search key account managers…"
+                emptyLabel="No key account managers yet"
+                noMatchLabel="No matches"
+                footerAction={{
+                  label: '+ Add key account manager',
+                  onClick: () => openAddKam(branch.id),
+                }}
+              />
+            </FormGroup>
+          ))}
+        </FormRow>
+      ))}
       <FormGroup label="Credit">
         <label className="form-checkbox" style={{ alignItems: 'center', marginTop: 4 }}>
           <input

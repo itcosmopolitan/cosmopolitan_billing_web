@@ -579,6 +579,21 @@ class Customer(Base):
     quotations = relationship("Quotation", back_populates="customer")
 
 
+# ─── Customer key account manager per branch ─────────────────────────────────
+class CustomerBranchKam(Base):
+    """Key account manager for a customer within one branch.
+
+    Sales documents in a branch use that branch's KAM. Values are free text;
+    legacy rows may store a users.id (resolved to a name by the helpers in
+    src/customer_kam.py).
+    """
+    __tablename__ = "customer_branch_kams"
+    customer_id       = Column(String, ForeignKey("customers.id", ondelete="CASCADE"), primary_key=True)
+    branch_id         = Column(String, ForeignKey("branches.id"), primary_key=True)
+    key_account_manager = Column(String, nullable=False)
+    created_at        = Column(DateTime, default=datetime.utcnow)
+
+
 # ─── Vendor ───────────────────────────────────────────────────────────────────
 class Vendor(Base):
     __tablename__ = "vendors"

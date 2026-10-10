@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { customersAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { fmt } from '@/utils/helpers'
+import { formatBranchKams } from '@/utils/customerKam'
 import { Chip, AlertBar, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import { CUSTOMER_TYPE_LABELS, CUSTOMER_CLASSIFICATION_LABELS } from '@/utils/dropdownOptions'
@@ -19,7 +20,7 @@ function mapCustomer(c) {
     creditBalance: c.credit_balance ?? c.creditBalance ?? 0,
     totalPurchases: c.total_purchases ?? c.totalPurchases ?? 0,
     isCreditEligible: Boolean(c.is_credit_eligible ?? c.isCreditEligible),
-    keyAccountManager: c.key_account_manager_name || c.keyAccountManager || c.key_account_manager || '',
+    keyAccountManagerNames: c.key_account_manager_names || c.keyAccountManagerNames || {},
     creditTerms: c.credit_terms || c.creditTerms || '',
     customerCode: c.customer_code || c.customerCode,
   }
@@ -164,7 +165,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
                   </Tag>
                 ),
               },
-              { label: 'Key account manager', value: detail?.keyAccountManager || '—' },
+              { label: 'Key account managers', value: formatBranchKams(detail?.keyAccountManagerNames, branches) || '—' },
               { label: 'Credit eligible', value: detail?.isCreditEligible ? 'Yes' : 'No' },
               { label: 'Credit terms', value: detail?.isCreditEligible ? (detail?.creditTerms || '—') : '—' },
               { label: 'Account limit', value: detail?.isCreditEligible ? fmt(detail?.creditLimit) : '—' },

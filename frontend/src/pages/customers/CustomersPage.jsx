@@ -4,6 +4,7 @@ import { customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToExcel } from '@/utils/helpers'
+import { formatBranchKams } from '@/utils/customerKam'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TablePanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, ConfirmDialog } from '@/components/ui'
 
 const CUSTOMER_TABS = [
@@ -106,8 +107,7 @@ export default function CustomersPage() {
           // applying credit to an invoice is manual in v1.
           creditBalance: c.credit_balance || 0,
           totalPurchases: c.total_purchases || 0,
-          keyAccountManager: c.key_account_manager_name || c.key_account_manager || '',
-          keyAccountManagerId: c.key_account_manager || '',
+          keyAccountManagerNames: c.key_account_manager_names || {},
           creditTerms: c.credit_terms || '',
         }))
         setCustomers(mapped)
@@ -216,6 +216,8 @@ export default function CustomersPage() {
         return
       }
 
+      const kamBranches = branches.filter((b) => b.active !== false)
+      const kamHeader = (b) => `Key Account Manager - ${b.code}`
       const headers = [
         'Customer Name',
         'Phone',
@@ -232,6 +234,7 @@ export default function CustomersPage() {
         'Customer Type',
         'Classification',
         'Key Account Manager',
+        ...kamBranches.map(kamHeader),
         'Credit Terms',
       ]
       const rows = exportCustomers.map((customer) => ({
@@ -249,7 +252,11 @@ export default function CustomersPage() {
         'Credit Limit': customer.credit_limit,
         'Customer Type': customer.customer_type,
         Classification: customer.classification,
-        'Key Account Manager': customer.key_account_manager,
+        'Key Account Manager': customer.key_account_manager_names?.[customer.branch_id] || '',
+        ...Object.fromEntries(kamBranches.map((b) => [
+          kamHeader(b),
+          customer.key_account_manager_names?.[b.id] || '',
+        ])),
         'Credit Terms': customer.credit_terms,
       }))
 
@@ -335,7 +342,7 @@ export default function CustomersPage() {
           <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', lineHeight: 1.45 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Upload instructions</div>
             <div>Customers will be added to the currently selected branch. Name and City are required. Street 1 and Country are optional.</div>
-            <div style={{ marginTop: 6 }}><strong>Columns:</strong> Customer Name, Phone, Email, GST Reg No, Street 1, Street 2, Street 3, City, State/Province, Country, Postal Code, Credit Limit, Customer Type, Key Account Manager, Credit Terms</div>
+            <div style={{ marginTop: 6 }}><strong>Columns:</strong> Customer Name, Phone, Email, GST Reg No, Street 1, Street 2, Street 3, City, State/Province, Country, Postal Code, Credit Limit, Customer Type, Classification, Key Account Manager, Key Account Manager - [branch code] (one column per branch), Credit Terms</div>
           </div>
           {importResult && (
             <div style={{ padding: 10, background: 'var(--bg-raised)', borderRadius: 6 }}>
@@ -567,7 +574,7 @@ export default function CustomersPage() {
                         )
                       }
                       if (id === 'kam') {
-                        return <td key={id} style={{ fontSize:12 }}>{c.keyAccountManager || '—'}</td>
+                        return <td key={id} style={{ fontSize:12 }}>{formatBranchKams(c.keyAccountManagerNames, branches) || '—'}</td>
                       }
                       if (id === 'branch') {
                         return (

@@ -149,6 +149,9 @@ def serialize_customer(c) -> dict:
         "is_credit_eligible": bool(getattr(c, "is_credit_eligible", False)),
         "key_account_manager": getattr(c, "key_account_manager", None),
         "key_account_manager_name": getattr(c, "_key_account_manager_name", None),
+        # Per-branch KAMs: {branch_id: stored value} and {branch_id: display name}.
+        "key_account_managers": dict(getattr(c, "_branch_kams", None) or {}),
+        "key_account_manager_names": dict(getattr(c, "_branch_kam_names", None) or {}),
         "credit_terms": getattr(c, "credit_terms", None),
         "active": c.active,
     }

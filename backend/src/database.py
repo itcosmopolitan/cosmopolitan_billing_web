@@ -576,6 +576,7 @@ async def init_schema() -> None:
             await _promote_qty_columns_to_float(conn)
             await _backfill_user_account_status(conn, added_columns)
             await _backfill_customer_credit_eligible(conn, added_columns)
+            await _backfill_customer_branch_kams(conn)
             await _ensure_audit_log_indexes(conn)
             await _ensure_stock_pool_indexes(conn)
             await _ensure_nullable_columns(conn)
@@ -973,6 +974,28 @@ async def _backfill_customer_credit_eligible(
             SET is_credit_eligible = TRUE
             WHERE LOWER(COALESCE(type, 'retail')) IN ('wholesale', 'staff')
               AND COALESCE(credit_limit, 0) > 0
+            """
+        )
+    )
+
+
+async def _backfill_customer_branch_kams(conn) -> None:
+    """Idempotent: copy each customer's legacy key_account_manager into a
+    per-branch row for its home branch when no such row exists yet.
+    """
+    await conn.execute(
+        text(
+            """
+            INSERT INTO customer_branch_kams (customer_id, branch_id, key_account_manager, created_at)
+            SELECT c.id, c.branch_id, c.key_account_manager, CURRENT_TIMESTAMP
+            FROM customers c
+            WHERE c.branch_id IS NOT NULL
+              AND c.key_account_manager IS NOT NULL
+              AND TRIM(c.key_account_manager) <> ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM customer_branch_kams k
+                  WHERE k.customer_id = c.id AND k.branch_id = c.branch_id
+              )
             """
         )
     )

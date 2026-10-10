@@ -7,7 +7,8 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
-from src.models import Branch, Category, Customer, Item, ItemBranchConfig, ItemStock, TaxRate, User, Vendor
+from src.customer_kam import attach_branch_kam_names
+from src.models import Branch, Category, Customer, CustomerBranchKam, Item, ItemBranchConfig, ItemStock, TaxRate, User, Vendor
 from src.permissions import BRANCH_PICKER_READ
 from src.routes._serializers import get_user_branch_ids
 from src.routes._approval import user_can
@@ -39,9 +40,11 @@ async def autocomplete_customer(
     rows = (
         await db.execute(q.order_by(Customer.name.asc()).limit(limit))
     ).scalars().all()
+    await attach_branch_kam_names(db, rows)
     result = []
     for c in rows:
         phone = (c.phone or "").strip() or None
+        branch_kams = getattr(c, "_branch_kams", None) or {}
         result.append({
             "id": c.id,
             "text": c.name,
@@ -55,7 +58,9 @@ async def autocomplete_customer(
             "outstanding": float(getattr(c, "outstanding", 0) or 0),
             "credit_balance": float(getattr(c, "credit_balance", 0) or 0),
             "credit_terms": getattr(c, "credit_terms", None),
-            "key_account_manager": getattr(c, "key_account_manager", None),
+            "key_account_manager": branch_kams.get(c.branch_id),
+            "key_account_managers": branch_kams,
+            "key_account_manager_names": getattr(c, "_branch_kam_names", None) or {},
         })
     return result
 
@@ -303,7 +308,17 @@ async def autocomplete_key_account_managers(
     Values are free text (operators can add new names in the customer form).
     Legacy rows that still store a users.id are resolved to that user's name.
     """
-    raw_values = (
+    branch_values = (
+        await db.execute(
+            select(CustomerBranchKam.key_account_manager)
+            .where(
+                CustomerBranchKam.key_account_manager.isnot(None),
+                CustomerBranchKam.key_account_manager != "",
+            )
+            .distinct()
+        )
+    ).scalars().all()
+    legacy_values = (
         await db.execute(
             select(Customer.key_account_manager)
             .where(
@@ -313,6 +328,7 @@ async def autocomplete_key_account_managers(
             .distinct()
         )
     ).scalars().all()
+    raw_values = list(dict.fromkeys([*branch_values, *legacy_values]))
     if not raw_values:
         return []
 

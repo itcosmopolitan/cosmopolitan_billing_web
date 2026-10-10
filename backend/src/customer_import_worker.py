@@ -12,7 +12,8 @@ import openpyxl
 from sqlalchemy import and_, func, or_, select
 
 from src.database import get_async_session, init_schema
-from src.models import Customer, CustomerImportJob
+from src.customer_kam import KAM_BRANCH_COLUMN_PREFIX, merge_legacy_kam, save_branch_kams
+from src.models import Branch, Customer, CustomerImportJob
 from src.routes.customers import (
     _compose_address_from_parts,
     _normalize_classification,
@@ -104,6 +105,17 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
     headers = [str(value).strip().lower() if value is not None else None for value in rows[0]]
     total_rows = len(rows) - 1
     branch_id = job.branch_id
+    branch_by_code = {
+        (row.code or "").strip().lower(): row.id
+        for row in (await db.execute(select(Branch.id, Branch.code).where(Branch.active.is_(True)))).all()
+    }
+    kam_prefix = KAM_BRANCH_COLUMN_PREFIX.lower()
+    branch_kam_cols: dict[int, str] = {}
+    for col_idx, header in enumerate(headers):
+        if header and header.startswith(kam_prefix):
+            kam_branch_id = branch_by_code.get(header[len(kam_prefix):].strip())
+            if kam_branch_id:
+                branch_kam_cols[col_idx] = kam_branch_id
     created = 0
     errors = []
     await progress_callback(processed_rows=0, total_rows=total_rows, created=0, skipped=0, errors=[])
@@ -147,6 +159,14 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
                 credit_terms = None
 
             customer_id = str(uuid.uuid4())
+            branch_kams: dict[str, str] = {}
+            for col_idx, kam_branch_id in branch_kam_cols.items():
+                value = _as_text(row[col_idx]) if col_idx < len(row) else None
+                if value:
+                    branch_kams[kam_branch_id] = value
+            kam_map = merge_legacy_kam(
+                branch_kams, branch_id, _as_text(data.get("key_account_manager")) or None,
+            )
             customer = Customer(
                 id=customer_id,
                 name=name,
@@ -158,7 +178,6 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
                 type=customer_type,
                 classification=classification,
                 is_credit_eligible=is_credit_eligible,
-                key_account_manager=_as_text(data.get("key_account_manager")) or None,
                 credit_terms=credit_terms,
                 street1=_as_text(data.get("street1")) or None,
                 street2=_as_text(data.get("street2")) or None,
@@ -172,6 +191,7 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
             customer.customer_code = _build_customer_code(customer_id)
             db.add(customer)
             await db.flush()
+            await save_branch_kams(db, customer, kam_map)
             await db.commit()
             created += 1
         except Exception as exc:

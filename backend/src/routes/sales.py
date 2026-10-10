@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src import config
+from src.customer_kam import attach_branch_kam_names, branch_kam_label
 from src.database import get_db
 from src.document_numbering import (
     allocate_customer_payment_number,
@@ -933,6 +934,7 @@ async def list_invoices(
     total = int(count_r.scalar() or 0)
     result = await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))
     invoices = result.unique().scalars().all()
+    await _attach_customer_kam_names(db, [_loaded_rel(inv, "customer") for inv in invoices])
     # Attach organisation profile as a fallback for branch-level metadata
     org_row = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     out = []
@@ -1065,6 +1067,7 @@ async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user:
     if not quote:
         raise HTTPException(404, "Quotation not found")
     await enforce_branch_access(quote.branch_id, user=user, db=db)
+    await _attach_customer_kam_names(db, [_loaded_rel(quote, "customer")])
     order_nums = await _sales_doc_number_map(db, SalesOrder, {quote.converted_order_id} if quote.converted_order_id else set())
     inv_id = getattr(quote, "converted_invoice_id", None)
     inv_nums = await _sales_doc_number_map(db, SaleInvoice, {inv_id} if inv_id else set())
@@ -1431,6 +1434,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
     if not inv:
         raise HTTPException(404, "Invoice not found")
     await _resolve_branch_scope(user, db, inv.branch_id)
+    await _attach_customer_kam_names(db, [_loaded_rel(inv, "customer")])
     linked = await _resolve_invoice_linked_docs(db, inv)
     d = _inv_dict(
         inv,
@@ -1631,6 +1635,7 @@ async def update_invoice(
         .where(SaleInvoice.id == invoice_id)
     )
     inv = result.scalar_one()
+    await _attach_customer_kam_names(db, [_loaded_rel(inv, "customer")])
     linked = await _resolve_invoice_linked_docs(db, inv)
     return _inv_dict(
         inv,
@@ -1859,7 +1864,7 @@ async def create_invoice(
         invoice_customer = (await db.execute(
             select(Customer).where(Customer.id == data.customer_id)
         )).scalar_one_or_none()
-    invoice_customer_snapshot = await _invoice_customer_snapshot(db, invoice_customer)
+    invoice_customer_snapshot = await _invoice_customer_snapshot(db, invoice_customer, data.branch_id)
     quotation_number_snapshot = None
     if data.quotation_id:
         quotation_number_snapshot = (await db.execute(
@@ -3069,8 +3074,8 @@ def _payment_dict(p, allocations=None):
         "id": p.id, "number": p.number,
         "customerId": p.customer_id,
         "customerName": p.customer_name or "Walk-in",
-        "customerKeyAccountManager": _customer_kam_label(customer),
-        "customer_key_account_manager": _customer_kam_label(customer),
+        "customerKeyAccountManager": _customer_kam_label(customer, p.branch_id),
+        "customer_key_account_manager": _customer_kam_label(customer, p.branch_id),
         "branchId": p.branch_id, "branchName": p.branch_name,
         "date": p.date,
         "totalAmount": p.total_amount,
@@ -3201,12 +3206,13 @@ async def list_payments(
 async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(CustomerPayment)
-        .options(selectinload(CustomerPayment.allocations))
+        .options(selectinload(CustomerPayment.allocations), selectinload(CustomerPayment.customer))
         .where(CustomerPayment.id == payment_id)
     )
     p = res.scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Payment not found")
+    await _attach_customer_kam_names(db, [_loaded_rel(p, "customer")])
     return _payment_dict(p, p.allocations)
 
 
@@ -4493,42 +4499,20 @@ def _loaded_rel(obj, name):
     return getattr(obj, name, None)
 
 
-def _customer_kam_label(customer) -> Optional[str]:
-    """Display label for a customer's key account manager (name preferred over id)."""
-    if customer is None:
-        return None
-    return (
-        getattr(customer, "_key_account_manager_name", None)
-        or getattr(customer, "key_account_manager", None)
-        or None
-    )
+def _customer_kam_label(customer, branch_id: Optional[str]) -> Optional[str]:
+    """Display label for the customer's key account manager in `branch_id`."""
+    return branch_kam_label(customer, branch_id)
 
 
 async def _attach_customer_kam_names(db: AsyncSession, customers) -> None:
-    """Resolve key_account_manager user ids → display names on loaded customers."""
-    rows = [c for c in (customers or []) if c is not None]
-    kam_ids = {
-        getattr(c, "key_account_manager", None)
-        for c in rows
-        if getattr(c, "key_account_manager", None)
-    }
-    kam_ids.discard(None)
-    if not kam_ids:
-        for c in rows:
-            c._key_account_manager_name = getattr(c, "key_account_manager", None)
-        return
-    name_rows = (
-        await db.execute(select(User.id, User.name).where(User.id.in_(kam_ids)))
-    ).all()
-    name_by_id = {row.id: row.name for row in name_rows}
-    for c in rows:
-        kam = getattr(c, "key_account_manager", None)
-        c._key_account_manager_name = name_by_id.get(kam) or kam
+    """Attach per-branch KAM names to loaded customers (see customer_kam)."""
+    await attach_branch_kam_names(db, customers)
 
 
-async def _invoice_customer_snapshot(db: AsyncSession, customer) -> dict:
+async def _invoice_customer_snapshot(db: AsyncSession, customer, branch_id: Optional[str]) -> dict:
     if customer is None:
         return {}
+    await attach_branch_kam_names(db, [customer])
     address_parts = [
         getattr(customer, "street1", None),
         getattr(customer, "street2", None),
@@ -4541,13 +4525,8 @@ async def _invoice_customer_snapshot(db: AsyncSession, customer) -> dict:
     address = ", ".join(str(part).strip() for part in address_parts if part and str(part).strip())
     if not address:
         address = getattr(customer, "address", None) or ""
-    key_account_manager = getattr(customer, "key_account_manager", None)
-    key_account_manager_name = key_account_manager
-    if key_account_manager:
-        manager = (await db.execute(
-            select(User).where(User.id == key_account_manager)
-        )).scalar_one_or_none()
-        key_account_manager_name = getattr(manager, "name", None) or key_account_manager
+    key_account_manager = (getattr(customer, "_branch_kams", None) or {}).get(branch_id)
+    key_account_manager_name = branch_kam_label(customer, branch_id)
     return {
         "customer_phone_snapshot": getattr(customer, "phone", None),
         "customer_gstin_snapshot": getattr(customer, "gstin", None),
@@ -4605,8 +4584,8 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
         "customer_gstin": customer.gstin if customer else None,
         "customerPhone": customer.phone if customer else None,
         "customer_phone": customer.phone if customer else None,
-        "customerKeyAccountManager": _customer_kam_label(customer),
-        "customer_key_account_manager": _customer_kam_label(customer),
+        "customerKeyAccountManager": _customer_kam_label(customer, quote.branch_id),
+        "customer_key_account_manager": _customer_kam_label(customer, quote.branch_id),
         "branchId": quote.branch_id,
         "branchName": quote.branch_name,
         "childCounterId": getattr(quote, "child_counter_id", None),
@@ -4764,14 +4743,14 @@ def _inv_dict(inv, items=None, sales_order_number=None, *, sales_order_id=None, 
         "customer_country": customer.country if customer else None,
         "customerPostalCode": customer.postal_code if customer else None,
         "customer_postal_code": customer.postal_code if customer else None,
-        "customerKeyAccountManager": getattr(customer, "key_account_manager", None) if customer else None,
-        "customer_key_account_manager": getattr(customer, "key_account_manager", None) if customer else None,
+        "customerKeyAccountManager": _customer_kam_label(customer, inv.branch_id) if customer else None,
+        "customer_key_account_manager": _customer_kam_label(customer, inv.branch_id) if customer else None,
         "customerCreditTerms": getattr(customer, "credit_terms", None) if customer else None,
         "customer_credit_terms": getattr(customer, "credit_terms", None) if customer else None,
         "customerCreditTerms": customer_snapshot["customer_credit_terms_snapshot"] or (getattr(customer, "credit_terms", None) if customer else None),
         "customer_credit_terms": customer_snapshot["customer_credit_terms_snapshot"] or (getattr(customer, "credit_terms", None) if customer else None),
-        "customerKeyAccountManager": customer_snapshot["customer_key_account_manager_name_snapshot"] or customer_snapshot["customer_key_account_manager_snapshot"] or (getattr(customer, "key_account_manager", None) if customer else None),
-        "customer_key_account_manager": customer_snapshot["customer_key_account_manager_name_snapshot"] or customer_snapshot["customer_key_account_manager_snapshot"] or (getattr(customer, "key_account_manager", None) if customer else None),
+        "customerKeyAccountManager": customer_snapshot["customer_key_account_manager_name_snapshot"] or customer_snapshot["customer_key_account_manager_snapshot"] or _customer_kam_label(customer, inv.branch_id),
+        "customer_key_account_manager": customer_snapshot["customer_key_account_manager_name_snapshot"] or customer_snapshot["customer_key_account_manager_snapshot"] or _customer_kam_label(customer, inv.branch_id),
         "customerGstin": customer_snapshot["customer_gstin_snapshot"] or (customer.gstin if customer else None),
         "customer_gstin": customer_snapshot["customer_gstin_snapshot"] or (customer.gstin if customer else None),
         "customerPhone": customer_snapshot["customer_phone_snapshot"] or (customer.phone if customer else None),
@@ -5010,8 +4989,8 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
         "classification": classification or (
             (getattr(customer, "classification", None) if customer else None) or "external"
         ),
-        "customerKeyAccountManager": customer_key_account_manager or _customer_kam_label(customer),
-        "customer_key_account_manager": customer_key_account_manager or _customer_kam_label(customer),
+        "customerKeyAccountManager": customer_key_account_manager or _customer_kam_label(customer, so.branch_id),
+        "customer_key_account_manager": customer_key_account_manager or _customer_kam_label(customer, so.branch_id),
         "branchId": so.branch_id,
         "branchName": so.branch_name,
         "childCounterId": getattr(so, "child_counter_id", None),
@@ -5716,12 +5695,15 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
         raise HTTPException(404, "Sales order not found")
     await _resolve_branch_scope(user, db, so.branch_id)
     classification = "external"
+    customer_kam = None
     if so.customer_id:
         cust = (
             await db.execute(select(Customer).where(Customer.id == so.customer_id))
         ).scalar_one_or_none()
         if cust is not None:
             classification = getattr(cust, "classification", None) or "external"
+            await _attach_customer_kam_names(db, [cust])
+            customer_kam = _customer_kam_label(cust, so.branch_id)
     inv_nums = await _sales_doc_number_map(
         db, SaleInvoice, {so.converted_invoice_id} if so.converted_invoice_id else set(),
     )
@@ -5730,6 +5712,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
         so.line_items,
         classification=classification,
         converted_invoice_number=inv_nums.get(so.converted_invoice_id),
+        customer_key_account_manager=customer_kam,
     )
 
 
@@ -6279,7 +6262,7 @@ async def convert_order_to_invoice(
         origin="sales_order",
         notes=data.notes or so.notes,
         quotation_number_snapshot=quotation_number_snapshot,
-        **await _invoice_customer_snapshot(db, invoice_customer),
+        **await _invoice_customer_snapshot(db, invoice_customer, so.branch_id),
     )
     db.add(inv)
 
@@ -6676,7 +6659,7 @@ async def convert_quote_to_invoice(
         origin="quotation",
         notes=data.notes or quote.notes,
         quotation_number_snapshot=quote.number,
-        **await _invoice_customer_snapshot(db, invoice_customer),
+        **await _invoice_customer_snapshot(db, invoice_customer, quote.branch_id),
     )
     db.add(inv)
 
@@ -6843,8 +6826,8 @@ def _return_dict(ret, items=None):
         "invoiceNumber": ret.invoice_number,
         "customerId": ret.customer_id,
         "customerName": ret.customer_name or "Walk-in",
-        "customerKeyAccountManager": _customer_kam_label(customer),
-        "customer_key_account_manager": _customer_kam_label(customer),
+        "customerKeyAccountManager": _customer_kam_label(customer, ret.branch_id),
+        "customer_key_account_manager": _customer_kam_label(customer, ret.branch_id),
         "branchId": ret.branch_id,
         "branchName": ret.branch_name,
         "date": ret.date,
@@ -7006,13 +6989,14 @@ async def list_returns(
 async def get_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesReturn)
-        .options(selectinload(SalesReturn.line_items))
+        .options(selectinload(SalesReturn.line_items), selectinload(SalesReturn.customer))
         .where(SalesReturn.id == return_id)
     )
     ret = res.scalar_one_or_none()
     if not ret:
         raise HTTPException(404, "Return not found")
     await _resolve_branch_scope(user, db, ret.branch_id)
+    await _attach_customer_kam_names(db, [_loaded_rel(ret, "customer")])
     return _return_dict(ret, ret.line_items)
 
 

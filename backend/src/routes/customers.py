@@ -6,14 +6,21 @@ import openpyxl
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.customer_kam import (
+    KAM_BRANCH_COLUMN_PREFIX,
+    attach_branch_kam_names,
+    merge_legacy_kam,
+    save_branch_kams,
+)
 from src.database import get_db
 from src.models import (
     Branch,
     ComplimentaryEntry,
     Customer,
+    CustomerBranchKam,
     CustomerCreditEntry,
     CustomerImportJob,
     CustomerPayment,
@@ -46,6 +53,8 @@ class CustomerCreate(BaseModel):
     classification: str = "external"
     is_credit_eligible: bool = False
     key_account_manager: Optional[str] = None
+    # Per-branch KAMs: {branch_id: name}. Branches left out get no KAM.
+    key_account_managers: Optional[dict[str, Optional[str]]] = None
     credit_terms: Optional[StrictInt] = Field(default=None, ge=0)
     street1: str
     street2: Optional[str] = None
@@ -79,6 +88,9 @@ class CustomerUpdate(BaseModel):
     classification: Optional[str] = None
     is_credit_eligible: Optional[bool] = None
     key_account_manager: Optional[str] = None
+    # Per-branch KAMs: {branch_id: name}. Listed branches are set (null or
+    # blank clears); branches not listed are left unchanged.
+    key_account_managers: Optional[dict[str, Optional[str]]] = None
     credit_terms: Optional[StrictInt] = Field(default=None, ge=0)
     street1: Optional[str] = None
     street2: Optional[str] = None
@@ -356,25 +368,13 @@ def _compose_address_from_parts(data: Union[CustomerCreate, CustomerUpdate]) -> 
 
 
 async def _attach_kam_names(db: AsyncSession, customers: list[Customer]) -> None:
-    """Attach display names for key_account_manager.
+    """Attach per-branch KAM values and display names (see customer_kam)."""
+    await attach_branch_kam_names(db, customers)
 
-    New values are free text. Legacy rows may still store a users.id —
-    resolve those to the user's name; otherwise use the stored string.
-    """
-    kam_values = {
-        c.key_account_manager
-        for c in customers
-        if getattr(c, "key_account_manager", None)
-    }
-    if not kam_values:
-        return
-    rows = (
-        await db.execute(select(User.id, User.name).where(User.id.in_(kam_values)))
-    ).all()
-    name_by_id = {row.id: row.name for row in rows}
-    for c in customers:
-        kam = getattr(c, "key_account_manager", None)
-        c._key_account_manager_name = name_by_id.get(kam) or kam
+
+async def _validate_branch_kam_map(db: AsyncSession, mapping: Optional[dict[str, Optional[str]]]) -> None:
+    for branch_id in mapping or {}:
+        await _validate_branch_id(branch_id, db)
 
 
 @router.post("/import", dependencies=[Depends(require_perm("customers.create"))])
@@ -428,6 +428,11 @@ def _customer_import_job_response(job: CustomerImportJob) -> dict:
 @router.get("/import/template", dependencies=[Depends(require_perm("customers.create"))])
 async def download_customer_import_template():
     """Generate an Excel template for bulk customer imports."""
+    branches = (
+        await db.execute(
+            select(Branch.code).where(Branch.active.is_(True)).order_by(Branch.code.asc())
+        )
+    ).scalars().all()
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Customers"
@@ -435,6 +440,7 @@ async def download_customer_import_template():
         "Customer Name", "Phone", "Email", "GST Reg No", "Street 1", "Street 2", "Street 3",
         "City", "State/Province", "Country", "Postal Code",
         "Credit Limit", "Customer Type", "Classification", "Key Account Manager", "Credit Terms",
+        *[f"{KAM_BRANCH_COLUMN_PREFIX}{code}" for code in branches],
     ])
     bio = BytesIO()
     wb.save(bio)
@@ -461,18 +467,20 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
     address = _compose_address_from_parts(data)
     customer_id = str(uuid.uuid4())
     customer_code = _build_customer_code(customer_id)
+    kam_map = merge_legacy_kam(data.key_account_managers, data.branch_id, data.key_account_manager)
+    await _validate_branch_kam_map(db, kam_map)
     c = Customer(id=customer_id, name=data.name, phone=data.phone,
                  email=data.email, address=address, customer_code=customer_code,
                  gstin=data.gst_in, branch_id=data.branch_id,
                  credit_limit=credit_limit, type=customer_type,
                  classification=classification,
                  is_credit_eligible=is_credit_eligible,
-                 key_account_manager=(data.key_account_manager or None),
                  credit_terms=credit_terms,
                  street1=data.street1, street2=data.street2, street3=data.street3,
                  city=data.city, state_province=data.state_province,
                  country=data.country, postal_code=data.postal_code)
     db.add(c)
+    await save_branch_kams(db, c, kam_map)
     await db.commit()
     return {"id": c.id, "message": "Customer created"}
 
@@ -483,9 +491,13 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
     if not c:
         raise HTTPException(404, "Customer not found")
     items = data.model_dump(exclude_unset=True)
+    kam_map = items.pop("key_account_managers", None) or {}
+    legacy_kam_given = "key_account_manager" in items
+    legacy_kam = items.pop("key_account_manager", None)
     if "branch_id" in items:
         await _validate_branch_id(items["branch_id"], db)
         await enforce_branch_access(items["branch_id"], user=user, db=db)
+    await _validate_branch_kam_map(db, kam_map)
     if "customer_type" in items:
         items["customer_type"] = _normalize_customer_type(items["customer_type"])
     if "classification" in items:
@@ -513,6 +525,10 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
 
     if not c.customer_code:
         c.customer_code = _build_customer_code(c.id)
+    if kam_map or legacy_kam_given:
+        if legacy_kam_given:
+            kam_map = merge_legacy_kam(kam_map, c.branch_id, legacy_kam)
+        await save_branch_kams(db, c, kam_map)
     await db.commit()
     return {"message": "Updated"}
 
@@ -537,6 +553,7 @@ async def delete_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
     blockers = await _customer_delete_blockers(db, customer_id)
     if blockers:
         raise HTTPException(400, "Cannot delete customer: " + "; ".join(blockers))
+    await db.execute(delete(CustomerBranchKam).where(CustomerBranchKam.customer_id == customer_id))
     await db.delete(c)
     await db.commit()
     return {"deleted": customer_id}
