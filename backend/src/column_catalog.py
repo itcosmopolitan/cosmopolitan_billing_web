@@ -55,6 +55,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("staff", "Staff", default_hidden=True),
         _col("gst", "GST"),
         _col("stock", "Stock"),
+        _col("reserved", "Reserved"),
+        _col("available", "Available"),
         _col("status", "Status", locked=True),
     ],
     "item_master.list": [

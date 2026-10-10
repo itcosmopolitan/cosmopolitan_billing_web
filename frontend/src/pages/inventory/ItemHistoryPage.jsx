@@ -13,8 +13,9 @@ import toast from 'react-hot-toast'
 import { itemsAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { fmt, fmtDate, fmtQty } from '@/utils/helpers'
+import { DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import {
-  Card, DatePicker, AutocompleteDropdown,
+  Card, DatePicker, AutocompleteDropdown, PaginationBar,
   SortableHeader, TableLoadingPanel,
   PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
@@ -37,31 +38,16 @@ const DOC_KIND_MAP = {
   adjustment:    [{ id: 'Adjustment', label: 'Adjustment' }, { id: 'Opening Stock', label: 'Opening Stock' }],
 }
 
-/* ── Formatters ───────────────────────────────────────────────────────── */
-function QtyBadge({ qty }) {
-  const v = Number(qty)
-  if (!Number.isFinite(v)) return <span style={{ color: 'var(--text-muted)' }}>—</span>
-  return (
-    <span
-      className="mono"
-      style={{
-        fontWeight: 600,
-        color: v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text-muted)',
-      }}
-    >
-      {v > 0 ? '+' : ''}{fmtQty(v)}
-    </span>
-  )
+/* Summary qty column labels per category */
+const QTY_LABELS = {
+  sales:         { qty: 'Sold Qty',      ordered: 'Ordered / Quoted Qty' },
+  purchase:      { qty: 'Purchased Qty', ordered: 'Ordered Qty' },
+  complimentary: { qty: 'Qty',           ordered: null },
+  transfer:      { qty: 'Qty',           ordered: null },
+  adjustment:    { qty: 'Qty',           ordered: null },
 }
 
 /* ── Column definitions ───────────────────────────────────────────────── */
-const SUMMARY_COLUMNS = [
-  { key: 'date',        label: 'Date',        sortable: true,  align: 'left' },
-  { key: 'count',       label: 'Transactions', sortable: true,  align: 'right' },
-  { key: 'totalQty',    label: 'Net Qty',      sortable: true,  align: 'right' },
-  { key: 'totalAmount', label: 'Amount (MVR)', sortable: true,  align: 'right' },
-]
-
 const DETAIL_COLUMNS = [
   { key: 'docKind',   label: 'Type',        align: 'left' },
   { key: 'docNumber', label: 'Document',    align: 'left' },
@@ -100,25 +86,48 @@ export default function ItemHistoryPage() {
     [category],
   )
 
-  /* ── Summary data ──────────────────────────────────────────────────── */
+  /* ── Summary state ─────────────────────────────────────────────────── */
   const [summaryRows, setSummaryRows] = useState([])
   const [summaryTotal, setSummaryTotal] = useState(0)
   const [summaryLoading, setSummaryLoading] = useState(true)
+  const [summarySkip, setSummarySkip] = useState(0)
+  const [summaryLimit, setSummaryLimit] = useState(DEFAULT_PAGE_SIZE)
   const [sortBy, setSortBy] = useState('date')
   const [sortOrder, setSortOrder] = useState('desc')
 
-  /* ── Drilldown data ────────────────────────────────────────────────── */
+  /* ── Drilldown state ───────────────────────────────────────────────── */
   const [drillDate, setDrillDate] = useState(null)
   const [detailRows, setDetailRows] = useState([])
   const [detailTotal, setDetailTotal] = useState(0)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [detailSkip, setDetailSkip] = useState(0)
+  const [detailLimit, setDetailLimit] = useState(DEFAULT_PAGE_SIZE)
+
+  /* ── Summary column config (depends on category) ───────────────────── */
+  const qtyLabels = QTY_LABELS[category] || QTY_LABELS.sales
+  const hasOrderedCol = !!qtyLabels.ordered
+
+  const summaryColumns = useMemo(() => {
+    const cols = [
+      { key: 'date',        label: 'Date',         sortable: true, align: 'left' },
+      { key: 'count',       label: 'Transactions',  sortable: true, align: 'right' },
+      { key: 'qty',         label: qtyLabels.qty,    sortable: true, align: 'right' },
+    ]
+    if (hasOrderedCol) {
+      cols.push({ key: 'orderedQty', label: qtyLabels.ordered, sortable: true, align: 'right' })
+    }
+    cols.push({ key: 'totalAmount', label: 'Amount (MVR)', sortable: true, align: 'right' })
+    return cols
+  }, [qtyLabels, hasOrderedCol])
+
+  const summaryColCount = summaryColumns.length
 
   /* ── Fetch summary (separate API) ──────────────────────────────────── */
   const fetchSummary = useCallback(async () => {
     if (!itemId) return
     setSummaryLoading(true)
     try {
-      const params = { limit: 500, sort_by: sortBy, sort_order: sortOrder }
+      const params = { skip: summarySkip, limit: summaryLimit, sort_by: sortBy, sort_order: sortOrder }
       if (branchId) params.branch_id = branchId
       if (category) params.category = category
       if (fromDate) params.from_date = fromDate
@@ -133,16 +142,16 @@ export default function ItemHistoryPage() {
     } finally {
       setSummaryLoading(false)
     }
-  }, [itemId, branchId, category, fromDate, toDate, sortBy, sortOrder])
+  }, [itemId, branchId, category, fromDate, toDate, sortBy, sortOrder, summarySkip, summaryLimit])
 
   useEffect(() => { fetchSummary() }, [fetchSummary])
 
   /* ── Fetch drilldown transactions (separate API) ───────────────────── */
-  const fetchDrilldown = useCallback(async (date, kind) => {
+  const fetchDrilldown = useCallback(async (date, kind, skip, limit) => {
     if (!itemId || !date) return
     setDetailLoading(true)
     try {
-      const params = { date, limit: 1000 }
+      const params = { date, skip: skip ?? 0, limit: limit ?? DEFAULT_PAGE_SIZE }
       if (branchId) params.branch_id = branchId
       if (category) params.category = category
       if (kind) params.doc_kind = kind
@@ -160,20 +169,28 @@ export default function ItemHistoryPage() {
 
   const handleDrill = useCallback((date) => {
     setDocKind('')
+    setDetailSkip(0)
     setDrillDate(date)
-    fetchDrilldown(date, '')
-  }, [fetchDrilldown])
+    fetchDrilldown(date, '', 0, detailLimit)
+  }, [fetchDrilldown, detailLimit])
 
-  /* Re-fetch drilldown when doc_kind changes */
+  /* Re-fetch drilldown when doc_kind or pagination changes */
   useEffect(() => {
-    if (drillDate) fetchDrilldown(drillDate, docKind)
-  }, [docKind]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (drillDate) fetchDrilldown(drillDate, docKind, detailSkip, detailLimit)
+  }, [docKind, detailSkip, detailLimit]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Reset skip when doc_kind filter changes */
+  useEffect(() => { setDetailSkip(0) }, [docKind])
 
   /* Reset drilldown when summary filters change */
-  useEffect(() => { setDrillDate(null); setDetailRows([]); setDocKind('') }, [category, fromDate, toDate])
+  useEffect(() => {
+    setDrillDate(null); setDetailRows([]); setDocKind('')
+    setSummarySkip(0)
+  }, [category, fromDate, toDate])
 
   /* ── Sort handler ──────────────────────────────────────────────────── */
   const handleSort = (key) => {
+    setSummarySkip(0)
     if (sortBy === key) setSortOrder((o) => o === 'asc' ? 'desc' : 'asc')
     else { setSortBy(key); setSortOrder('desc') }
   }
@@ -218,7 +235,7 @@ export default function ItemHistoryPage() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto' }}>
           <PageActionsMenu actions={buildListPageMenuActions({
             onRefresh: () => {
-              if (drillDate) fetchDrilldown(drillDate)
+              if (drillDate) fetchDrilldown(drillDate, docKind, detailSkip, detailLimit)
               else fetchSummary()
               toast.success('Refreshed')
             },
@@ -373,7 +390,9 @@ export default function ItemHistoryPage() {
                         <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {m.party || '—'}
                         </td>
-                        <td className="text-right"><QtyBadge qty={m.qty} /></td>
+                        <td className="text-right mono" style={{ fontWeight: 500 }}>
+                          {m.qty != null ? fmtQty(m.qty) : '—'}
+                        </td>
                         <td className="text-right mono">{m.amount != null ? fmt(m.amount) : '—'}</td>
                         <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{m.time || '—'}</td>
                         <td style={{ color: 'var(--text-muted)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -387,8 +406,8 @@ export default function ItemHistoryPage() {
                   <tfoot>
                     <tr style={{ fontWeight: 700 }}>
                       <td colSpan={3} style={{ textAlign: 'right' }}>Total</td>
-                      <td className="text-right">
-                        <QtyBadge qty={detailRows.reduce((s, m) => s + (Number(m.qty) || 0), 0)} />
+                      <td className="text-right mono">
+                        {fmtQty(detailRows.reduce((s, m) => s + (Number(m.qty) || 0), 0))}
                       </td>
                       <td className="text-right mono">
                         {fmt(detailRows.reduce((s, m) => s + (Number(m.amount) || 0), 0))}
@@ -399,11 +418,11 @@ export default function ItemHistoryPage() {
                 )}
               </table>
             ) : (
-              /* ── Summary view (date-wise, like Daily Sales) ────── */
+              /* ── Summary view (date-wise) ─────────────────────── */
               <table className="data-table" style={{ minWidth: 600 }}>
                 <thead>
                   <tr>
-                    {SUMMARY_COLUMNS.map((col) => (
+                    {summaryColumns.map((col) => (
                       col.sortable ? (
                         <SortableHeader
                           key={col.key}
@@ -425,13 +444,13 @@ export default function ItemHistoryPage() {
                 <tbody>
                   {summaryLoading ? (
                     <tr>
-                      <td colSpan={SUMMARY_COLUMNS.length} style={{ padding: 0 }}>
+                      <td colSpan={summaryColCount} style={{ padding: 0 }}>
                         <TableLoadingPanel label="Loading report data…" />
                       </td>
                     </tr>
                   ) : summaryRows.length === 0 ? (
                     <tr>
-                      <td colSpan={SUMMARY_COLUMNS.length} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
+                      <td colSpan={summaryColCount} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
                         No {categoryLabel.toLowerCase()} transactions found for the selected period.
                       </td>
                     </tr>
@@ -445,7 +464,10 @@ export default function ItemHistoryPage() {
                       >
                         <td style={{ fontWeight: 500 }}>{fmtDate(row.date)}</td>
                         <td className="text-right">{row.count}</td>
-                        <td className="text-right"><QtyBadge qty={row.totalQty} /></td>
+                        <td className="text-right mono" style={{ fontWeight: 500 }}>{fmtQty(row.qty)}</td>
+                        {hasOrderedCol && (
+                          <td className="text-right mono" style={{ fontWeight: 500, color: 'var(--blue)' }}>{fmtQty(row.orderedQty)}</td>
+                        )}
                         <td className="text-right mono">{fmt(row.totalAmount)}</td>
                       </tr>
                     ))
@@ -456,9 +478,14 @@ export default function ItemHistoryPage() {
                     <tr style={{ fontWeight: 700 }}>
                       <td>Total</td>
                       <td className="text-right">{summaryRows.reduce((s, r) => s + r.count, 0)}</td>
-                      <td className="text-right">
-                        <QtyBadge qty={summaryRows.reduce((s, r) => s + r.totalQty, 0)} />
+                      <td className="text-right mono">
+                        {fmtQty(summaryRows.reduce((s, r) => s + (r.qty || 0), 0))}
                       </td>
+                      {hasOrderedCol && (
+                        <td className="text-right mono" style={{ color: 'var(--blue)' }}>
+                          {fmtQty(summaryRows.reduce((s, r) => s + (r.orderedQty || 0), 0))}
+                        </td>
+                      )}
                       <td className="text-right mono">
                         {fmt(summaryRows.reduce((s, r) => s + r.totalAmount, 0))}
                       </td>
@@ -468,6 +495,17 @@ export default function ItemHistoryPage() {
               </table>
             )}
           </div>
+          <PaginationBar
+            total={drillDate ? detailTotal : summaryTotal}
+            skip={drillDate ? detailSkip : summarySkip}
+            limit={drillDate ? detailLimit : summaryLimit}
+            onSkipChange={drillDate ? setDetailSkip : setSummarySkip}
+            onLimitChange={drillDate
+              ? (v) => { setDetailLimit(v); setDetailSkip(0) }
+              : (v) => { setSummaryLimit(v); setSummarySkip(0) }
+            }
+            disabled={drillDate ? detailLoading : summaryLoading}
+          />
         </Card>
       </div>
     </div>

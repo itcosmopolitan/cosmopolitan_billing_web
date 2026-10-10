@@ -21,7 +21,7 @@ from src.item_branch import (
     effective_reorder_level,
     effective_selling_price,
 )
-from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemImportJob, ItemStock, User, AuditLog
+from src.models import Branch, Category, Item, ItemApprovalStatus, ItemBatch, ItemBranchConfig, ItemImportJob, ItemStock, StockReservationStatus, User, AuditLog
 from src.models import (
     AdjustmentRequest,
     AdjustmentStatus,
@@ -1085,6 +1085,22 @@ async def list_items(
         )
         for row in sr.scalars().all():
             stock_by_item[row.item_id] = row.quantity
+    reserved_by_item: dict[str, float] = {}
+    if ids and branch_id:
+        rr = await db.execute(
+            select(
+                StockReservation.item_id,
+                func.coalesce(func.sum(StockReservation.qty), 0),
+            )
+            .where(
+                StockReservation.item_id.in_(ids),
+                StockReservation.branch_id == branch_id,
+                StockReservation.status == StockReservationStatus.active,
+            )
+            .group_by(StockReservation.item_id)
+        )
+        for item_id, total_reserved in rr.all():
+            reserved_by_item[item_id] = float(total_reserved or 0)
     config_by_item = await _get_config_map(db, ids, branch_id)
     avail_branch_counts = await _available_branch_counts(db, ids) if master_mode else {}
     # Per-item batch summary (count + nearest expiry) so the Items table can
@@ -1148,6 +1164,7 @@ async def list_items(
             "batch_tracking": item.batch_tracking,
             "expiry_tracking": item.expiry_tracking,
             "available_stock": stock_by_item.get(item.id, 0),
+            "reserved_stock": reserved_by_item.get(item.id, 0),
             "pool_id": stock_pool.id if stock_pool else None,
             "pool_stock": pool_stock_by_item.get(item.id) if stock_pool else None,
             "pool_sellable": (
@@ -2940,7 +2957,7 @@ async def _collect_item_history(
         for r in (await db.execute(q)).all():
             rows.append({"id": r.id, "category": "sales", "docKind": "Invoice",
                          "docNumber": r.number, "party": r.customer_name,
-                         "date": r.date, "qty": -(r.qty or 0), "amount": r.line_total,
+                         "date": r.date, "qty": r.qty or 0, "amount": r.line_total,
                          "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
 
     # ── Sales: Quotations
@@ -3045,7 +3062,7 @@ async def _collect_item_history(
         for r in (await db.execute(q)).all():
             rows.append({"id": r.id, "category": "purchase", "docKind": "Vendor Return",
                          "docNumber": r.number, "party": r.vendor_name,
-                         "date": r.date, "qty": -(r.return_qty or 0), "amount": r.line_total,
+                         "date": r.date, "qty": r.return_qty or 0, "amount": r.line_total,
                          "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": None})
 
     # ── Complimentary
@@ -3060,7 +3077,7 @@ async def _collect_item_history(
         for r in (await db.execute(q)).all():
             rows.append({"id": r.id, "category": "complimentary", "docKind": "Complimentary",
                          "docNumber": r.number, "party": r.customer_name,
-                         "date": r.date, "qty": -(r.qty or 0), "amount": r.cost_total,
+                         "date": r.date, "qty": r.qty or 0, "amount": r.cost_total,
                          "branchId": r.branch_id, "createdAt": r.created_at, "createdBy": r.created_by})
 
     # ── Transfers
@@ -3081,10 +3098,9 @@ async def _collect_item_history(
         if to_date:
             q = q.where(StockTransfer.request_date <= to_date)
         for r in (await db.execute(q)).all():
-            is_out = branch_id and r.from_branch_id == branch_id
             rows.append({"id": r.id, "category": "transfer", "docKind": "Transfer",
                          "docNumber": r.ref_number, "party": f"{r.from_branch_name} → {r.to_branch_name}",
-                         "date": r.request_date, "qty": -(r.qty or 0) if is_out else (r.qty or 0),
+                         "date": r.request_date, "qty": r.qty or 0,
                          "amount": (r.qty or 0) * (r.cost_price or 0),
                          "branchId": r.from_branch_id, "createdAt": r.created_at, "createdBy": r.requested_by})
 
@@ -3108,7 +3124,7 @@ async def _collect_item_history(
                              "docKind": "Opening Stock" if m.movement_type == "opening" else "Adjustment",
                              "docNumber": None, "party": None,
                              "date": m.created_at.strftime("%Y-%m-%d") if m.created_at else None,
-                             "qty": m.delta, "amount": None,
+                             "qty": abs(m.delta) if m.delta else 0, "amount": None,
                              "branchId": m.branch_id, "createdAt": m.created_at, "createdBy": m.created_by})
 
     return rows
@@ -3137,6 +3153,8 @@ async def item_history_summary(
     user: User = Depends(current_user),
 ):
     """Date-wise summary of item transactions (like Daily Sales)."""
+    ORDER_DOC_KINDS = {"Quotation", "Sales Order", "Purchase Order"}
+
     allowed = await _resolve_hist_branches(user, db, branch_id)
     rows = await _collect_item_history(db, item_id, allowed, category, doc_kind,
                                        from_date, to_date, branch_id)
@@ -3145,9 +3163,13 @@ async def item_history_summary(
     for r in rows:
         d = r.get("date") or "unknown"
         if d not in groups:
-            groups[d] = {"date": d, "count": 0, "totalQty": 0, "totalAmount": 0}
+            groups[d] = {"date": d, "count": 0, "qty": 0, "orderedQty": 0, "totalAmount": 0}
         groups[d]["count"] += 1
-        groups[d]["totalQty"] += float(r.get("qty") or 0)
+        q = float(r.get("qty") or 0)
+        if r.get("docKind") in ORDER_DOC_KINDS:
+            groups[d]["orderedQty"] += q
+        else:
+            groups[d]["qty"] += q
         groups[d]["totalAmount"] += float(r.get("amount") or 0)
 
     result = list(groups.values())

@@ -179,9 +179,10 @@ export default function ItemsPage({ mode = 'branch' }) {
     // the user sees in the column.
     const sortKey = itemSortBy
     const dir = itemSortOrder === 'desc' ? -1 : 1
-    const numericKeys = new Set(['cost_price', 'selling_price', 'tax_rate', 'reorder_level', 'available_stock'])
+    const numericKeys = new Set(['cost_price', 'selling_price', 'tax_rate', 'reorder_level', 'available_stock', 'reserved_stock', 'available_qty'])
     const valueOf = (row) => {
       if (sortKey === 'category_id') return row.categoryName || ''
+      if (sortKey === 'available_qty') return (row.available_stock || 0) - (row.reserved_stock || 0)
       const v = row[sortKey]
       if (v == null) return numericKeys.has(sortKey) ? 0 : ''
       return v
@@ -451,6 +452,8 @@ export default function ItemsPage({ mode = 'branch' }) {
         ? { 'Active Branches': item.available_branch_count ?? 0 }
         : {
           Stock: item.available_stock,
+          Reserved: item.reserved_stock || 0,
+          Available: (item.available_stock || 0) - (item.reserved_stock || 0),
           'Reorder Level': item.reorder_level,
           'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
         }),
@@ -654,6 +657,34 @@ export default function ItemsPage({ mode = 'branch' }) {
                         />
                       )
                     }
+                    if (id === 'reserved') {
+                      return (
+                        <SortableHeader
+                          key={id}
+                          label="Reserved"
+                          sortKey="reserved_stock"
+                          sortBy={itemSortBy}
+                          sortOrder={itemSortOrder}
+                          onSort={onSort}
+                          className="text-right"
+                          align="right"
+                        />
+                      )
+                    }
+                    if (id === 'available') {
+                      return (
+                        <SortableHeader
+                          key={id}
+                          label="Available"
+                          sortKey="available_qty"
+                          sortBy={itemSortBy}
+                          sortOrder={itemSortOrder}
+                          onSort={onSort}
+                          className="text-right"
+                          align="right"
+                        />
+                      )
+                    }
                     if (id === 'status') return <th key={id}>Status</th>
                     return null
                   })}
@@ -787,6 +818,22 @@ export default function ItemsPage({ mode = 'branch' }) {
                           return (
                             <td key={id} className="text-right">
                               <div style={{ fontWeight: 500, fontSize: 13, color: branchStock === 0 ? 'var(--red)' : branchStock <= p.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>{fmtQty(branchStock)}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'reserved') {
+                          const reserved = p.reserved_stock || 0
+                          return (
+                            <td key={id} className="text-right">
+                              <div className="mono" style={{ fontSize: 13, color: reserved > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>{fmtQty(reserved)}</div>
+                            </td>
+                          )
+                        }
+                        if (id === 'available') {
+                          const avail = branchStock - (p.reserved_stock || 0)
+                          return (
+                            <td key={id} className="text-right">
+                              <div style={{ fontWeight: 600, fontSize: 13, color: avail <= 0 ? 'var(--red)' : avail <= p.reorder_level ? 'var(--amber)' : 'var(--green)' }}>{fmtQty(avail)}</div>
                             </td>
                           )
                         }
