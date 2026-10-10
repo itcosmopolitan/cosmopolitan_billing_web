@@ -15,6 +15,7 @@ import { useQuickVendor } from '@/components/useQuickParty'
 import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
+import { fetchAllPages } from '@/utils/fetchAllPages'
 
 const REASONS = ['Defective', 'Overstocked', 'Wrong Item', 'Quality Issue', 'Damaged', 'Other']
 
@@ -112,9 +113,8 @@ export default function VendorReturnFormPage() {
     if (!vendor?.id) return
     let cancelled = false
     setBillsLoading(true)
-    purchasesAPI.list({
+    fetchAllPages((p) => purchasesAPI.list(p), {
       vendor_id: vendor.id,
-      limit: 200,
       sort_by: 'date',
       sort_order: 'desc',
     })

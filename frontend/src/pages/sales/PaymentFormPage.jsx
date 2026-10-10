@@ -19,6 +19,7 @@ import { PAYMENT_MODE_LABEL_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { cashTenderError } from '@/utils/cashTender'
 import { storeCreditApplyAmount, remainingAfterStoreCredit } from '@/utils/storeCredit'
+import { fetchAllPages } from '@/utils/fetchAllPages'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -126,9 +127,8 @@ export default function PaymentFormPage() {
     if (!customer?.id) return
     let cancelled = false
     setLoading(true)
-    salesAPI.list({
+    fetchAllPages((p) => salesAPI.list(p), {
       customer_id: customer.id,
-      limit: 200,
       sort_by: 'date',
       sort_order: 'asc',
     })

@@ -18,6 +18,7 @@ import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { roundAmount, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_METHOD_WITH_CREDIT_OPTIONS } from '@/utils/dropdownOptions'
+import { fetchAllPages } from '@/utils/fetchAllPages'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -124,9 +125,8 @@ export default function VendorPaymentFormPage() {
     if (!vendor?.id) return
     let cancelled = false
     setLoading(true)
-    purchasesAPI.list({
+    fetchAllPages((p) => purchasesAPI.list(p), {
       vendor_id: vendor.id,
-      limit: 200,
       sort_by: 'date',
       sort_order: 'asc',
     })

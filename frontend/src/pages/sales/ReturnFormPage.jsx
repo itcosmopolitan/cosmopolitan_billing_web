@@ -15,6 +15,7 @@ import { useCan } from '@/auth/permissions'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { lineTaxAmount } from '@/utils/taxCalc'
+import { fetchAllPages } from '@/utils/fetchAllPages'
 
 export default function ReturnFormPage() {
   const navigate = useNavigate()
@@ -119,9 +120,8 @@ export default function ReturnFormPage() {
     if (!customer?.id) return
     let cancelled = false
     setInvoicesLoading(true)
-    salesAPI.list({
+    fetchAllPages((p) => salesAPI.list(p), {
       customer_id: customer.id,
-      limit: 200,
       sort_by: 'date',
       sort_order: 'desc',
     })

@@ -310,22 +310,31 @@ async def export_csv(
     user: User = Depends(current_user),
 ):
     # Reuse the same server-side filtering semantics as list endpoint.
-    response = await list_audit_logs(
-        module=module,
-        risk=risk,
-        user_id=user_id,
-        branch_id=branch_id,
-        date_from=date_from,
-        date_to=date_to,
-        operation_type=operation_type,
-        operation_type_not=operation_type_not,
-        criteria=criteria,
-        search=search,
-        page=1,
-        limit=200,
-        db=db,
-        user=user,
-    )
+    # Fetch every page up front so the export is not capped at one page.
+    export_page_limit = 500
+    all_results = []
+    page = 1
+    while True:
+        response = await list_audit_logs(
+            module=module,
+            risk=risk,
+            user_id=user_id,
+            branch_id=branch_id,
+            date_from=date_from,
+            date_to=date_to,
+            operation_type=operation_type,
+            operation_type_not=operation_type_not,
+            criteria=criteria,
+            search=search,
+            page=page,
+            limit=export_page_limit,
+            db=db,
+            user=user,
+        )
+        all_results.extend(response.results)
+        if len(response.results) < export_page_limit or len(all_results) >= response.total:
+            break
+        page += 1
 
     def _iter_csv_rows():
         output = io.StringIO()
@@ -349,7 +358,7 @@ async def export_csv(
         output.seek(0)
         output.truncate(0)
 
-        for item in response.results:
+        for item in all_results:
             writer.writerow(
                 [
                     item.id,
