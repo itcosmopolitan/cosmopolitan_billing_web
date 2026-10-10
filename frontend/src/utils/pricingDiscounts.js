@@ -56,6 +56,41 @@ export function isInternalTransferByGstin(customerOrValue, orgGstin) {
   return Boolean(a && b && a === b)
 }
 
+/**
+ * Purchase-side internal transfer: when the vendor GSTIN matches the org,
+ * catalog lines are bought at branch cost with 0% GST and no line discount.
+ * The original values are kept in `catalog` so switching back to an
+ * external vendor restores them. Returns the same array when nothing changes.
+ */
+export function applyVendorTransferPricingToPurchaseLines(items, internal) {
+  let changed = false
+  const next = (items || []).map((it) => {
+    if (!it?.item_id) return it
+    if (internal) {
+      changed = true
+      const catalog = it.catalog ?? {
+        cost: it.cost,
+        taxRate: it.taxRate,
+        lineDiscount: it.lineDiscount,
+        lineDiscountType: it.lineDiscountType,
+      }
+      return {
+        ...it,
+        catalog,
+        cost: roundAmount(it.branchCost ?? catalog.cost),
+        taxRate: 0,
+        lineDiscount: 0,
+        lineDiscountType: '%',
+      }
+    }
+    if (!it.catalog) return it
+    changed = true
+    const { catalog, ...rest } = it
+    return { ...rest, ...catalog, catalog: undefined }
+  })
+  return changed ? next : items
+}
+
 export function lineCostPrice(item) {
   return Math.max(
     0,

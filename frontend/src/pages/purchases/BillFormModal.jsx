@@ -20,7 +20,7 @@
  * (on-hand value + receipt value) / total qty so POS margin uses WAC.
  * That all happens server-side in create_bill / GRN receive.
  */
-import { Fragment } from 'react'
+import { Fragment, useEffect } from 'react'
 import { todayISO } from '@/utils/batchDates'
 import { Modal, FormGroup, AlertBar, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
@@ -46,6 +46,9 @@ import {
   qtyInputValue,
 } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
+import { useAppStore } from '@/store'
+import { useVendorGstin } from '@/hooks/useVendorGstin'
+import { applyVendorTransferPricingToPurchaseLines, isInternalTransferByGstin } from '@/utils/pricingDiscounts'
 
 const costLineGross = purchaseLineGross
 
@@ -84,6 +87,17 @@ export default function BillFormModal({
       pbf('vendorName', v.name)
     },
   })
+  const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const vendorGstin = useVendorGstin(billForm.vendorId)
+  const internalVendor = isInternalTransferByGstin({ gstin: vendorGstin }, organisationGstin)
+
+  useEffect(() => {
+    const next = applyVendorTransferPricingToPurchaseLines(billForm.items, internalVendor)
+    if (next !== billForm.items) pbf('items', next)
+    // Re-run only when the vendor's internal status flips.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [internalVendor])
+
   const title = conversionLabel
     ? (isGrn ? `Receive Stock — from ${conversionLabel}` : `Create Bill — from ${conversionLabel}`)
     : (isGrn ? 'New Goods Receipt (GRN)' : 'New Purchase Bill')
@@ -104,8 +118,9 @@ export default function BillFormModal({
       // Cache batch flags for the conditional row render below.
       batchTracking: Boolean(inv.batch_tracking),
       expiryTracking: Boolean(inv.expiry_tracking),
+      catalog: undefined,
     }
-    pbf('items', next)
+    pbf('items', internalVendor ? applyVendorTransferPricingToPurchaseLines(next, true) : next)
   }
 
   const handleClear = (i) => {
@@ -119,6 +134,7 @@ export default function BillFormModal({
       branchStock: null,
       batchTracking: false,
       expiryTracking: false,
+      catalog: undefined,
     }
     pbf('items', next)
   }
@@ -201,6 +217,11 @@ export default function BillFormModal({
               footerAction={addVendorAction}
               style={{ width: '100%' }}
             />
+            {internalVendor ? (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Same GSTIN as organisation — priced at cost (internal transfer), GST 0%
+              </div>
+            ) : null}
           </FormGroup>
           <FormGroup label={isGrn ? 'Receipt Date' : 'Bill Date'}>
             <DatePicker

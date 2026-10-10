@@ -14,6 +14,7 @@
  * branch picker, matching the sales SO modal. Vendor uses the strict
  * VendorPicker; items use the shared InventoryItemPicker.
  */
+import { useEffect } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_VENDOR_URL } from '@/api'
 import { useQuickVendor } from '@/components/useQuickParty'
@@ -37,6 +38,9 @@ import {
   qtyInputValue,
 } from '@/utils/documentFormTotals'
 import { entityDiscountShares, purchaseDocumentMargin, purchaseLineMargin } from '@/utils/marginCalc'
+import { useAppStore } from '@/store'
+import { useVendorGstin } from '@/hooks/useVendorGstin'
+import { applyVendorTransferPricingToPurchaseLines, isInternalTransferByGstin } from '@/utils/pricingDiscounts'
 
 const costLineGross = purchaseLineGross
 
@@ -73,6 +77,18 @@ export default function PurchaseOrderFormModal({
     },
   })
 
+  const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const vendorGstin = useVendorGstin(poForm.vendorId)
+  const internalVendor = isInternalTransferByGstin({ gstin: vendorGstin }, organisationGstin)
+
+  useEffect(() => {
+    if (readOnly) return
+    const next = applyVendorTransferPricingToPurchaseLines(poForm.items, internalVendor)
+    if (next !== poForm.items) ppof('items', next)
+    // Re-run only when the vendor's internal status flips.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [internalVendor])
+
   const handlePick = (i, inv) => {
     const next = [...poForm.items]
     next[i] = {
@@ -85,13 +101,15 @@ export default function PurchaseOrderFormModal({
       cost: inv.cost_price ?? inv.selling_price ?? 0,
       sellingPrice: inv.selling_price ?? inv.sellingPrice ?? 0,
       taxRate: inv.tax_rate || 0,
+      branchCost: Number(inv.cost_price ?? inv.costPrice ?? 0) || 0,
+      catalog: undefined,
     }
-    ppof('items', next)
+    ppof('items', internalVendor ? applyVendorTransferPricingToPurchaseLines(next, true) : next)
   }
 
   const handleClear = (i) => {
     const next = [...poForm.items]
-    next[i] = { ...next[i], item_id: null, name: '', sellingPrice: 0 }
+    next[i] = { ...next[i], item_id: null, name: '', sellingPrice: 0, catalog: undefined }
     ppof('items', next)
   }
 
@@ -169,6 +187,11 @@ export default function PurchaseOrderFormModal({
             footerAction={addVendorAction}
             style={{ width: '100%' }}
           />
+          {internalVendor ? (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+              Same GSTIN as organisation — priced at cost (internal transfer), GST 0%
+            </div>
+          ) : null}
         </FormGroup>
         <FormGroup label="Expected Date">
           <DatePicker disabled={readOnly}

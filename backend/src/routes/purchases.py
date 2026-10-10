@@ -35,6 +35,7 @@ from src.models import (
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.qty import as_qty, coerce_qty_value
+from src.routes.sales import _normalize_gstin, _resolve_item_transfer_cost
 from src.routes._grn_stock import (
     ReceiptLine,
     format_branch_cost_change_detail,
@@ -777,6 +778,7 @@ async def create_bill(
 
     # Per-line net = gross × (1 − pct/100). Document discount is applied
     # next, then GST is extracted from the remaining inclusive amount.
+    await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
@@ -1600,6 +1602,9 @@ async def update_bill(
     prev_due_date = bill.due_date
     item_changes = _summarize_purchase_bill_item_changes(list(bill.line_items or []), data.items)
 
+    await _apply_internal_vendor_pricing(
+        db, data.vendor_id or bill.vendor_id, data.items, bill.branch_id,
+    )
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total_val = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total_val, 2)
@@ -3317,6 +3322,37 @@ def _calc_po_lines(lines, tax_mode: str = "inclusive", entity_discount: float = 
     return rows, subtotal, tax_total
 
 
+async def _vendor_gstin_matches_org(db: AsyncSession, vendor_id: Optional[str]) -> bool:
+    """True when vendor GSTIN equals organisation profile GSTIN (internal transfer)."""
+    if not vendor_id:
+        return False
+    vendor = (
+        await db.execute(select(Vendor).where(Vendor.id == vendor_id))
+    ).scalar_one_or_none()
+    if not vendor:
+        return False
+    org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    vendor_gst = _normalize_gstin(getattr(vendor, "gstin", None))
+    org_gst = _normalize_gstin(getattr(org, "gstin", None) if org else None)
+    return bool(vendor_gst and org_gst and vendor_gst == org_gst)
+
+
+async def _apply_internal_vendor_pricing(
+    db: AsyncSession, vendor_id: Optional[str], lines, branch_id: Optional[str],
+) -> None:
+    """Same GSTIN as organisation → lines take the item's branch cost at 0% GST
+    with no line discount, mirroring the internal-transfer rule on sales docs.
+    Free-text lines without an item are left as entered."""
+    if not lines or not await _vendor_gstin_matches_org(db, vendor_id):
+        return
+    for line in lines:
+        if not getattr(line, "item_id", None):
+            continue
+        line.cost = await _resolve_item_transfer_cost(db, line.item_id, branch_id)
+        line.tax_rate = 0
+        line.discount = 0
+
+
 def _header_totals_after_discount(line_rows, discount: float = 0.0):
     """Header subtotal/tax/total from inclusive line nets + document discount."""
     inclusives = [ln for _, ln, _ in line_rows]
@@ -3756,6 +3792,7 @@ async def create_order(
         ),
     )
 
+    await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
@@ -3847,6 +3884,7 @@ async def update_order(order_id: str, data: PurchaseOrderCreate, db: AsyncSessio
     from sqlalchemy import delete as sa_delete
     await db.execute(sa_delete(PurchaseOrderLineItem).where(PurchaseOrderLineItem.order_id == po.id))
 
+    await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, po.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
@@ -4421,6 +4459,7 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
                 "PO already has a pending goods receipt — bill the existing GRN or cancel the PO",
             )
 
+    await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     line_rows, _, _ = _calc_po_lines(data.items, tax_mode)
 
