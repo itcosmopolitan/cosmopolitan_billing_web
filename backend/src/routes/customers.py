@@ -276,7 +276,7 @@ async def get_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
 async def customer_credit_ledger(
     customer_id: str,
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     """Append-only store-credit ledger for a customer (Sales Phase 1)."""

@@ -3131,7 +3131,7 @@ async def list_payments(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     branch_id: Optional[str] = None,
     customer_id: Optional[str] = None,
     payment_mode: Optional[str] = None,

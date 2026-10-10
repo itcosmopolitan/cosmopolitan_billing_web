@@ -207,7 +207,7 @@ async def list_audit_logs(
     criteria: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):

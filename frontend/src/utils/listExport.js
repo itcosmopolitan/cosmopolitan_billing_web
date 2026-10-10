@@ -5,8 +5,8 @@ import { getAuditDateRangeForPreset } from '@/utils/dropdownOptions'
  *  export adjacent ranges and merge CSVs offline. */
 export const MAX_EXPORT_DATE_RANGE_DAYS = 93
 
-/** Endpoints with `le=200` (payments, some orders/GRNs) need a smaller page. */
-export const EXPORT_PAGE_SIZE_SAFE = 200
+/** Largest page size list endpoints accept (see ALLOWED_PAGE_SIZES in backend/src/pagination.py). */
+export const EXPORT_PAGE_SIZE_SAFE = 500
 
 export function defaultExportDateRange() {
   const { from, to } = getAuditDateRangeForPreset('this_month')

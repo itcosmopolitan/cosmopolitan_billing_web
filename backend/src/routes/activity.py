@@ -239,7 +239,7 @@ def _serialize_history(log: AuditLog) -> dict[str, Any]:
 async def get_timeline(
     record_type: str,
     record_id: str,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -260,7 +260,7 @@ async def get_timeline(
 async def get_timeline_by_path(
     record_type: str,
     record_id: str,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
