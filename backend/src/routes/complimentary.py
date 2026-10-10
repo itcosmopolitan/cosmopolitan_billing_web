@@ -8,7 +8,7 @@ leaves inventory through the stock ledger under movement_type
 import json
 import uuid
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
@@ -22,6 +22,7 @@ from src.models import (
     Branch,
     ComplimentaryEntry,
     ComplimentaryLineItem,
+    ComplimentaryReason,
     Customer,
     Item,
     User,
@@ -64,9 +65,38 @@ class ComplimentaryLineIn(BaseModel):
         return _coerce_qty_value(value, field_name="qty")
 
 
+def _clean_reason(value: str) -> str:
+    reason = value.strip()
+    if not reason:
+        raise ValueError("Reason cannot be empty")
+    return reason
+
+
+def _merge_reasons(custom: List[str]) -> List[str]:
+    """Built-in reasons first, then custom ones; case-insensitive de-duplication."""
+    merged: List[str] = []
+    seen = set()
+    for reason in [*COMPLIMENTARY_REASONS, *custom]:
+        key = reason.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(reason)
+    return merged
+
+
+class ComplimentaryReasonCreate(BaseModel):
+    branch_id: str
+    reason: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator("reason")
+    @classmethod
+    def _clean_reason_value(cls, value: str) -> str:
+        return _clean_reason(value)
+
+
 class ComplimentaryCreate(BaseModel):
     number: Optional[str] = None
-    reason: Literal["Complimentary", "Sample"]
+    reason: str = Field(..., min_length=1, max_length=100)
     branch_id: str
     child_counter_id: Optional[str] = None
     child_counter_name: Optional[str] = None
@@ -74,6 +104,11 @@ class ComplimentaryCreate(BaseModel):
     date: Optional[str] = None
     notes: Optional[str] = None
     items: List[ComplimentaryLineIn]
+
+    @field_validator("reason")
+    @classmethod
+    def _clean_reason_value(cls, value: str) -> str:
+        return _clean_reason(value)
 
 
 def _line_dict(li: ComplimentaryLineItem, item: Optional[Item] = None) -> dict:
@@ -254,8 +289,6 @@ async def list_complimentary(
     lim = normalize_limit(limit)
     conds = []
     if reason:
-        if reason not in COMPLIMENTARY_REASONS:
-            raise HTTPException(400, "Invalid reason")
         conds.append(ComplimentaryEntry.reason == reason)
     if child_counter_id:
         conds.append(ComplimentaryEntry.child_counter_id == child_counter_id)
@@ -305,6 +338,65 @@ async def list_complimentary(
     )
     entries = result.scalars().all()
     return paged([_entry_dict(e) for e in entries], total, sk, lim)
+
+
+@router.get("/reasons", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+async def list_complimentary_reasons(
+    branch_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Built-in and branch-saved complimentary reasons for the Reason dropdown."""
+    await _resolve_branch_scope(user, db, branch_id)
+    custom = (
+        await db.execute(
+            select(ComplimentaryReason.reason)
+            .where(ComplimentaryReason.branch_id == branch_id)
+            .order_by(ComplimentaryReason.created_at)
+        )
+    ).scalars().all()
+    return {"reasons": _merge_reasons(list(custom))}
+
+
+@router.post("/reasons", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
+async def create_complimentary_reason(
+    data: ComplimentaryReasonCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Save a custom complimentary reason for a branch."""
+    await _resolve_branch_scope(user, db, data.branch_id)
+    reason = data.reason
+    if reason.lower() in {r.lower() for r in COMPLIMENTARY_REASONS}:
+        raise HTTPException(400, "This complimentary reason already exists")
+
+    existing = (
+        await db.execute(
+            select(ComplimentaryReason).where(
+                ComplimentaryReason.branch_id == data.branch_id,
+                func.lower(ComplimentaryReason.reason) == func.lower(reason),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, "This complimentary reason already exists for this branch")
+
+    row = ComplimentaryReason(id=str(uuid.uuid4()), branch_id=data.branch_id, reason=reason)
+    db.add(row)
+    add_audit_log(
+        db,
+        action="Complimentary reason added",
+        module="Sales",
+        reference_id=row.id,
+        detail=f"Added complimentary reason: {reason}",
+        user=user,
+        request=request,
+        branch_id=data.branch_id,
+        metadata={"reason": reason},
+    )
+    await db.commit()
+    return {"id": row.id, "reason": reason}
 
 
 @router.get("/{entry_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])

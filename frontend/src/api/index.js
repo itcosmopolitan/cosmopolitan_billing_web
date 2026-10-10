@@ -386,6 +386,8 @@ export const salesAPI = {
     get:    (id)     => api.get(`/sales/complimentary/${id}`),
     create: (data)   => api.post('/sales/complimentary/', data),
     remove: (id)     => api.delete(`/sales/complimentary/${id}`),
+    reasons: (branchId) => api.get('/sales/complimentary/reasons', { params: { branch_id: branchId } }),
+    createReason: (branchId, reason) => api.post('/sales/complimentary/reasons', { branch_id: branchId, reason }),
   },
 }
 

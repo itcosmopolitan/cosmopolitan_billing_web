@@ -12,7 +12,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
-import { AutocompleteDropdown, DatePicker, FormGroup, Select } from '@/components/ui'
+import { AutocompleteDropdown, DatePicker, FormGroup, Modal } from '@/components/ui'
 import InventoryItemPicker from './InventoryItemPicker'
 import { WALK_IN_CUSTOMER_NAME, WALK_IN_CUSTOMER_OPTION } from './salesFormShared'
 import { toApiPayload } from '@/utils/batchAllocation'
@@ -59,6 +59,9 @@ export default function ComplimentaryFormPage() {
   const [form, setForm] = useState(() => emptyForm(activeBranchId))
   const [saving, setSaving] = useState(false)
   const [allocEditor, setAllocEditor] = useState(null)
+  const [reasonOptions, setReasonOptions] = useState(COMPLIMENTARY_REASONS)
+  const [showAddReason, setShowAddReason] = useState(false)
+  const [newReason, setNewReason] = useState('')
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const patchLine = (i, patch) => setForm((f) => {
     const items = [...f.items]
@@ -78,6 +81,19 @@ export default function ComplimentaryFormPage() {
       current.branchId === activeBranchId ? current : { ...current, branchId: activeBranchId }
     ))
   }, [activeBranchId])
+
+  useEffect(() => {
+    if (!form.branchId) return
+    let cancelled = false
+    salesAPI.complimentary.reasons(form.branchId)
+      .then((res) => {
+        if (!cancelled && res?.reasons) setReasonOptions(res.reasons)
+      })
+      .catch(() => {
+        if (!cancelled) setReasonOptions(COMPLIMENTARY_REASONS)
+      })
+    return () => { cancelled = true }
+  }, [form.branchId])
 
   useEffect(() => {
     setChildCounterBranchId(activeBranchId || '')
@@ -131,10 +147,34 @@ export default function ComplimentaryFormPage() {
     { label: 'Cost value', value: fmt(costValue) },
   ]
 
+  const submitNewReason = async () => {
+    const reason = newReason.trim()
+    if (!reason) {
+      toast.error('Reason is required')
+      return
+    }
+    const existing = reasonOptions.find((row) => row.toLowerCase() === reason.toLowerCase())
+    if (existing) {
+      pif('reason', existing)
+      setShowAddReason(false)
+      return
+    }
+    try {
+      const res = await salesAPI.complimentary.createReason(form.branchId, reason)
+      const saved = res?.reason || reason
+      setReasonOptions((prev) => [...prev, saved])
+      pif('reason', saved)
+      setShowAddReason(false)
+      toast.success('Reason added')
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || error?.message || 'Failed to add reason')
+    }
+  }
+
   const save = async () => {
     const lines = form.items.filter((it) => it.item_id)
     if (!form.reason) {
-      toast.error('Select a reason (Complimentary or Sample)')
+      toast.error('Select a reason')
       return
     }
     if (!lines.length) {
@@ -223,14 +263,28 @@ export default function ComplimentaryFormPage() {
                 style={{ width: '100%' }}
               />
             </FormGroup>
-            <Select
-              label="Reason"
-              required
-              value={form.reason}
-              onChange={(v) => pif('reason', v)}
-              options={COMPLIMENTARY_REASONS}
-              placeholder="Select reason…"
-            />
+            <FormGroup label="Reason" required>
+              <AutocompleteDropdown
+                value={form.reason || ''}
+                onChange={(id) => pif('reason', id || '')}
+                onSelectOption={(opt) => pif('reason', opt?.id || '')}
+                options={reasonOptions.map((reason) => ({ id: reason, label: reason }))}
+                isSearchFieldRequired
+                searchPlaceholder="Search reason…"
+                placeholder="Select reason…"
+                selectedLabel={form.reason || undefined}
+                footerAction={{
+                  label: '+ Add reason',
+                  onClick: () => {
+                    setNewReason('')
+                    setShowAddReason(true)
+                  },
+                }}
+                emptyLabel="No reasons yet"
+                noMatchLabel="No matching reasons"
+                style={{ width: '100%' }}
+              />
+            </FormGroup>
             <FormGroup label="Date">
               <DatePicker value={form.date} onChange={(v) => pif('date', v)} />
             </FormGroup>
@@ -395,6 +449,36 @@ export default function ComplimentaryFormPage() {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={showAddReason}
+        onClose={() => setShowAddReason(false)}
+        title="Add Complimentary Reason"
+        icon="🎁"
+        size="sm"
+        footer={(
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowAddReason(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitNewReason}>Add Reason</button>
+          </>
+        )}
+      >
+        <FormGroup label="Reason" required>
+          <input
+            className="form-input"
+            value={newReason}
+            onChange={(e) => setNewReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitNewReason()
+              }
+            }}
+            placeholder="e.g. Staff tasting"
+            autoFocus
+          />
+        </FormGroup>
+      </Modal>
     </DocumentFormShell>
   )
 }

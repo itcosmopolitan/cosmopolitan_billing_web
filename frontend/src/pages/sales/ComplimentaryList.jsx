@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { salesAPI } from '@/api'
-import { usePOSStore } from '@/store'
+import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt } from '@/utils/helpers'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
@@ -27,8 +27,6 @@ import ComplimentaryDetailPanel from './ComplimentaryDetailPanel'
 import { COMPLIMENTARY_REASONS } from './complimentaryOptions'
 
 const FILTER_FIELDS = ['customer', 'reason', 'date']
-const REASON_OPTIONS = COMPLIMENTARY_REASONS.map((r) => ({ id: r, label: r }))
-
 export default function ComplimentaryList({ toolbarActions, refreshKey = 0, branches = [] }) {
   const can = useCan()
   const columnPrefs = useColumnPrefs('sales.complimentary')
@@ -44,6 +42,12 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
   const [customerLabel, setCustomerLabel] = useState('')
   const [reason, setReason] = useState('')
   const childCounterId = usePOSStore((s) => s.selectedChildCounter)
+  const activeBranchId = useAppStore((s) => s.activeBranch?.id)
+  const [reasonNames, setReasonNames] = useState(COMPLIMENTARY_REASONS)
+  const reasonOptions = useMemo(
+    () => reasonNames.map((r) => ({ id: r, label: r })),
+    [reasonNames],
+  )
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [sortBy, setSortBy] = useState('created_at')
@@ -51,6 +55,17 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
   const [detailId, setDetailId] = useState(null)
   const [detail, setDetail] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
+
+  useEffect(() => {
+    if (!activeBranchId) return
+    let cancelled = false
+    salesAPI.complimentary.reasons(activeBranchId)
+      .then((res) => {
+        if (!cancelled && res?.reasons) setReasonNames(res.reasons)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [activeBranchId])
 
   useEffect(() => {
     let cancelled = false
@@ -179,7 +194,7 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
         searchPlaceholder="Search complimentary #, customer…"
         toolbarActions={toolbarActions}
         fields={FILTER_FIELDS}
-        reasonOptions={REASON_OPTIONS}
+        reasonOptions={reasonOptions}
         filters={{
           customerId,
           customerLabel,

@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -27,10 +28,13 @@ from src.models import (  # noqa: E402
 from src.routes.complimentary import (  # noqa: E402
     ComplimentaryCreate,
     ComplimentaryLineIn,
+    ComplimentaryReasonCreate,
     create_complimentary,
+    create_complimentary_reason,
     delete_complimentary,
     get_complimentary,
     list_complimentary,
+    list_complimentary_reasons,
 )
 
 
@@ -217,3 +221,65 @@ def test_complimentary_list_sort_and_filter() -> None:
 
 def test_complimentary_stock_flow() -> None:
     asyncio.run(_run_complimentary_flow())
+
+
+async def _run_complimentary_custom_reasons() -> None:
+    db = await _build_session()
+    try:
+        user = await _seed(db)
+
+        assert (await list_complimentary_reasons(branch_id="b1", db=db, user=user))["reasons"] == [
+            "Complimentary", "Sample",
+        ]
+
+        added = await create_complimentary_reason(
+            ComplimentaryReasonCreate(branch_id="b1", reason="  Staff tasting  "),
+            request=None, db=db, user=user,
+        )
+        assert added["reason"] == "Staff tasting"
+        assert (await list_complimentary_reasons(branch_id="b1", db=db, user=user))["reasons"] == [
+            "Complimentary", "Sample", "Staff tasting",
+        ]
+
+        for duplicate in ("staff TASTING", "sample"):
+            try:
+                await create_complimentary_reason(
+                    ComplimentaryReasonCreate(branch_id="b1", reason=duplicate),
+                    request=None, db=db, user=user,
+                )
+            except HTTPException as exc:
+                assert exc.status_code == 400
+            else:
+                raise AssertionError(f"duplicate reason {duplicate!r} was accepted")
+
+        try:
+            ComplimentaryReasonCreate(branch_id="b1", reason="   ")
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError("blank reason was accepted")
+
+        created = await create_complimentary(
+            ComplimentaryCreate(
+                reason="Staff tasting",
+                branch_id="b1",
+                items=[ComplimentaryLineIn(item_id="i1", qty=1)],
+            ),
+            request=None,
+            db=db,
+            user=user,
+        )
+        detail = await get_complimentary(created["id"], db=db, user=user)
+        assert detail["reason"] == "Staff tasting"
+
+        listing = await list_complimentary(
+            branch_id=None, reason="Staff tasting", search=None, date_from=None, date_to=None,
+            skip=0, limit=50, db=db, user=user,
+        )
+        assert [row["id"] for row in listing["items"]] == [created["id"]]
+    finally:
+        await db.close()
+
+
+def test_complimentary_custom_reasons() -> None:
+    asyncio.run(_run_complimentary_custom_reasons())

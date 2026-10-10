@@ -869,7 +869,7 @@ class QuotationLineItem(Base):
 
 
 # ─── Complimentary / Sample issues ───────────────────────────────────────────
-# Stock given away free (reason = Complimentary or Sample). Kept in its own
+# Stock given away free (reason = Complimentary, Sample or a branch-saved reason). Kept in its own
 # tables rather than sale_invoices so no sales, tax, revenue or customer
 # report picks it up. Stock still leaves inventory through the stock ledger
 # under movement_type="complimentary".
@@ -1865,6 +1865,21 @@ class DiscountReason(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     branch = relationship("Branch", backref="discount_reasons")
+
+
+class ComplimentaryReason(Base):
+    """Custom complimentary/sample reasons per branch. Built-in reasons are not stored here."""
+    __tablename__ = "complimentary_reasons"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "reason", name="uq_complimentary_reason_branch"),
+        Index("ix_complimentary_reason_branch", "branch_id"),
+    )
+    id         = Column(String, primary_key=True)
+    branch_id  = Column(String, ForeignKey("branches.id"), nullable=False)
+    reason     = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    branch = relationship("Branch", backref="complimentary_reasons")
 
 
 class UserColumnPrefs(Base):
