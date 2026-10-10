@@ -188,6 +188,12 @@ export default function ItemHistoryPage() {
     setSummarySkip(0)
   }, [category, fromDate, toDate])
 
+  /* ── Back: one drilldown level at a time, then leave the page ─────── */
+  const handleBack = () => {
+    if (drillDate) setDrillDate(null)
+    else navigate(-1)
+  }
+
   /* ── Sort handler ──────────────────────────────────────────────────── */
   const handleSort = (key) => {
     setSummarySkip(0)
@@ -207,9 +213,9 @@ export default function ItemHistoryPage() {
       <div className="section-hdr">
         <button
           type="button"
-          onClick={() => navigate(-1)}
-          aria-label="Back"
-          title="Back"
+          onClick={handleBack}
+          aria-label={drillDate ? 'Back to summary' : 'Back'}
+          title={drillDate ? 'Back to summary' : 'Back'}
           style={{
             flexShrink: 0, width: 36, height: 36, padding: 0,
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
