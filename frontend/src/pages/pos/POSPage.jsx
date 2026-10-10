@@ -1467,9 +1467,9 @@ export default function POSPage() {
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
               }}
-              title="Customer GSTIN matches organisation — priced at cost (internal transfer)"
+              title="Customer GSTIN matches organisation — internal transfer, GST 0%, no line discount"
             >
-              Cost transfer
+              Internal transfer
             </span>
           ) : customer && isInternalCustomer(customer) ? (
             <span

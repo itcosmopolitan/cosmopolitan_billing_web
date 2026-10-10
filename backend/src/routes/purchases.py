@@ -35,7 +35,7 @@ from src.models import (
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.qty import as_qty, coerce_qty_value
-from src.routes.sales import _normalize_gstin, _resolve_item_transfer_cost
+from src.routes.sales import _normalize_gstin
 from src.routes._grn_stock import (
     ReceiptLine,
     format_branch_cost_change_detail,
@@ -3340,15 +3340,14 @@ async def _vendor_gstin_matches_org(db: AsyncSession, vendor_id: Optional[str]) 
 async def _apply_internal_vendor_pricing(
     db: AsyncSession, vendor_id: Optional[str], lines, branch_id: Optional[str],
 ) -> None:
-    """Same GSTIN as organisation → lines take the item's branch cost at 0% GST
-    with no line discount, mirroring the internal-transfer rule on sales docs.
+    """Same GSTIN as organisation → item lines take 0% GST and no line discount,
+    mirroring the internal-transfer rule on sales docs. The entered cost is kept.
     Free-text lines without an item are left as entered."""
     if not lines or not await _vendor_gstin_matches_org(db, vendor_id):
         return
     for line in lines:
         if not getattr(line, "item_id", None):
             continue
-        line.cost = await _resolve_item_transfer_cost(db, line.item_id, branch_id)
         line.tax_rate = 0
         line.discount = 0
 

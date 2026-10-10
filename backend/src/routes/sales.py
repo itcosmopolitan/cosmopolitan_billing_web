@@ -479,18 +479,14 @@ async def _apply_internal_customer_gst(
 ) -> None:
     """Internal pricing adjustments before sales totals.
 
-    - Same GSTIN as organisation → charge branch/item cost at 0% GST
-      (internal transfer via sales docs).
+    - Same GSTIN as organisation → keep the line price at 0% GST, no line
+      discount (internal transfer via sales docs).
     - Classification `internal` → strip GST from selling price, bill at 0%.
     """
     if not items:
         return
     if await _customer_gstin_matches_org(db, customer_id):
         for item in items:
-            cost = await _resolve_item_transfer_cost(
-                db, getattr(item, "item_id", None), branch_id,
-            )
-            item.price = cost
             item.tax_rate = 0
             if hasattr(item, "line_discount"):
                 item.line_discount = 0

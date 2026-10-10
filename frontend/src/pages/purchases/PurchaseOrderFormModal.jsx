@@ -189,7 +189,7 @@ export default function PurchaseOrderFormModal({
           />
           {internalVendor ? (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-              Same GSTIN as organisation — priced at cost (internal transfer), GST 0%
+              Same GSTIN as organisation — internal transfer, GST 0%, no line discount
             </div>
           ) : null}
         </FormGroup>
