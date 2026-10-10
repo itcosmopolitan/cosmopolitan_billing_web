@@ -413,11 +413,13 @@
         ${discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(discountAmount)}</div>` : ''}
         <div class="amount-words">${escapeHtml(amountToWords(total))}</div>
         ${isComplimentary ? '<div class="free-of-charge-note">Free of charge. No amount payable.</div>' : ''}
-        ${isPurchaseDocument ? '' : `<div class="payment-section">
-          <div class="bank-details">
-            Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
-          </div>
-        </div>`}
+      </div>
+      ${isPurchaseDocument ? '' : `<div class="payment-section">
+        <div class="bank-details">
+          Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
+        </div>
+      </div>`}
+      <div class="keep-together">
         <div class="terms">${footerText}</div>
         <div class="thankyou">${isPurchaseDocument ? 'Thank you for your partnership' : 'Thank you for choosing Cosmopolitan as your preferred partner'}</div>
         <div class="signoff">${isGrnReceipt ? 'Received By' : isPurchaseDocument ? 'Authorized By' : 'Received By'}</div>
