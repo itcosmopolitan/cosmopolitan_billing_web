@@ -4543,7 +4543,7 @@ async def stock_movement(
     )
     pool_reversal_out_q = (
         select(
-            func.date(PoolSaleAllocationReversal.created_at).label("date"),
+            cast(func.date(PoolSaleAllocationReversal.created_at), String).label("date"),
             SaleLineItem.name.label("product"),
             literal("Pool reversal out").label("movement_type"),
             (-PoolSaleAllocationReversal.qty_delta).label("quantity"),
@@ -4558,7 +4558,7 @@ async def stock_movement(
     )
     pool_reversal_in_q = (
         select(
-            func.date(PoolSaleAllocationReversal.created_at).label("date"),
+            cast(func.date(PoolSaleAllocationReversal.created_at), String).label("date"),
             SaleLineItem.name.label("product"),
             literal("Pool reversal in").label("movement_type"),
             PoolSaleAllocationReversal.qty_delta.label("quantity"),
