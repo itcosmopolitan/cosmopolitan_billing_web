@@ -41,6 +41,8 @@ from src.models import (
     SalesReturnStatus,
     StockAdjustment,
     StockMovement,
+    StockReservation,
+    StockReservationStatus,
     StockTransfer,
     TaxRate,
     TransferLineItem,
@@ -3269,13 +3271,25 @@ async def current_stock(
     if search:
         conds.append(Item.name.ilike(f"%{search}%"))
 
+    reserved_sq = (
+        select(
+            StockReservation.item_id.label("item_id"),
+            StockReservation.branch_id.label("branch_id"),
+            func.sum(StockReservation.qty).label("reserved_qty"),
+        )
+        .where(StockReservation.status == StockReservationStatus.active)
+        .group_by(StockReservation.item_id, StockReservation.branch_id)
+        .subquery()
+    )
+    reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
+
     sort_map = {
         "product_code": Item.sku,
         "product_name": Item.name,
         "category": Category.name,
         "branch": Branch.name,
         "available_stock": ItemStock.quantity,
-        "reserved_stock": Item.reorder_level,
+        "reserved_stock": reserved_expr,
         "stock_value": ItemStock.quantity * func.coalesce(Item.cost_price, 0),
     }
 
@@ -3289,12 +3303,20 @@ async def current_stock(
             Category.name.label("category"),
             Branch.name.label("branch"),
             ItemStock.quantity.label("available_stock"),
-            Item.reorder_level.label("reserved_stock"),
+            reserved_expr.label("reserved_stock"),
             (ItemStock.quantity * func.coalesce(Item.cost_price, 0)).label("stock_value"),
         )
         .join(Item, Item.id == ItemStock.item_id)
         .join(Branch, Branch.id == ItemStock.branch_id)
         .join(Category, Category.id == Item.category_id, isouter=True)
+        .join(
+            reserved_sq,
+            and_(
+                reserved_sq.c.item_id == ItemStock.item_id,
+                reserved_sq.c.branch_id == ItemStock.branch_id,
+            ),
+            isouter=True,
+        )
         .where(and_(*conds) if conds else True)
     )
     total_q = select(func.count()).select_from(base.subquery())

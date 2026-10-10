@@ -1951,6 +1951,7 @@ async def create_invoice(
                 invoice_id=inv.id,
                 invoice_number=inv.number,
                 allow_oversell=allow_oversell,
+                exclude_source_ref=data.sales_order_id,
             )
 
     # Settle: optional store-credit draw + tender for remainder.
@@ -4104,6 +4105,7 @@ async def _consume_sale_line_stock(
     allow_oversell: bool,
     movement_type: str = "sale",
     source_type: str = "sale_invoice",
+    exclude_source_ref: Optional[str] = None,
 ) -> None:
     """Deduct stock for one invoice line and persist batch_allocation when known."""
     if not item.item_id:
@@ -4111,6 +4113,7 @@ async def _consume_sale_line_stock(
     if not allow_oversell:
         avail = await get_available_qty(
             db, item_id=item.item_id, branch_id=branch_id,
+            exclude_source_ref=exclude_source_ref,
         )
         if as_qty(item.qty) > avail:
             raise HTTPException(
@@ -5980,7 +5983,7 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
     prev_status = prev.value if hasattr(prev, "value") else str(prev)
     if target == SalesOrderStatus.cancelled:
         await release_reservations(db, source_type="sales_order", source_ref=so.id)
-    elif target == SalesOrderStatus.confirmed and prev == SalesOrderStatus.draft:
+    elif target == SalesOrderStatus.confirmed and prev != SalesOrderStatus.confirmed:
         if not await get_allow_overselling(db):
             try:
                 await reserve_for_sales_order(
@@ -6286,6 +6289,7 @@ async def convert_order_to_invoice(
     if data.line_allocations:
         for a in data.line_allocations:
             alloc_by_item[a.item_id] = [e.model_dump() for e in a.batch_allocation]
+    claimed_by_item: dict = {}
 
     for (so_line, convert_qty), (after, _taxable, _tax) in zip(convert_plan, convert_taxed):
         item_obj = item_map.get(so_line.item_id) if so_line.item_id else None
@@ -6306,11 +6310,15 @@ async def convert_order_to_invoice(
                     db, item_id=so_line.item_id, branch_id=so.branch_id,
                     exclude_source_ref=so.id,
                 )
+                avail = max(0.0, as_qty(avail - claimed_by_item.get(so_line.item_id, 0.0)))
                 if convert_qty > avail:
                     raise HTTPException(
                         400,
                         f"Insufficient stock for {so_line.name}: need {convert_qty}, available {avail}",
                     )
+                claimed_by_item[so_line.item_id] = as_qty(
+                    claimed_by_item.get(so_line.item_id, 0.0) + convert_qty
+                )
             tracked, expiry_tracked = await is_tracked(db, so_line.item_id)
             if tracked:
                 strategy = "fefo" if expiry_tracked else "fifo"
@@ -6533,17 +6541,28 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
         notes=f"From quotation {quote.number}" + (f": {quote.notes}" if quote.notes else ""),
     )
     db.add(so)
+    created_lines = []
     for ql in quote.line_items:
-        db.add(SalesOrderLineItem(
+        li = SalesOrderLineItem(
             id=str(uuid.uuid4()), order_id=so.id,
             item_id=ql.item_id, name=ql.name,
             qty=ql.qty, price=ql.price,
             tax_rate=ql.tax_rate, discount=ql.discount or 0,
             line_total=ql.line_total,
-        ))
+        )
+        db.add(li)
+        created_lines.append(li)
 
     # Flush inserts for SO + lines so quotation FK back-pointer passes immediately.
     await db.flush()
+    # The order is created as confirmed, so it must hold stock like any other confirmed SO.
+    if not await get_allow_overselling(db):
+        try:
+            await reserve_for_sales_order(
+                db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     quote.status = QuotationStatus.converted
     quote.converted_order_id = so.id
     _log_quotation_history(db, user=user,

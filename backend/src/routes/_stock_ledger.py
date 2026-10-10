@@ -100,17 +100,22 @@ async def reserve_for_sales_order(
     lines: list,
 ) -> None:
     """Create active reservations for each catalog line on a confirmed SO."""
+    claimed: dict[str, float] = {}
     for line in lines:
         need = as_qty(getattr(line, "qty", 0))
         if not line.item_id or need <= 0:
             continue
+        # Lines of this order aren't in the DB yet for this check, so subtract
+        # what earlier lines in this batch already claimed for the same item.
         available = await get_available_qty(
             db, item_id=line.item_id, branch_id=branch_id, exclude_source_ref=order_id,
         )
+        available = max(0.0, as_qty(available - claimed.get(line.item_id, 0.0)))
         if need > available:
             raise ValueError(
                 f"Insufficient stock for {line.name}: need {need}, available {available}"
             )
+        claimed[line.item_id] = as_qty(claimed.get(line.item_id, 0.0) + need)
         db.add(StockReservation(
             id=str(uuid.uuid4()),
             item_id=line.item_id,
