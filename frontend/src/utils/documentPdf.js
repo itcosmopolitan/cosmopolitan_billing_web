@@ -47,23 +47,35 @@ function templateKeyFor(documentType) {
   return documentType === DOCUMENT_TYPES.QUOTATION ? 'quotation' : 'invoice'
 }
 
+const MAX_FILE_NAME_CUSTOMER_LENGTH = 100
+
 function documentNumber(data) {
   const source = data?.sale || data?.quote || {}
   return source.number || source.quote_no || source.invoiceNumber || source.invoice_no || source.ref_number || source.id || ''
 }
 
+// Purchase documents carry the vendor in customerName (see prepareInvoicePayload).
+function documentCustomerName(data) {
+  const source = data?.sale || data?.quote || {}
+  return source.customerName || source.customer_name || source.vendorName || source.vendor_name || ''
+}
+
+// Keeps letters and marks so non-Latin names (e.g. Thaana) survive.
 export function safePdfName(fileName) {
   const raw = String(fileName || 'Document').trim()
   const base = raw
     .replace(/\s+/g, '_')
-    .replace(/[^a-zA-Z0-9_.-]+/g, '_')
+    .replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, '_')
     .replace(/^_+|_+$/g, '') || 'Document'
   return base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`
 }
 
 export function buildFileName(documentType, data) {
-  const prefix = String(documentType || 'Document').replace(/\s+/g, '_')
   const number = documentNumber(data)
+  const customer = documentCustomerName(data).trim().slice(0, MAX_FILE_NAME_CUSTOMER_LENGTH).trim()
+  if (customer && number) return safePdfName(`${customer}-${number}`)
+
+  const prefix = String(documentType || 'Document').replace(/\s+/g, '_')
   return safePdfName(number ? `${prefix}_${number}` : prefix)
 }
 

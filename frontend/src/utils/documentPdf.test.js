@@ -71,9 +71,27 @@ describe('file names', () => {
     expect(safePdfName('   ')).toBe('Document.pdf')
   })
 
-  it('builds names from the document type and number', () => {
+  it('keeps non-Latin letters and marks in names', () => {
+    expect(safePdfName('ޢަލީ Ali-INV-1')).toBe('ޢަލީ_Ali-INV-1.pdf')
+    expect(safePdfName('Café-INV-1')).toBe('Café-INV-1.pdf')
+  })
+
+  it('builds names as customer name and number for sales and purchase documents', () => {
+    expect(buildFileName('Tax Invoice', { sale: { customerName: 'Ali Hassan', number: 'INV-0001' } })).toBe('Ali_Hassan-INV-0001.pdf')
+    expect(buildFileName('Quote', { quote: { customerName: 'Ali Hassan', number: 'QT-0001' } })).toBe('Ali_Hassan-QT-0001.pdf')
+    expect(buildFileName('Sales Order', { sale: { customerName: 'Walk-in', number: 'SO-0002' } })).toBe('Walk-in-SO-0002.pdf')
+    expect(buildFileName('Purchase Order', { sale: { customerName: 'Vendor Co', number: 'PO-0003' } })).toBe('Vendor_Co-PO-0003.pdf')
+    expect(buildFileName('Purchase Bill', { sale: { customerName: 'Vendor Co', number: 'BILL-0004' } })).toBe('Vendor_Co-BILL-0004.pdf')
+  })
+
+  it('caps the customer part so long names stay within the server limit', () => {
+    const name = buildFileName('Tax Invoice', { sale: { customerName: 'A'.repeat(300), number: 'INV-0001' } })
+    expect(name).toBe(`${'A'.repeat(100)}-INV-0001.pdf`)
+  })
+
+  it('falls back to the document type and number when there is no customer', () => {
     expect(buildFileName('Tax Invoice', { sale: { number: 'INV-0001' } })).toBe('Tax_Invoice_INV-0001.pdf')
-    expect(buildFileName('Quote', { quote: { id: 'q-9' } })).toBe('Quote_q-9.pdf')
+    expect(buildFileName('Stock Transfer', { sale: { number: 'TR-0005' } })).toBe('Stock_Transfer_TR-0005.pdf')
     expect(buildFileName('Purchase Bill', {})).toBe('Purchase_Bill.pdf')
   })
 })
