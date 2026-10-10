@@ -113,7 +113,7 @@ def test_backfill_copies_legacy_kam_once_and_is_idempotent():
 
 
 def _import_job(branch_id: str, file_bytes: bytes):
-    return SimpleNamespace(branch_id=branch_id, file_data=file_bytes)
+    return SimpleNamespace(id="job-kam", user_id="u-kam", branch_id=branch_id, file_data=file_bytes)
 
 
 def test_import_reads_per_branch_kam_columns_and_precedence():

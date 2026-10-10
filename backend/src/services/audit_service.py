@@ -92,6 +92,23 @@ def build_audit_entry(
         "risk": risk,
     }
 
+
+def diff_snapshots(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return {field: {"before": x, "after": y}} for every key whose value changed."""
+    return {
+        key: {"before": before.get(key), "after": after.get(key)}
+        for key in sorted(before.keys() | after.keys())
+        if before.get(key) != after.get(key)
+    }
+
+
+def master_update_action(entity: str, changes: dict[str, dict[str, Any]]) -> str:
+    """Action label for a master-record edit; a lone `active` flip gets its own label."""
+    if "active" in changes:
+        return f"{entity} Reactivated" if changes["active"]["after"] else f"{entity} Deactivated"
+    return f"{entity} Updated"
+
+
 def _get_user_role(user: Optional[User]) -> str:
     if user is None:
         return "unknown"

@@ -13,11 +13,13 @@ from sqlalchemy import and_, func, or_, select
 
 from src.database import get_async_session, init_schema
 from src.customer_kam import KAM_BRANCH_COLUMN_PREFIX, merge_legacy_kam, save_branch_kams
-from src.models import Branch, Customer, CustomerImportJob
+from src.models import Branch, Customer, CustomerImportJob, User
 from src.routes.customers import (
     _compose_address_from_parts,
     _normalize_classification,
     _normalize_customer_type,
+    customer_audit_snapshot,
+    record_customer_audit,
 )
 from src.routes._serializers import _build_customer_code
 
@@ -118,6 +120,9 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
                 branch_kam_cols[col_idx] = kam_branch_id
     created = 0
     errors = []
+    # Captured up front: a rollback on a bad row expires ORM objects, so later reads must not touch them.
+    job_id = job.id
+    actor_id = job.user_id
     await progress_callback(processed_rows=0, total_rows=total_rows, created=0, skipped=0, errors=[])
 
     for idx, row in enumerate(rows[1:], start=2):
@@ -192,6 +197,15 @@ async def process_customer_import(job: CustomerImportJob, db, progress_callback)
             db.add(customer)
             await db.flush()
             await save_branch_kams(db, customer, kam_map)
+            actor = await db.get(User, actor_id)
+            snapshot = await customer_audit_snapshot(db, customer)
+            record_customer_audit(
+                db, customer,
+                action="Customer Imported",
+                detail=f"Imported customer {customer.name}",
+                user=actor,
+                metadata={"source": "import", "import_job_id": job_id, **snapshot},
+            )
             await db.commit()
             created += 1
         except Exception as exc:

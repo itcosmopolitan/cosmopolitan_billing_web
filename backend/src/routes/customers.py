@@ -3,7 +3,7 @@ from io import BytesIO
 from typing import Optional, Union
 
 import openpyxl
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt
 from sqlalchemy import and_, delete, func, or_, select
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.customer_kam import (
     KAM_BRANCH_COLUMN_PREFIX,
     attach_branch_kam_names,
+    load_branch_kams,
     merge_legacy_kam,
     save_branch_kams,
 )
@@ -32,6 +33,7 @@ from src.models import (
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import _build_customer_code, serialize_customer
+from src.services.audit_service import add_audit_log, diff_snapshots, master_update_action
 from src.permissions import CUSTOMER_PICKER_READ
 from src.security import require_perm, current_user, enforce_branch_access
 
@@ -452,8 +454,50 @@ async def download_customer_import_template():
     )
 
 
+_CUSTOMER_AUDIT_FIELDS = (
+    "name", "phone", "email", "address", "gstin", "branch_id", "credit_limit", "type",
+    "classification", "is_credit_eligible", "credit_terms", "street1", "street2", "street3",
+    "city", "state_province", "country", "postal_code", "active",
+)
+
+
+async def customer_audit_snapshot(db: AsyncSession, c: Customer) -> dict:
+    """Audited field values for a customer, including per-branch KAMs."""
+    snapshot = {field: getattr(c, field) for field in _CUSTOMER_AUDIT_FIELDS}
+    snapshot["branch_kams"] = (await load_branch_kams(db, [c.id])).get(c.id, {})
+    return snapshot
+
+
+def record_customer_audit(
+    db: AsyncSession,
+    c: Customer,
+    *,
+    action: str,
+    detail: str,
+    user: Optional[User],
+    request: Optional[Request] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    add_audit_log(
+        db,
+        action=action,
+        module="Sales",
+        reference_id=c.customer_code or c.id,
+        detail=detail,
+        user=user,
+        request=request,
+        branch_id=c.branch_id,
+        metadata=metadata,
+    )
+
+
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("customers.create", "pos.use"))])
-async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_customer(
+    data: CustomerCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     await _validate_branch_id(data.branch_id, db)
     await enforce_branch_access(data.branch_id, user=user, db=db)
     customer_type = _normalize_customer_type(data.customer_type)
@@ -481,15 +525,31 @@ async def create_customer(data: CustomerCreate, db: AsyncSession = Depends(get_d
                  country=data.country, postal_code=data.postal_code)
     db.add(c)
     await save_branch_kams(db, c, kam_map)
+    await db.flush()
+    record_customer_audit(
+        db, c,
+        action="Customer Created",
+        detail=f"Created customer {c.name}",
+        user=user,
+        request=request,
+        metadata=await customer_audit_snapshot(db, c),
+    )
     await db.commit()
     return {"id": c.id, "message": "Customer created"}
 
 @router.put("/{customer_id}", dependencies=[Depends(require_perm("customers.edit"))])
-async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def update_customer(
+    customer_id: str,
+    data: CustomerUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     result = await db.execute(select(Customer).where(Customer.id == customer_id))
     c = result.scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Customer not found")
+    before = await customer_audit_snapshot(db, c)
     items = data.model_dump(exclude_unset=True)
     kam_map = items.pop("key_account_managers", None) or {}
     legacy_kam_given = "key_account_manager" in items
@@ -529,6 +589,16 @@ async def update_customer(customer_id: str, data: CustomerUpdate, db: AsyncSessi
         if legacy_kam_given:
             kam_map = merge_legacy_kam(kam_map, c.branch_id, legacy_kam)
         await save_branch_kams(db, c, kam_map)
+    changes = diff_snapshots(before, await customer_audit_snapshot(db, c))
+    if changes:
+        record_customer_audit(
+            db, c,
+            action=master_update_action("Customer", changes),
+            detail=f"Updated customer {c.name}",
+            user=user,
+            request=request,
+            metadata={"changes": changes, "updated_fields": list(changes)},
+        )
     await db.commit()
     return {"message": "Updated"}
 
@@ -539,13 +609,19 @@ async def patch_customer(
     data: CustomerUpdate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
+    request: Request = None,
 ):
     """Partial update — used for deactivate / reactivate (`active`)."""
-    return await update_customer(customer_id, data, db=db, user=user)
+    return await update_customer(customer_id, data, db=db, user=user, request=request)
 
 
 @router.delete("/{customer_id}", dependencies=[Depends(require_perm("customers.delete"))])
-async def delete_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_customer(
+    customer_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     result = await db.execute(select(Customer).where(Customer.id == customer_id))
     c = result.scalar_one_or_none()
     if not c:
@@ -553,7 +629,16 @@ async def delete_customer(customer_id: str, db: AsyncSession = Depends(get_db)):
     blockers = await _customer_delete_blockers(db, customer_id)
     if blockers:
         raise HTTPException(400, "Cannot delete customer: " + "; ".join(blockers))
+    snapshot = await customer_audit_snapshot(db, c)
     await db.execute(delete(CustomerBranchKam).where(CustomerBranchKam.customer_id == customer_id))
     await db.delete(c)
+    record_customer_audit(
+        db, c,
+        action="Customer Deleted",
+        detail=f"Deleted customer {c.name}",
+        user=user,
+        request=request,
+        metadata=snapshot,
+    )
     await db.commit()
     return {"deleted": customer_id}

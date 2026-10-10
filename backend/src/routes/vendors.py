@@ -3,7 +3,7 @@ from io import BytesIO
 from typing import Optional
 
 import openpyxl
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
@@ -24,6 +24,7 @@ from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_vendor
 from src.permissions import VENDOR_PICKER_READ
 from src.security import current_user, require_perm
+from src.services.audit_service import add_audit_log, diff_snapshots, master_update_action
 
 router = APIRouter()
 
@@ -45,6 +46,37 @@ class VendorUpdate(BaseModel):
     gstin: Optional[str] = None
     payment_terms: Optional[str] = None
     active: Optional[bool] = None
+
+
+_VENDOR_AUDIT_FIELDS = (
+    "name", "contact_person", "phone", "email", "address", "gstin", "payment_terms", "active",
+)
+
+
+def vendor_audit_snapshot(v: Vendor) -> dict:
+    return {field: getattr(v, field) for field in _VENDOR_AUDIT_FIELDS}
+
+
+def record_vendor_audit(
+    db: AsyncSession,
+    v: Vendor,
+    *,
+    action: str,
+    detail: str,
+    user: Optional[User],
+    request: Optional[Request] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    add_audit_log(
+        db,
+        action=action,
+        module="Purchases",
+        reference_id=v.id,
+        detail=detail,
+        user=user,
+        request=request,
+        metadata=metadata,
+    )
 
 
 async def _vendor_delete_blockers(db: AsyncSession, vendor_id: str) -> list[str]:
@@ -205,6 +237,8 @@ async def import_vendors(
 
     created = 0
     errors = []
+    # Captured up front: a rollback on a bad row expires ORM objects, so the actor is re-fetched per row.
+    actor_id = user.id
 
     def _as_text(value):
         if value is None:
@@ -247,6 +281,14 @@ async def import_vendors(
             )
             db.add(vendor)
             await db.flush()
+            actor = await db.get(User, actor_id)
+            record_vendor_audit(
+                db, vendor,
+                action="Vendor Imported",
+                detail=f"Imported vendor {vendor.name}",
+                user=actor,
+                metadata={"source": "import", **vendor_audit_snapshot(vendor)},
+            )
             created += 1
         except Exception as e:
             try:
@@ -349,36 +391,78 @@ async def vendor_credit_ledger(
     return paged(items, total, sk, lim)
 
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("vendors.create"))])
-async def create_vendor(data: VendorCreate, db: AsyncSession = Depends(get_db)):
+async def create_vendor(
+    data: VendorCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     v = Vendor(id=str(uuid.uuid4()), name=data.name, contact_person=data.contact_person,
                phone=data.phone, email=data.email, address=data.address,
                gstin=data.gstin, payment_terms=data.payment_terms)
     db.add(v)
+    await db.flush()
+    record_vendor_audit(
+        db, v,
+        action="Vendor Created",
+        detail=f"Created vendor {v.name}",
+        user=user,
+        request=request,
+        metadata=vendor_audit_snapshot(v),
+    )
     await db.commit()
     await db.refresh(v)
     return serialize_vendor(v)
 
 @router.put("/{vendor_id}", dependencies=[Depends(require_perm("vendors.edit"))])
-async def update_vendor(vendor_id: str, data: VendorUpdate, db: AsyncSession = Depends(get_db)):
+async def update_vendor(
+    vendor_id: str,
+    data: VendorUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     result = await db.execute(select(Vendor).where(Vendor.id == vendor_id))
     v = result.scalar_one_or_none()
     if not v:
         raise HTTPException(404, "Vendor not found")
+    before = vendor_audit_snapshot(v)
     for k, val in data.model_dump(exclude_unset=True).items():
         setattr(v, k, val)
+    changes = diff_snapshots(before, vendor_audit_snapshot(v))
+    if changes:
+        record_vendor_audit(
+            db, v,
+            action=master_update_action("Vendor", changes),
+            detail=f"Updated vendor {v.name}",
+            user=user,
+            request=request,
+            metadata={"changes": changes, "updated_fields": list(changes)},
+        )
     await db.commit()
     await db.refresh(v)
     return serialize_vendor(v)
 
 
 @router.patch("/{vendor_id}", dependencies=[Depends(require_perm("vendors.edit"))])
-async def patch_vendor(vendor_id: str, data: VendorUpdate, db: AsyncSession = Depends(get_db)):
+async def patch_vendor(
+    vendor_id: str,
+    data: VendorUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     """Partial update — used for deactivate / reactivate (`active`)."""
-    return await update_vendor(vendor_id, data, db=db)
+    return await update_vendor(vendor_id, data, db=db, user=user, request=request)
 
 
 @router.delete("/{vendor_id}", dependencies=[Depends(require_perm("vendors.delete"))])
-async def delete_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_vendor(
+    vendor_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    request: Request = None,
+):
     result = await db.execute(select(Vendor).where(Vendor.id == vendor_id))
     v = result.scalar_one_or_none()
     if not v:
@@ -386,6 +470,15 @@ async def delete_vendor(vendor_id: str, db: AsyncSession = Depends(get_db)):
     blockers = await _vendor_delete_blockers(db, vendor_id)
     if blockers:
         raise HTTPException(400, "Cannot delete vendor: " + "; ".join(blockers))
+    snapshot = vendor_audit_snapshot(v)
     await db.delete(v)
+    record_vendor_audit(
+        db, v,
+        action="Vendor Deleted",
+        detail=f"Deleted vendor {v.name}",
+        user=user,
+        request=request,
+        metadata=snapshot,
+    )
     await db.commit()
     return {"deleted": vendor_id}
