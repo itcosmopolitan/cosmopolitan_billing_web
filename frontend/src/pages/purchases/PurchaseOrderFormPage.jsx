@@ -12,7 +12,7 @@ import {
   applyDocumentBranch,
   documentHasSelectedLines,
   useTransactionBranchGuard,
-} from '@/utils/branchLineGuard'
+} from '@/utils/branchLineGuard.jsx'
 import {
   entityDiscountToPayload,
   purchaseLineGross,

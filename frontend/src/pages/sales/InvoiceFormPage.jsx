@@ -35,7 +35,7 @@ import {
   applyDocumentBranch,
   documentHasSelectedLines,
   useTransactionBranchGuard,
-} from '@/utils/branchLineGuard'
+} from '@/utils/branchLineGuard.jsx'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const withCost = await enrichSaleLinesWithCosts(items, branchId)

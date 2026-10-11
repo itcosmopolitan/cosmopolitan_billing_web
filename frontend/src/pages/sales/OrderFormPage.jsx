@@ -22,7 +22,7 @@ import {
   applyDocumentBranch,
   documentHasSelectedLines,
   useTransactionBranchGuard,
-} from '@/utils/branchLineGuard'
+} from '@/utils/branchLineGuard.jsx'
 
 export default function OrderFormPage({ mode = 'create' }) {
   const { orderId } = useParams()

@@ -25,7 +25,7 @@ import {
 import {
   BranchLineConfirmModal,
   useTransactionBranchGuard,
-} from '@/utils/branchLineGuard'
+} from '@/utils/branchLineGuard.jsx'
 
 const SIDEBAR_W = 220
 const SIDEBAR_W_COLLAPSED = 68

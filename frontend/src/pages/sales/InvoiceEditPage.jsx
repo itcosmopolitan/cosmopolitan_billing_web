@@ -11,7 +11,7 @@ import {
   applyDocumentBranch,
   documentHasSelectedLines,
   useTransactionBranchGuard,
-} from '@/utils/branchLineGuard'
+} from '@/utils/branchLineGuard.jsx'
 import { entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'

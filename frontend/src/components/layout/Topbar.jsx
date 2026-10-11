@@ -13,7 +13,7 @@ import {
   BranchLineConfirmModal,
   confirmBranchLineChange,
   hasBranchLineGuard,
-} from '@/utils/branchLineGuard'
+} from '@/utils/branchLineGuard.jsx'
 
 // Topbar is intentionally chrome-only: it carries global context (active
 // branch) and global actions (new sale, notifications, theme). The
