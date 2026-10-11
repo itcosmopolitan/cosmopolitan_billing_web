@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, and_, case, cast, func, literal, select, Numeric
+from sqlalchemy import String, and_, case, cast, func, literal, or_, select, Numeric
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import flag_modified
@@ -25,6 +25,7 @@ from src.models import (
     Item,
     ItemBatch,
     ItemStock,
+    Organisation,
     PaymentSummary,
     PoolSaleAllocation,
     PoolSaleAllocationReversal,
@@ -3834,6 +3835,43 @@ async def gst_summary(
     ]
 
 
+def _normalized_identity(column):
+    """Uppercase identity with spaces removed, for GSTIN and similar codes."""
+    return func.upper(func.replace(func.trim(func.coalesce(column, "")), " ", ""))
+
+
+def _external_customer_condition():
+    """Keep walk-ins and external customers; drop internal companies."""
+    return or_(
+        SaleInvoice.customer_id.is_(None),
+        func.lower(func.coalesce(Customer.classification, "external")) != "internal",
+    )
+
+
+def _vendor_is_internal_company():
+    """A vendor is internal when it is the organisation or an internal customer."""
+    vendor_gstin = _normalized_identity(Vendor.gstin)
+    customer_gstin = _normalized_identity(Customer.gstin)
+    organisation_gstin = _normalized_identity(Organisation.gstin)
+    matches_internal_customer = (
+        select(Customer.id)
+        .where(
+            func.lower(func.coalesce(Customer.classification, "external")) == "internal",
+            or_(
+                and_(customer_gstin != "", customer_gstin == vendor_gstin),
+                func.lower(func.trim(Customer.name)) == func.lower(func.trim(Vendor.name)),
+            ),
+        )
+        .exists()
+    )
+    matches_organisation = (
+        select(Organisation.id)
+        .where(and_(organisation_gstin != "", organisation_gstin == vendor_gstin))
+        .exists()
+    )
+    return or_(matches_internal_customer, matches_organisation)
+
+
 @router.get("/outstanding-receivables", dependencies=[Depends(require_perm("reports.view"))])
 async def outstanding_receivables(
     branch_id: Optional[str] = None,
@@ -3852,6 +3890,7 @@ async def outstanding_receivables(
     conds = [
         outstanding > 0.01,
         SaleInvoice.status != InvoiceStatus.cancelled,
+        _external_customer_condition(),
     ]
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
@@ -3884,12 +3923,19 @@ async def outstanding_receivables(
             SaleInvoice.date.label("due_date"),
             outstanding.label("outstanding_amount"),
         )
+        .select_from(SaleInvoice)
+        .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
         .where(and_(*conds))
         .order_by(order_by_expr)
         .offset(sk)
         .limit(lim)
     )
-    total_q = select(func.count()).select_from(SaleInvoice).where(and_(*conds))
+    total_q = (
+        select(func.count())
+        .select_from(SaleInvoice)
+        .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
+        .where(and_(*conds))
+    )
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(query)
     rows = [dict(r._mapping) for r in result.fetchall()]
@@ -3909,7 +3955,10 @@ async def outstanding_payables(
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
-    conds = [PurchaseBill.total > PurchaseBill.paid_amount]
+    conds = [
+        PurchaseBill.total > PurchaseBill.paid_amount,
+        ~_vendor_is_internal_company(),
+    ]
     purchase_branch = _eq_or_in(PurchaseBill.branch_id, branch_id)
     if purchase_branch is not None:
         conds.append(purchase_branch)
@@ -3939,12 +3988,19 @@ async def outstanding_payables(
             PurchaseBill.due_date.label("due_date"),
             (PurchaseBill.total - PurchaseBill.paid_amount).label("outstanding_amount"),
         )
+        .select_from(PurchaseBill)
+        .outerjoin(Vendor, Vendor.id == PurchaseBill.vendor_id)
         .where(and_(*conds))
         .order_by(order_by_expr)
         .offset(sk)
         .limit(lim)
     )
-    total_q = select(func.count()).select_from(PurchaseBill).where(and_(*conds))
+    total_q = (
+        select(func.count())
+        .select_from(PurchaseBill)
+        .outerjoin(Vendor, Vendor.id == PurchaseBill.vendor_id)
+        .where(and_(*conds))
+    )
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(query)
     rows = [dict(r._mapping) for r in result.fetchall()]
