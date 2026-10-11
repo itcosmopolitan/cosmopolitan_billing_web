@@ -10,7 +10,16 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.database import Base  # noqa: E402
-from src.models import AuditLog, Branch, User  # noqa: E402
+from src.models import (  # noqa: E402
+    AuditLog,
+    Branch,
+    Item,
+    ItemBranchConfig,
+    ItemStock,
+    SaleLineItem,
+    SalesOrderLineItem,
+    User,
+)
 from src.routes.sales import (  # noqa: E402
     BulkDeleteIn,
     ConvertToInvoiceIn,
@@ -96,6 +105,13 @@ async def _run_quotation_activity_proof() -> None:
 
         order_conv = await convert_quote_to_order(q1_id, db=db, user=(await db.execute(select(User).where(User.id == 'u-test'))).scalar_one())
         order_id = order_conv["order_id"]
+        legacy_order_line = (
+            await db.execute(
+                select(SalesOrderLineItem).where(SalesOrderLineItem.order_id == order_id)
+            )
+        ).scalar_one()
+        assert legacy_order_line.item_id is None
+        assert legacy_order_line.name == "Quote Item A"
 
         q2 = await create_quotation(
             QuotationCreate(
@@ -127,6 +143,13 @@ async def _run_quotation_activity_proof() -> None:
             user=(await db.execute(select(User).where(User.id == 'u-test'))).scalar_one(),
         )
         invoice_id = invoice_conv["invoice_id"]
+        legacy_invoice_line = (
+            await db.execute(
+                select(SaleLineItem).where(SaleLineItem.invoice_id == invoice_id)
+            )
+        ).scalar_one()
+        assert legacy_invoice_line.item_id is None
+        assert legacy_invoice_line.name == "Quote Item B"
 
         q3 = await create_quotation(
             QuotationCreate(
@@ -289,6 +312,99 @@ async def _run_quotation_activity_proof() -> None:
 
 def test_quotation_activity_catalogue() -> None:
     asyncio.run(_run_quotation_activity_proof())
+
+
+async def _run_item_rename_conversion_proof() -> None:
+    db = await _build_session()
+    try:
+        await _seed(db)
+        user = (await db.execute(select(User).where(User.id == "u-test"))).scalar_one()
+        item = Item(
+            id="item-rename",
+            name="Original Item Name",
+            sku="RENAME-1",
+            selling_price=25,
+            tax_rate=0,
+        )
+        db.add_all([
+            item,
+            ItemBranchConfig(
+                id="item-rename-b1",
+                item_id=item.id,
+                branch_id="b1",
+                is_available=True,
+            ),
+            ItemStock(
+                id="item-rename-stock",
+                item_id=item.id,
+                branch_id="b1",
+                quantity=10,
+            ),
+        ])
+        await db.commit()
+
+        async def create_quote(number: str) -> str:
+            created = await create_quotation(
+                QuotationCreate(
+                    customer_name="Walk-in",
+                    branch_id="b1",
+                    branch_name="Main",
+                    number=number,
+                    items=[
+                        LineItemIn(
+                            item_id=item.id,
+                            name="Original Item Name",
+                            qty=1,
+                            price=25,
+                            tax_rate=0,
+                            line_discount=0,
+                        )
+                    ],
+                    discount=0,
+                ),
+                db=db,
+                user=user,
+            )
+            return created["id"]
+
+        order_quote_id = await create_quote("Q-RENAME-ORDER")
+        invoice_quote_id = await create_quote("Q-RENAME-INVOICE")
+
+        item.name = "Renamed Item"
+        await db.commit()
+
+        order_result = await convert_quote_to_order(order_quote_id, db=db, user=user)
+        order_line = (
+            await db.execute(
+                select(SalesOrderLineItem).where(
+                    SalesOrderLineItem.order_id == order_result["order_id"],
+                )
+            )
+        ).scalar_one()
+        assert order_line.item_id == item.id
+        assert order_line.name == "Renamed Item"
+
+        invoice_result = await convert_quote_to_invoice(
+            invoice_quote_id,
+            ConvertToInvoiceIn(payment_received=False),
+            db=db,
+            user=user,
+        )
+        invoice_line = (
+            await db.execute(
+                select(SaleLineItem).where(
+                    SaleLineItem.invoice_id == invoice_result["invoice_id"],
+                )
+            )
+        ).scalar_one()
+        assert invoice_line.item_id == item.id
+        assert invoice_line.name == "Renamed Item"
+    finally:
+        await db.close()
+
+
+def test_quotation_conversion_resolves_renamed_item_by_id() -> None:
+    asyncio.run(_run_item_rename_conversion_proof())
 
 
 if __name__ == "__main__":

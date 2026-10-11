@@ -23,11 +23,6 @@ export async function enrichSaleLinesWithCosts(items, branchId) {
       continue
     }
     const needsCost = !(Number(line.costPrice) > 0)
-    const needsBatch = line.batchTracking == null || line.batchTracking === false
-    if (!needsCost && !needsBatch) {
-      out.push(line)
-      continue
-    }
     try {
       const [item, branchData] = await Promise.all([
         itemsAPI.get(line.item_id),
@@ -38,6 +33,9 @@ export async function enrichSaleLinesWithCosts(items, branchId) {
       const fallback = masterCost(item)
       out.push({
         ...line,
+        // Catalog identity is the item ID. Refresh the label so documents
+        // created from an older quote/order survive Item Master renames.
+        name: item?.name || line.name,
         costPrice: needsCost
           ? (branchId ? effectiveCostFromBranches(branchData, branchId, fallback) : fallback)
           : line.costPrice,

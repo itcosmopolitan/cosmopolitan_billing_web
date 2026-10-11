@@ -137,6 +137,16 @@ async def _load_items_by_id(db: AsyncSession, item_ids: set[str]) -> dict[str, I
     return {item.id: item for item in res.scalars().all()}
 
 
+def _current_item_name(
+    item_map: dict[str, Item],
+    item_id: Optional[str],
+    snapshot_name: str,
+) -> str:
+    """Resolve catalog lines by immutable ID while retaining legacy free text."""
+    item = item_map.get(item_id) if item_id else None
+    return item.name if item is not None and item.name else snapshot_name
+
+
 async def _unlisted_item_names_at_branch(
     db: AsyncSession,
     lines,
@@ -1583,7 +1593,8 @@ async def update_invoice(
         item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
-            item_id=item.item_id, name=item.name,
+            item_id=item.item_id,
+            name=_current_item_name(item_map, item.item_id, item.name),
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
@@ -1970,7 +1981,8 @@ async def create_invoice(
         item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
-            item_id=item.item_id, name=item.name,
+            item_id=item.item_id,
+            name=_current_item_name(item_map, item.item_id, item.name),
             qty=item.qty, price=item.price,
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
@@ -5856,11 +5868,15 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         notes=data.notes,
     )
     db.add(so)
+    item_map = await _load_items_by_id(
+        db, {line.item_id for line, _net, _tax in line_rows if line.item_id},
+    )
     created_lines = []
     for line, line_net, _line_tax in line_rows:
         li = SalesOrderLineItem(
             id=str(uuid.uuid4()), order_id=so.id,
-            item_id=line.item_id, name=line.name,
+            item_id=line.item_id,
+            name=_current_item_name(item_map, line.item_id, line.name),
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate, discount=line.discount or 0,
             line_total=line_net,
@@ -5995,11 +6011,15 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
     await db.execute(
         sa_delete(SalesOrderLineItem).where(SalesOrderLineItem.order_id == so.id)
     )
+    item_map = await _load_items_by_id(
+        db, {line.item_id for line, _net, _tax in line_rows if line.item_id},
+    )
     created_lines = []
     for line, line_net, _line_tax in line_rows:
         li = SalesOrderLineItem(
             id=str(uuid.uuid4()), order_id=so.id,
-            item_id=line.item_id, name=line.name,
+            item_id=line.item_id,
+            name=_current_item_name(item_map, line.item_id, line.name),
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate, discount=line.discount or 0,
             line_total=line_net,
@@ -6373,7 +6393,8 @@ async def convert_order_to_invoice(
         item_obj = item_map.get(so_line.item_id) if so_line.item_id else None
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
-            item_id=so_line.item_id, name=so_line.name,
+            item_id=so_line.item_id,
+            name=_current_item_name(item_map, so_line.item_id, so_line.name),
             qty=convert_qty,
             price=_exclusive_unit_price(so_line.price, so_line.tax_rate) if internal_customer else so_line.price,
             tax_rate=0 if internal_customer else so_line.tax_rate,
@@ -6619,11 +6640,15 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
         notes=f"From quotation {quote.number}" + (f": {quote.notes}" if quote.notes else ""),
     )
     db.add(so)
+    item_map = await _load_items_by_id(
+        db, {line.item_id for line in quote.line_items if line.item_id},
+    )
     created_lines = []
     for ql in quote.line_items:
         li = SalesOrderLineItem(
             id=str(uuid.uuid4()), order_id=so.id,
-            item_id=ql.item_id, name=ql.name,
+            item_id=ql.item_id,
+            name=_current_item_name(item_map, ql.item_id, ql.name),
             qty=ql.qty, price=ql.price,
             tax_rate=ql.tax_rate, discount=ql.discount or 0,
             line_total=ql.line_total,
@@ -6777,7 +6802,8 @@ async def convert_quote_to_invoice(
             tax_rate = line.tax_rate
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
-            item_id=line.item_id, name=line.name,
+            item_id=line.item_id,
+            name=_current_item_name(item_map, line.item_id, line.name),
             qty=line.qty, price=unit_price,
             tax_rate=tax_rate,
             discount=line.discount or 0,
