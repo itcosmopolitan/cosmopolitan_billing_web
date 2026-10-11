@@ -310,7 +310,7 @@ async def _resolve_branch_scope(user: User, db: AsyncSession, branch_id: Optiona
 
 
 def _build_summary(entries: list, opening: float, close: Optional[CashDayClose]) -> dict:
-    active = [e for e in entries if not e.is_voided]
+    active = [e for e in entries if not e.is_voided and e.source_type != "void"]
     cash_in = sum(e.amount for e in active if e.type == "in" and not _is_opening_balance(e.category))
     cash_out = sum(
         e.amount for e in active
