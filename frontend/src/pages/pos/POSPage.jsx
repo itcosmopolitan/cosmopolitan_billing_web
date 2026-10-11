@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { applyLineCalc, usePOSStore, useAppStore } from '@/store'
+import { useTransactionBranchGuard } from '@/utils/branchLineGuard'
 import { itemsAPI, customersAPI, salesAPI, settingsAPI, stockPoolsAPI } from '@/api'
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys'
 import { useCan } from '@/auth/permissions'
@@ -253,6 +254,11 @@ export default function POSPage() {
   const stockMode = activeBranch?.id ? (stockModeByBranch[activeBranch.id] || 'branch') : 'branch'
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
   const childCounters = getConfiguredChildCounters(activeBranchData)
+  useTransactionBranchGuard({
+    hasLines: cart.length > 0,
+    activeBranchId: activeBranch?.id,
+    onConfirm: () => store.clearCart(),
+  })
 
   // Guard route changes when the cart has unsaved lines. We stash the
   // resume-callback in state so a custom Modal (rather than window.confirm)

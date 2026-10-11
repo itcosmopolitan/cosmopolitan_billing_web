@@ -4,12 +4,16 @@ import { useAppStore, usePOSStore } from '@/store'
 import { notificationsAPI } from '@/api'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import * as Icon from '@/components/ui/Icons'
-import { Modal } from '@/components/ui'
 import {
   getChildCounterBranch,
   getConfiguredChildCounters,
   shouldFollowActiveBranchForCounters,
 } from '@/utils/childCounters'
+import {
+  BranchLineConfirmModal,
+  confirmBranchLineChange,
+  hasBranchLineGuard,
+} from '@/utils/branchLineGuard'
 
 // Topbar is intentionally chrome-only: it carries global context (active
 // branch) and global actions (new sale, notifications, theme). The
@@ -41,9 +45,6 @@ function formatRelativeTime(iso) {
 export default function Topbar() {
   const { user, activeBranch, branches, setActiveBranch, toggleSidebar, theme, setTheme } = useAppStore()
   const {
-    cart,
-    holdBill,
-    clearCart,
     selectedChildCounter,
     setSelectedChildCounter,
     childCounterBranchId,
@@ -151,19 +152,17 @@ export default function Topbar() {
 
   const handleBranchSelect = (branch) => {
     setBranchOpen(false)
-    const hasCartItems = (cart?.length || 0) > 0
-    if (location.pathname === '/pos' && hasCartItems && branch.id !== activeBranch?.id) {
+    if (branch.id !== activeBranch?.id && hasBranchLineGuard()) {
       setPendingBranch(branch)
       return
     }
     setActiveBranch(branch)
   }
 
-  const switchBranchWithCartAction = (hold) => {
+  const confirmBranchSwitch = () => {
     if (!pendingBranch) return
-    if (hold) holdBill(activeBranch?.id)
-    else clearCart()
     const branch = pendingBranch
+    confirmBranchLineChange(branch)
     setPendingBranch(null)
     setActiveBranch(branch)
   }
@@ -646,26 +645,12 @@ export default function Topbar() {
         {theme === 'dark' ? <Icon.Sun size={17} /> : <Icon.Moon size={17} />}
       </IconButton>
 
-      <Modal
+      <BranchLineConfirmModal
         open={!!pendingBranch}
-        onClose={() => setPendingBranch(null)}
-        title="Switch branch with items in cart?"
-        icon="🛒"
-        size="sm"
-        footer={(
-          <>
-            <button className="btn btn-secondary" onClick={() => setPendingBranch(null)}>Stay</button>
-            <button className="btn btn-ghost" onClick={() => switchBranchWithCartAction(true)}>Hold &amp; Switch</button>
-            <button className="btn btn-danger" onClick={() => switchBranchWithCartAction(false)}>Discard &amp; Switch</button>
-          </>
-        )}
-      >
-        <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-          You have <strong>{cart?.length || 0} item{(cart?.length || 0) === 1 ? '' : 's'}</strong> in the current POS transaction.
-          Choose <strong>Hold &amp; Switch</strong> to save it for later, or discard it and start fresh at{' '}
-          <strong>{pendingBranch?.name}</strong>.
-        </div>
-      </Modal>
+        branchName={pendingBranch?.name}
+        onCancel={() => setPendingBranch(null)}
+        onConfirm={confirmBranchSwitch}
+      />
     </header>
   )
 }

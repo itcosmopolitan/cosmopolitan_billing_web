@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { purchasesAPI, itemsAPI } from '@/api'
@@ -8,10 +8,16 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import BillFormModal from './BillFormModal'
 import {
   emptyBillForm,
+  emptyPurchaseLine,
   billFromRow,
   poFromRow,
   lineDiscountToPercent,
 } from './purchaseFormShared'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 import {
   entityDiscountToPayload,
   purchaseLineGross,
@@ -59,6 +65,16 @@ export default function BillFormPage({ mode = 'bill' }) {
   const [conversionLabel, setConversionLabel] = useState(null)
   const [loading, setLoading] = useState(!!fromPoId || !!fromGrnId)
   const [saving, setSaving] = useState(false)
+  const activeBranchIdRef = useRef(activeBranchId)
+  activeBranchIdRef.current = activeBranchId
+  useTransactionBranchGuard({
+    hasLines: documentHasSelectedLines(form.items),
+    activeBranchId,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      emptyItems: () => [emptyPurchaseLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId),
+  })
 
   const goBack = () => {
     if (fromPoId) navigate('/purchases?tab=orders')
@@ -81,7 +97,7 @@ export default function BillFormPage({ mode = 'bill' }) {
         if (fromPoId) {
           const po = await purchasesAPI.orders.get(fromPoId)
           if (cancelled) return
-          const mapped = poFromRow(po, activeBranchId)
+          const mapped = poFromRow(po, activeBranchIdRef.current)
           const items = await enrichLinesWithBatchFlags(mapped.items, mapped.branchId)
           setForm({
             ...emptyBillForm(mapped.branchId),
@@ -94,7 +110,7 @@ export default function BillFormPage({ mode = 'bill' }) {
         } else if (fromGrnId) {
           const grn = await purchasesAPI.grns.get(fromGrnId)
           if (cancelled) return
-          const mapped = billFromRow(grn, activeBranchId)
+          const mapped = billFromRow(grn, activeBranchIdRef.current)
           const items = await enrichLinesWithBatchFlags(mapped.items, mapped.branchId)
           setForm({ ...mapped, items })
           setConversionLabel(grn.number)
@@ -107,7 +123,7 @@ export default function BillFormPage({ mode = 'bill' }) {
       }
     })()
     return () => { cancelled = true }
-  }, [fromPoId, fromGrnId, activeBranchId, navigate])
+  }, [fromPoId, fromGrnId, navigate])
 
   const save = async () => {
     if (saving) return

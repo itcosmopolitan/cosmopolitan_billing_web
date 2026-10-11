@@ -22,6 +22,11 @@ import { entryInputStep } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
 import { COMPLIMENTARY_REASONS } from './complimentaryOptions'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 
 const emptyLine = () => ({
   item_id: null,
@@ -75,12 +80,14 @@ export default function ComplimentaryFormPage() {
     }
   }, [can, navigate])
 
-  useEffect(() => {
-    if (!activeBranchId) return
-    setForm((current) => (
-      current.branchId === activeBranchId ? current : { ...current, branchId: activeBranchId }
-    ))
-  }, [activeBranchId])
+  useTransactionBranchGuard({
+    hasLines: documentHasSelectedLines(form.items),
+    activeBranchId,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      emptyItems: () => [emptyLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId),
+  })
 
   useEffect(() => {
     if (!form.branchId) return

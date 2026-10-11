@@ -22,6 +22,10 @@ import {
   buildTransferPayload,
   EMPTY_LINE,
 } from './transferFormShared'
+import {
+  BranchLineConfirmModal,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 
 const SIDEBAR_W = 220
 const SIDEBAR_W_COLLAPSED = 68
@@ -49,6 +53,29 @@ export default function TransferFormPage({ mode = 'create' }) {
   const [allocEditor, setAllocEditor] = useState(null)
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
+  const [pendingFromBranchId, setPendingFromBranchId] = useState(null)
+  const hasTransferLines = (form.items || []).some((row) => row.item_id)
+
+  const applyFromBranch = (branchId, { clearLines = false } = {}) => {
+    if (!branchId || (!clearLines && form.from_branch_id === branchId)) return
+    setBatchOptions({})
+    setForm((current) => ({
+      ...current,
+      from_branch_id: branchId,
+      to_branch_id: current.to_branch_id === branchId ? '' : current.to_branch_id,
+      child_counter_id: '',
+      child_counter_name: '',
+      items: clearLines ? [{ ...EMPTY_LINE }] : current.items,
+    }))
+  }
+
+  useTransactionBranchGuard({
+    enabled: !loading,
+    hasLines: hasTransferLines,
+    activeBranchId: activeBranch?.id,
+    onConfirm: (branch) => applyFromBranch(branch.id, { clearLines: true }),
+    onSync: (branchId) => applyFromBranch(branchId),
+  })
 
   useEffect(() => {
     setChildCounterBranchId(
@@ -59,19 +86,11 @@ export default function TransferFormPage({ mode = 'create' }) {
 
   const patchForm = (k, v) => {
     if (k === 'from_branch_id' && v !== form.from_branch_id) {
-      setBatchOptions({})
-      setForm((f) => ({
-        ...f,
-        from_branch_id: v,
-        to_branch_id: f.to_branch_id === v ? '' : f.to_branch_id,
-        child_counter_id: '',
-        child_counter_name: '',
-        items: f.items.map((row) => (
-          row.item_id
-            ? { ...row, batchAllocation: [], batchAllocationCustom: false }
-            : row
-        )),
-      }))
+      if (hasTransferLines) {
+        setPendingFromBranchId(v || '')
+        return
+      }
+      applyFromBranch(v)
       return
     }
     setForm((f) => ({ ...f, [k]: v }))
@@ -385,6 +404,15 @@ export default function TransferFormPage({ mode = 'create' }) {
           Cancel
         </button>
       </div>
+      <BranchLineConfirmModal
+        open={!!pendingFromBranchId}
+        branchName={branchById.get(pendingFromBranchId)?.name}
+        onCancel={() => setPendingFromBranchId(null)}
+        onConfirm={() => {
+          applyFromBranch(pendingFromBranchId, { clearLines: true })
+          setPendingFromBranchId(null)
+        }}
+      />
     </>
   )
 }

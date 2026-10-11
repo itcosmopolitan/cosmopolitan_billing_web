@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI } from '@/api'
@@ -10,11 +10,17 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import QuoteFormModal from './QuoteFormModal'
 import {
   emptyQuoteForm,
+  emptySaleLine,
   quoteFromRow,
   lineDiscountToPercent,
 } from './salesFormShared'
 import { entityDiscountToPayload, roundSaleLineForApi, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 
 export default function QuoteFormPage({ mode = 'create' }) {
   const { quoteId } = useParams()
@@ -43,19 +49,18 @@ export default function QuoteFormPage({ mode = 'create' }) {
     setChildCounterBranchId(branchId, isEdit ? form.childCounterId || '' : '')
   }, [activeBranchId, isEdit, form.branchId, form.childCounterId, setChildCounterBranchId])
 
-  useEffect(() => {
-    if (isEdit || !activeBranchId) return
-    setForm((current) => (
-      current.branchId === activeBranchId
-        ? current
-        : {
-            ...current,
-            branchId: activeBranchId,
-            childCounterId: '',
-            childCounterName: '',
-          }
-    ))
-  }, [activeBranchId, isEdit])
+  const activeBranchIdRef = useRef(activeBranchId)
+  activeBranchIdRef.current = activeBranchId
+  useTransactionBranchGuard({
+    enabled: !readOnly,
+    hasLines: documentHasSelectedLines(form.items),
+    activeBranchId,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      resetCounter: true,
+      emptyItems: () => [emptySaleLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId, { resetCounter: true }),
+  })
 
   useEffect(() => {
     if (isEdit && !can('invoices.edit') && !readOnly) {
@@ -73,7 +78,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
         setLoading(true)
         const q = await salesAPI.quotations.get(quoteId)
         if (cancelled) return
-        const base = quoteFromRow(q, activeBranchId)
+        const base = quoteFromRow(q, activeBranchIdRef.current)
         const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
         if (cancelled) return
         setForm({ ...base, items })
@@ -86,7 +91,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
       }
     })()
     return () => { cancelled = true }
-  }, [isEdit, quoteId, activeBranchId, navigate])
+  }, [isEdit, quoteId, navigate])
 
   const save = async () => {
     if (saving || readOnly) return

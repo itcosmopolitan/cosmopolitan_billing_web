@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI, itemsAPI, customersAPI } from '@/api'
@@ -11,6 +11,7 @@ import InvoiceFormModal from './InvoiceFormModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import {
   emptyInvoiceForm,
+  emptySaleLine,
   invoiceFromRow,
   lineDiscountToPercent,
   findUnlistedItemsAtBranch,
@@ -30,6 +31,11 @@ import {
 } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 
 async function enrichLinesWithBatchFlags(items, branchId) {
   const withCost = await enrichSaleLinesWithCosts(items, branchId)
@@ -95,14 +101,17 @@ export default function InvoiceFormPage() {
 
   const goBack = () => navigate(fromOrderId ? '/sales?tab=orders' : fromQuoteId ? '/sales?tab=quotes' : '/sales?tab=invoices')
 
-  useEffect(() => {
-    if (fromQuoteId || fromOrderId || !activeBranchId) return
-    setForm((current) => (
-      current.branchId === activeBranchId
-        ? current
-        : { ...current, branchId: activeBranchId }
-    ))
-  }, [activeBranchId, fromOrderId, fromQuoteId])
+  const activeBranchIdRef = useRef(activeBranchId)
+  activeBranchIdRef.current = activeBranchId
+  useTransactionBranchGuard({
+    hasLines: documentHasSelectedLines(form.items),
+    activeBranchId,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      resetCounter: true,
+      emptyItems: () => [emptySaleLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId, { resetCounter: true }),
+  })
 
   useEffect(() => {
     setChildCounterBranchId(form.branchId || activeBranchId || '', form.childCounterId || '')
@@ -124,7 +133,7 @@ export default function InvoiceFormPage() {
           const so = await salesAPI.orders.get(fromOrderId)
           if (cancelled) return
           const base = await enrichCustomerCreditFields(
-            invoiceFromRow(so, activeBranchId, { withOrderLineId: true }),
+            invoiceFromRow(so, activeBranchIdRef.current, { withOrderLineId: true }),
           )
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
@@ -135,7 +144,7 @@ export default function InvoiceFormPage() {
           if (cancelled) return
           const unlisted = await findUnlistedItemsAtBranch(
             q.items || [],
-            q.branchId || q.branch_id || activeBranchId,
+            q.branchId || q.branch_id || activeBranchIdRef.current,
           )
           if (cancelled) return
           if (unlisted.length) {
@@ -143,7 +152,7 @@ export default function InvoiceFormPage() {
             setConversionLabel(q.number)
             return
           }
-          const base = await enrichCustomerCreditFields(invoiceFromRow(q, activeBranchId))
+          const base = await enrichCustomerCreditFields(invoiceFromRow(q, activeBranchIdRef.current))
           const items = await enrichLinesWithBatchFlags(base.items, base.branchId)
           setForm({ ...base, items })
           setSelectedChildCounter(base.childCounterId || '')
@@ -157,7 +166,7 @@ export default function InvoiceFormPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [fromQuoteId, fromOrderId, activeBranchId, navigate, setSelectedChildCounter])
+  }, [fromQuoteId, fromOrderId, navigate, setSelectedChildCounter])
 
   const save = async (allowCreditOverLimit = false) => {
     if (saving) return

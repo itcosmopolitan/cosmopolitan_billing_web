@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { purchasesAPI } from '@/api'
@@ -7,7 +7,12 @@ import { useCan } from '@/auth/permissions'
 import { formatLabel } from '@/utils/helpers'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import PurchaseOrderFormModal from './PurchaseOrderFormModal'
-import { emptyPoForm, poFromRow, lineDiscountToPercent } from './purchaseFormShared'
+import { emptyPoForm, emptyPurchaseLine, poFromRow, lineDiscountToPercent } from './purchaseFormShared'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 import {
   entityDiscountToPayload,
   purchaseLineGross,
@@ -30,6 +35,17 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
   const [editingNumber, setEditingNumber] = useState(null)
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
+  const activeBranchIdRef = useRef(activeBranchId)
+  activeBranchIdRef.current = activeBranchId
+  useTransactionBranchGuard({
+    enabled: !readOnly,
+    hasLines: documentHasSelectedLines(form.items),
+    activeBranchId,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      emptyItems: () => [emptyPurchaseLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId),
+  })
 
   const goBack = () => navigate('/purchases?tab=orders')
 
@@ -61,7 +77,7 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
             return
           }
         }
-        const base = poFromRow(po, activeBranchId)
+        const base = poFromRow(po, activeBranchIdRef.current)
         const items = await enrichPurchaseLinesWithSellPrice(base.items)
         if (cancelled) return
         setForm({ ...base, items })
@@ -74,7 +90,7 @@ export default function PurchaseOrderFormPage({ mode = 'create' }) {
       }
     })()
     return () => { cancelled = true }
-  }, [isEdit, orderId, activeBranchId, navigate])
+  }, [isEdit, orderId, navigate])
 
   const save = async () => {
     if (saving || readOnly) return

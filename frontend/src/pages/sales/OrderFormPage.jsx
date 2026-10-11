@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { salesAPI, branchesAPI } from '@/api'
@@ -11,12 +11,18 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import OrderFormModal from './OrderFormModal'
 import {
   emptyOrderForm,
+  emptySaleLine,
   orderFromRow,
   quoteFromRow,
   lineDiscountToPercent,
 } from './salesFormShared'
 import { entityDiscountToPayload, roundSaleLineForApi, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 
 export default function OrderFormPage({ mode = 'create' }) {
   const { orderId } = useParams()
@@ -49,19 +55,18 @@ export default function OrderFormPage({ mode = 'create' }) {
     )
   }, [activeBranchId, isEdit, fromQuoteId, form.branchId, form.childCounterId, setChildCounterBranchId])
 
-  useEffect(() => {
-    if (isEdit || fromQuoteId || !activeBranchId) return
-    setForm((current) => (
-      current.branchId === activeBranchId
-        ? current
-        : {
-            ...current,
-            branchId: activeBranchId,
-            childCounterId: '',
-            childCounterName: '',
-          }
-    ))
-  }, [activeBranchId, isEdit, fromQuoteId])
+  const activeBranchIdRef = useRef(activeBranchId)
+  activeBranchIdRef.current = activeBranchId
+  useTransactionBranchGuard({
+    enabled: !readOnly,
+    hasLines: documentHasSelectedLines(form.items),
+    activeBranchId,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      resetCounter: true,
+      emptyItems: () => [emptySaleLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId, { resetCounter: true }),
+  })
 
   useEffect(() => {
     if (isEdit && !can('invoices.edit', 'invoices.create') && !readOnly) {
@@ -91,7 +96,7 @@ export default function OrderFormPage({ mode = 'create' }) {
               return
             }
           }
-          const base = orderFromRow(so, activeBranchId)
+          const base = orderFromRow(so, activeBranchIdRef.current)
           const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
           if (cancelled) return
           setForm({ ...base, items })
@@ -112,10 +117,10 @@ export default function OrderFormPage({ mode = 'create' }) {
           setLoading(true)
           const q = await salesAPI.quotations.get(fromQuoteId)
           if (cancelled) return
-          const base = quoteFromRow(q, activeBranchId)
+          const base = quoteFromRow(q, activeBranchIdRef.current)
           const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
           if (cancelled) return
-          setForm({ ...emptyOrderForm(base.branchId || activeBranchId), ...base, items, number: '' })
+          setForm({ ...emptyOrderForm(base.branchId || activeBranchIdRef.current), ...base, items, number: '' })
           setConversionLabel(q.number)
         } catch {
           toast.error('Quotation not found')
@@ -127,7 +132,7 @@ export default function OrderFormPage({ mode = 'create' }) {
       return () => { cancelled = true }
     }
     return undefined
-  }, [isEdit, orderId, fromQuoteId, activeBranchId, navigate])
+  }, [isEdit, orderId, fromQuoteId, navigate])
 
   const save = async () => {
     if (saving || readOnly) return

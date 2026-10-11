@@ -6,7 +6,12 @@ import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import InvoiceFormModal from './InvoiceFormModal'
-import { invoiceFromRow, lineDiscountToPercent, canShowInvoiceEdit, invoiceEditPath, invoiceHasPayment, invoiceHasReturn, isPosInvoice } from './salesFormShared'
+import { emptySaleLine, invoiceFromRow, lineDiscountToPercent, canShowInvoiceEdit, invoiceEditPath, invoiceHasPayment, invoiceHasReturn, isPosInvoice } from './salesFormShared'
+import {
+  applyDocumentBranch,
+  documentHasSelectedLines,
+  useTransactionBranchGuard,
+} from '@/utils/branchLineGuard'
 import { entityDiscountToPayload, saleLineGross } from '@/utils/documentFormTotals'
 import { enrichSaleLinesWithCosts } from '@/utils/enrichSaleLineCosts'
 import { toApiPayload } from '@/utils/batchAllocation'
@@ -58,6 +63,16 @@ export default function InvoiceEditPage() {
   const [saving, setSaving] = useState(false)
 
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  useTransactionBranchGuard({
+    enabled: !loading && !!form,
+    hasLines: documentHasSelectedLines(form?.items),
+    activeBranchId: activeBranch?.id,
+    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
+      resetCounter: true,
+      emptyItems: () => [emptySaleLine()],
+    }),
+    onSync: (branchId) => applyDocumentBranch(setForm, branchId, { resetCounter: true }),
+  })
 
   useEffect(() => {
     setChildCounterBranchId(form?.branchId || '', form?.childCounterId || '')
