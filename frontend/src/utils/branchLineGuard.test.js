@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { documentHasSelectedLines } from './branchLineGuard'
+import { documentHasSelectedLines } from './branchLineGuard.jsx'
 
 describe('documentHasSelectedLines', () => {
   it('ignores blank rows and keeps rows that already point at an item', () => {
