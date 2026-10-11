@@ -8661,6 +8661,7 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
     deleted = []
     credit_refunded = 0.0
     customer_ids: set[str] = set()
+    today = datetime.now().strftime("%Y-%m-%d")
     for pay in payments:
         snapshot = {
             "id": pay.id, "number": pay.number, "customer_id": pay.customer_id,
@@ -8743,6 +8744,20 @@ async def bulk_delete_payments(data: BulkDeleteIn, db: AsyncSession = Depends(ge
                     source_ref=pay.id,
                     source_number=pay.number,
                 )
+        await void_payment_record(
+            db,
+            source_document_type="customer_payment",
+            source_document_id=pay.id,
+            voided_at=today,
+        )
+        if pay.payment_mode == "cash":
+            await void_cash_for_payment(
+                db,
+                source_type="customer_payment",
+                source_id=pay.id,
+                voided_by=getattr(user, "name", None) or "Staff",
+                reason=f"Payment {pay.number} deleted",
+            )
         _audit_delete(db, action="delete_payment", ref=pay.number, snapshot=snapshot, user=user)
         await db.delete(pay)
         deleted.append({"id": pay.id, "number": pay.number})
