@@ -1,10 +1,13 @@
 
 import logging
+import uuid
 from datetime import date, datetime, time, timedelta
 from collections import defaultdict
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import String, and_, case, cast, func, literal, or_, select, Numeric
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -33,6 +36,7 @@ from src.models import (
     PurchaseBill,
     PurchaseLineItem,
     PurchaseOrder,
+    ReportExportJob,
     ReturnLineItem,
     SaleInvoice,
     SaleLineItem,
@@ -53,6 +57,12 @@ from src.models import (
     VendorReturn,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.report_export import (
+    EXPORT_RETENTION,
+    REPORT_EXPORT_PATHS,
+    ReportExportRequest,
+    safe_export_filename,
+)
 from src.report_catalog import build_catalog_payload, normalize_favorite_ids
 from src.security import current_user, get_allowed_branch_ids, require_perm
 
@@ -4846,3 +4856,91 @@ async def margin_analysis(
         for row in result.fetchall()
     ]
     return {"by_category": by_category, "top_items": top_items}
+
+
+MAX_EXPORT_PARAMS = 40
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _export_status_response(job: ReportExportJob) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "filename": job.filename,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "error_message": job.error_message,
+        "expires_at": job.expires_at.isoformat() if job.expires_at else None,
+    }
+
+
+async def _get_owned_export_job(db: AsyncSession, job_id: str, user: User) -> ReportExportJob:
+    result = await db.execute(
+        select(ReportExportJob).where(
+            ReportExportJob.id == job_id,
+            ReportExportJob.user_id == user.id,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, detail="Export job not found")
+    return job
+
+
+@router.post(
+    "/exports",
+    status_code=202,
+    dependencies=[Depends(require_perm("reports.view"))],
+)
+async def create_report_export(
+    body: ReportExportRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    if body.report_api not in REPORT_EXPORT_PATHS:
+        raise HTTPException(400, detail="This report cannot be exported")
+    if len(body.params) > MAX_EXPORT_PARAMS:
+        raise HTTPException(400, detail="Too many report filters")
+    now = datetime.utcnow()
+    job = ReportExportJob(
+        id=str(uuid.uuid4()),
+        status="queued",
+        report_api=body.report_api,
+        filename=safe_export_filename(body.filename),
+        request_json=body.model_dump(mode="json"),
+        user_id=user.id,
+        created_at=now,
+        expires_at=now + EXPORT_RETENTION,
+    )
+    db.add(job)
+    await db.commit()
+    return _export_status_response(job)
+
+
+@router.get("/exports/{job_id}", dependencies=[Depends(require_perm("reports.view"))])
+async def get_report_export(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    job = await _get_owned_export_job(db, job_id, user)
+    return _export_status_response(job)
+
+
+@router.get("/exports/{job_id}/download", dependencies=[Depends(require_perm("reports.view"))])
+async def download_report_export(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    job = await _get_owned_export_job(db, job_id, user)
+    if job.status != "completed":
+        raise HTTPException(409, detail="The export is not ready yet")
+    if job.file_data is None or (job.expires_at and job.expires_at < datetime.utcnow()):
+        raise HTTPException(410, detail="This export has expired. Please export again.")
+    disposition = f"attachment; filename=\"report.xlsx\"; filename*=UTF-8''{quote(job.filename)}"
+    return Response(
+        content=bytes(job.file_data),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": disposition},
+    )

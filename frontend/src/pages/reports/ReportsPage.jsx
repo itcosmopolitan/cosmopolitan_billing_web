@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { reportsAPI } from '@/api'
-import { fmt, fmtDate, fmtNum, fmtQty, statusLabel, exportToExcel } from '@/utils/helpers'
+import { fmt, fmtDate, fmtNum, fmtQty, statusLabel } from '@/utils/helpers'
 import {
   Card, SearchBar, PaginationBar, SortableHeader, MultiSelect,
   DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, AutocompleteDropdown,
@@ -69,6 +69,9 @@ const NON_SUMMABLE_KEYS = new Set([
 
 /** Reports that already encode their own totals / structure. */
 const NO_FOOTER_TOTALS_REPORTS = new Set(['profit-loss'])
+
+const EXPORT_POLL_INTERVAL_MS = 1500
+const EXPORT_POLL_TIMEOUT_MS = 20 * 60 * 1000
 
 /** When set, footer only sums these keys (taxable is duplicated across CGST/SGST). */
 const FOOTER_SUM_KEYS_BY_REPORT = {
@@ -317,13 +320,6 @@ const COLUMN_VALUE_FORMATTERS = {
   status: formatStatus,
 }
 
-const NUMERIC_EXPORT_FORMATS = new Set(['currency', 'currency_blank', 'qty', 'number', 'pct'])
-
-/** Export-facing labels when the API key still uses a legacy name. */
-const EXPORT_LABEL_OVERRIDES = {
-  profit: 'Margin',
-}
-
 function withCurrencyLabel(label, format) {
   if ((format === 'currency' || format === 'currency_blank') && !/\(MVR\)/i.test(label)) {
     return `${label} (MVR)`
@@ -331,28 +327,8 @@ function withCurrencyLabel(label, format) {
   return label
 }
 
-function exportColumnLabel(column) {
-  return withCurrencyLabel(EXPORT_LABEL_OVERRIDES[column.key] || column.label || column.key, column.format)
-}
-
 function displayColumnLabel(column) {
   return withCurrencyLabel(column.label, column.format)
-}
-
-function exportColumnValue(column, row) {
-  const value = row?.[column.key]
-  if (NUMERIC_EXPORT_FORMATS.has(column.format)) {
-    if (value === null || value === undefined || value === '') return null
-    const num = typeof value === 'number' ? value : Number(value)
-    return Number.isFinite(num) ? num : null
-  }
-  const formatted = COLUMN_VALUE_FORMATTERS[column.key]
-    ? COLUMN_VALUE_FORMATTERS[column.key](value, row)
-    : column.formatter
-      ? column.formatter(value, row)
-      : value
-  if (formatted === null || formatted === undefined || formatted === NOT_SET || formatted === NOT_APPLICABLE) return ''
-  return formatted
 }
 
 const DETAIL_PATH_BUILDERS = {
@@ -1400,31 +1376,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setSkip(0)
   }
 
-  const exportExcel = () => {
-    if (!rows || rows.length === 0) {
+  const [exporting, setExporting] = useState(false)
+
+  const exportExcel = async () => {
+    if (exporting) return
+    const expectedRows = appliedSearchQuery ? (searchRows?.length ?? 0) : total
+    if (expectedRows <= 0) {
       toast.error('No data available to export.')
       return
-    }
-    const exportData = rows.map((row) => {
-      const entry = {}
-      visibleColumns.forEach((col) => {
-        entry[exportColumnLabel(col)] = exportColumnValue(col, row)
-      })
-      return entry
-    })
-    if (columnTotals) {
-      const totalEntry = {}
-      visibleColumns.forEach((col) => {
-        const label = exportColumnLabel(col)
-        if (Object.prototype.hasOwnProperty.call(columnTotals, col.key)) {
-          totalEntry[label] = exportColumnValue(col, { [col.key]: columnTotals[col.key] })
-        } else if (col.key === totalsLabelColumnKey) {
-          totalEntry[label] = totalsLabel
-        } else {
-          totalEntry[label] = null
-        }
-      })
-      exportData.push(totalEntry)
     }
     const fromLabel = formatDate(appliedFilters.dateFrom)
     const toLabel = formatDate(appliedFilters.dateTo)
@@ -1434,18 +1393,77 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     const safeName = String(report.label || 'Report').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Report'
     const stampFrom = isAsOfDate ? (appliedFilters.dateTo || 'as_of') : (appliedFilters.dateFrom || 'start')
     const stampTo = appliedFilters.dateTo || 'end'
-    exportToExcel(
-      exportData,
-      isAsOfDate
-        ? `${safeName.replace(/\s+/g, '_')}_as_of_${stampTo}.xlsx`
-        : `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`,
-      null,
-      {
-        title: report.label || 'Report',
-        subtitle: isAsOfDate ? `As of: ${dateRangeLabel}` : `Date range: ${dateRangeLabel}`,
-      },
-    )
-    toast.success('Excel export ready')
+    const filename = isAsOfDate
+      ? `${safeName.replace(/\s+/g, '_')}_as_of_${stampTo}.xlsx`
+      : `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`
+    const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
+    const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
+    const params = {
+      branch_id: appliedBranchId || null,
+      date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
+      date_to: appliedFilters.dateTo,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      ...drillFilters,
+      ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
+      ...(supportsChildCounterFilter && appliedFilters.childCounterId
+        ? { child_counter_id: appliedFilters.childCounterId }
+        : {}),
+    }
+    const body = {
+      report_api: report.api,
+      params,
+      search: appliedSearchQuery || null,
+      columns: visibleColumns.map((col) => ({
+        key: col.key,
+        label: col.label || '',
+        format: col.format || null,
+        summable: isSummableColumn(col, report.id),
+      })),
+      title: report.label || 'Report',
+      subtitle: isAsOfDate ? `As of: ${dateRangeLabel}` : `Date range: ${dateRangeLabel}`,
+      filename,
+    }
+
+    setExporting(true)
+    const toastId = toast.loading('Preparing Excel export…')
+    try {
+      const job = await reportsAPI.createExport(body)
+      const deadline = Date.now() + EXPORT_POLL_TIMEOUT_MS
+      let status = job
+      while (status.status !== 'completed' && status.status !== 'failed') {
+        if (Date.now() > deadline) {
+          throw new Error('The export is taking longer than expected. Please try again later.')
+        }
+        await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_INTERVAL_MS))
+        status = await reportsAPI.getExport(job.job_id)
+        if (status.status === 'processing' && status.total_rows) {
+          toast.loading(`Preparing Excel export… ${status.processed_rows} of ${status.total_rows} rows`, { id: toastId })
+        }
+      }
+      if (status.status !== 'completed') {
+        throw new Error(status.error_message || 'Excel export failed.')
+      }
+      const blob = await reportsAPI.downloadExport(job.job_id)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = status.filename || filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      toast.success('Excel export ready', { id: toastId })
+    } catch (error) {
+      // HTTP failures are already reported by the API interceptor.
+      if (error?.response) {
+        toast.dismiss(toastId)
+      } else {
+        toast.error(error?.message || 'Excel export failed.', { id: toastId })
+      }
+    } finally {
+      setExporting(false)
+    }
   }
 
   const openDrilldown = (row) => {

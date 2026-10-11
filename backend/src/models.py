@@ -92,6 +92,26 @@ class ItemImportJob(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class ReportExportJob(Base):
+    __tablename__ = "report_export_jobs"
+
+    id = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    report_api = Column(String, nullable=False)
+    filename = Column(String, nullable=False)
+    request_json = Column(JSON, nullable=False)
+    file_data = Column(LargeBinary, nullable=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    total_rows = Column(Integer, nullable=False, default=0)
+    processed_rows = Column(Integer, nullable=False, default=0)
+    attempts = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+
+
 class CustomerImportJob(Base):
     __tablename__ = "customer_import_jobs"
 

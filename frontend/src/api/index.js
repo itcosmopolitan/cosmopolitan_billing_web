@@ -634,6 +634,9 @@ export const reportsAPI = {
   branchCompare:         (params) => api.get('/reports/branch-comparison',{ params }),
   marginAnalysis:        (params) => api.get('/reports/margin-analysis',  { params }),
   documentTrail:   (params) => api.get('/reports/document-trail',   { params }),
+  createExport:    (data) => api.post('/reports/exports', data),
+  getExport:       (jobId) => api.get(`/reports/exports/${jobId}`),
+  downloadExport:  (jobId) => api.get(`/reports/exports/${jobId}/download`, { responseType: 'blob' }),
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
