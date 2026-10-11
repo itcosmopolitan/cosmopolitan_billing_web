@@ -39,9 +39,9 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
   }, [open, vendor?.id])
 
   const summary = [
-    { label: 'Outstanding', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
-    { label: 'Vendor credit', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
-    { label: 'Total purchases', value: fmt(detail?.totalPurchases) },
+    { label: 'Outstanding (MVR)', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
+    { label: 'Vendor credit (MVR)', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
+    { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
     { label: 'Payment terms', value: detail?.payment_terms || '—' },
   ]
 
@@ -117,7 +117,7 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
                   ? <span style={{ color: 'var(--accent)' }}>{fmt(detail.creditBalance)}</span>
                   : '—',
               },
-              { label: 'Total purchases', value: fmt(detail?.totalPurchases) },
+              { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
             ]}
             />
           </DetailSection>

@@ -2,7 +2,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { axisStyle, chartColors, gridStroke } from '../utils/chartConfig'
 import { formatCompactCurrency } from '../utils/formatCurrency'
 
-export default function SalesTrendChart({ data = [], valueKey = 'sales', label = 'Sales', color = chartColors.primary }) {
+export default function SalesTrendChart({ data = [], valueKey = 'sales', label = 'Sales (MVR)', color = chartColors.primary }) {
   return (
     <ResponsiveContainer width="100%" height={240}>
       <AreaChart data={data} margin={{ top: 8, right: 10, left: -12, bottom: 0 }}>

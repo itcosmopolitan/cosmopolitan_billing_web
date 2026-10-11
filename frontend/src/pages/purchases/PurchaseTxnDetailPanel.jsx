@@ -79,12 +79,12 @@ export default function PurchaseTxnDetailPanel({
   const poStatus = kind === 'order' ? conversionStatusDisplay('po', detail) : null
 
   const summary = kind === 'bill' ? [
-    { label: 'Total', value: fmt(detail?.total) },
-    { label: 'Paid', value: fmt(detail?.paidAmount || 0), tone: 'var(--green)' },
-    { label: 'Balance', value: balDue > 0.01 ? fmt(balDue) : '—', tone: balDue > 0.01 ? 'var(--red)' : undefined },
+    { label: 'Total (MVR)', value: fmt(detail?.total) },
+    { label: 'Paid (MVR)', value: fmt(detail?.paidAmount || 0), tone: 'var(--green)' },
+    { label: 'Balance (MVR)', value: balDue > 0.01 ? fmt(balDue) : '—', tone: balDue > 0.01 ? 'var(--red)' : undefined },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : kind === 'return' ? [
-    { label: 'Credit total', value: fmt(detail?.total) },
+    { label: 'Credit total (MVR)', value: fmt(detail?.total) },
     {
       label: 'Against bill',
       value: detail?.billNumber
@@ -94,7 +94,7 @@ export default function PurchaseTxnDetailPanel({
     { label: 'Reason', value: detail?.reason || '—' },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : kind === 'grn' ? [
-    { label: 'Total', value: fmt(detail?.total) },
+    { label: 'Total (MVR)', value: fmt(detail?.total) },
     {
       label: 'PO',
       value: detail?.poNumber
@@ -104,7 +104,7 @@ export default function PurchaseTxnDetailPanel({
     { label: 'Lines', value: lineCount },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : [
-    { label: 'Total', value: fmt(detail?.total) },
+    { label: 'Total (MVR)', value: fmt(detail?.total) },
     { label: 'Lines', value: lineCount },
     { label: 'Expected', value: detail?.expectedDate || '—' },
     { label: 'Status', value: <Chip status={poStatus?.chip || detail?.status} label={poStatus?.label} /> },
@@ -308,7 +308,7 @@ export default function PurchaseTxnDetailPanel({
                 { label: 'Due date', value: detail?.dueDate || '—' },
                 { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode) },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
-                { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                { label: 'Credited (returns) (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
                 ...(detail?.purchaseOrderNumber ? [{
                   label: 'Purchase order',
                   value: (
@@ -401,26 +401,26 @@ export default function PurchaseTxnDetailPanel({
                 {kind === 'return' ? (
                   <>
                     <th className="text-right">Return qty</th>
-                    <th className="text-right">Cost (Excl.)</th>
-                    <th className="text-right">GST</th>
-                    <th className="text-right">Total (Excl.)</th>
+                    <th className="text-right">Cost (Excl.) (MVR)</th>
+                    <th className="text-right">GST (MVR)</th>
+                    <th className="text-right">Total (Excl.) (MVR)</th>
                   </>
                 ) : kind === 'grn' ? (
                   <>
                     <th className="text-right">Ordered</th>
                     <th className="text-right">Received</th>
-                    <th className="text-right">Cost (Excl.)</th>
+                    <th className="text-right">Cost (Excl.) (MVR)</th>
                     <th>Batch</th>
-                    <th className="text-right">GST</th>
-                    <th className="text-right">Total (Excl.)</th>
+                    <th className="text-right">GST (MVR)</th>
+                    <th className="text-right">Total (Excl.) (MVR)</th>
                   </>
                 ) : (
                   <>
                     <th className="text-right">Qty</th>
-                    <th className="text-right">Cost (Excl.)</th>
+                    <th className="text-right">Cost (Excl.) (MVR)</th>
                     <th className="text-right">Discount %</th>
-                    <th className="text-right">GST</th>
-                    <th className="text-right">Total (Excl.)</th>
+                    <th className="text-right">GST (MVR)</th>
+                    <th className="text-right">Total (Excl.) (MVR)</th>
                   </>
                 )}
               </tr>
@@ -486,16 +486,16 @@ export default function PurchaseTxnDetailPanel({
           <DetailFields
             columns={1}
             fields={[
-              { label: 'Subtotal', value: fmt(detail?.subtotal || 0) },
-              { label: 'GST', value: fmt(detail?.taxTotal || 0) },
-              { label: 'Discount', value: (detail?.discount || 0) > 0 ? `-${fmt(detail.discount)}` : '—' },
+              { label: 'Subtotal (MVR)', value: fmt(detail?.subtotal || 0) },
+              { label: 'GST (MVR)', value: fmt(detail?.taxTotal || 0) },
+              { label: 'Discount (MVR)', value: (detail?.discount || 0) > 0 ? `-${fmt(detail.discount)}` : '—' },
               {
-                label: kind === 'return' ? 'Credit total' : 'Total',
+                label: kind === 'return' ? 'Credit total (MVR)' : 'Total (MVR)',
                 value: <strong style={{ color: 'var(--accent)' }}>{fmt(detail?.total || 0)}</strong>,
               },
               ...(kind === 'bill' ? [
-                { label: 'Paid', value: <span style={{ color: 'var(--green)' }}>{fmt(detail?.paidAmount || 0)}</span> },
-                { label: 'Balance', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : '—' },
+                { label: 'Paid (MVR)', value: <span style={{ color: 'var(--green)' }}>{fmt(detail?.paidAmount || 0)}</span> },
+                { label: 'Balance (MVR)', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : '—' },
               ] : []),
             ]}
           />

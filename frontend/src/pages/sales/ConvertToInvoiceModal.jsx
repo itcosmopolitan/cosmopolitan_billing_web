@@ -247,7 +247,7 @@ export default function ConvertToInvoiceModal({
         <AlertBar type="blue" icon="ℹ">
           Creating invoice from <strong>{source.number}</strong>
           {source.customerName ? <> for <strong>{source.customerName}</strong></> : null}
-          {typeof previewTotal === 'number' ? <> · Invoice total: <strong>{fmt(previewTotal)}</strong></> : null}
+          {typeof previewTotal === 'number' ? <> · Invoice total (MVR): <strong>{fmt(previewTotal)}</strong></> : null}
         </AlertBar>
       )}
 

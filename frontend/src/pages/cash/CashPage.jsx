@@ -171,35 +171,35 @@ export default function CashPage({ ledger = 'sales' }) {
   const breakdownOut = summary.breakdown_out || []
   const summaryCards = isPettyCash
     ? [
-        { label: 'Opening Balance', value: fmt(summary.opening_balance ?? 0), color: 'var(--teal)' },
-        { label: 'Cash In', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in').length} entries`, color: 'var(--green)' },
-        { label: 'Cash Out', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out' && e.category !== 'Opening Balance').length} entries`, color: 'var(--red)' },
-        { label: 'Expected', value: fmt(summary.expected_balance ?? 0), color: 'var(--text-primary)' },
+        { label: 'Opening Balance (MVR)', value: fmt(summary.opening_balance ?? 0), color: 'var(--teal)' },
+        { label: 'Cash In (MVR)', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in').length} entries`, color: 'var(--green)' },
+        { label: 'Cash Out (MVR)', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out' && e.category !== 'Opening Balance').length} entries`, color: 'var(--red)' },
+        { label: 'Expected (MVR)', value: fmt(summary.expected_balance ?? 0), color: 'var(--text-primary)' },
         {
-          label: 'Actual',
+          label: 'Actual (MVR)',
           value: isLocked ? fmt(summary.physical_count ?? 0) : '— pending',
           color: isLocked ? 'var(--green)' : 'var(--text-muted)',
           sub: isLocked ? 'at close' : 'close to record',
         },
         {
-          label: 'Variance',
+          label: 'Variance (MVR)',
           value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
           color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
         },
       ]
     : [
-        { label: 'Opening Balance', value: fmt(summary.opening_balance ?? summary.opening ?? 0), color: 'var(--teal)' },
-        { label: 'Cash In', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in' && e.category !== 'Opening Balance').length} entries`, color: 'var(--green)' },
-        { label: 'Cash Out', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out').length} entries`, color: 'var(--red)' },
-        { label: 'Expected', value: fmt(summary.expected_balance ?? summary.expected ?? 0), color: 'var(--text-primary)' },
+        { label: 'Opening Balance (MVR)', value: fmt(summary.opening_balance ?? summary.opening ?? 0), color: 'var(--teal)' },
+        { label: 'Cash In (MVR)', value: fmt(summary.cash_in ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'in' && e.category !== 'Opening Balance').length} entries`, color: 'var(--green)' },
+        { label: 'Cash Out (MVR)', value: fmt(summary.cash_out ?? 0), sub: `${entries.filter((e) => !e.is_voided && e.type === 'out').length} entries`, color: 'var(--red)' },
+        { label: 'Expected (MVR)', value: fmt(summary.expected_balance ?? summary.expected ?? 0), color: 'var(--text-primary)' },
         {
-          label: 'Actual',
+          label: 'Actual (MVR)',
           value: isLocked ? fmt(summary.physical_count ?? 0) : '— pending',
           color: isLocked ? 'var(--green)' : 'var(--text-muted)',
           sub: isLocked ? 'at close' : 'close to record',
         },
         {
-          label: 'Variance',
+          label: 'Variance (MVR)',
           value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
           color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
         },
@@ -265,7 +265,7 @@ export default function CashPage({ ledger = 'sales' }) {
           icon="⚠️"
           style={{ marginBottom: 16 }}
         >
-          {isPettyCash ? 'Petty cash' : 'Cash'} variance detected: <strong>{fmt(Math.abs(variance))}</strong>{' '}
+          {isPettyCash ? 'Petty cash' : 'Cash'} variance (MVR) detected: <strong>{fmt(Math.abs(variance))}</strong>{' '}
           {variance < 0 ? 'shortage' : 'excess'}. Recount and close the day to record it.
         </AlertBar>
       )}
@@ -366,7 +366,7 @@ export default function CashPage({ ledger = 'sales' }) {
                     if (id === 'description') return <th key={id}>Description</th>
                     if (id === 'ref') return <th key={id}>Ref</th>
                     if (id === 'by') return <th key={id}>By</th>
-                    if (id === 'amount') return <th key={id} className="text-right">Amount</th>
+                    if (id === 'amount') return <th key={id} className="text-right">Amount (MVR)</th>
                     return null
                   })}
                   <th aria-label="Actions" />
@@ -455,9 +455,9 @@ export default function CashPage({ ledger = 'sales' }) {
           <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{entries.filter((e) => !e.is_voided).length} active entries</span>
             <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
-              <span>In: <strong style={{ color: 'var(--green)' }}>{fmt(summary.cash_in ?? 0)}</strong></span>
-              <span>Out: <strong style={{ color: 'var(--red)' }}>{fmt(summary.cash_out ?? 0)}</strong></span>
-              <span>Balance: <strong style={{ color: 'var(--accent)' }}>{fmt(summary.expected_balance ?? summary.expected ?? 0)}</strong></span>
+              <span>In (MVR): <strong style={{ color: 'var(--green)' }}>{fmt(summary.cash_in ?? 0)}</strong></span>
+              <span>Out (MVR): <strong style={{ color: 'var(--red)' }}>{fmt(summary.cash_out ?? 0)}</strong></span>
+              <span>Balance (MVR): <strong style={{ color: 'var(--accent)' }}>{fmt(summary.expected_balance ?? summary.expected ?? 0)}</strong></span>
             </div>
           </div>
         </Card>
@@ -506,8 +506,8 @@ export default function CashPage({ ledger = 'sales' }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Date</th><th>Opening</th><th>Cash In</th><th>Cash Out</th>
-                  <th>Expected</th><th>Physical</th><th>Variance</th>
+                  <th>Date</th><th>Opening (MVR)</th><th>Cash In (MVR)</th><th>Cash Out (MVR)</th>
+                  <th>Expected (MVR)</th><th>Physical (MVR)</th><th>Variance (MVR)</th>
                   <th>Closed By</th><th>Status</th>
                 </tr>
               </thead>

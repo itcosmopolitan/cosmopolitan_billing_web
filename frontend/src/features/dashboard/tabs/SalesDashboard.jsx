@@ -28,35 +28,35 @@ export default function SalesDashboard({ filters, autoRefresh }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div className="grid-kpi">
-        <KpiCard title="Daily Sales" value={formatCompactCurrency(kpis.daily_sales)} delta={deltas.daily_sales} tone="success" sparkline={salesSpark} loading={loading} />
-        <KpiCard title="Weekly Sales" value={formatCompactCurrency(kpis.weekly_sales)} delta={deltas.weekly_sales} tone="info" sparkline={salesSpark} loading={loading} />
-        <KpiCard title="Monthly Sales" value={formatCompactCurrency(kpis.monthly_sales)} delta={deltas.monthly_sales} tone="success" sparkline={salesSpark} loading={loading} />
-        <KpiCard title="Revenue" value={formatCompactCurrency(kpis.total_revenue)} delta={deltas.total_revenue} tone="neutral" sparkline={revenueSpark} loading={loading} />
+        <KpiCard title="Daily Sales (MVR)" value={formatCompactCurrency(kpis.daily_sales)} delta={deltas.daily_sales} tone="success" sparkline={salesSpark} loading={loading} />
+        <KpiCard title="Weekly Sales (MVR)" value={formatCompactCurrency(kpis.weekly_sales)} delta={deltas.weekly_sales} tone="info" sparkline={salesSpark} loading={loading} />
+        <KpiCard title="Monthly Sales (MVR)" value={formatCompactCurrency(kpis.monthly_sales)} delta={deltas.monthly_sales} tone="success" sparkline={salesSpark} loading={loading} />
+        <KpiCard title="Revenue (MVR)" value={formatCompactCurrency(kpis.total_revenue)} delta={deltas.total_revenue} tone="neutral" sparkline={revenueSpark} loading={loading} />
         <KpiCard title="Profit Margin" value={formatPercent(kpis.profit_margin)} delta={deltas.profit_margin} tone="success" sparkline={spark(charts.revenue_vs_profit, 'profit')} loading={loading} permission="dashboard.profit.view" />
-        <KpiCard title="Average Bill Value" value={formatCurrency(kpis.average_bill_value)} delta={deltas.average_bill_value} tone="info" sparkline={salesSpark} loading={loading} />
+        <KpiCard title="Average Bill Value (MVR)" value={formatCurrency(kpis.average_bill_value)} delta={deltas.average_bill_value} tone="info" sparkline={salesSpark} loading={loading} />
       </div>
 
       <div className="grid-2">
-        <ChartCard title="Sales Trend" loading={loading}>
+        <ChartCard title="Sales Trend (MVR)" loading={loading}>
           <SalesTrendChart data={charts.sales_trend || []} />
         </ChartCard>
-        <ChartCard title="Revenue vs Profit" loading={loading}>
+        <ChartCard title="Revenue vs Profit (MVR)" loading={loading}>
           <RevenueProfitChart data={charts.revenue_vs_profit || []} />
         </ChartCard>
       </div>
 
       <div className="grid-2">
-        <ChartCard title="Category Mix" loading={loading}>
+        <ChartCard title="Category Mix (MVR)" loading={loading}>
           <CategoryPieChart data={charts.category_pie || []} nameKey="category" valueKey="revenue" />
         </ChartCard>
-        <ChartCard title="Brand Mix" loading={loading}>
+        <ChartCard title="Brand Mix (MVR)" loading={loading}>
           <CategoryPieChart data={charts.brand_donut || []} nameKey="brand" valueKey="revenue" donut />
         </ChartCard>
       </div>
 
       <div className="grid-2">
         <TargetAchievementPanel data={analytics.target_vs_achievement} />
-        <ChartCard title="Branch-wise Sales" loading={loading}>
+        <ChartCard title="Branch-wise Sales (MVR)" loading={loading}>
           <BranchComparisonChart data={analytics.branch_wise_sales || []} />
         </ChartCard>
       </div>
@@ -84,7 +84,7 @@ function TargetAchievementPanel({ data = {} }) {
   return (
     <div className="card">
       <div className="card-header" style={{ padding: '12px 16px' }}>
-        <h4 style={{ margin: 0, flex: 1 }}>Target vs Achievement</h4>
+        <h4 style={{ margin: 0, flex: 1 }}>Target vs Achievement (MVR)</h4>
         <span
           style={{
             fontSize: 11,
@@ -141,10 +141,10 @@ function TargetAchievementPanel({ data = {} }) {
 
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-              <TargetMetric label="Target" value={formatCompactCurrency(target)} />
-              <TargetMetric label="Achieved" value={formatCompactCurrency(achieved)} emphasis />
+              <TargetMetric label="Target (MVR)" value={formatCompactCurrency(target)} />
+              <TargetMetric label="Achieved (MVR)" value={formatCompactCurrency(achieved)} emphasis />
               <TargetMetric
-                label={overTarget > 0 ? 'Above target' : 'Remaining'}
+                label={overTarget > 0 ? 'Above target (MVR)' : 'Remaining (MVR)'}
                 value={formatCompactCurrency(overTarget > 0 ? overTarget : remaining)}
               />
             </div>
@@ -160,7 +160,7 @@ function TargetAchievementPanel({ data = {} }) {
                 />
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-                <span>MVR 0</span>
+                <span>0</span>
                 <span>{formatCompactCurrency(target)}</span>
               </div>
             </div>
@@ -195,17 +195,17 @@ function TargetMetric({ label, value, emphasis = false }) {
 const topProductColumns = [
   { key: 'name', header: 'Product' },
   { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatQtyNumber(row.qty) },
-  { key: 'revenue', header: 'Revenue', align: 'right', render: (row) => formatCompactCurrency(row.revenue) },
+  { key: 'revenue', header: 'Revenue (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.revenue) },
 ]
 
 const topCustomerColumns = [
   { key: 'name', header: 'Customer' },
   { key: 'bill_count', header: 'Bills', align: 'right', width: 70, render: (row) => formatNumber(row.bill_count) },
-  { key: 'revenue', header: 'Revenue', align: 'right', render: (row) => formatCompactCurrency(row.revenue) },
+  { key: 'revenue', header: 'Revenue (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.revenue) },
 ]
 
 const recentSalesColumns = [
   { key: 'number', header: 'Invoice' },
   { key: 'customer', header: 'Customer' },
-  { key: 'total', header: 'Total', align: 'right', render: (row) => formatCompactCurrency(row.total) },
+  { key: 'total', header: 'Total (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.total) },
 ]

@@ -441,7 +441,7 @@ async def download_customer_import_template():
     ws.append([
         "Customer Name", "Phone", "Email", "GST Reg No", "Street 1", "Street 2", "Street 3",
         "City", "State/Province", "Country", "Postal Code",
-        "Credit Limit", "Customer Type", "Classification", "Key Account Manager", "Credit Terms",
+        "Credit Limit (MVR)", "Customer Type", "Classification", "Key Account Manager", "Credit Terms",
         *[f"{KAM_BRANCH_COLUMN_PREFIX}{code}" for code in branches],
     ])
     bio = BytesIO()

@@ -71,10 +71,10 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
   ].filter((line) => typeof line === 'string' && line.trim())
 
   const summary = [
-    { label: 'Outstanding', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
-    { label: 'Store credit', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
-    { label: 'Account limit', value: fmt(detail?.creditLimit) },
-    { label: 'Total purchases', value: fmt(detail?.totalPurchases) },
+    { label: 'Outstanding (MVR)', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
+    { label: 'Store credit (MVR)', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
+    { label: 'Account limit (MVR)', value: fmt(detail?.creditLimit) },
+    { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
   ]
 
   return (
@@ -179,7 +179,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
                   ? <span style={{ color: 'var(--accent)' }}>{fmt(detail.creditBalance)}</span>
                   : '—',
               },
-              { label: 'Total purchases', value: fmt(detail?.totalPurchases) },
+              { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
             ]}
             />
           </DetailSection>

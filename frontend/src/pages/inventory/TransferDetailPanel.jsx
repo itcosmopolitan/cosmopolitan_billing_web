@@ -281,8 +281,8 @@ export default function TransferDetailPanel({
                   <tr>
                     <th>Item</th>
                     <th className="text-right">Qty</th>
-                    <th className="text-right">Cost Price</th>
-                    <th className="text-right">Total Cost Price</th>
+                    <th className="text-right">Cost Price (MVR)</th>
+                    <th className="text-right">Total Cost Price (MVR)</th>
                     <th>Source batches drained</th>
                   </tr>
                 </thead>
@@ -345,7 +345,7 @@ export default function TransferDetailPanel({
                 </tbody>
               </table>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8, fontSize: 13, fontWeight: 700 }}>
-                Total Cost Price: <span className="mono" style={{ marginLeft: 8 }}>{fmt(totalCostPrice)}</span>
+                Total Cost Price (MVR): <span className="mono" style={{ marginLeft: 8 }}>{fmt(totalCostPrice)}</span>
               </div>
               {detail.status === 'received' && detail.items.some((it) => it.batches?.length) && (
                 <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-raised)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>

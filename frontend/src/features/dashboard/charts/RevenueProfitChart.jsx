@@ -11,8 +11,8 @@ export default function RevenueProfitChart({ data = [] }) {
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} />
         <Tooltip formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Area type="monotone" dataKey="revenue" name="Revenue" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.12} dot={false} />
-        <Area type="monotone" dataKey="profit" name="Profit" stroke={chartColors.emerald} fill={chartColors.emerald} fillOpacity={0.12} dot={false} />
+        <Area type="monotone" dataKey="revenue" name="Revenue (MVR)" stroke={chartColors.blue} fill={chartColors.blue} fillOpacity={0.12} dot={false} />
+        <Area type="monotone" dataKey="profit" name="Profit (MVR)" stroke={chartColors.emerald} fill={chartColors.emerald} fillOpacity={0.12} dot={false} />
       </AreaChart>
     </ResponsiveContainer>
   )

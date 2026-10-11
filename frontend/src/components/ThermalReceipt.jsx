@@ -143,7 +143,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
                 <tr class="item-row">
                   <td colspan="3">
                     <table style="width:100%;font-size:9px;">
-                      <tr class="bold"><td>UOM</td><td class="right">Qty</td><td class="right">Rate</td><td class="right">Disc.</td><td class="right">GST</td><td class="right">Net Amt</td></tr>
+                      <tr class="bold"><td>UOM</td><td class="right">Qty</td><td class="right">Rate (MVR)</td><td class="right">Disc.</td><td class="right">GST (MVR)</td><td class="right">Net Amt (MVR)</td></tr>
                       <tr><td>${item.unit || item.size || item.package || '1/1'}</td><td class="right">${item.qty || 0}</td><td class="right">${formatCurrency(line.rate)}</td><td class="right">${line.disc}%</td><td class="right">${formatCurrency(line.gst)}</td><td class="right">${formatCurrency(line.netAmt)}</td></tr>
                     </table>
                   </td>
@@ -156,20 +156,20 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
 
         <div class="box">
           <div class="box-title">Summary</div>
-          <div class="kv"><span class="label">Subtotal</span><span class="value">${formatCurrency(taxableAmount)}</span></div>
-          <div class="kv"><span class="label">GST Value</span><span class="value">${formatCurrency(gstAmount)}</span></div>
-          <div class="kv bold"><span class="label">Payable</span><span class="value">${formatCurrency(payable)}</span></div>
+          <div class="kv"><span class="label">Subtotal (MVR)</span><span class="value">${formatCurrency(taxableAmount)}</span></div>
+          <div class="kv"><span class="label">GST Value (MVR)</span><span class="value">${formatCurrency(gstAmount)}</span></div>
+          <div class="kv bold"><span class="label">Payable (MVR)</span><span class="value">${formatCurrency(payable)}</span></div>
           <div class="kv bold"><span class="label">Invoice Amount (MVR)</span><span class="value">${formatCurrency(payable)}</span></div>
         </div>
-        ${discountAmount > 0 ? `<div class="kv" style="margin:4px 0;"><span class="label">Discount Amount</span><span class="value">-${formatCurrency(discountAmount)}</span></div>` : ''}
+        ${discountAmount > 0 ? `<div class="kv" style="margin:4px 0;"><span class="label">Discount Amount (MVR)</span><span class="value">-${formatCurrency(discountAmount)}</span></div>` : ''}
 
         ${config.showPayment !== false ? `
           <div class="box">
             <div class="box-title">Payment Details</div>
-            <div class="kv"><span class="label">Cash Collected</span><span class="value">${formatCurrency(cashCollected)}</span></div>
-            <div class="kv"><span class="label">Cash Refunded</span><span class="value">${formatCurrency(-Math.abs(cashRefunded))}</span></div>
+            <div class="kv"><span class="label">Cash Collected (MVR)</span><span class="value">${formatCurrency(cashCollected)}</span></div>
+            <div class="kv"><span class="label">Cash Refunded (MVR)</span><span class="value">${formatCurrency(-Math.abs(cashRefunded))}</span></div>
             <div class="kv"><span class="label">Credit / Debit Card No</span><span class="value">${cardNo || '—'}</span></div>
-            ${cardNo ? `<div class="kv"><span class="label">Card Amt</span><span class="value">${formatCurrency(cardAmt)}</span></div>` : ''}
+            ${cardNo ? `<div class="kv"><span class="label">Card Amt (MVR)</span><span class="value">${formatCurrency(cardAmt)}</span></div>` : ''}
             <div class="kv" style="margin-top:2px;"><span class="label">Payment Mode</span><span class="value">${formatSettlementLabel({
               paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
               storeCreditApplied: sale.storeCreditApplied,
@@ -233,23 +233,23 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
   const shareWhatsApp = () => {
     const items = (sale.items || []).map((item, idx) => {
       const line = getLineDisplay(item, idx)
-      return `• ${item.name} x${item.qty} = MVR${line.netAmt}`
+      return `• ${item.name} x${item.qty} = ${line.netAmt}`
     }).join('\n')
     const msg = `*${company} — ${branchLabel}*\n` +
       `Invoice: *${docNo}*\n` +
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
       `─────────────────\n` +
-      `Subtotal: MVR${taxableAmount.toLocaleString('en-MV')}\n` +
-      (discountAmount ? `Discount: -MVR${discountAmount.toLocaleString('en-MV')}\n` : '') +
-      `GST value: MVR${gstAmount.toLocaleString('en-MV')}\n` +
-      `*Payable: MVR${payable.toLocaleString('en-MV')}*\n` +
+      `Subtotal (MVR): ${taxableAmount.toLocaleString('en-MV')}\n` +
+      (discountAmount ? `Discount (MVR): -${discountAmount.toLocaleString('en-MV')}\n` : '') +
+      `GST value (MVR): ${gstAmount.toLocaleString('en-MV')}\n` +
+      `*Payable (MVR): ${payable.toLocaleString('en-MV')}*\n` +
       `Payment: ${formatSettlementLabel({
         paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
         storeCreditApplied: sale.storeCreditApplied,
         payments: sale.payments,
       })}\n` +
-      (Number(sale.storeCreditApplied || 0) > 0 ? `Account credit: ${fmt(sale.storeCreditApplied)}\n` : '') +
+      (Number(sale.storeCreditApplied || 0) > 0 ? `Account credit (MVR): ${fmt(sale.storeCreditApplied)}\n` : '') +
       `\nThank you for your purchase! 🙏`
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')
   }
@@ -319,10 +319,10 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', fontSize: 9, marginTop: 2 }}>
                 <div style={{ fontWeight: 700 }}>UOM</div>
                 <div style={{ fontWeight: 700, textAlign: 'right' }}>Qty</div>
-                <div style={{ fontWeight: 700, textAlign: 'right' }}>Rate</div>
+                <div style={{ fontWeight: 700, textAlign: 'right' }}>Rate (MVR)</div>
                 <div style={{ fontWeight: 700, textAlign: 'right' }}>Disc.</div>
-                <div style={{ fontWeight: 700, textAlign: 'right' }}>GST</div>
-                <div style={{ fontWeight: 700, textAlign: 'right' }}>Net Amt</div>
+                <div style={{ fontWeight: 700, textAlign: 'right' }}>GST (MVR)</div>
+                <div style={{ fontWeight: 700, textAlign: 'right' }}>Net Amt (MVR)</div>
                 <div>{item.unit || item.size || item.package || '1/1'}</div>
                 <div style={{ textAlign: 'right' }}>{item.qty || 0}</div>
                 <div style={{ textAlign: 'right' }}>{fmt(line.rate)}</div>
@@ -337,14 +337,14 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
 
         <div style={{ border: '1px solid #000', padding: '4px 6px', margin: '6px 0' }}>
           <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, borderBottom: '1px dashed #000', marginBottom: 3, paddingBottom: 2 }}>Summary</div>
-          <div className="kv"><span className="label">Subtotal</span><span className="value">{fmt(taxableAmount)}</span></div>
-          <div className="kv"><span className="label">GST Value</span><span className="value">{fmt(gstAmount)}</span></div>
-          <div className="kv" style={{ fontWeight: 700 }}><span className="label">Payable</span><span className="value">{fmt(payable)}</span></div>
+          <div className="kv"><span className="label">Subtotal (MVR)</span><span className="value">{fmt(taxableAmount)}</span></div>
+          <div className="kv"><span className="label">GST Value (MVR)</span><span className="value">{fmt(gstAmount)}</span></div>
+          <div className="kv" style={{ fontWeight: 700 }}><span className="label">Payable (MVR)</span><span className="value">{fmt(payable)}</span></div>
           <div className="kv" style={{ fontWeight: 700 }}><span className="label">Invoice Amount (MVR)</span><span className="value">{fmt(payable)}</span></div>
         </div>
         {discountAmount > 0 ? (
           <div className="kv" style={{ margin: '4px 0' }}>
-            <span className="label">Discount Amount</span>
+            <span className="label">Discount Amount (MVR)</span>
             <span className="value">-{fmt(discountAmount)}</span>
           </div>
         ) : null}
@@ -352,10 +352,10 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
         {config.showPayment !== false && (
           <div style={{ border: '1px solid #000', padding: '4px 6px', margin: '6px 0' }}>
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, borderBottom: '1px dashed #000', marginBottom: 3, paddingBottom: 2 }}>Payment Details</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Cash Collected</span><span>{fmt(cashCollected)}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Cash Refunded</span><span>{fmt(-Math.abs(cashRefunded))}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Cash Collected (MVR)</span><span>{fmt(cashCollected)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Cash Refunded (MVR)</span><span>{fmt(-Math.abs(cashRefunded))}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Credit / Debit Card No</span><span>{cardNo || '—'}</span></div>
-            {cardNo && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Card Amt</span><span>{fmt(cardAmt)}</span></div>}
+            {cardNo && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Card Amt (MVR)</span><span>{fmt(cardAmt)}</span></div>}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, marginTop: 2 }}>
               <span>Payment Mode</span>
               <span>{formatSettlementLabel({

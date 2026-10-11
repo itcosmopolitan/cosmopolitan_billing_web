@@ -78,9 +78,9 @@ export default function Dashboard() {
   const trendPeak  = salesTrend.reduce((m, d) => Math.max(m, d.sales || 0), 0)
   const fmtCompact = (n) => {
     const abs = Math.abs(Number(n) || 0)
-      if (abs >= 1000000000) return `MVR ${(abs / 1000000000).toFixed(2)}B`
-      if (abs >= 1000000) return `MVR ${(abs / 1000000).toFixed(2)}M`
-      if (abs >= 1000) return `MVR ${(abs / 1000).toFixed(2)}K`
+      if (abs >= 1000000000) return `${(abs / 1000000000).toFixed(2)}B`
+      if (abs >= 1000000) return `${(abs / 1000000).toFixed(2)}M`
+      if (abs >= 1000) return `${(abs / 1000).toFixed(2)}K`
       return fmt(Math.round(abs))
   }
 
@@ -89,11 +89,11 @@ export default function Dashboard() {
 
       {/* KPI Grid */}
       <div className="grid-kpi" style={{ marginBottom: 22 }}>
-        <KPICard label="Today's Sales" value={fmt(kpis.today_sales || 0)} icon="💰" color="var(--accent)" onClick={() => navigate('/sales')} />
-        <KPICard label="Today's Purchases" value={fmt(kpis.today_purchases || 0)} icon="📦" color="var(--purple)" onClick={() => navigate('/purchases')} />
-        <KPICard label="Cash in Hand" value={fmt(kpis.cash_in_hand || 0)} sub={activeBranch?.name || 'All branches'} icon="🏦" color="var(--green)" onClick={() => navigate('/cash')} />
-        <KPICard label="Outstanding Receivables" value={fmt(kpis.outstanding_receivables || 0)} delta={`${kpis.overdue_invoices ?? 0} invoices overdue`} deltaUp={false} icon="📋" color="var(--red)" onClick={() => navigate('/sales')} />
-        <KPICard label="Outstanding Payables" value={fmt(kpis.outstanding_payables || 0)} icon="💳" color="var(--amber)" onClick={() => navigate('/purchases')} />
+        <KPICard label="Today's Sales (MVR)" value={fmt(kpis.today_sales || 0)} icon="💰" color="var(--accent)" onClick={() => navigate('/sales')} />
+        <KPICard label="Today's Purchases (MVR)" value={fmt(kpis.today_purchases || 0)} icon="📦" color="var(--purple)" onClick={() => navigate('/purchases')} />
+        <KPICard label="Cash in Hand (MVR)" value={fmt(kpis.cash_in_hand || 0)} sub={activeBranch?.name || 'All branches'} icon="🏦" color="var(--green)" onClick={() => navigate('/cash')} />
+        <KPICard label="Outstanding Receivables (MVR)" value={fmt(kpis.outstanding_receivables || 0)} delta={`${kpis.overdue_invoices ?? 0} invoices overdue`} deltaUp={false} icon="📋" color="var(--red)" onClick={() => navigate('/sales')} />
+        <KPICard label="Outstanding Payables (MVR)" value={fmt(kpis.outstanding_payables || 0)} icon="💳" color="var(--amber)" onClick={() => navigate('/purchases')} />
         <KPICard label="Low Stock Items" value={String(kpis.low_stock_count ?? 0)} delta="Across all branches" deltaUp={false} icon="⚠️" color="var(--red)" onClick={() => navigate('/items')} />
       </div>
 
@@ -116,7 +116,7 @@ export default function Dashboard() {
       {/* Charts row */}
       <div className="grid-65" style={{ marginBottom: 18 }}>
         <Card
-          title="Sales & Purchase Trend"
+          title="Sales & Purchase Trend (MVR)"
           titleRight={
             <div style={{ display: 'flex', gap: 4 }}>
               {['7d', '14d', '30d'].map((p) => (
@@ -139,7 +139,7 @@ export default function Dashboard() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `MVR ${(v/1000).toFixed(0)}K`} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
               <Tooltip content={<CustomTooltip />} />
               <Legend wrapperStyle={{ fontSize: 11, color: 'var(--text-muted)' }} />
               <Area type="monotone" dataKey="sales" name="Sales" stroke="#ff8c61" strokeWidth={2.5} fill="url(#gSales)" dot={false} />
@@ -147,13 +147,13 @@ export default function Dashboard() {
             </AreaChart>
           </ResponsiveContainer>
           <div style={{ display: 'flex', gap: 20, marginTop: 8, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total ({trendPeriod})</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendTotal)}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg/Day</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendAvg)}</div></div>
-            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Peak</div><div style={{ fontSize: 17, fontWeight: 600, color: 'var(--green)' }}>{fmtCompact(trendPeak)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total ({trendPeriod}) (MVR)</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendTotal)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Avg/Day (MVR)</div><div style={{ fontSize: 17, fontWeight: 600 }}>{fmtCompact(trendAvg)}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Peak (MVR)</div><div style={{ fontSize: 17, fontWeight: 600, color: 'var(--green)' }}>{fmtCompact(trendPeak)}</div></div>
           </div>
         </Card>
 
-        <Card title="Branch Comparison (Today)">
+        <Card title="Branch Comparison (Today) (MVR)">
           <BarList
             items={branchData.map((b, i) => ({ label: b.branch, value: b.sales, color: BRANCH_COLORS[i % BRANCH_COLORS.length] }))}
             valueFormatter={(v) => fmt(v)}
@@ -175,7 +175,7 @@ export default function Dashboard() {
 
       {/* Bottom row */}
       <div className="grid-3" style={{ marginBottom: 18 }}>
-        <Card title="Top Products (Today)" bodyPadding={false}>
+        <Card title="Top Products (Today) (MVR)" bodyPadding={false}>
           <BarList
             items={topProducts.map((p) => ({ label: p.name, value: p.revenue }))}
             valueFormatter={(v) => fmt(v)}

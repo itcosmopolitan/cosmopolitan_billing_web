@@ -231,13 +231,13 @@ export default function VendorsPage() {
                     return <SortableHeader key={id} label="Payment Terms" sortKey="payment_terms" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} />
                   }
                   if (id === 'outstanding') {
-                    return <SortableHeader key={id} label="Outstanding" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                    return <SortableHeader key={id} label="Outstanding (MVR)" sortKey="outstanding" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
                   }
                   if (id === 'credit') {
-                    return <th key={id} className="text-right" style={{ textAlign: 'right' }}>Credit</th>
+                    return <th key={id} className="text-right" style={{ textAlign: 'right' }}>Credit (MVR)</th>
                   }
                   if (id === 'total_purchases') {
-                    return <SortableHeader key={id} label="Total Purchases" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
+                    return <SortableHeader key={id} label="Total Purchases (MVR)" sortKey="total_purchases" sortBy={venSortBy} sortOrder={venSortOrder} onSort={onSort} className="text-right" align="right" />
                   }
                   if (id === 'status') return <th key={id}>Status</th>
                   return null
@@ -477,8 +477,8 @@ export default function VendorsPage() {
                     <th>Date</th>
                     <th>Type</th>
                     <th>Reference</th>
-                    <th className="text-right" style={{ textAlign: 'right' }}>Change</th>
-                    <th className="text-right" style={{ textAlign: 'right' }}>Balance</th>
+                    <th className="text-right" style={{ textAlign: 'right' }}>Change (MVR)</th>
+                    <th className="text-right" style={{ textAlign: 'right' }}>Balance (MVR)</th>
                   </tr>
                 </thead>
                 <tbody>

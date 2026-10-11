@@ -18,7 +18,7 @@ export default function MarginBadge({ margin, showAmount = false, size = 'sm' })
         fontSize,
         whiteSpace: 'nowrap',
       }}
-      title={showAmount ? undefined : `Margin ${margin.amount >= 0 ? '+' : ''}${formatAmountNumber(margin.amount)} MVR`}
+      title={showAmount ? undefined : `Margin ${margin.amount >= 0 ? '+' : ''}${formatAmountNumber(margin.amount)}`}
     >
       <span aria-hidden>{positive ? '↑' : '↓'}</span>
       <span className="mono" style={{ fontFamily: 'DM Mono, monospace' }}>

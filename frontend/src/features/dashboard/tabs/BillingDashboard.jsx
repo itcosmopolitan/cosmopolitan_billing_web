@@ -21,20 +21,20 @@ export default function BillingDashboard({ filters, autoRefresh }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div className="grid-kpi">
-        <KpiCard title="Cash" value={formatCompactCurrency(kpis.cash)} delta={deltas.cash} tone="success" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
-        <KpiCard title="Card" value={formatCompactCurrency(kpis.card)} delta={deltas.card} tone="info" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
-        <KpiCard title="UPI" value={formatCompactCurrency(kpis.upi)} delta={deltas.upi} tone="neutral" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
-        <KpiCard title="Pending Payments" value={formatCompactCurrency(kpis.pending_payments)} delta={deltas.pending_payments} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
-        <KpiCard title="Refunds" value={formatCompactCurrency(kpis.refunds)} delta={deltas.refunds} tone="danger" sparkline={spark(charts.refund_trends, 'refunds')} loading={loading} />
-        <KpiCard title="Discounts" value={formatCompactCurrency(kpis.discounts)} delta={deltas.discounts} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
+        <KpiCard title="Cash (MVR)" value={formatCompactCurrency(kpis.cash)} delta={deltas.cash} tone="success" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Card (MVR)" value={formatCompactCurrency(kpis.card)} delta={deltas.card} tone="info" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="UPI (MVR)" value={formatCompactCurrency(kpis.upi)} delta={deltas.upi} tone="neutral" sparkline={spark(charts.payment_distribution, 'amount')} loading={loading} />
+        <KpiCard title="Pending Payments (MVR)" value={formatCompactCurrency(kpis.pending_payments)} delta={deltas.pending_payments} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
+        <KpiCard title="Refunds (MVR)" value={formatCompactCurrency(kpis.refunds)} delta={deltas.refunds} tone="danger" sparkline={spark(charts.refund_trends, 'refunds')} loading={loading} />
+        <KpiCard title="Discounts (MVR)" value={formatCompactCurrency(kpis.discounts)} delta={deltas.discounts} tone="warning" sparkline={spark(charts.daily_billing_count, 'count')} loading={loading} />
       </div>
 
       <div className="grid-3">
-        <ChartCard title="Payment Distribution" loading={loading}>
+        <ChartCard title="Payment Distribution (MVR)" loading={loading}>
           <PaymentMethodChart data={charts.payment_distribution || []} />
         </ChartCard>
-        <ChartCard title="Refund Trends" loading={loading}>
-          <SalesTrendChart data={charts.refund_trends || []} valueKey="refunds" label="Refunds" />
+        <ChartCard title="Refund Trends (MVR)" loading={loading}>
+          <SalesTrendChart data={charts.refund_trends || []} valueKey="refunds" label="Refunds (MVR)" />
         </ChartCard>
         <ChartCard title="Daily Billing Count" loading={loading}>
           <SalesTrendChart data={charts.daily_billing_count || []} valueKey="count" label="Bills" />
@@ -116,8 +116,8 @@ function CollectionEfficiencyPanel({ analytics = {}, kpis = {} }) {
 
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-              <CollectionMetric label="Collected" value={formatCompactCurrency(collected)} emphasis />
-              <CollectionMetric label="Pending" value={formatCompactCurrency(pendingAmount)} />
+              <CollectionMetric label="Collected (MVR)" value={formatCompactCurrency(collected)} emphasis />
+              <CollectionMetric label="Pending (MVR)" value={formatCompactCurrency(pendingAmount)} />
               <CollectionMetric label="Invoices due" value={formatNumber(pendingCount)} />
             </div>
 
@@ -178,17 +178,17 @@ function ProgressMetric({ label, value, tone }) {
 const pendingColumns = [
   { key: 'number', header: 'Invoice' },
   { key: 'customer', header: 'Customer' },
-  { key: 'balance', header: 'Balance', align: 'right', render: (row) => formatCompactCurrency(row.balance) },
+  { key: 'balance', header: 'Balance (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.balance) },
 ]
 
 const refundColumns = [
   { key: 'number', header: 'Credit Note' },
   { key: 'customer', header: 'Customer' },
-  { key: 'amount', header: 'Amount', align: 'right', render: (row) => formatCompactCurrency(row.amount) },
+  { key: 'amount', header: 'Amount (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.amount) },
 ]
 
 const discountColumns = [
   { key: 'number', header: 'Invoice' },
   { key: 'customer', header: 'Customer' },
-  { key: 'discount', header: 'Discount', align: 'right', render: (row) => formatCompactCurrency(row.discount) },
+  { key: 'discount', header: 'Discount (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.discount) },
 ]

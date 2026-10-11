@@ -7,10 +7,10 @@ export default function ComplimentaryDetailPanel({ open, onClose, entry, onPrint
   const lines = entry?.items || []
 
   const summary = [
-    { label: 'Amount (cost)', value: fmt(entry?.cost_value) },
+    { label: 'Amount (cost) (MVR)', value: fmt(entry?.cost_value) },
     { label: 'Lines', value: lines.length },
     { label: 'Reason', value: entry?.reason || '—' },
-    { label: 'Taxable amount', value: fmt(0) },
+    { label: 'Taxable amount (MVR)', value: fmt(0) },
   ]
 
   const footer = (
@@ -85,8 +85,8 @@ export default function ComplimentaryDetailPanel({ open, onClose, entry, onPrint
               <tr>
                 <th>Item</th>
                 <th className="text-right">Qty</th>
-                <th className="text-right">Rate (Cost)</th>
-                <th className="text-right">Total (Cost)</th>
+                <th className="text-right">Rate (Cost) (MVR)</th>
+                <th className="text-right">Total (Cost) (MVR)</th>
                 <th>Lots</th>
               </tr>
             </thead>

@@ -230,7 +230,7 @@ export default function CustomersPage() {
         'State/Province',
         'Country',
         'Postal Code',
-        'Credit Limit',
+        'Credit Limit (MVR)',
         'Customer Type',
         'Classification',
         'Key Account Manager',
@@ -249,7 +249,7 @@ export default function CustomersPage() {
         'State/Province': customer.state_province,
         Country: customer.country,
         'Postal Code': customer.postal_code,
-        'Credit Limit': customer.credit_limit,
+        'Credit Limit (MVR)': customer.credit_limit,
         'Customer Type': customer.customer_type,
         Classification: customer.classification,
         'Key Account Manager': customer.key_account_manager_names?.[customer.branch_id] || '',
@@ -342,7 +342,7 @@ export default function CustomersPage() {
           <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'left', lineHeight: 1.45 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Upload instructions</div>
             <div>Customers will be added to the currently selected branch. Name and City are required. Street 1 and Country are optional.</div>
-            <div style={{ marginTop: 6 }}><strong>Columns:</strong> Customer Name, Phone, Email, GST Reg No, Street 1, Street 2, Street 3, City, State/Province, Country, Postal Code, Credit Limit, Customer Type, Classification, Key Account Manager, Key Account Manager - [branch code] (one column per branch), Credit Terms</div>
+            <div style={{ marginTop: 6 }}><strong>Columns:</strong> Customer Name, Phone, Email, GST Reg No, Street 1, Street 2, Street 3, City, State/Province, Country, Postal Code, Credit Limit (MVR), Customer Type, Classification, Key Account Manager, Key Account Manager - [branch code] (one column per branch), Credit Terms</div>
           </div>
           {importResult && (
             <div style={{ padding: 10, background: 'var(--bg-raised)', borderRadius: 6 }}>
@@ -389,7 +389,7 @@ export default function CustomersPage() {
 
       {/* <div className="grid-kpi" style={{ marginBottom: 20 }}>
         <KPICard label="Total Customers"    value={totals.total}                    color="var(--accent)" icon="👥" />
-        <KPICard label="Outstanding Total"  value={fmt(totals.outstanding)}         color="var(--red)"   icon="📋" />
+        <KPICard label="Outstanding Total (MVR)" value={fmt(totals.outstanding)}         color="var(--red)"   icon="📋" />
         <KPICard label="With Balance Due"   value={totals.overdue}                  color="var(--amber)" icon="⚠️" />
         <KPICard label="Top Buyer"          value={totals.topBuyer?.name?.split(' ')[0] || '—'} color="var(--green)" icon="🏆" sub={totals.topBuyer ? fmt(totals.topBuyer.total_purchases || 0) : '—'} />
       </div> */}
@@ -477,7 +477,7 @@ export default function CustomersPage() {
                     return (
                       <SortableHeader
                         key={id}
-                        label="Account Limit"
+                        label="Account Limit (MVR)"
                         sortKey="credit_limit"
                         sortBy={custSortBy}
                         sortOrder={custSortOrder}
@@ -491,7 +491,7 @@ export default function CustomersPage() {
                     return (
                       <SortableHeader
                         key={id}
-                        label="Outstanding"
+                        label="Outstanding (MVR)"
                         sortKey="outstanding"
                         sortBy={custSortBy}
                         sortOrder={custSortOrder}
@@ -504,7 +504,7 @@ export default function CustomersPage() {
                   if (id === 'store_credit') {
                     return (
                       <th key={id} className="text-right" style={{ textAlign: 'right' }}>
-                        Store Credit
+                        Store Credit (MVR)
                       </th>
                     )
                   }
@@ -515,7 +515,7 @@ export default function CustomersPage() {
                     return (
                       <SortableHeader
                         key={id}
-                        label="Total Purchases"
+                        label="Total Purchases (MVR)"
                         sortKey="total_purchases"
                         sortBy={custSortBy}
                         sortOrder={custSortOrder}
@@ -737,7 +737,7 @@ export default function CustomersPage() {
           <>
             <div style={{ display:'flex', gap:16, marginBottom:16, flexWrap:'wrap' }}>
               <div style={{ padding:'10px 14px', background:'var(--bg-raised)', borderRadius:8 }}>
-                <div style={{ fontSize:11, color:'var(--text-muted)' }}>Store credit balance</div>
+                <div style={{ fontSize:11, color:'var(--text-muted)' }}>Store credit balance (MVR)</div>
                 <div style={{ fontSize:18, fontWeight:600, color:'var(--accent)' }}>{fmt(ledgerCustomer.creditBalance)}</div>
               </div>
               <div style={{ padding:'10px 14px', background:'var(--bg-raised)', borderRadius:8 }}>
@@ -756,8 +756,8 @@ export default function CustomersPage() {
                     <th>Date</th>
                     <th>Type</th>
                     <th>Reference</th>
-                    <th className="text-right" style={{textAlign:'right'}}>Change</th>
-                    <th className="text-right" style={{textAlign:'right'}}>Balance</th>
+                    <th className="text-right" style={{textAlign:'right'}}>Change (MVR)</th>
+                    <th className="text-right" style={{textAlign:'right'}}>Balance (MVR)</th>
                   </tr>
                 </thead>
                 <tbody>

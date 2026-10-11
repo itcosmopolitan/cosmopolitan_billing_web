@@ -207,7 +207,7 @@ export default function ConvertPOToBillModal({
             <>Creating bill from <strong>{source.number}</strong></>
           )}
           {source.vendorName ? <> for <strong>{source.vendorName}</strong></> : null}
-          {typeof source.total === 'number' ? <> · Total: <strong>{fmt(source.total)}</strong></> : null}
+          {typeof source.total === 'number' ? <> · Total (MVR): <strong>{fmt(source.total)}</strong></> : null}
           {isReceiveOnly && (
             <div style={{ marginTop: 6, fontSize: 12 }}>
               No bill yet — create one later from the GRN tab via <strong>To Bill</strong>.

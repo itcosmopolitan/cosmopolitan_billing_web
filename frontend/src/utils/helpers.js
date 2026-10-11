@@ -4,7 +4,7 @@ import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/
 // ─── Currency formatting ──────────────────────────────────────────────────────
 export const fmt = (amount, decimals) => {
   if (amount === null || amount === undefined) return '—'
-  return 'MVR ' + formatAmountNumber(amount, decimals ?? getAmountDecimals())
+  return formatAmountNumber(amount, decimals ?? getAmountDecimals())
 }
 
 export const fmtQty = (n, decimals) => formatQtyNumber(n, decimals)

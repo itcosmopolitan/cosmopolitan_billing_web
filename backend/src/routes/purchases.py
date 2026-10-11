@@ -1150,13 +1150,13 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         if avail + 0.001 < data.amount:
             raise HTTPException(
                 400,
-                f"Insufficient vendor credit — MVR{round(avail, 2)} available, "
-                f"payment is MVR{data.amount}",
+                f"Insufficient vendor credit — {round(avail, 2)} available, "
+                f"payment is {data.amount}",
             )
         if data.amount > balance + 0.001:
             raise HTTPException(
                 400,
-                f"Credit mode can't overpay — balance is MVR{round(balance, 2)}",
+                f"Credit mode can't overpay — balance is {round(balance, 2)}",
             )
 
     applied = min(balance, data.amount)
@@ -2037,14 +2037,14 @@ async def update_payment(
             if float(a.amount) > balance + 0.001:
                 raise HTTPException(
                     400,
-                    f"Credit mode can't overpay — {b.number} balance is MVR{round(balance, 2)}",
+                    f"Credit mode can't overpay — {b.number} balance is {round(balance, 2)}",
                 )
         avail = float(vendor.credit_balance or 0)
         if avail + 0.001 < requested_total:
             raise HTTPException(
                 400,
-                f"Insufficient vendor credit — {vendor.name} has MVR{round(avail, 2)} available, "
-                f"payment totals MVR{round(requested_total, 2)}",
+                f"Insufficient vendor credit — {vendor.name} has {round(avail, 2)} available, "
+                f"payment totals {round(requested_total, 2)}",
             )
 
     total_credit = 0.0
@@ -2208,7 +2208,7 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
         user_name=getattr(user, "name", None),
         module="purchases",
         ref=pay.number,
-        detail=f"Voided vendor payment {pay.number} (MVR{pay.total_amount})",
+        detail=f"Voided vendor payment {pay.number} ({pay.total_amount})",
         risk="medium",
         ip_address=None,
     ))
@@ -2268,14 +2268,14 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
             if float(a.amount) > balance + 0.001:
                 raise HTTPException(
                     400,
-                    f"Credit mode can't overpay — {b.number} balance is MVR{round(balance, 2)}",
+                    f"Credit mode can't overpay — {b.number} balance is {round(balance, 2)}",
                 )
         avail = float(vendor.credit_balance or 0)
         if avail + 0.001 < requested_total:
             raise HTTPException(
                 400,
-                f"Insufficient vendor credit — {vendor.name} has MVR{round(avail, 2)} available, "
-                f"payment totals MVR{round(requested_total, 2)}",
+                f"Insufficient vendor credit — {vendor.name} has {round(avail, 2)} available, "
+                f"payment totals {round(requested_total, 2)}",
             )
 
     total_credit = 0.0
@@ -2313,7 +2313,7 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
             module="purchases",
             ref=None,
             detail=(
-                f"Multi-bill payment overpayment: +MVR{round(total_credit, 2)} "
+                f"Multi-bill payment overpayment: +{round(total_credit, 2)} "
                 f"credited to {vendor.name}"
             ),
             risk="low",
@@ -2970,8 +2970,8 @@ async def undo_void_vendor_return(return_id: str, db: AsyncSession = Depends(get
     if new_bill_total < -0.01:
         raise HTTPException(
             400,
-            f"Cannot undo void: the bill balance is already MVR{round(float(bill.total or 0), 2)} "
-            f"and re-applying {ret.number} (MVR{round(float(ret.total or 0), 2)}) would make it "
+            f"Cannot undo void: the bill balance is already {round(float(bill.total or 0), 2)} "
+            f"and re-applying {ret.number} ({round(float(ret.total or 0), 2)}) would make it "
             f"negative. Another active vendor return has likely consumed the same amount. "
             f"Void that return first, then undo this one."
         )

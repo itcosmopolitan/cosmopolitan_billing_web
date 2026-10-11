@@ -29,11 +29,11 @@ export default function CashTenderFields({
   const result = hasAmount && (
     short > 0 ? (
       <div className="cash-tender__msg cash-tender__msg--short">
-        Short by <strong>{fmt(short)}</strong>
+        Short (MVR) by <strong>{fmt(short)}</strong>
       </div>
     ) : (
       <div className="cash-tender__msg cash-tender__msg--change">
-        <span>Change to customer</span>
+        <span>Change to customer (MVR)</span>
         <strong>{fmt(change)}</strong>
       </div>
     )
@@ -43,7 +43,7 @@ export default function CashTenderFields({
     return (
       <div className="cash-tender cash-tender--compact">
         <div className="cash-tender__field">
-          <label className="cash-tender__label">Amount collected</label>
+          <label className="cash-tender__label">Amount collected (MVR)</label>
           {input}
         </div>
         {result}
@@ -53,7 +53,7 @@ export default function CashTenderFields({
 
   return (
     <div className="cash-tender">
-      <FormGroup label="Amount collected" required>
+      <FormGroup label="Amount collected (MVR)" required>
         {input}
       </FormGroup>
       {result}

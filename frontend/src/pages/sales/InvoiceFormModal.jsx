@@ -334,7 +334,7 @@ export default function InvoiceFormModal({
               })}
               {invoiceForm.paymentMethod === 'credit' && (
                 <div style={{ width: '100%', fontSize: 11.5, color: 'var(--text-muted)' }}>
-                  Remaining credit: <strong>{fmt(accountCreditRemaining)}</strong>
+                  Remaining credit (MVR): <strong>{fmt(accountCreditRemaining)}</strong>
                 </div>
               )}
               {invoiceForm.paymentMethod === 'cash' && !editMode && remainingDuePreview > 0.001 && (
@@ -392,11 +392,11 @@ export default function InvoiceFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.)</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.) (MVR)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
-              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax (MVR)</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.)</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.) (MVR)</th>
               {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
               <th style={{ width: 60 }} />
             </tr>

@@ -147,7 +147,7 @@ export default function OrderFormModal({
 
   // Toggle the per-row discount unit (% ↔ MVR) and AUTO-CONVERT the value
   // so the effective discount stays constant across the unit switch.
-  // Example: 10% on a MVR500 line → toggle to MVR → input becomes 50.
+  // Example: 10% on a 500 line → toggle to MVR → input becomes 50.
   // Operator no longer has to do the math in their head when changing units.
   const toggleDiscountType = (i) => {
     const next = [...orderForm.items]
@@ -272,11 +272,11 @@ export default function OrderFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.)</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.) (MVR)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
-              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax (MVR)</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.)</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.) (MVR)</th>
               {!readOnly && <th style={{ width: 60 }} />}
             </tr>
           </thead>

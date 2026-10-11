@@ -32,14 +32,14 @@ export default function OperationsDashboard({ filters, autoRefresh }) {
 
       <div className="grid-3">
         <PermissionGate permission="dashboard.staff_performance.view">
-          <ChartCard title="Staff Sales" loading={loading}>
+          <ChartCard title="Staff Sales (MVR)" loading={loading}>
             <BranchComparisonChart data={staffChart} />
           </ChartCard>
         </PermissionGate>
-        <ChartCard title="Hourly Heatmap" loading={loading}>
+        <ChartCard title="Hourly Heatmap (MVR)" loading={loading}>
           <HeatmapChart data={charts.hourly_heatmap || []} />
         </ChartCard>
-        <ChartCard title="Branch Performance" loading={loading}>
+        <ChartCard title="Branch Performance (MVR)" loading={loading}>
           <BranchComparisonChart data={charts.branch_performance || []} />
         </ChartCard>
       </div>
@@ -125,7 +125,7 @@ function OperationalEfficiencyPanel({ analytics = {} }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
               <EfficiencyMetric label="Productivity" value={formatPercent(productivity)} emphasis />
               <EfficiencyMetric label="Bills per staff" value={formatNumber(billsPerStaff)} />
-              <EfficiencyMetric label="Revenue per bill" value={formatCompactCurrency(revenuePerBill)} />
+              <EfficiencyMetric label="Revenue per bill (MVR)" value={formatCompactCurrency(revenuePerBill)} />
             </div>
             <div style={{ display: 'grid', gap: 12, marginTop: 18 }}>
               <EfficiencyProgress label="Productivity index" value={productivityScore} tone={tone} />
@@ -184,13 +184,13 @@ function formatCompactPercent(value) {
 const staffColumns = [
   { key: 'staff', header: 'Staff' },
   { key: 'bill_count', header: 'Bills', align: 'right', width: 72, render: (row) => formatNumber(row.bill_count) },
-  { key: 'sales', header: 'Sales', align: 'right', render: (row) => formatCompactCurrency(row.sales) },
+  { key: 'sales', header: 'Sales (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.sales) },
 ]
 
 const branchColumns = [
   { key: 'branch', header: 'Branch' },
   { key: 'transactions', header: 'Bills', align: 'right', width: 78, render: (row) => formatNumber(row.transactions) },
-  { key: 'sales', header: 'Sales', align: 'right', render: (row) => formatCompactCurrency(row.sales) },
+  { key: 'sales', header: 'Sales (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.sales) },
 ]
 
 const logColumns = [

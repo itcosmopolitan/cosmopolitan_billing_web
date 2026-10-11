@@ -259,11 +259,11 @@ export default function BranchPricingSection({
                 </div>
                 <dl className="branch-price-card__grid">
                   <div>
-                    <dt>Cost</dt>
+                    <dt>Cost (MVR)</dt>
                     <dd className="mono">{fmt(cost)}{r.cost_price === '' || r.cost_price == null ? <span className="branch-price-card__inherit"> default</span> : null}</dd>
                   </div>
                   <div>
-                    <dt>Selling</dt>
+                    <dt>Selling (MVR)</dt>
                     <dd className="mono">{fmt(price)}{r.selling_price === '' || r.selling_price == null ? <span className="branch-price-card__inherit"> default</span> : null}</dd>
                   </div>
                   <div>
@@ -275,14 +275,14 @@ export default function BranchPricingSection({
                     </dd>
                   </div>
                   <div>
-                    <dt>Wholesale</dt>
+                    <dt>Wholesale (MVR)</dt>
                     <dd>
                       {cat.wholesale}
                       {!cat.wholesaleOverride && <span className="branch-price-card__inherit"> default</span>}
                     </dd>
                   </div>
                   <div>
-                    <dt>Staff</dt>
+                    <dt>Staff (MVR)</dt>
                     <dd>
                       {cat.staff}
                       {!cat.staffOverride && <span className="branch-price-card__inherit"> default</span>}

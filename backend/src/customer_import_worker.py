@@ -32,7 +32,7 @@ _MAP_KEYS = {
     "street 3": "street3", "street3": "street3", "city": "city",
     "state/province": "state_province", "state province": "state_province",
     "country": "country", "postal code": "postal_code", "postal_code": "postal_code",
-    "credit limit": "credit_limit", "customer type": "customer_type",
+    "credit limit": "credit_limit", "credit limit (mvr)": "credit_limit", "customer type": "customer_type",
     "classification": "classification", "internal/external": "classification",
     "key account manager": "key_account_manager", "credit terms": "credit_terms",
     "credit eligible": "is_credit_eligible", "is credit eligible": "is_credit_eligible",

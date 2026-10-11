@@ -98,27 +98,27 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     const summary = calcInvoiceSummary(sale.items || [], sale)
     const items = (sale.items || []).map((item) => {
       const net = lineTaxableFromInclusive(item)
-      return `• ${item.name} x${item.qty} = MVR${net}`
+      return `• ${item.name} x${item.qty} = ${net}`
     }).join('\n')
     const msg = `*Cosmopolitan — ${branch?.name}*\n` +
       `Invoice: *${sale.number}*\n` +
       `Date: ${fmtDate(sale.date || new Date())}\n` +
       `─────────────────\n${items}\n` +
       `─────────────────\n` +
-      `Subtotal: MVR${summary.subtotal.toLocaleString('en-MV')}\n` +
-      (summary.discountAmount ? `Discount: -MVR${summary.discountAmount.toLocaleString('en-MV')}\n` : '') +
-      `GST: MVR${summary.taxTotal.toLocaleString('en-MV')}\n` +
-      `*TOTAL: MVR${summary.total.toLocaleString('en-MV')}*\n` +
+      `Subtotal (MVR): ${summary.subtotal.toLocaleString('en-MV')}\n` +
+      (summary.discountAmount ? `Discount (MVR): -${summary.discountAmount.toLocaleString('en-MV')}\n` : '') +
+      `GST (MVR): ${summary.taxTotal.toLocaleString('en-MV')}\n` +
+      `*TOTAL (MVR): ${summary.total.toLocaleString('en-MV')}*\n` +
       `Payment: ${formatSettlementLabel({
         paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
         storeCreditApplied: sale.storeCreditApplied,
         payments: sale.payments,
       })}\n` +
       (Number(sale.storeCreditApplied || 0) > 0
-        ? `Account credit: MVR${Number(sale.storeCreditApplied).toLocaleString('en-MV')}\n`
+        ? `Account credit (MVR): ${Number(sale.storeCreditApplied).toLocaleString('en-MV')}\n`
         : '') +
       (sale.cashCollected != null && Number(sale.cashCollected) > 0
-        ? `Cash collected: MVR${Number(sale.cashCollected).toLocaleString('en-MV')}\nChange: MVR${Number(sale.cashChange || 0).toLocaleString('en-MV')}\n`
+        ? `Cash collected (MVR): ${Number(sale.cashCollected).toLocaleString('en-MV')}\nChange (MVR): ${Number(sale.cashChange || 0).toLocaleString('en-MV')}\n`
         : '') +
       `\nThank you for your purchase! 🙏`
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')

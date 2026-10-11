@@ -144,7 +144,7 @@ export default function ComplimentaryFormPage() {
   const summaryCards = [
     { label: 'Lines', value: form.items.filter((i) => i.item_id).length },
     { label: 'Qty', value: totalQty },
-    { label: 'Cost value', value: fmt(costValue) },
+    { label: 'Cost value (MVR)', value: fmt(costValue) },
   ]
 
   const submitNewReason = async () => {
@@ -302,8 +302,8 @@ export default function ComplimentaryFormPage() {
                 <tr>
                   <th>Item</th>
                   <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-                  <th style={{ width: 120, textAlign: 'right' }}>Rate (Cost)</th>
-                  <th style={{ width: 120, textAlign: 'right' }}>Total (Excl.)</th>
+                  <th style={{ width: 120, textAlign: 'right' }}>Rate (Cost) (MVR)</th>
+                  <th style={{ width: 120, textAlign: 'right' }}>Total (Excl.) (MVR)</th>
                   {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
                   <th style={{ width: 60 }} />
                 </tr>
@@ -435,12 +435,12 @@ export default function ComplimentaryFormPage() {
             <div className="document-totals-footer__summary">
               <div className="document-summary-card">
                 <div className="document-summary-row">
-                  <span className="document-summary-row__label">Taxable amount</span>
+                  <span className="document-summary-row__label">Taxable amount (MVR)</span>
                   <span className="document-summary-row__spacer" />
                   <span className="document-summary-row__value mono">{fmt(0)}</span>
                 </div>
                 <div className="document-summary-row document-summary-row--total">
-                  <span className="document-summary-row__label">Total</span>
+                  <span className="document-summary-row__label">Total (MVR)</span>
                   <span className="document-summary-row__spacer" />
                   <span className="document-summary-row__value mono document-summary-row__value--total">{fmt(0)}</span>
                 </div>

@@ -29,7 +29,7 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
   const handleClose = async () => {
     if (!physicalCount || physicalCount === '') { toast.error('Enter the physical cash count'); return }
     if (needsReason && !varianceReason.trim()) {
-      toast.error(`Variance of ${fmt(Math.abs(variance))} exceeds threshold. Please explain the variance.`)
+      toast.error(`Variance (MVR) of ${fmt(Math.abs(variance))} exceeds threshold. Please explain the variance.`)
       return
     }
     setSaving(true)
@@ -53,10 +53,10 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
   }
 
   const rows = [
-    { label: 'Opening Balance', value: fmt(summary?.opening_balance ?? summary?.opening ?? 0) },
-    { label: 'Total Cash In', value: fmt(summary?.cash_in ?? 0), color: 'var(--green)' },
-    { label: 'Total Cash Out', value: fmt(summary?.cash_out ?? 0), color: 'var(--red)' },
-    { label: 'Expected Balance', value: fmt(expected), color: 'var(--accent)' },
+    { label: 'Opening Balance (MVR)', value: fmt(summary?.opening_balance ?? summary?.opening ?? 0) },
+    { label: 'Total Cash In (MVR)', value: fmt(summary?.cash_in ?? 0), color: 'var(--green)' },
+    { label: 'Total Cash Out (MVR)', value: fmt(summary?.cash_out ?? 0), color: 'var(--red)' },
+    { label: 'Expected Balance (MVR)', value: fmt(expected), color: 'var(--accent)' },
   ]
 
   return (
@@ -109,7 +109,7 @@ export default function CloseDayModal({ open, onClose, branchId, summary, date, 
           background: variance === 0 ? 'var(--bg-raised)' : Math.abs(variance) <= threshold ? '#fff8e6' : '#fff0f0',
           border: `1px solid ${varianceColor}`,
         }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Variance</span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Variance (MVR)</span>
           <span style={{ fontSize: 15, fontWeight: 700, fontFamily: 'DM Mono,monospace', color: varianceColor }}>
             {variance >= 0 ? '+' : ''}{fmt(variance)}
           </span>

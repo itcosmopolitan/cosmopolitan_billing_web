@@ -389,8 +389,8 @@ async def _validate_unpaid_account_limit(
     if projected > limit + 0.01:
         raise HTTPException(
             400,
-            f"Customer account limit exhausted — outstanding is MVR {outstanding:.2f}, "
-            f"limit is MVR {limit:.2f}. Select a payment method to continue.",
+            f"Customer account limit exhausted — outstanding is {outstanding:.2f}, "
+            f"limit is {limit:.2f}. Select a payment method to continue.",
         )
 
 
@@ -2525,8 +2525,8 @@ async def record_payment(
             await db.rollback()
             raise HTTPException(
                 400,
-                f"Walk-in invoice — reduce amount to MVR{round(remaining_after_credit, 2)} "
-                f"or assign a customer first to capture the MVR{credit_applied} excess as credit",
+                f"Walk-in invoice — reduce amount to {round(remaining_after_credit, 2)} "
+                f"or assign a customer first to capture the {credit_applied} excess as credit",
             )
         cust_row = await db.execute(
             select(Customer).where(Customer.id == pre_row.customer_id)
@@ -2551,9 +2551,9 @@ async def record_payment(
                 module="sales",
                 ref=pre_row.number,
                 detail=(
-                    f"Overpayment on {pre_row.number}: +MVR{credit_applied} "
-                    f"credited to {cust.name} (was MVR{cur_credit:.2f}, "
-                    f"now MVR{new_credit:.2f})"
+                    f"Overpayment on {pre_row.number}: +{credit_applied} "
+                    f"credited to {cust.name} (was {cur_credit:.2f}, "
+                    f"now {new_credit:.2f})"
                 ),
                 risk="low",
                 ip_address=None,
@@ -3292,14 +3292,14 @@ async def update_payment(
             if float(a.amount) > bal + 0.001:
                 raise HTTPException(
                     400,
-                    f"Credit mode can't overpay — {inv.number} balance is MVR{round(bal, 2)}",
+                    f"Credit mode can't overpay — {inv.number} balance is {round(bal, 2)}",
                 )
         avail = float(cust.credit_balance or 0)
         if avail + 0.001 < requested_total:
             raise HTTPException(
                 400,
-                f"Insufficient credit — {cust.name} has MVR{round(avail, 2)} available, "
-                f"payment totals MVR{round(requested_total, 2)}",
+                f"Insufficient credit — {cust.name} has {round(avail, 2)} available, "
+                f"payment totals {round(requested_total, 2)}",
             )
 
     total_credit = 0.0
@@ -3514,7 +3514,7 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
     Allocation semantics:
       • allocation.amount > invoice.balance — the excess routes to
         customer.credit_balance + accumulates in the Payment's
-        credit_applied. Inline UI warning preview ("Excess MVRX credited")
+        credit_applied. Inline UI warning preview ("Excess X credited")
         keeps the operator informed before submit.
       • Per-invoice update: paid_amount += min(amount, balance);
         status = paid|partial; payment_mode = data.payment_mode.
@@ -3569,14 +3569,14 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             if float(a.amount) > bal + 0.001:
                 raise HTTPException(
                     400,
-                    f"Credit mode can't overpay — {inv.number} balance is MVR{round(bal, 2)}",
+                    f"Credit mode can't overpay — {inv.number} balance is {round(bal, 2)}",
                 )
         avail = float(cust.credit_balance or 0)
         if avail + 0.001 < requested_total:
             raise HTTPException(
                 400,
-                f"Insufficient credit — {cust.name} has MVR{round(avail, 2)} available, "
-                f"payment totals MVR{round(requested_total, 2)}",
+                f"Insufficient credit — {cust.name} has {round(avail, 2)} available, "
+                f"payment totals {round(requested_total, 2)}",
             )
 
     # 5. Apply allocations + accumulate credit. We update each invoice's
@@ -3621,9 +3621,9 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             module="sales",
             ref=None,  # multi-invoice; specific invoice ref doesn't fit
             detail=(
-                f"Multi-invoice payment overpayment: +MVR{round(total_credit, 2)} "
-                f"credited to {cust.name} (was MVR{cur_credit:.2f}, "
-                f"now MVR{new_credit:.2f})"
+                f"Multi-invoice payment overpayment: +{round(total_credit, 2)} "
+                f"credited to {cust.name} (was {cur_credit:.2f}, "
+                f"now {new_credit:.2f})"
             ),
             risk="low",
             ip_address=None,
@@ -3693,8 +3693,8 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
             module="sales",
             ref=None,
             detail=(
-                f"Multi-invoice credit settlement {pay_num}: −MVR{round(total_amount, 2)} "
-                f"from {cust.name} (was MVR{cur_credit:.2f}, now MVR{new_credit:.2f})"
+                f"Multi-invoice credit settlement {pay_num}: −{round(total_amount, 2)} "
+                f"from {cust.name} (was {cur_credit:.2f}, now {new_credit:.2f})"
             ),
             risk="low",
             ip_address=None,
@@ -3787,8 +3787,8 @@ async def _resolve_store_credit_use(
         if legacy_full_credit or float(requested or 0) > 0:
             raise HTTPException(
                 400,
-                f"Insufficient credit — customer has MVR{round(available, 2)} available, "
-                f"need MVR{round(min(want, due), 2)}",
+                f"Insufficient credit — customer has {round(available, 2)} available, "
+                f"need {round(min(want, due), 2)}",
             )
         return cust, 0.0
     return cust, use
@@ -3825,9 +3825,9 @@ async def _write_store_credit_payment(
         module="sales",
         ref=inv.number,
         detail=(
-            f"Store credit on {inv.number}: −MVR{amount} from "
-            f"{customer.name}'s credit (was MVR{prev_balance:.2f}, "
-            f"now MVR{new_balance:.2f})"
+            f"Store credit on {inv.number}: −{amount} from "
+            f"{customer.name}'s credit (was {prev_balance:.2f}, "
+            f"now {new_balance:.2f})"
         ),
         risk="low",
         ip_address=None,
@@ -7117,9 +7117,9 @@ async def undo_void_return(return_id: str, db: AsyncSession = Depends(get_db), u
     if new_credited > float(inv.total or 0) + 0.01:
         raise HTTPException(
             400,
-            f"Cannot undo void: re-activating {ret.number} (MVR{round(float(ret.total or 0), 2)}) "
-            f"would push total credits (MVR{new_credited}) above the invoice total "
-            f"(MVR{round(float(inv.total or 0), 2)}). Another active credit note has already "
+            f"Cannot undo void: re-activating {ret.number} ({round(float(ret.total or 0), 2)}) "
+            f"would push total credits ({new_credited}) above the invoice total "
+            f"({round(float(inv.total or 0), 2)}). Another active credit note has already "
             f"consumed the same amount. Void that credit note first, then undo this one."
         )
 
@@ -7844,8 +7844,8 @@ async def _apply_sales_return(
                 ref=ret.number,
                 detail=(
                     f"Return {ret.number} against {inv.number}: "
-                    f"+MVR{credited} credited to {cust.name} "
-                    f"(was MVR{cur_credit:.2f}, now MVR{new_credit:.2f})"
+                    f"+{credited} credited to {cust.name} "
+                    f"(was {cur_credit:.2f}, now {new_credit:.2f})"
                 ),
                 risk="low",
                 ip_address=None,

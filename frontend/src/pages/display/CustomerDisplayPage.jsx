@@ -251,16 +251,16 @@ function CustomerDisplayLive({ roomId }) {
               )}
               {discount > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--green)', marginBottom: 6 }}>
-                  <span>Discount</span>
+                  <span>Discount (MVR)</span>
                   <span className="mono">−{fmt(discount)}</span>
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-                <span>Taxable amount</span>
+                <span>Taxable amount (MVR)</span>
                 <span className="mono">{fmt(subtotal)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-                <span>Tax amount</span>
+                <span>Tax amount (MVR)</span>
                 <span className="mono">{fmt(tax)}</span>
               </div>
               <div style={{
@@ -271,7 +271,7 @@ function CustomerDisplayLive({ roomId }) {
                 paddingTop: 14,
                 borderTop: '1px solid var(--border-default)',
               }}>
-                <span style={{ fontSize: 16, fontWeight: 600 }}>Total</span>
+                <span style={{ fontSize: 16, fontWeight: 600 }}>Total (MVR)</span>
                 <span style={{ fontSize: 28, fontWeight: 700, fontFamily: 'DM Mono', color: 'var(--accent)' }}>
                   {fmt(total)}
                 </span>
@@ -279,7 +279,7 @@ function CustomerDisplayLive({ roomId }) {
               {cashCollected != null && Number(cashCollected) > 0 && (
                 <>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginTop: 12 }}>
-                    <span>Cash collected</span>
+                    <span>Cash collected (MVR)</span>
                     <span className="mono">{fmt(cashCollected)}</span>
                   </div>
                   <div style={{
@@ -290,7 +290,7 @@ function CustomerDisplayLive({ roomId }) {
                     color: 'var(--green)',
                     fontWeight: 700,
                   }}>
-                    <span style={{ fontSize: 16 }}>Change</span>
+                    <span style={{ fontSize: 16 }}>Change (MVR)</span>
                     <span style={{ fontSize: 24, fontFamily: 'DM Mono' }}>{fmt(cashChange || 0)}</span>
                   </div>
                 </>
@@ -311,8 +311,8 @@ function CustomerDisplayLive({ roomId }) {
                 <tr>
                   <th>Item</th>
                   <th className="text-right">Qty</th>
-                  <th className="text-right">Rate</th>
-                  <th className="text-right">Amount</th>
+                  <th className="text-right">Rate (MVR)</th>
+                  <th className="text-right">Amount (MVR)</th>
                 </tr>
               </thead>
               <tbody>

@@ -134,8 +134,8 @@ export default function TransferFormFields({
                 <th style={{ width: 48 }}>#</th>
                 <th style={{ width: '34%' }}>Item</th>
                 <th style={{ width: 90 }}>Qty</th>
-                <th style={{ width: 120 }}>Cost Price</th>
-                <th style={{ width: 145 }}>Total Cost Price</th>
+                <th style={{ width: 120 }}>Cost Price (MVR)</th>
+                <th style={{ width: 145 }}>Total Cost Price (MVR)</th>
                 <th style={{ width: 280 }}>Batch allocation</th>
                 <th style={{ width: 44 }} />
               </tr>
@@ -301,7 +301,7 @@ export default function TransferFormFields({
           </table>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10, fontSize: 13, fontWeight: 700 }}>
-          Total Cost Price: <span className="mono" style={{ marginLeft: 8 }}>{fmt(totalCostPrice)}</span>
+          Total Cost Price (MVR): <span className="mono" style={{ marginLeft: 8 }}>{fmt(totalCostPrice)}</span>
         </div>
         <button
           type="button"

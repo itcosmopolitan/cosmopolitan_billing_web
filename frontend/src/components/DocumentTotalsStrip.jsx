@@ -124,7 +124,7 @@ export default function DocumentTotalsStrip({
 
       {!readOnly && onEntityDiscountChange && (
         <div className="document-summary-row document-summary-row--discount">
-          <span className="document-summary-row__label">Discount</span>
+          <span className="document-summary-row__label">Discount (MVR)</span>
           <div className="document-summary-row__control">{discountInput}</div>
           <span className="document-summary-row__value mono">
             {totals.entityDiscount > 0 ? `−${fmt(totals.entityDiscount)}` : fmt(0)}
@@ -134,7 +134,7 @@ export default function DocumentTotalsStrip({
 
       {readOnly && totals.entityDiscount > 0 && (
         <div className="document-summary-row">
-          <span className="document-summary-row__label">Discount</span>
+          <span className="document-summary-row__label">Discount (MVR)</span>
           <span className="document-summary-row__spacer" />
           <span className="document-summary-row__value mono document-summary-row__value--discount">
             −{fmt(totals.entityDiscount)}
@@ -144,7 +144,7 @@ export default function DocumentTotalsStrip({
 
       {totals.lineDiscount > 0 && (
         <div className="document-summary-row">
-          <span className="document-summary-row__label">Line discount</span>
+          <span className="document-summary-row__label">Line discount (MVR)</span>
           <span className="document-summary-row__spacer" />
           <span className="document-summary-row__value mono document-summary-row__value--discount">
             −{fmt(totals.lineDiscount)}
@@ -155,7 +155,7 @@ export default function DocumentTotalsStrip({
       {gstReverse.gstReversed > 0 && (
         <>
           <div className="document-summary-row">
-            <span className="document-summary-row__label">GST reversed</span>
+            <span className="document-summary-row__label">GST reversed (MVR)</span>
             <span className="document-summary-row__spacer" />
             <span className="document-summary-row__value mono document-summary-row__value--discount">
               −{fmt(gstReverse.gstReversed)}
@@ -173,14 +173,14 @@ export default function DocumentTotalsStrip({
       )}
 
       <div className="document-summary-row">
-        <span className="document-summary-row__label">Taxable amount</span>
+        <span className="document-summary-row__label">Taxable amount (MVR)</span>
         <span className="document-summary-row__spacer" />
         <span className="document-summary-row__value mono">{fmt(totals.netSubtotal)}</span>
       </div>
 
       {showTax && (
         <div className="document-summary-row">
-          <span className="document-summary-row__label">Tax amount</span>
+          <span className="document-summary-row__label">Tax amount (MVR)</span>
           <span className="document-summary-row__spacer" />
           <span className="document-summary-row__value mono">{fmt(totals.taxTotal)}</span>
         </div>
@@ -196,7 +196,7 @@ export default function DocumentTotalsStrip({
 
       {margin && (
         <div className="document-summary-row">
-          <span className="document-summary-row__label">Margin</span>
+          <span className="document-summary-row__label">Margin (MVR)</span>
           <span className="document-summary-row__spacer" />
           <span className="document-summary-row__value">
             <MarginBadge margin={margin} showAmount />
@@ -205,7 +205,7 @@ export default function DocumentTotalsStrip({
       )}
 
       <div className={`document-summary-row${showCredit ? '' : ' document-summary-row--total'}`}>
-        <span className="document-summary-row__label">{showCredit ? 'Invoice total' : 'Total'}</span>
+        <span className="document-summary-row__label">{showCredit ? 'Invoice total (MVR)' : 'Total (MVR)'}</span>
         <span className="document-summary-row__spacer" />
         <span className={`document-summary-row__value mono${showCredit ? '' : ' document-summary-row__value--total'}`}>
           {fmt(totals.total)}
@@ -216,7 +216,7 @@ export default function DocumentTotalsStrip({
         <>
           <div className="document-summary-row">
             <span className="document-summary-row__label" style={{ color: 'var(--green)' }}>
-              Account credit applied
+              Account credit applied (MVR)
             </span>
             <span className="document-summary-row__spacer" />
             <span className="document-summary-row__value mono" style={{ color: 'var(--green)' }}>
@@ -226,7 +226,7 @@ export default function DocumentTotalsStrip({
           {creditLeft != null && (
             <div className="document-summary-row">
               <span className="document-summary-row__label" style={{ color: 'var(--text-muted)' }}>
-                Credit remaining
+                Credit remaining (MVR)
               </span>
               <span className="document-summary-row__spacer" />
               <span className="document-summary-row__value mono" style={{ color: 'var(--text-muted)' }}>
@@ -235,7 +235,7 @@ export default function DocumentTotalsStrip({
             </div>
           )}
           <div className="document-summary-row document-summary-row--total">
-            <span className="document-summary-row__label">Amount due</span>
+            <span className="document-summary-row__label">Amount due (MVR)</span>
             <span className="document-summary-row__spacer" />
             <span className="document-summary-row__value mono document-summary-row__value--total">
               {fmt(amountDue)}

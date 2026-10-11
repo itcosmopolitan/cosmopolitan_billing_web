@@ -323,12 +323,19 @@ const EXPORT_LABEL_OVERRIDES = {
   profit: 'Margin',
 }
 
-function exportColumnLabel(column) {
-  const label = EXPORT_LABEL_OVERRIDES[column.key] || column.label || column.key
-  if ((column.format === 'currency' || column.format === 'currency_blank') && !/\(MVR\)/i.test(label)) {
+function withCurrencyLabel(label, format) {
+  if ((format === 'currency' || format === 'currency_blank') && !/\(MVR\)/i.test(label)) {
     return `${label} (MVR)`
   }
   return label
+}
+
+function exportColumnLabel(column) {
+  return withCurrencyLabel(EXPORT_LABEL_OVERRIDES[column.key] || column.label || column.key, column.format)
+}
+
+function displayColumnLabel(column) {
+  return withCurrencyLabel(column.label, column.format)
 }
 
 function exportColumnValue(column, row) {
@@ -1783,11 +1790,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                   )}
                   {visibleColumns.map((column) => (
                     column.sortable === false ? (
-                      <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{column.label}</th>
+                      <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{displayColumnLabel(column)}</th>
                     ) : (
                       <SortableHeader
                         key={column.key}
-                        label={column.label}
+                        label={displayColumnLabel(column)}
                         sortKey={column.key}
                         sortBy={sortBy}
                         sortOrder={sortOrder}

@@ -1236,8 +1236,8 @@ export default function SalesPage() {
                       if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} />
                       if (id === 'cashier') return <SortableHeader key={id} label="Cashier" sortKey="cashier" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
-                      if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
-                      if (id === 'paid') return <SortableHeader key={id} label="Paid" sortKey="paid_amount" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'amount') return <SortableHeader key={id} label="Amount (MVR)" sortKey="total" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'paid') return <SortableHeader key={id} label="Paid (MVR)" sortKey="paid_amount" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'mode') return <SortableHeader key={id} label="Mode" sortKey="payment_mode" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={invSortBy} sortOrder={invSortOrder} onSort={(k) => toggleSort(invSortBy, invSortOrder, setInvSortBy, setInvSortOrder, setInvSkip, k)} />
                       if (id === 'returns') return <th key={id}>Returns</th>
@@ -1476,7 +1476,7 @@ export default function SalesPage() {
                       if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
                       if (id === 'valid_until') return <SortableHeader key={id} label="Valid Till" sortKey="valid_until" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} />
-                      if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'amount') return <SortableHeader key={id} label="Amount (MVR)" sortKey="total" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={quoteSortBy} sortOrder={quoteSortOrder} onSort={(k) => toggleSort(quoteSortBy, quoteSortOrder, setQuoteSortBy, setQuoteSortOrder, setQuoteSkip, k)} />
                       if (id === 'linked') return <th key={id}>Linked</th>
                       return null
@@ -1763,8 +1763,8 @@ export default function SalesPage() {
                       if (id === 'customer') return <SortableHeader key={id} label="Customer" sortKey="customer_name" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
                       if (id === 'kam') return <th key={id}>KAM</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} />
-                      if (id === 'total') return <SortableHeader key={id} label="Total" sortKey="total" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
-                      if (id === 'credited') return <th key={id} className="text-right">Credited</th>
+                      if (id === 'total') return <SortableHeader key={id} label="Total (MVR)" sortKey="total" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'credited') return <th key={id} className="text-right">Credited (MVR)</th>
                       if (id === 'refund') return <th key={id}>Refund</th>
                       if (id === 'reason') return <th key={id}>Reason</th>
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={retSortBy} sortOrder={retSortOrder} onSort={(k) => toggleSort(retSortBy, retSortOrder, setRetSortBy, setRetSortOrder, setRetSkip, k)} />
@@ -1941,8 +1941,8 @@ export default function SalesPage() {
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} />
                       if (id === 'method') return <SortableHeader key={id} label="Method" sortKey="payment_mode" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k)} />
                       if (id === 'invoices') return <th key={id}>Invoices</th>
-                      if (id === 'total') return <SortableHeader key={id} label="Total Amount" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
-                      if (id === 'store_credit') return <th key={id} className="text-right">Store Credit</th>
+                      if (id === 'total') return <SortableHeader key={id} label="Total Amount (MVR)" sortKey="total_amount" sortBy={paySortBy} sortOrder={paySortOrder} onSort={(k) => toggleSort(paySortBy, paySortOrder, setPaySortBy, setPaySortOrder, setPaySkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'store_credit') return <th key={id} className="text-right">Store Credit (MVR)</th>
                       if (id === 'status') return <th key={id}>Status</th>
                       return null
                     })}
@@ -2111,7 +2111,7 @@ export default function SalesPage() {
                       if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} />
                       if (id === 'expected') return <SortableHeader key={id} label="Expected" sortKey="expected_date" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
-                      if (id === 'amount') return <SortableHeader key={id} label="Amount" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
+                      if (id === 'amount') return <SortableHeader key={id} label="Amount (MVR)" sortKey="total" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k, 'desc')} className="text-right" align="right" />
                       if (id === 'status') return <SortableHeader key={id} label="Status" sortKey="status" sortBy={orderSortBy} sortOrder={orderSortOrder} onSort={(k) => toggleSort(orderSortBy, orderSortOrder, setOrderSortBy, setOrderSortOrder, setOrderSkip, k)} />
                       if (id === 'linked') return <th key={id}>Linked</th>
                       return null

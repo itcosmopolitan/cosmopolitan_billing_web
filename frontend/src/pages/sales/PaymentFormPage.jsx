@@ -455,10 +455,10 @@ export default function PaymentFormPage() {
                     <th style={{ width: 30 }}></th>
                     <th>Invoice #</th>
                     <th>Date</th>
-                    <th style={{ width: 110, textAlign: 'right' }}>Total</th>
-                    <th style={{ width: 100, textAlign: 'right' }}>Paid</th>
-                    <th style={{ width: 110, textAlign: 'right' }}>Balance</th>
-                    <th style={{ width: 130, textAlign: 'right' }}>Apply Amount</th>
+                    <th style={{ width: 110, textAlign: 'right' }}>Total (MVR)</th>
+                    <th style={{ width: 100, textAlign: 'right' }}>Paid (MVR)</th>
+                    <th style={{ width: 110, textAlign: 'right' }}>Balance (MVR)</th>
+                    <th style={{ width: 130, textAlign: 'right' }}>Apply Amount (MVR)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -522,19 +522,19 @@ export default function PaymentFormPage() {
                   </div>
                   {creditApplied > 0 && (
                     <div style={totalsRowStyle}>
-                      <span style={{ ...totalsLabelStyle, color: 'var(--accent)' }}>Account credit</span>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--accent)' }}>Account credit (MVR)</span>
                       <span className="mono" style={{ ...totalsValueStyle, color: 'var(--accent)' }}>-{fmt(creditApplied)}</span>
                     </div>
                   )}
                   {totals.credit > 0 && (
                     <div style={totalsRowStyle}>
-                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>To account credit</span>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>To account credit (MVR)</span>
                       <span className="mono" style={{ ...totalsValueStyle, color: 'var(--amber)' }}>{fmt(totals.credit)}</span>
                     </div>
                   )}
                   <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
                     <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {creditApplied > 0 ? 'Remaining to collect' : 'Allocated'}
+                      {creditApplied > 0 ? 'Remaining to collect (MVR)' : 'Allocated (MVR)'}
                     </span>
                     <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>
                       {fmt(creditApplied > 0 ? remainingTender : totals.allocated)}

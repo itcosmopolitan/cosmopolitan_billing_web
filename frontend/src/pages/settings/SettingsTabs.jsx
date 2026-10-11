@@ -871,17 +871,17 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
             <div>Subtotal</div>
-            <div>MVR{formatAmountNumber(305.6)}</div>
+            <div>{formatAmountNumber(305.6)}</div>
           </div>
           {taxMode === 'itemized' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontSize: 10, marginBottom: 2 }}>
               <div>Tax (18%)</div>
-              <div>MVR{formatAmountNumber(27.5)}</div>
+              <div>{formatAmountNumber(27.5)}</div>
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, fontWeight: 700, fontSize: 11, marginBottom: 2 }}>
             <div>TOTAL</div>
-            <div>MVR{formatAmountNumber(333.1)}</div>
+            <div>{formatAmountNumber(333.1)}</div>
           </div>
 
           {showPayment && (

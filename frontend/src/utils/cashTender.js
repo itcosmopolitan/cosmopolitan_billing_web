@@ -25,6 +25,6 @@ export function cashTenderSummary(collectedValue, due) {
 export function cashTenderError(collectedValue, due) {
   const { collected, short, ready } = cashTenderSummary(collectedValue, due)
   if (collected == null) return 'Enter the amount collected from the customer'
-  if (!ready) return `Amount collected is short by ${fmt(short)}`
+  if (!ready) return `Amount collected (MVR) is short by ${fmt(short)}`
   return null
 }

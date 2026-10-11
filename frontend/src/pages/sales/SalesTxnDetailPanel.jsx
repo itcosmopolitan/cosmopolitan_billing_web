@@ -156,17 +156,17 @@ export default function SalesTxnDetailPanel({
   const conversionDisplay = conversionKind ? conversionStatusDisplay(conversionKind, detail) : null
 
   const summary = kind === 'invoice' ? [
-    { label: 'Total', value: fmt(detail?.total) },
-    { label: 'Paid', value: fmt(detail?.paidAmount || 0), tone: 'var(--green)' },
-    { label: 'Balance due', value: balDue > 0.01 ? fmt(balDue) : '—', tone: balDue > 0.01 ? 'var(--red)' : undefined },
+    { label: 'Total (MVR)', value: fmt(detail?.total) },
+    { label: 'Paid (MVR)', value: fmt(detail?.paidAmount || 0), tone: 'var(--green)' },
+    { label: 'Balance due (MVR)', value: balDue > 0.01 ? fmt(balDue) : '—', tone: balDue > 0.01 ? 'var(--red)' : undefined },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : kind === 'return' ? [
-    { label: 'Credit total', value: fmt(detail?.total), tone: 'var(--red)' },
-    { label: 'Credited', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+    { label: 'Credit total (MVR)', value: fmt(detail?.total), tone: 'var(--red)' },
+    { label: 'Credited (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
     { label: 'Refund', value: detail?.refundMethod || '—' },
     { label: 'Status', value: <Chip status={detail?.status === 'processed' ? 'paid' : detail?.status} label={formatLabel(detail?.status)} /> },
   ] : [
-    { label: 'Total', value: fmt(detail?.total) },
+    { label: 'Total (MVR)', value: fmt(detail?.total) },
     { label: 'Lines', value: lineCount },
     { label: kind === 'quote' ? 'Valid until' : 'Expected', value: detail?.validUntil || detail?.expectedDate || '—' },
     {
@@ -454,7 +454,7 @@ export default function SalesTxnDetailPanel({
                 { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode, detail) },
                 { label: 'Payment ref', value: detail?.paymentRef || '—' },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
-                { label: 'Credited (returns)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                { label: 'Credited (returns) (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
                 ...(detail?.salesOrderNumber ? [{
                   label: 'Sales order',
                   value: (
@@ -563,17 +563,17 @@ export default function SalesTxnDetailPanel({
                   <>
                     <th className="text-right">Original qty</th>
                     <th className="text-right">Return qty</th>
-                    <th className="text-right">Price (Excl.)</th>
-                    <th className="text-right">GST</th>
-                    <th className="text-right">Total (Excl.)</th>
+                    <th className="text-right">Price (Excl.) (MVR)</th>
+                    <th className="text-right">GST (MVR)</th>
+                    <th className="text-right">Total (Excl.) (MVR)</th>
                   </>
                 ) : (
                   <>
                     <th className="text-right">Qty</th>
-                    <th className="text-right">Price (Excl.)</th>
+                    <th className="text-right">Price (Excl.) (MVR)</th>
                     <th className="text-right">Disc %</th>
-                    <th className="text-right">GST</th>
-                    <th className="text-right">Total (Excl.)</th>
+                    <th className="text-right">GST (MVR)</th>
+                    <th className="text-right">Total (Excl.) (MVR)</th>
                   </>
                 )}
               </tr>
@@ -631,8 +631,8 @@ export default function SalesTxnDetailPanel({
                     <th className="text-right">Quantity</th>
                     <th>Batch</th>
                     <th>Expiry</th>
-                    <th className="text-right">Unit cost</th>
-                    <th className="text-right">Total cost</th>
+                    <th className="text-right">Unit cost (MVR)</th>
+                    <th className="text-right">Total cost (MVR)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -659,19 +659,19 @@ export default function SalesTxnDetailPanel({
           <DetailFields
             columns={1}
             fields={[
-              { label: 'Subtotal', value: fmt(detail?.subtotal || ((detail?.total || 0) - (detail?.taxTotal || 0))) },
-              { label: 'GST', value: fmt(detail?.taxTotal || 0) },
-              { label: 'Discount', value: (detail?.discount || 0) > 0 ? `-${fmt(detail.discount)}` : '—' },
+              { label: 'Subtotal (MVR)', value: fmt(detail?.subtotal || ((detail?.total || 0) - (detail?.taxTotal || 0))) },
+              { label: 'GST (MVR)', value: fmt(detail?.taxTotal || 0) },
+              { label: 'Discount (MVR)', value: (detail?.discount || 0) > 0 ? `-${fmt(detail.discount)}` : '—' },
               {
-                label: kind === 'return' ? 'Credit total' : 'Total',
+                label: kind === 'return' ? 'Credit total (MVR)' : 'Total (MVR)',
                 value: <strong style={{ color: kind === 'return' ? 'var(--red)' : 'var(--accent)' }}>{fmt(detail?.total)}</strong>,
               },
               ...(kind === 'invoice' ? [
-                { label: 'Paid', value: <span style={{ color: 'var(--green)' }}>{fmt(detail?.paidAmount || 0)}</span> },
-                { label: 'Balance due', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : '—' },
+                { label: 'Paid (MVR)', value: <span style={{ color: 'var(--green)' }}>{fmt(detail?.paidAmount || 0)}</span> },
+                { label: 'Balance due (MVR)', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : '—' },
               ] : []),
               ...(kind === 'return' ? [
-                { label: 'Added to store credit', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                { label: 'Added to store credit (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
               ] : []),
             ]}
           />
@@ -739,7 +739,7 @@ export default function SalesTxnDetailPanel({
                   <th>Date</th>
                   <th>Method</th>
                   <th>Reference</th>
-                  <th className="text-right">Applied</th>
+                  <th className="text-right">Applied (MVR)</th>
                   <th>Status</th>
                 </tr>
               </thead>

@@ -25,9 +25,9 @@ export default function PaymentDetailPanel({
   const allocCount = detail?.allocations?.length || 0
 
   const summary = [
-    { label: 'Amount', value: fmt(detail?.totalAmount), tone: 'var(--green)' },
+    { label: 'Amount (MVR)', value: fmt(detail?.totalAmount), tone: 'var(--green)' },
     {
-      label: 'Store credit applied',
+      label: 'Store credit applied (MVR)',
       value: (detail?.creditApplied || 0) > 0 ? fmt(detail.creditApplied) : '—',
       tone: (detail?.creditApplied || 0) > 0 ? 'var(--amber)' : undefined,
     },
@@ -96,11 +96,11 @@ export default function PaymentDetailPanel({
               },
               { label: 'Reference', value: detail?.paymentRef || '—' },
               {
-                label: 'Total amount',
+                label: 'Total amount (MVR)',
                 value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(detail?.totalAmount)}</span>,
               },
               ...(partyLabel === 'Customer' ? [{
-                label: 'Store credit applied',
+                label: 'Store credit applied (MVR)',
                 value: (detail?.creditApplied || 0) > 0
                   ? <span className="mono" style={{ color: 'var(--amber)' }}>{fmt(detail.creditApplied)}</span>
                   : '—',
@@ -123,7 +123,7 @@ export default function PaymentDetailPanel({
             <thead>
               <tr>
                 <th>{partyLabel === 'Vendor' ? 'Bill #' : 'Invoice #'}</th>
-                <th className="text-right">Amount</th>
+                <th className="text-right">Amount (MVR)</th>
               </tr>
             </thead>
             <tbody>

@@ -309,11 +309,11 @@ export default function BillFormModal({
             <tr>
               <th>Item</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Cost (Excl.)</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Cost (Excl.) (MVR)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
-              <th style={{ width: 90, textAlign: 'right' }}>Tax</th>
+              <th style={{ width: 90, textAlign: 'right' }}>Tax (MVR)</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
-              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.)</th>
+              <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.) (MVR)</th>
               <th style={{ width: 60 }} />
             </tr>
           </thead>
@@ -390,12 +390,12 @@ export default function BillFormModal({
                             whiteSpace: 'nowrap',
                           }}
                           title={
-                            `WAC: (${costPreview.onHandQty} × ${fmt(costPreview.current)}`
+                            `WAC (MVR): (${costPreview.onHandQty} × ${fmt(costPreview.current)}`
                             + ` + ${costPreview.purchaseQty} × ${fmt(costPreview.purchase)})`
                             + ` / ${costPreview.onHandQty + costPreview.purchaseQty}`
                           }
                         >
-                          WAC {formatAmountNumber(costPreview.current)}→{formatAmountNumber(costPreview.next)}
+                          WAC (MVR) {formatAmountNumber(costPreview.current)}→{formatAmountNumber(costPreview.next)}
                         </div>
                       )}
                     </td>

@@ -163,7 +163,7 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
       } else {
         toast.success(
           credited > 0
-            ? `Return ${res.number} — refund ${fmt(credited)} from drawer`
+            ? `Return ${res.number} — refund (MVR) ${fmt(credited)} from drawer`
             : `Return ${res.number} processed`,
         )
       }
@@ -239,7 +239,7 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
             {' · '}
             {invoice.customerName || 'Walk-in'}
             {' · '}
-            {fmt(invoice.total)}
+            Total (MVR): {fmt(invoice.total)}
             {invoice.returnStatus && invoice.returnStatus !== 'none' && (
               <span style={{ color: 'var(--amber)', marginLeft: 6 }}>
                 ({invoice.returnStatus} return)
@@ -315,7 +315,7 @@ export default function POSRefundModal({ open, onClose, branchId, initialInvoice
 
           {returnTotal > 0 && (
             <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-              <span style={{ color: 'var(--text-muted)' }}>Return total</span>
+              <span style={{ color: 'var(--text-muted)' }}>Return total (MVR)</span>
               <span className="mono" style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmt(returnTotal)}</span>
             </div>
           )}

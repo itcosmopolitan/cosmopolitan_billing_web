@@ -1506,7 +1506,7 @@ export default function POSPage() {
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
               }}
-              title="Account credit available (from returns / overpayments)"
+              title="Account credit (MVR) available (from returns / overpayments)"
             >
               {fmt(Number(customer.credit_balance || 0))}
             </span>
@@ -1595,7 +1595,7 @@ export default function POSPage() {
               <table style={{ width: '100%', minWidth: 980, borderCollapse: 'separate', borderSpacing: 0 }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-raised)' }}>
-                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.)', 'Discount', 'Tax', 'Margin', 'Total (Excl.)', ''].map((h) => (
+                    {['Item Details', 'Packaging', 'Qty', 'Rate (Excl.) (MVR)', 'Discount', 'Tax (MVR)', 'Margin', 'Total (Excl.) (MVR)', ''].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -1841,7 +1841,7 @@ export default function POSPage() {
                         marginBottom: 2,
                       }}
                     >
-                      <span>Discount</span>
+                      <span>Discount (MVR)</span>
                       <span style={{ fontFamily: 'DM Mono' }}>-{fmt(discountAmount)}</span>
                     </div>
                   )}
@@ -1857,7 +1857,7 @@ export default function POSPage() {
                           marginBottom: 2,
                         }}
                       >
-                        <span>GST reversed</span>
+                        <span>GST reversed (MVR)</span>
                         <span style={{ fontFamily: 'DM Mono' }}>-{fmt(gstReverse.gstReversed)}</span>
                       </div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2, lineHeight: 1.35 }}>
@@ -1876,7 +1876,7 @@ export default function POSPage() {
                       marginBottom: 2,
                     }}
                   >
-                    <span>Taxable</span>
+                    <span>Taxable (MVR)</span>
                     <span style={{ fontFamily: 'DM Mono' }}>{fmt(subtotal)}</span>
                   </div>
                   <div
@@ -1889,7 +1889,7 @@ export default function POSPage() {
                       marginBottom: cartMargin ? 2 : 0,
                     }}
                   >
-                    <span>Tax</span>
+                    <span>Tax (MVR)</span>
                     <span style={{ fontFamily: 'DM Mono' }}>{fmt(tax)}</span>
                   </div>
                   {cartMargin && (
@@ -1904,7 +1904,7 @@ export default function POSPage() {
                         marginBottom: 4,
                       }}
                     >
-                      <span>Margin</span>
+                      <span>Margin (MVR)</span>
                       <MarginBadge margin={cartMargin} showAmount size="sm" />
                     </div>
                   )}
@@ -1919,7 +1919,7 @@ export default function POSPage() {
                         marginBottom: 2,
                       }}
                     >
-                      <span>Account credit</span>
+                      <span>Account credit (MVR)</span>
                       <span style={{ fontFamily: 'DM Mono' }}>-{fmt(creditAppliedPreview)}</span>
                     </div>
                   )}
@@ -1936,7 +1936,7 @@ export default function POSPage() {
                 }}
               >
                 <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {creditAppliedPreview > 0 ? 'Remaining' : 'Total'}
+                  {creditAppliedPreview > 0 ? 'Remaining (MVR)' : 'Total (MVR)'}
                 </span>
                 <span style={{ fontFamily: 'DM Mono, monospace', fontSize: 22, fontWeight: 700, color: 'var(--accent)', lineHeight: 1.1 }}>
                   {fmt(creditAppliedPreview > 0 ? remainingDuePreview : total)}
@@ -1944,7 +1944,7 @@ export default function POSPage() {
               </div>
               {creditAppliedPreview > 0 && (
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, textAlign: 'right' }}>
-                  Bill total {fmt(total)}
+                  Bill total (MVR) {fmt(total)}
                 </div>
               )}
             </div>
@@ -1967,9 +1967,9 @@ export default function POSPage() {
             <div style={{ minWidth: 0 }}>
               {customer?.id && creditAvail > 0 && (
                 <AlertBar type="green" icon="✓" style={{ marginBottom: 6 }}>
-                  Account credit <strong>{fmt(creditAvail)}</strong> will be applied automatically
+                  Account credit (MVR) <strong>{fmt(creditAvail)}</strong> will be applied automatically
                   {remainingDuePreview > 0.001
-                    ? <> — collect <strong>{fmt(remainingDuePreview)}</strong> remaining</>
+                    ? <> — collect (MVR) <strong>{fmt(remainingDuePreview)}</strong> remaining</>
                     : <> — sale fully covered</>}
                 </AlertBar>
               )}
@@ -2020,7 +2020,7 @@ export default function POSPage() {
                 })}
                 {paymentMethod === 'credit' && (
                   <div style={{ width: '100%', fontSize: 11, color: 'var(--text-muted)' }}>
-                    Remaining credit: <strong>{fmt(accountCreditRemaining)}</strong>
+                    Remaining credit (MVR): <strong>{fmt(accountCreditRemaining)}</strong>
                   </div>
                 )}
                 {paymentMethod === 'cash' && remainingDuePreview > 0.001 && (

@@ -209,7 +209,7 @@ export default function BranchPricingModal({
             </span>
           </div>
           <p className="item-form-section__hint" style={{ marginTop: 0 }}>
-            Blank uses catalog defaults (cost {fmt(Number(defaultCost) || 0)}, sell {fmt(Number(defaultPrice) || 0)}).
+            Blank uses catalog defaults (MVR) (cost {fmt(Number(defaultCost) || 0)}, sell {fmt(Number(defaultPrice) || 0)}).
           </p>
           <div className="item-form-grid">
             <TaxedPriceInput
@@ -254,7 +254,7 @@ export default function BranchPricingModal({
               <>
                 <div>
                   <TaxedPriceInput
-                    label="Wholesale price"
+                    label="Wholesale price (MVR)"
                     dense
                     value={draft.wholesale_price ?? ''}
                     mode={priceTaxMode}
@@ -275,7 +275,7 @@ export default function BranchPricingModal({
                 </div>
                 <div>
                   <TaxedPriceInput
-                    label="Staff price"
+                    label="Staff price (MVR)"
                     dense
                     value={draft.staff_price ?? ''}
                     mode={priceTaxMode}

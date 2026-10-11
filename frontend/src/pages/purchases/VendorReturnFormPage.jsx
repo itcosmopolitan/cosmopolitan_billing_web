@@ -415,7 +415,7 @@ export default function VendorReturnFormPage() {
               <>
                 <AlertBar type="blue" icon="ℹ">
                   <strong>{bill.number}</strong> · {bill.vendorName} ·
-                  Total: <strong>{fmt(bill.total)}</strong> · Paid: <strong>{fmt(bill.paidAmount)}</strong>
+                  Total (MVR): <strong>{fmt(bill.total)}</strong> · Paid (MVR): <strong>{fmt(bill.paidAmount)}</strong>
                 </AlertBar>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
@@ -437,8 +437,8 @@ export default function VendorReturnFormPage() {
                         <th style={{ width: 80, textAlign: 'right' }}>Received</th>
                         <th style={{ width: 95, textAlign: 'right' }}>Returnable</th>
                         <th style={{ width: 90, textAlign: 'right' }}>Return Qty</th>
-                        <th style={{ width: 95, textAlign: 'right' }}>Cost</th>
-                        <th style={{ width: 100, textAlign: 'right' }}>Line Total</th>
+                        <th style={{ width: 95, textAlign: 'right' }}>Cost (MVR)</th>
+                        <th style={{ width: 100, textAlign: 'right' }}>Line Total (MVR)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -490,15 +490,15 @@ export default function VendorReturnFormPage() {
                   <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                     <div style={{ minWidth: 240 }}>
                       <div style={totalsRowStyle}>
-                        <span style={totalsLabelStyle}>Subtotal</span>
+                        <span style={totalsLabelStyle}>Subtotal (MVR)</span>
                         <span className="mono" style={totalsValueStyle}>{fmt(totals.subtotal)}</span>
                       </div>
                       <div style={totalsRowStyle}>
-                        <span style={totalsLabelStyle}>GST</span>
+                        <span style={totalsLabelStyle}>GST (MVR)</span>
                         <span className="mono" style={totalsValueStyle}>{fmt(totals.tax)}</span>
                       </div>
                       <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
-                        <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Total Credit</span>
+                        <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Total Credit (MVR)</span>
                         <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--pink)' }}>{fmt(totals.total)}</span>
                       </div>
                     </div>

@@ -132,8 +132,8 @@ export default function BranchConfigModal({ item, branches, open, onClose, onSav
       }
     >
       <AlertBar type="blue" icon="ℹ️">
-        Default cost: <strong>{fmt(defaultCost)}</strong>
-        {' · '}Default selling price: <strong>{fmt(defaultPrice)}</strong>
+        Default cost (MVR): <strong>{fmt(defaultCost)}</strong>
+        {' · '}Default selling price (MVR): <strong>{fmt(defaultPrice)}</strong>
         {' · '}Leave branch fields blank to use defaults.
         {' · '}Uncheck a branch to hide this item there (POS & branch inventory).
       </AlertBar>

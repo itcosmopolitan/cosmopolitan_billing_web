@@ -615,7 +615,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                       return (
                         <SortableHeader
                           key={id}
-                          label={isMaster ? 'Default Cost' : 'Cost'}
+                          label={isMaster ? 'Default Cost (MVR)' : 'Cost (MVR)'}
                           sortKey="cost_price"
                           sortBy={itemSortBy}
                           sortOrder={itemSortOrder}
@@ -629,7 +629,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                       return (
                         <SortableHeader
                           key={id}
-                          label={isMaster ? 'Default Price' : 'Price'}
+                          label={isMaster ? 'Default Price (MVR)' : 'Price (MVR)'}
                           sortKey="selling_price"
                           sortBy={itemSortBy}
                           sortOrder={itemSortOrder}
@@ -639,8 +639,8 @@ export default function ItemsPage({ mode = 'branch' }) {
                         />
                       )
                     }
-                    if (id === 'wholesale') return <th key={id} className="text-right">Wholesale</th>
-                    if (id === 'staff') return <th key={id} className="text-right">Staff</th>
+                    if (id === 'wholesale') return <th key={id} className="text-right">Wholesale (MVR)</th>
+                    if (id === 'staff') return <th key={id} className="text-right">Staff (MVR)</th>
                     if (id === 'branches') return <th key={id}>{branchesColumnLabel}</th>
                     if (id === 'gst') return <th key={id}>GST</th>
                     if (id === 'stock') {

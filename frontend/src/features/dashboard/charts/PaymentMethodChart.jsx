@@ -10,7 +10,7 @@ export default function PaymentMethodChart({ data = [] }) {
         <XAxis dataKey="method" tick={axisStyle} tickLine={false} axisLine={false} />
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} />
         <Tooltip cursor={{ fill: 'transparent' }} formatter={(value) => formatCompactCurrency(value)} contentStyle={tooltipStyle} />
-        <Bar dataKey="amount" name="Amount" fill={chartColors.primary} radius={[4, 4, 0, 0]} cursor={{ fill: 'transparent' }} />
+        <Bar dataKey="amount" name="Amount (MVR)" fill={chartColors.primary} radius={[4, 4, 0, 0]} cursor={{ fill: 'transparent' }} />
       </BarChart>
     </ResponsiveContainer>
   )

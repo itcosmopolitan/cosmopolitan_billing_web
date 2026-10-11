@@ -229,7 +229,7 @@ export default function VendorPaymentFormPage() {
     if (totals.count === 0) { toast.error('Select at least one bill'); return }
     if (!paymentMode) { toast.error('Pick a payment method'); return }
     if (creditMode && creditInsufficient) {
-      toast.error(`Insufficient vendor credit — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
+      toast.error(`Insufficient vendor credit (MVR) — ${fmt(avail)} available, ${fmt(totals.allocated)} needed`)
       return
     }
     const allocations = []
@@ -259,7 +259,7 @@ export default function VendorPaymentFormPage() {
       const credit = Number(res?.credit_applied || 0)
       if (credit > 0) {
         toast.success(
-          `Payment ${res.number} ${isEdit ? 'updated' : 'recorded'}. ${fmt(credit)} credited to ${vendor.name}`,
+          `Payment ${res.number} ${isEdit ? 'updated' : 'recorded'}. ${fmt(credit)} (MVR) credited to ${vendor.name}`,
           { duration: 5000 },
         )
       } else {
@@ -359,9 +359,9 @@ export default function VendorPaymentFormPage() {
               return (
                 <AlertBar type="blue" icon="ℹ">
                   {bills.length} pending {bills.length === 1 ? 'bill' : 'bills'} ·{' '}
-                  <strong>{fmt(totalBalance)}</strong> outstanding
+                  <strong>{fmt(totalBalance)}</strong> outstanding (MVR)
                   {avail > 0 && (
-                    <> · <strong>{fmt(avail)}</strong> vendor credit available</>
+                    <> · <strong>{fmt(avail)}</strong> vendor credit available (MVR)</>
                   )}
                 </AlertBar>
               )
@@ -396,10 +396,10 @@ export default function VendorPaymentFormPage() {
                     <th style={{ width: 30 }}></th>
                     <th>Bill #</th>
                     <th>Date</th>
-                    <th style={{ width: 110, textAlign: 'right' }}>Total</th>
-                    <th style={{ width: 100, textAlign: 'right' }}>Paid</th>
-                    <th style={{ width: 110, textAlign: 'right' }}>Balance</th>
-                    <th style={{ width: 130, textAlign: 'right' }}>Apply Amount</th>
+                    <th style={{ width: 110, textAlign: 'right' }}>Total (MVR)</th>
+                    <th style={{ width: 100, textAlign: 'right' }}>Paid (MVR)</th>
+                    <th style={{ width: 110, textAlign: 'right' }}>Balance (MVR)</th>
+                    <th style={{ width: 130, textAlign: 'right' }}>Apply Amount (MVR)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -445,7 +445,7 @@ export default function VendorPaymentFormPage() {
                           />
                           {excess > 0 && (
                             <div style={{ fontSize: 10.5, color: 'var(--amber)', marginTop: 2 }}>
-                              Excess {fmt(excess)} → vendor credit
+                              Excess {fmt(excess)} (MVR) → vendor credit
                             </div>
                           )}
                         </td>
@@ -463,12 +463,12 @@ export default function VendorPaymentFormPage() {
                   </div>
                   {totals.credit > 0 && (
                     <div style={totalsRowStyle}>
-                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>Vendor Credit</span>
+                      <span style={{ ...totalsLabelStyle, color: 'var(--amber)' }}>Vendor Credit (MVR)</span>
                       <span className="mono" style={{ ...totalsValueStyle, color: 'var(--amber)' }}>{fmt(totals.credit)}</span>
                     </div>
                   )}
                   <div style={{ ...totalsRowStyle, borderTop: '1px solid var(--border-subtle)', paddingTop: 6, marginTop: 4 }}>
-                    <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Allocated</span>
+                    <span style={{ ...totalsLabelStyle, fontWeight: 600, color: 'var(--text-primary)' }}>Allocated (MVR)</span>
                     <span className="mono" style={{ ...totalsValueStyle, fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{fmt(totals.allocated)}</span>
                   </div>
                 </div>
@@ -499,7 +499,7 @@ export default function VendorPaymentFormPage() {
             </div>
             {creditMode && creditInsufficient && (
               <AlertBar type="red" icon="⚠">
-                Insufficient vendor credit — {fmt(avail)} available, {fmt(totals.allocated)} needed
+                Insufficient vendor credit (MVR) — {fmt(avail)} available, {fmt(totals.allocated)} needed
               </AlertBar>
             )}
             <FormGroup label="Notes (optional)">

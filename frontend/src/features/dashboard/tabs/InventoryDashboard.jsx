@@ -23,15 +23,15 @@ export default function InventoryDashboard({ filters, autoRefresh }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div className="grid-kpi">
-        <KpiCard title="Inventory Value" value={formatCompactCurrency(kpis.inventory_value)} delta={deltas.inventory_value} tone="neutral" sparkline={valueSpark} loading={loading} />
+        <KpiCard title="Inventory Value (MVR)" value={formatCompactCurrency(kpis.inventory_value)} delta={deltas.inventory_value} tone="neutral" sparkline={valueSpark} loading={loading} />
         <KpiCard title="Products" value={formatNumber(kpis.products)} delta={deltas.products} tone="info" sparkline={valueSpark} loading={loading} />
         <KpiCard title="Out of Stock" value={formatNumber(kpis.out_of_stock)} delta={deltas.out_of_stock} tone="danger" sparkline={valueSpark} loading={loading} />
         <KpiCard title="Low Stock" value={formatNumber(kpis.low_stock)} delta={deltas.low_stock} tone="warning" sparkline={valueSpark} loading={loading} />
       </div>
 
       <div className="grid-3">
-        <ChartCard title="Inventory Value Trend" loading={loading}>
-          <SalesTrendChart data={charts.inventory_value_trend || []} valueKey="value" label="Inventory Value" />
+        <ChartCard title="Inventory Value Trend (MVR)" loading={loading}>
+          <SalesTrendChart data={charts.inventory_value_trend || []} valueKey="value" label="Inventory Value (MVR)" />
         </ChartCard>
         <ChartCard title="Fast vs Slow Moving" loading={loading}>
           <CategoryPieChart
@@ -42,7 +42,7 @@ export default function InventoryDashboard({ filters, autoRefresh }) {
             donut
           />
         </ChartCard>
-        <ChartCard title="Stock by Category" loading={loading}>
+        <ChartCard title="Stock by Category (MVR)" loading={loading}>
           <CategoryPieChart data={charts.stock_by_category || []} nameKey="category" valueKey="value" />
         </ChartCard>
       </div>
@@ -243,7 +243,7 @@ const stockColumns = [
   { key: 'name', header: 'Product' },
   { key: 'branch', header: 'Branch' },
   { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
-  { key: 'value', header: 'Value', align: 'right', render: (row) => formatCompactCurrency(row.value) },
+  { key: 'value', header: 'Value (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.value) },
 ]
 
 const lowStockColumns = [
@@ -255,7 +255,7 @@ const lowStockColumns = [
 const deadStockColumns = [
   { key: 'name', header: 'Product' },
   { key: 'qty', header: 'Qty', align: 'right', width: 72, render: (row) => formatNumber(row.qty) },
-  { key: 'value', header: 'Value', align: 'right', render: (row) => formatCompactCurrency(row.value) },
+  { key: 'value', header: 'Value (MVR)', align: 'right', render: (row) => formatCompactCurrency(row.value) },
 ]
 
 const expiryColumns = [

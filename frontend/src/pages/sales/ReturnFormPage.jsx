@@ -482,7 +482,7 @@ export default function ReturnFormPage() {
               <>
                 <AlertBar type="blue" icon="ℹ">
                   <strong>{invoice.number}</strong> · {invoice.customerName || 'Walk-in'} ·
-                  Total: <strong>{fmt(invoice.total)}</strong> · Paid: <strong>{fmt(invoice.paidAmount)}</strong>
+                  Total (MVR): <strong>{fmt(invoice.total)}</strong> · Paid (MVR): <strong>{fmt(invoice.paidAmount)}</strong>
                 </AlertBar>
 
                 <FormGroup label="Lines to return" required>
@@ -493,7 +493,7 @@ export default function ReturnFormPage() {
                         <th style={{ width: 70, textAlign: 'right' }}>Sold</th>
                         <th style={{ width: 90, textAlign: 'right' }}>Returnable</th>
                         <th style={{ width: 90, textAlign: 'right' }}>Return Qty</th>
-                        <th style={{ width: 90, textAlign: 'right' }}>Line Total</th>
+                        <th style={{ width: 90, textAlign: 'right' }}>Line Total (MVR)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -605,7 +605,7 @@ export default function ReturnFormPage() {
                     display: 'flex', justifyContent: 'space-between',
                     fontSize: 13, fontWeight: 600,
                   }}>
-                    <span>Return total:</span>
+                    <span>Return total (MVR):</span>
                     <span className="mono" style={{ color: 'var(--accent)' }}>{fmt(totals.total)}</span>
                   </div>
                 )}

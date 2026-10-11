@@ -62,10 +62,10 @@ function BranchCard({ item, onClick }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px', fontSize: 12.5 }}>
         {[
-          { label: 'Opening', value: fmt(item.opening_balance) },
-          { label: 'Cash In', value: fmt(item.cash_in), color: 'var(--green)' },
-          { label: 'Cash Out', value: fmt(item.cash_out), color: 'var(--red)' },
-          { label: 'Expected', value: fmt(item.expected_balance) },
+          { label: 'Opening (MVR)', value: fmt(item.opening_balance) },
+          { label: 'Cash In (MVR)', value: fmt(item.cash_in), color: 'var(--green)' },
+          { label: 'Cash Out (MVR)', value: fmt(item.cash_out), color: 'var(--red)' },
+          { label: 'Expected (MVR)', value: fmt(item.expected_balance) },
         ].map((r) => (
           <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: 'var(--text-muted)' }}>{r.label}</span>
@@ -78,13 +78,13 @@ function BranchCard({ item, onClick }) {
         {item.day_status === 'closed' && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Physical</span>
+              <span style={{ color: 'var(--text-muted)' }}>Physical (MVR)</span>
               <span style={{ fontFamily: 'DM Mono,monospace', fontWeight: 600 }}>
                 {fmt(item.physical_count)}
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>Variance</span>
+              <span style={{ color: 'var(--text-muted)' }}>Variance (MVR)</span>
               <VarianceBadge variance={item.variance} />
             </div>
           </>

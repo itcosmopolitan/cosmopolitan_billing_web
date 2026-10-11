@@ -275,7 +275,7 @@ export default function ItemFormFields({
                 <>
                   <div>
                     <TaxedPriceInput
-                      label="Wholesale price"
+                      label="Wholesale price (MVR)"
                       value={form.wholesale_price}
                       mode={priceTaxMode}
                       taxRate={form.tax_rate}
@@ -296,7 +296,7 @@ export default function ItemFormFields({
                   </div>
                   <div>
                     <TaxedPriceInput
-                      label="Staff price"
+                      label="Staff price (MVR)"
                       value={form.staff_price}
                       mode={priceTaxMode}
                       taxRate={form.tax_rate}

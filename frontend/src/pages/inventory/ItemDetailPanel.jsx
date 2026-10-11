@@ -114,8 +114,8 @@ export default function ItemDetailPanel({
 
   const summary = [
     { label: 'Stock on hand', value: fmtQty(stockOnHand) },
-    { label: 'Retail price', value: fmt(detail?.default_selling_price ?? detail?.selling_price) },
-    { label: 'Cost', value: fmt(detail?.default_cost_price ?? detail?.cost_price) },
+    { label: 'Retail price (MVR)', value: fmt(detail?.default_selling_price ?? detail?.selling_price) },
+    { label: 'Cost (MVR)', value: fmt(detail?.default_cost_price ?? detail?.cost_price) },
     {
       label: isMaster ? 'Listed branches' : 'Stock status',
       value: isMaster ? listedBranches : stockLabel,
@@ -221,14 +221,13 @@ export default function ItemDetailPanel({
             <DetailFields fields={[
               { label: 'Default cost (MVR)', value: catalogCostLabel(detail?.default_cost_price ?? detail?.cost_price, detail?.tax_rate) },
               { label: 'Default selling — retail (MVR)', value: catalogPriceLabel(detail?.default_selling_price ?? detail?.selling_price, detail?.tax_rate) },
-              {
-                label: 'Wholesale',
+              { label: 'Wholesale (MVR)',
                 value: detail?.wholesale_pricing_mode === 'price'
                   ? catalogPriceLabel(detail?.wholesale_price, detail?.tax_rate)
                   : `${Number(detail?.wholesale_discount_pct || 0)}% off`,
               },
               {
-                label: 'Staff',
+                label: 'Staff (MVR)',
                 value: detail?.staff_pricing_mode === 'price'
                   ? catalogPriceLabel(detail?.staff_price, detail?.tax_rate)
                   : `${Number(detail?.staff_discount_pct || 0)}% off`,
@@ -269,10 +268,10 @@ export default function ItemDetailPanel({
                     <tr>
                       <th>Branch</th>
                       <th className="text-right">Stock</th>
-                      <th className="text-right">Cost</th>
-                      <th className="text-right">Selling</th>
-                      <th className="text-right">Wholesale</th>
-                      <th className="text-right">Staff</th>
+                      <th className="text-right">Cost (MVR)</th>
+                      <th className="text-right">Selling (MVR)</th>
+                      <th className="text-right">Wholesale (MVR)</th>
+                      <th className="text-right">Staff (MVR)</th>
                       <th className="text-right">Reorder</th>
                     </tr>
                   </thead>
@@ -311,7 +310,7 @@ export default function ItemDetailPanel({
                 </table>
                 {branchMeta && (
                   <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
-                    Catalog defaults — cost {fmt(branchMeta.default_cost_price)}, sell {fmt(branchMeta.default_selling_price)}, reorder {fmtQty(branchMeta.default_reorder_level)}
+                    Catalog defaults (MVR) — cost {fmt(branchMeta.default_cost_price)}, sell {fmt(branchMeta.default_selling_price)}, reorder {fmtQty(branchMeta.default_reorder_level)}
                   </div>
                 )}
               </div>
@@ -336,7 +335,7 @@ export default function ItemDetailPanel({
                     <th className="text-right">Qty</th>
                     <th>Mfg</th>
                     <th>Expiry</th>
-                    <th className="text-right">Cost</th>
+                    <th className="text-right">Cost (MVR)</th>
                     <th>Status</th>
                   </tr>
                 </thead>

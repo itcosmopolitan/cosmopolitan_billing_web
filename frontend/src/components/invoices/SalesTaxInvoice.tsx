@@ -309,10 +309,10 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   <th>Origin</th>
                   <th>Units</th>
                   <th className="num">Qty</th>
-                  <th className="num">Rate (Excl. GST)</th>
+                  <th className="num">Rate (Excl. GST) (MVR)</th>
                   <th className="num">Disc %</th>
-                  <th className="num">GST</th>
-                  <th className="num">Amount</th>
+                  <th className="num">GST (MVR)</th>
+                  <th className="num">Amount (MVR)</th>
                 </tr>
               </thead>
               <tbody>
@@ -346,7 +346,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                 <table className="totals">
                   <tr>
                     <td colSpan={6}></td>
-                    <td className="tlabel">Subtotal</td>
+                    <td className="tlabel">Subtotal (MVR)</td>
                     <td className="tval">{formatNumber(invoice.totalExclGst)}</td>
                   </tr>
                   <tr>
@@ -356,13 +356,13 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   </tr>
                   <tr className="grand">
                     <td colSpan={6}></td>
-                    <td className="tlabel grand">Total Payable (Inc. GST)</td>
+                    <td className="tlabel grand">Total Payable (Inc. GST) (MVR)</td>
                     <td className="tval grand">{formatNumber(invoice.totalInclGst)}</td>
                   </tr>
                 </table>
 
                 {invoice.discountAmount ? (
-                  <div className="discount-note">Discount Amount: {formatNumber(invoice.discountAmount)}</div>
+                  <div className="discount-note">Discount Amount (MVR): {formatNumber(invoice.discountAmount)}</div>
                 ) : null}
                 <div className="amount-words">******* {invoice.amountInWords}</div>
 
