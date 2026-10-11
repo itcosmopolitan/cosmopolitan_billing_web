@@ -9,7 +9,7 @@
   html, body { margin: 0; padding: 0; background: #fff; }
   body {
     font-family: "Liberation Sans", Arial, Helvetica, sans-serif;
-    font-size: 11px;
+    font-size: 9px;
     color: #222;
   }
   table { border-collapse: collapse; width: 100%; }
@@ -25,8 +25,8 @@
   .logo-img { display: block; width: 100%; max-width: 40mm; height: auto; }
   .logo-tag { font-size: 7px; font-style: italic; color: #444; margin-top: 4px; }
   .company-info { text-align: center; padding-top: 4px; }
-  .company-name { color: #47aa1c; font-weight: bold; font-size: 15px; margin-bottom: 4px; line-height: 1.2; }
-  .company-line { font-size: 8px; color: #222; line-height: 1.4; }
+  .company-name { color: #47aa1c; font-weight: bold; font-size: 13px; margin-bottom: 4px; line-height: 1.2; }
+  .company-line { font-size: 6px; color: #222; line-height: 1.4; }
   .badge-cell { text-align: right; }
   .badge-img { display: inline-block; width: 19mm; height: auto; }
   .gold-seal {
@@ -48,8 +48,8 @@
 
   /* Title */
   h1.doc-title {
-    text-align: center;
-    font-size: 16px;
+    text-align: left;
+    font-size: 14px;
     margin: 8px 0 0 0;
     color: #111;
     letter-spacing: 0.4px;
@@ -66,20 +66,20 @@
     background: #fbfbfb;
     padding: 8px 10px;
   }
-  .details-title { font-size: 11px; font-weight: bold; color: #1b3e6f; margin-bottom: 6px; }
-  .details-box h2 { font-size: 14px; margin: 0 0 6px 0; font-weight: bold; line-height: 1.2; }
-  .details-box table td { font-size: 10px; padding: 2px 0; }
+  .details-title { font-size: 9px; font-weight: bold; color: #1b3e6f; margin-bottom: 6px; }
+  .details-box h2 { font-size: 12px; margin: 0 0 6px 0; font-weight: bold; line-height: 1.2; }
+  .details-box table td { font-size: 8px; padding: 2px 0; }
   .details-box table td.label {
     width: 38%;
     font-weight: bold;
-    font-size: 9.8px;
+    font-size: 7.8px;
     color: #333;
     padding-right: 6px;
   }
-  .addr-line { font-size: 10.5px; line-height: 1.35; margin-top: 2px; }
+  .addr-line { font-size: 8.5px; line-height: 1.35; margin-top: 2px; }
 
   /* Items */
-  table.items { table-layout: auto; margin-top: 12px; font-size: 10.5px; }
+  table.items { table-layout: auto; margin-top: 12px; font-size: 8.5px; }
   table.items thead { display: table-header-group; }
   table.items thead tr { border-top: 1.5px solid #1b3e6f; border-bottom: 1.5px solid #1b3e6f; }
   table.items th { text-align: left; padding: 5px 4px; font-weight: bold; color: #1b3e6f; }
@@ -90,18 +90,18 @@
   
   /* Totals and footer */
   table.totals { margin-top: 4px; }
-  table.totals td { padding: 3px 4px; font-size: 10.5px; }
+  table.totals td { padding: 3px 4px; font-size: 8.5px; }
   table.totals .tlabel { text-align: right; padding-right: 10px; }
   table.totals .tval { text-align: right; }
   table.totals .grand-row td { border-top: 1.5px solid #1b3e6f; }
   table.totals .grand { font-weight: bold; }
-  .discount-note { margin-top: 10px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
-  .amount-words { margin-top: 6px; font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px; }
-  .payment-section { margin-top: 12px; border-top: 1px solid #333; padding-top: 6px; font-size: 10.5px; }
+  .discount-note { margin-top: 10px; font-size: 8.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .amount-words { margin-top: 6px; font-size: 8.5px; font-weight: bold; letter-spacing: 0.5px; }
+  .payment-section { margin-top: 12px; border-top: 1px solid #333; padding-top: 6px; font-size: 8.5px; }
   .bank-details { line-height: 1.5; }
-  .terms { margin-top: 8px; font-size: 9.5px; color: #333; line-height: 1.6; }
-  .thankyou { margin-top: 12px; text-align: center; font-style: italic; font-weight: bold; font-size: 11px; }
-  .signoff { margin-top: 24px; font-size: 10.5px; font-weight: bold; }
+  .terms { margin-top: 8px; font-size: 7.5px; color: #333; line-height: 1.6; }
+  .thankyou { margin-top: 12px; text-align: center; font-style: italic; font-weight: bold; font-size: 9px; }
+  .signoff { margin-top: 24px; font-size: 8.5px; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -346,6 +346,7 @@
         ${totals.discountAmount > 0 ? `<div class="discount-note">Discount Amount: ${formatNumber(totals.discountAmount)}</div>` : ''}
         <div class="amount-words">${escapeHtml(amountToWords(totals.total))}</div>
       </div>
+      <div class="keep-together">
       <div class="payment-section">
         <div class="bank-details">
           Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
@@ -354,7 +355,6 @@
       <div class="terms">
           Disclaimer: Jurisdiction Male, Republic of Maldives, Supplier can not take any responsibility for product lost or spoil in transit after the delivery point. No return accepted, Overdue outstanding will be subjected to 1% interest per overdue day
         </div>
-      <div class="keep-together">
         <div class="thankyou">Thank you for choosing Cosmopolitan as your preferred partner</div>
         <div class="signoff">Received By</div>
       </div>`
