@@ -16,6 +16,7 @@ import { fmt, fmtQty } from '@/utils/helpers'
 import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { lineTaxAmount } from '@/utils/taxCalc'
 import { fetchAllPages } from '@/utils/fetchAllPages'
+import { NOT_SET } from '@/utils/emptyValue'
 
 export default function ReturnFormPage() {
   const navigate = useNavigate()
@@ -563,7 +564,7 @@ export default function ReturnFormPage() {
                                         {batches.map((b) => (
                                           <tr key={b.batch_id}>
                                             <td className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>{b.batch_number || b.batch_id}</td>
-                                            <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiry_date || '—'}</td>
+                                            <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiry_date || NOT_SET}</td>
                                             <td className="text-right mono" style={{ fontSize: 12 }}>{b.consumed}</td>
                                             <td className="text-right">
                                               <input

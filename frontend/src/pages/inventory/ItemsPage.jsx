@@ -22,6 +22,7 @@ import BatchesModal from './BatchesModal'
 import RowActionsMenu from './RowActionsMenu'
 import ItemDetailPanel from './ItemDetailPanel'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const BRANCH_TABS = [
   { id: 'all',      label: 'All Items' },
@@ -434,10 +435,10 @@ export default function ItemsPage({ mode = 'branch' }) {
 
     exportToCSV(filtered.map((item) => ({
       'Item Name': item.name,
-      SKU: item.sku || '—',
-      Barcode: item.barcode || '—',
-      Category: item.categoryName || '—',
-      Brand: item.brand || '—',
+      SKU: item.sku || NOT_SET,
+      Barcode: item.barcode || NOT_SET,
+      Category: item.categoryName || NOT_SET,
+      Brand: item.brand || NOT_SET,
       Unit: item.unit,
       'Cost Price (MVR)': isMaster ? (item.default_cost_price ?? item.cost_price) : item.cost_price,
       'Selling Price (MVR)': isMaster ? (item.default_selling_price ?? item.selling_price) : item.selling_price,
@@ -566,9 +567,9 @@ export default function ItemsPage({ mode = 'branch' }) {
                       <div className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{b.itemSku}</div>
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>
-                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : '—'}</td>
+                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : NOT_SET}</td>
                     <td style={{ fontSize: 12, fontWeight: 600, color: expInfo.dateColor }} title={expInfo.title}>
-                      {b.expiryDate ? fmtDate(b.expiryDate) : '—'}
+                      {b.expiryDate ? fmtDate(b.expiryDate) : NOT_SET}
                     </td>
                     <td className="text-right mono" style={{ fontWeight: 600 }}>{fmtQty(b.quantity)}</td>
                     <td title={expInfo.title}>
@@ -796,12 +797,12 @@ export default function ItemsPage({ mode = 'branch' }) {
                             <td key={id}>
                               {tab === 'pending' ? (
                                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                  <div>{p.created_by || '—'}</div>
+                                  <div>{p.created_by || NOT_SET}</div>
                                   {p.created_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.created_at)}</div> : null}
                                 </div>
                               ) : tab === 'rejected' ? (
                                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                  <div>{p.rejected_by || '—'}</div>
+                                  <div>{p.rejected_by || NOT_SET}</div>
                                   {p.rejected_at ? <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(p.rejected_at)}</div> : null}
                                   {p.rejection_reason ? <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{p.rejection_reason}</div> : null}
                                 </div>
@@ -1073,8 +1074,8 @@ export default function ItemsPage({ mode = 'branch' }) {
                         <tr key={b.id} style={{ cursor: 'pointer', background: adjBatchId === b.id ? 'rgba(79,142,247,.08)' : undefined }} onClick={() => { setAdjBatchId(b.id); setAdjQty(b.quantity) }}>
                           <td><input type="radio" checked={adjBatchId === b.id} readOnly /></td>
                           <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>
-                          <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : '—'}</td>
-                          <td style={{ fontSize: 12, color: b.expiryDate && new Date(b.expiryDate) < new Date() ? 'var(--red)' : 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : '—'}</td>
+                          <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : NOT_SET}</td>
+                          <td style={{ fontSize: 12, color: b.expiryDate && new Date(b.expiryDate) < new Date() ? 'var(--red)' : 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : NOT_SET}</td>
                           <td className="text-right mono">{fmtQty(b.quantity)}</td>
                         </tr>
                       ))}

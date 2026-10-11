@@ -22,6 +22,7 @@ import { entryInputStep } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
 import { COMPLIMENTARY_REASONS } from './complimentaryOptions'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 import {
   applyDocumentBranch,
   documentHasSelectedLines,
@@ -350,7 +351,7 @@ export default function ComplimentaryFormPage() {
                         />
                       </td>
                       <td className="text-right mono" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
-                        {it.item_id ? fmt(it.costPrice) : '—'}
+                        {it.item_id ? fmt(it.costPrice) : NOT_APPLICABLE}
                       </td>
                       <td className="text-right mono" style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                         {fmt((Number(it.qty) || 0) * (Number(it.costPrice) || 0))}

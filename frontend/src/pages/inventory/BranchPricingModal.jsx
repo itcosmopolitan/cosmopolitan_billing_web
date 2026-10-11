@@ -5,6 +5,7 @@ import { createBranchRow, profitPercentage, retailBranches } from './itemFormSha
 import { catalogExclusiveAmount, catalogInclusiveAmount } from '@/utils/taxCalc'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 
 function SegmentedControl({ value, options, onChange, ariaLabel }) {
   return (
@@ -204,7 +205,7 @@ export default function BranchPricingModal({
             <span className="branch-price-modal__gp-label">
               GP%
               {retailGp == null
-                ? <span className="branch-price-table__gp">—</span>
+                ? <span className="branch-price-table__gp">{NOT_APPLICABLE}</span>
                 : <GpBadge value={retailGp} />}
             </span>
           </div>

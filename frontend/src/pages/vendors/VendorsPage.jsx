@@ -9,6 +9,7 @@ import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import VendorDetailPanel from './VendorDetailPanel'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 const VENDOR_TABS = [
   { id: 'all', label: 'All Vendors' },
@@ -177,12 +178,12 @@ export default function VendorsPage() {
           onExport: () => {
             exportToCSV(vendors.map((v) => ({
               'Vendor Name': v.name,
-              'Contact Person': v.contact_person || '—',
-              Phone: v.phone || '—',
-              Email: v.email || '—',
-              Address: v.address || '—',
-              'GST Reg No': v.gstin || '—',
-              'Payment Terms': v.payment_terms || '—',
+              'Contact Person': v.contact_person || NOT_SET,
+              Phone: v.phone || NOT_SET,
+              Email: v.email || NOT_SET,
+              Address: v.address || NOT_SET,
+              'GST Reg No': v.gstin || NOT_SET,
+              'Payment Terms': v.payment_terms || NOT_SET,
               'Total Purchases (MVR)': v.totalPurchases || 0,
               'Outstanding (MVR)': v.outstanding || 0,
             })), `Vendors_${new Date().toISOString().split('T')[0]}.csv`)
@@ -199,7 +200,7 @@ export default function VendorsPage() {
         <KPICard label="Total Vendors"   value={totals.total}              color="var(--accent)"  icon="🏭" />
         <KPICard label="Total Payables"  value={fmt(totals.outstanding)}   color="var(--red)"     icon="💳" />
         <KPICard label="With Balance Due" value={totals.overdue}           color="var(--amber)"   icon="⚠️" />
-        <KPICard label="Top Vendor"      value={totals.topVendor?.name?.split(' ')[0] || '—'} color="var(--green)" sub={totals.topVendor ? fmt(totals.topVendor.totalPurchases || 0) : '—'} icon="🏆" />
+        <KPICard label="Top Vendor"      value={totals.topVendor?.name?.split(' ')[0] || NOT_SET} color="var(--green)" sub={totals.topVendor ? fmt(totals.topVendor.totalPurchases || 0) : NOT_APPLICABLE} icon="🏆" />
       </div> */}
 
       <Tabs tabs={VENDOR_TABS} active={tab} onChange={setTab} />
@@ -254,20 +255,20 @@ export default function VendorsPage() {
                       return (
                         <td key={id}>
                           <div style={{fontWeight:500,color:'var(--text-primary)',fontSize:13}}>{v.name}</div>
-                          <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || '—'}</div>
+                          <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.address || NOT_SET}</div>
                         </td>
                       )
                     }
                     if (id === 'contact') {
                       return (
                         <td key={id}>
-                          <div style={{fontSize:12.5}}>{v.contact_person || '—'}</div>
-                          <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.phone || '—'}</div>
+                          <div style={{fontSize:12.5}}>{v.contact_person || NOT_SET}</div>
+                          <div style={{fontSize:11,color:'var(--text-muted)'}}>{v.phone || NOT_SET}</div>
                         </td>
                       )
                     }
                     if (id === 'gstin') {
-                      return <td key={id} style={{fontSize:12,fontFamily:'DM Mono,monospace'}}>{v.gstin||'—'}</td>
+                      return <td key={id} style={{fontSize:12,fontFamily:'DM Mono,monospace'}}>{v.gstin||NOT_SET}</td>
                     }
                     if (id === 'payment_terms') {
                       return <td key={id}><Tag>{v.payment_terms}</Tag></td>
@@ -278,7 +279,7 @@ export default function VendorsPage() {
                     if (id === 'credit') {
                       return (
                         <td key={id} className="text-right mono" style={{ color: v.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                          {v.creditBalance > 0 ? fmt(v.creditBalance) : '—'}
+                          {v.creditBalance > 0 ? fmt(v.creditBalance) : NOT_APPLICABLE}
                         </td>
                       )
                     }
@@ -486,7 +487,7 @@ export default function VendorsPage() {
                     <tr key={e.id}>
                       <td style={{ fontSize: 12 }}>{e.date}</td>
                       <td style={{ fontSize: 12 }}>{e.entryLabel || e.entryType}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{e.sourceNumber || e.sourceType || '—'}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{e.sourceNumber || e.sourceType || NOT_SET}</td>
                       <td className="text-right mono" style={{ color: entryTypeColor(e.entryType), textAlign: 'right' }}>
                         {e.delta >= 0 ? '+' : ''}{fmt(e.delta)}
                       </td>

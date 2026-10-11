@@ -1,4 +1,5 @@
 import { parseISO } from 'date-fns'
+import { NOT_APPLICABLE } from './emptyValue'
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24
 
@@ -78,7 +79,7 @@ export function batchExpiryStatus(batch, opts = {}) {
       daysLeft: null,
       pctRemaining: null,
       status: null,
-      statusLabel: '—',
+      statusLabel: NOT_APPLICABLE,
       dateColor: 'var(--text-muted)',
       showUrgentIcon: false,
       title: 'No expiry date on this batch',

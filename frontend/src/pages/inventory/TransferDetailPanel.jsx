@@ -7,6 +7,7 @@ import { fmt, fmtDate, fmtQty } from '@/utils/helpers'
 import { exportStockTransferPdf, printStockTransferPdf } from '@/utils/exportStockTransferPdf'
 import { Chip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import { NOT_SET } from '@/utils/emptyValue'
 
 function transferStatusChip(status) {
   if (status === 'received') return { status: 'received', label: 'Received' }
@@ -14,7 +15,7 @@ function transferStatusChip(status) {
   if (status === 'pending') return { status: 'pending', label: 'Pending' }
   if (status === 'rejected') return { status: 'draft', label: 'Rejected' }
   if (status === 'draft') return { status: 'draft', label: 'Draft' }
-  return { status: 'draft', label: status || '—' }
+  return { status: 'draft', label: status || NOT_SET }
 }
 
 export default function TransferDetailPanel({
@@ -84,7 +85,7 @@ export default function TransferDetailPanel({
     { label: 'Status', value: <Chip status={chip.status} label={chip.label} /> },
     { label: 'Lines', value: lineCount },
     { label: 'Total qty', value: totalQty },
-    { label: 'Requested by', value: detail?.requested_by || '—' },
+    { label: 'Requested by', value: detail?.requested_by || NOT_SET },
   ]
 
   const busy = !!actionBusy || deleteBusy || documentBusy
@@ -234,7 +235,7 @@ export default function TransferDetailPanel({
       onClose={() => !busy && onClose?.()}
       icon="↔"
       title={detail?.ref_number || 'Transfer'}
-      subtitle={`${detail?.from_branch_name || detail?.from_branch_id || '—'} → ${detail?.to_branch_name || detail?.to_branch_id || '—'}`}
+      subtitle={`${detail?.from_branch_name || detail?.from_branch_id || NOT_SET} → ${detail?.to_branch_name || detail?.to_branch_id || NOT_SET}`}
       size="lg"
       summary={summary}
       tabs={[
@@ -257,8 +258,8 @@ export default function TransferDetailPanel({
               { label: 'From', value: detail?.from_branch_name || detail?.from_branch_id },
               { label: 'To', value: detail?.to_branch_name || detail?.to_branch_id },
               { label: 'Status', value: <Chip status={chip.status} label={chip.label} /> },
-              { label: 'Requested by', value: detail?.requested_by || '—' },
-              { label: 'Created', value: detail?.created_at ? fmtDate(detail.created_at) : '—' },
+              { label: 'Requested by', value: detail?.requested_by || NOT_SET },
+              { label: 'Created', value: detail?.created_at ? fmtDate(detail.created_at) : NOT_SET },
             ]}
             />
           </DetailSection>

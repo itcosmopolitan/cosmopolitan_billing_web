@@ -20,6 +20,7 @@ import CashTenderFields from '@/components/CashTenderFields'
 import { cashTenderError } from '@/utils/cashTender'
 import { storeCreditApplyAmount, remainingAfterStoreCredit } from '@/utils/storeCredit'
 import { fetchAllPages } from '@/utils/fetchAllPages'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -359,7 +360,7 @@ export default function PaymentFormPage() {
       <div style={{ display: 'grid', gap: 18 }}>
         <FormGroup label="Customer" required>
           {isEdit ? (
-            <div style={{ fontWeight: 500, fontSize: 14 }}>{customer?.name || '—'}</div>
+            <div style={{ fontWeight: 500, fontSize: 14 }}>{customer?.name || NOT_SET}</div>
           ) : (
             <AutocompleteDropdown
               value={customer?.id || ''}

@@ -10,6 +10,7 @@ import {
 import BranchPricingModal from './BranchPricingModal'
 import { catalogExclusiveAmount, catalogInclusiveAmount } from '@/utils/taxCalc'
 import { fmt, fmtQty } from '@/utils/helpers'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 
 /**
  * Branch listing on Item Master create/edit.
@@ -270,7 +271,7 @@ export default function BranchPricingSection({
                     <dt>GP%</dt>
                     <dd>
                       <span className={`branch-price-table__gp${gp != null && gp < 0 ? ' is-neg' : ''}`}>
-                        {gp == null ? '—' : `${gp.toFixed(1)}%`}
+                        {gp == null ? NOT_APPLICABLE : `${gp.toFixed(1)}%`}
                       </span>
                     </dd>
                   </div>

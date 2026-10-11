@@ -3,6 +3,7 @@ import { useAppStore } from "../../store";
 import { ModuleTag } from "./ModuleTag";
 import { RiskBadge } from "./RiskBadge";
 import { humanizeLabel } from "@/utils/helpers";
+import { NOT_SET } from '@/utils/emptyValue'
 
 interface Props {
   logs: AuditLog[];
@@ -27,9 +28,9 @@ const ACTION_LABELS: Record<string, string> = {
 
 const toDisplayAction = (action: string) => {
   const key = (action || "").trim().toLowerCase();
-  if (!key) return "-";
+  if (!key) return NOT_SET;
   if (ACTION_LABELS[key]) return ACTION_LABELS[key];
-  return humanizeLabel(key.replace(/[_-]+/g, " ")) || "-";
+  return humanizeLabel(key.replace(/[_-]+/g, " ")) || NOT_SET;
 };
 
 const parseUtcToLocal = (value: string) => {
@@ -43,7 +44,7 @@ const parseUtcToLocal = (value: string) => {
 
 const formatTimeParts = (value: string) => {
   const date = parseUtcToLocal(value);
-  if (!date) return { date: "-", time: "-" };
+  if (!date) return { date: NOT_SET, time: NOT_SET };
   const datePart = new Intl.DateTimeFormat(undefined, {
     year: "numeric",
     month: "short",
@@ -98,7 +99,7 @@ export function AuditTable({ logs, selected, onSelect, onClearFilters }: Props) 
       const branch = branches.find((b: { id: string; name?: string }) => b.id === log.branch_id);
       if (branch?.name) return branch.name;
     }
-    return "—";
+    return NOT_SET;
   };
 
   return (
@@ -132,11 +133,11 @@ export function AuditTable({ logs, selected, onSelect, onClearFilters }: Props) 
                 title={log.detail}
               >
                 <td className="font-semibold text-[var(--text-primary)]">{toDisplayAction(log.action)}</td>
-                <td className="text-[var(--text-secondary)]">{log.user_name || "-"}</td>
+                <td className="text-[var(--text-secondary)]">{log.user_name || NOT_SET}</td>
                 <td className="text-[var(--text-secondary)]">{branchLabel(log)}</td>
-                <td>{log.module ? <ModuleTag module={log.module} /> : "-"}</td>
+                <td>{log.module ? <ModuleTag module={log.module} /> : NOT_SET}</td>
                 <td>
-                  <span className="font-mono text-[11px] font-semibold text-[var(--accent)]">{log.reference_id || "-"}</span>
+                  <span className="font-mono text-[11px] font-semibold text-[var(--accent)]">{log.reference_id || NOT_SET}</span>
                 </td>
                 <td className="max-w-[360px] truncate text-[var(--text-secondary)]">
                   {detailIsJson ? <span className="text-[var(--text-muted)]">See full detail ↓</span> : log.detail}

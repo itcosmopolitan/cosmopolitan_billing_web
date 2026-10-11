@@ -1,5 +1,6 @@
 import { formatLabel, statusLabel, conversionStatusDisplay } from '@/utils/helpers'
 import { getAuditDateRangeForPreset } from '@/utils/dropdownOptions'
+import { NOT_SET } from './emptyValue'
 
 /** Cap export window so large lists don't blow the API timeout. Operators can
  *  export adjacent ranges and merge CSVs offline. */
@@ -23,7 +24,7 @@ export function exportNum(...vals) {
   return 0
 }
 
-export function exportDash(v, fallback = '—') {
+export function exportDash(v, fallback = NOT_SET) {
   if (v === null || v === undefined || v === '') return fallback
   return v
 }
@@ -43,7 +44,7 @@ export function exportRefNumbers(...vals) {
     parts.push(String(v))
   }
   const unique = [...new Set(parts)]
-  return unique.length ? unique.join(', ') : '—'
+  return unique.length ? unique.join(', ') : NOT_SET
 }
 
 function allocationDocNumbers(allocations, numberKey) {
@@ -71,7 +72,7 @@ export function validateExportDateRange(dateFrom, dateTo, maxDays = MAX_EXPORT_D
 }
 
 function paymentModeLabel(raw) {
-  if (!raw) return '—'
+  if (!raw) return NOT_SET
   return formatLabel(raw)
 }
 
@@ -86,7 +87,7 @@ function outstanding(total, paid) {
 }
 
 function returnStatusLabel(raw) {
-  if (!raw || raw === 'none') return '—'
+  if (!raw || raw === 'none') return NOT_SET
   return statusLabel(raw) || formatLabel(raw)
 }
 

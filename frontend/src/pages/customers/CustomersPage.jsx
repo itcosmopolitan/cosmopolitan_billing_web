@@ -4,7 +4,7 @@ import { customersAPI } from '@/api'
 import { useAppStore, subscribeToBranchChanged } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { fmt, exportToExcel } from '@/utils/helpers'
-import { formatBranchKams } from '@/utils/customerKam'
+import { getBranchKamEntries } from '@/utils/customerKam'
 import { SectionHeader, Card, Tabs, SearchBar, Chip, KPICard, Modal, EmptyState, ProgressBar, Tag, PaginationBar, SortableHeader, AutocompleteDropdown, TablePanel, PageActionsMenu, buildListPageMenuActions, RowActionsMenu, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, ConfirmDialog } from '@/components/ui'
 
 const CUSTOMER_TABS = [
@@ -17,6 +17,7 @@ import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import CustomerDetailPanel from './CustomerDetailPanel'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 export default function CustomersPage() {
   const can = useCan()
@@ -391,7 +392,7 @@ export default function CustomersPage() {
         <KPICard label="Total Customers"    value={totals.total}                    color="var(--accent)" icon="👥" />
         <KPICard label="Outstanding Total (MVR)" value={fmt(totals.outstanding)}         color="var(--red)"   icon="📋" />
         <KPICard label="With Balance Due"   value={totals.overdue}                  color="var(--amber)" icon="⚠️" />
-        <KPICard label="Top Buyer"          value={totals.topBuyer?.name?.split(' ')[0] || '—'} color="var(--green)" icon="🏆" sub={totals.topBuyer ? fmt(totals.topBuyer.total_purchases || 0) : '—'} />
+        <KPICard label="Top Buyer"          value={totals.topBuyer?.name?.split(' ')[0] || NOT_SET} color="var(--green)" icon="🏆" sub={totals.topBuyer ? fmt(totals.topBuyer.total_purchases || 0) : NOT_APPLICABLE} />
       </div> */}
 
       <Tabs tabs={CUSTOMER_TABS} active={tab} onChange={setTab} />
@@ -542,7 +543,7 @@ export default function CustomersPage() {
                         return (
                           <td key={id}>
                             <div style={{ fontWeight:500, color:'var(--text-primary)', fontSize:13 }}>{c.name}</div>
-                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>Customer ID: {c.customer_code || c.customerCode || '—'}</div>
+                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>Customer ID: {c.customer_code || c.customerCode || NOT_SET}</div>
                             <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.gstIn || 'No GST Reg No'}</div>
                           </td>
                         )
@@ -551,7 +552,7 @@ export default function CustomersPage() {
                         return (
                           <td key={id}>
                             <div style={{ fontSize:12.5 }}>{c.phone}</div>
-                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.email || '—'}</div>
+                            <div style={{ fontSize:11, color:'var(--text-muted)' }}>{c.email || NOT_SET}</div>
                           </td>
                         )
                       }
@@ -567,14 +568,22 @@ export default function CustomersPage() {
                       if (id === 'classification') {
                         return (
                           <td key={id}>
-                            <Tag color={c.classification === 'internal' ? 'var(--accent)' : undefined}>
+                            <Tag>
                               {CUSTOMER_CLASSIFICATION_LABELS[c.classification] || 'External'}
                             </Tag>
                           </td>
                         )
                       }
                       if (id === 'kam') {
-                        return <td key={id} style={{ fontSize:12 }}>{formatBranchKams(c.keyAccountManagerNames, branches) || '—'}</td>
+                        const kamEntries = getBranchKamEntries(c.keyAccountManagerNames, branches)
+                        return (
+                          <td key={id} style={{ fontSize:12, whiteSpace:'normal', minWidth:200, maxWidth:280, lineHeight:1.45 }}>
+                            {kamEntries.length === 0 && NOT_SET}
+                            {kamEntries.map(({ branch, name }) => (
+                              <div key={branch} style={{ padding:'2px 0' }}>{branch}: {name}</div>
+                            ))}
+                          </td>
+                        )
                       }
                       if (id === 'branch') {
                         return (
@@ -584,7 +593,7 @@ export default function CustomersPage() {
                         )
                       }
                       if (id === 'credit_terms') {
-                        return <td key={id} style={{ fontSize:12 }}>{c.creditTerms || '—'}</td>
+                        return <td key={id} style={{ fontSize:12 }}>{c.creditTerms || NOT_SET}</td>
                       }
                       if (id === 'account_limit') {
                         return <td key={id} className="text-right mono">{fmt(c.creditLimit)}</td>
@@ -608,7 +617,7 @@ export default function CustomersPage() {
                             className="text-right mono"
                             style={{ color: c.creditBalance > 0 ? 'var(--accent)' : 'var(--text-muted)' }}
                           >
-                            {c.creditBalance > 0 ? fmt(c.creditBalance) : '—'}
+                            {c.creditBalance > 0 ? fmt(c.creditBalance) : NOT_APPLICABLE}
                           </td>
                         )
                       }
@@ -765,7 +774,7 @@ export default function CustomersPage() {
                     <tr key={e.id}>
                       <td style={{ fontSize:12 }}>{e.date}</td>
                       <td style={{ fontSize:12 }}>{e.entryLabel || e.entryType}</td>
-                      <td style={{ fontSize:12, color:'var(--text-muted)' }}>{e.sourceNumber || e.sourceType || '—'}</td>
+                      <td style={{ fontSize:12, color:'var(--text-muted)' }}>{e.sourceNumber || e.sourceType || NOT_SET}</td>
                       <td className="text-right mono" style={{ color: entryTypeColor(e.entryType), textAlign:'right' }}>
                         {e.delta >= 0 ? '+' : ''}{fmt(e.delta)}
                       </td>

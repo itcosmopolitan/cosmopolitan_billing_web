@@ -49,6 +49,7 @@ import {
   readStoredLeading,
   leadingPanelFromDrop,
 } from './posDrag'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 
 const DISCOUNT_REASON_OPTIONS = [
   'Customer goodwill',
@@ -1716,7 +1717,7 @@ export default function POSPage() {
                       }}
                       placeholder={
                         hasLineLevelDiscount
-                          ? '—'
+                          ? NOT_APPLICABLE
                           : (discountType === 'flat' ? 'Amt' : '%')
                       }
                       type="number"

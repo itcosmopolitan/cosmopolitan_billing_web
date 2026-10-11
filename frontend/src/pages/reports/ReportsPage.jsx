@@ -14,18 +14,19 @@ import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { useAppStore } from '@/store'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
 import { searchReportRows } from './reportSearch'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 const FAVORITES_GROUP_ID = 'favorites'
 
-const formatDate = (value) => (value ? fmtDate(value) : '—')
-const formatCurrency = (value) => (value === null || value === undefined ? '—' : fmt(value))
-const formatNumber = (value) => (value === null || value === undefined ? '—' : fmtNum(value))
-const formatQty = (value) => (value === null || value === undefined ? '—' : fmtQty(value))
+const formatDate = (value) => (value ? fmtDate(value) : NOT_SET)
+const formatCurrency = (value) => (value === null || value === undefined ? NOT_APPLICABLE : fmt(value))
+const formatNumber = (value) => (value === null || value === undefined ? NOT_APPLICABLE : fmtNum(value))
+const formatQty = (value) => (value === null || value === undefined ? NOT_APPLICABLE : fmtQty(value))
 const formatCurrencyBlank = (value) => (value === null || value === undefined ? '' : formatCurrency(value))
 const formatPct = (value) => {
-  if (value === null || value === undefined || value === '') return '—'
+  if (value === null || value === undefined || value === '') return NOT_APPLICABLE
   const num = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(num)) return '—'
+  if (!Number.isFinite(num)) return NOT_APPLICABLE
   return `${fmtNum(num)}%`
 }
 const formatPaymentMode = (value) => {
@@ -36,7 +37,7 @@ const formatPaymentMode = (value) => {
     bank_transfer: 'Bank Transfer',
     credit: 'Credit',
   }
-  return labels[String(value || '').trim().toLowerCase()] || (value || '—')
+  return labels[String(value || '').trim().toLowerCase()] || (value || NOT_SET)
 }
 const formatTransactionType = (value) => {
   const labels = {
@@ -46,7 +47,7 @@ const formatTransactionType = (value) => {
     debit_note: 'Debit Note',
   }
   const key = String(value || '').trim().toLowerCase().replace(/\s+/g, '_')
-  return labels[key] || (value || '—')
+  return labels[key] || (value || NOT_SET)
 }
 const formatStatus = (value) => statusLabel(String(value || '').trim().toLowerCase())
 
@@ -350,7 +351,7 @@ function exportColumnValue(column, row) {
     : column.formatter
       ? column.formatter(value, row)
       : value
-  if (formatted === null || formatted === undefined || formatted === '—') return ''
+  if (formatted === null || formatted === undefined || formatted === NOT_SET || formatted === NOT_APPLICABLE) return ''
   return formatted
 }
 
@@ -1875,7 +1876,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                             >
                               {rendered !== null && rendered !== undefined && rendered !== ''
                                 ? rendered
-                                : (isPnL ? '' : '—')}
+                                : (isPnL ? '' : NOT_APPLICABLE)}
                             </td>
                           )
                         })}

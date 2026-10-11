@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { NOT_SET } from '@/utils/emptyValue'
 
 /**
  * Wide record detail drawer used from list row-click.
@@ -131,7 +132,7 @@ export function DetailFields({ fields = [], columns = 2 }) {
       {fields.map((f) => (
         <div key={f.label} className="drawer-field">
           <div className="drawer-field__label">{f.label}</div>
-          <div className="drawer-field__value">{f.value ?? '—'}</div>
+          <div className="drawer-field__value">{f.value ?? NOT_SET}</div>
         </div>
       ))}
     </div>

@@ -9,6 +9,7 @@ import { FINANCIAL_YEAR_OPTIONS, DECIMAL_PRECISION_OPTIONS } from '@/utils/dropd
 import { unwrapPaged, DEFAULT_PAGE_SIZE, fetchAllList } from '@/utils/pagination'
 import RoleEditor from './RoleEditor'
 import { TaxConfigTab, NumberingTab, InvoiceTemplateTab } from './SettingsTabs'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const EMPTY_ORG_FORM = {
   id: '',
@@ -1246,7 +1247,7 @@ export default function SettingsPage() {
                   {users.map(u=>{
                     const initials = u.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()
                     const r = roleForUser(u)
-                    const rLabel = r?.label || humanizeLabel(u.role) || '—'
+                    const rLabel = r?.label || humanizeLabel(u.role) || NOT_SET
                     const rColor = roleColors[u.role] || roleColors[r?.key] || 'var(--accent)'
                     // Branches column: "All branches" badge when all_branches=true,
                     // otherwise a flat chip list of branch names. All chips look
@@ -1278,7 +1279,7 @@ export default function SettingsPage() {
                             All branches
                           </span>
                         ) : branchNames.length === 0 ? (
-                          <span style={{ color:'var(--text-muted)' }}>—</span>
+                          <span style={{ color:'var(--text-muted)' }}>{NOT_SET}</span>
                         ) : (
                           <TruncatedChipList
                             items={assigned.map((bid, i) => ({ id: bid, label: branchNames[i] }))}
@@ -1351,7 +1352,7 @@ export default function SettingsPage() {
                             {r.is_system && <Tag color="gray">system</Tag>}
                           </div>
                         </td>
-                        <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.description || '—'}</td>
+                        <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.description || NOT_SET}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                           {r.user_count} user{r.user_count === 1 ? '' : 's'}
                         </td>

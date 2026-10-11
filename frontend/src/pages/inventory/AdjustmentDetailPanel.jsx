@@ -3,11 +3,12 @@ import { useCan } from '@/auth/permissions'
 import { fmtDateTime, formatLabel } from '@/utils/helpers'
 import { Chip } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import { NOT_SET } from '@/utils/emptyValue'
 
 function PersonWhen({ name, at }) {
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{name || '—'}</div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{name || NOT_SET}</div>
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
         {fmtDateTime(at || null)}
       </div>
@@ -37,7 +38,7 @@ export default function AdjustmentDetailPanel({
   const summary = [
     {
       label: 'Quantity change',
-      value: `${detail?.before_qty ?? '—'} → ${detail?.new_qty ?? '—'}`,
+      value: `${detail?.before_qty ?? NOT_SET} → ${detail?.new_qty ?? NOT_SET}`,
     },
     {
       label: 'Delta',
@@ -49,11 +50,11 @@ export default function AdjustmentDetailPanel({
       value: (
         <Chip
           status={detail?.status === 'approved' ? 'active' : detail?.status === 'pending' ? 'pending' : 'draft'}
-          label={detail?.status ? formatLabel(detail.status) : '—'}
+          label={detail?.status ? formatLabel(detail.status) : NOT_SET}
         />
       ),
     },
-    { label: 'Reason', value: detail?.reason || '—' },
+    { label: 'Reason', value: detail?.reason || NOT_SET },
   ]
   const nextAction = detail?.status === 'pending' && can('adjustments.approve')
     ? {
@@ -120,10 +121,10 @@ export default function AdjustmentDetailPanel({
           <DetailSection title="Stock change">
             <DetailFields fields={[
               { label: 'Adjustment #', value: <span className="mono">{detail?.ref_number}</span> },
-              { label: 'Branch', value: detail?.branch_name || '—' },
-              { label: 'Item', value: detail?.item_name || '—' },
-              { label: 'Before qty', value: detail?.before_qty ?? '—' },
-              { label: 'New qty', value: detail?.new_qty ?? '—' },
+              { label: 'Branch', value: detail?.branch_name || NOT_SET },
+              { label: 'Item', value: detail?.item_name || NOT_SET },
+              { label: 'Before qty', value: detail?.before_qty ?? NOT_SET },
+              { label: 'New qty', value: detail?.new_qty ?? NOT_SET },
               {
                 label: 'Delta',
                 value: (
@@ -132,7 +133,7 @@ export default function AdjustmentDetailPanel({
                   </span>
                 ),
               },
-              { label: 'Reason', value: detail?.reason || '—' },
+              { label: 'Reason', value: detail?.reason || NOT_SET },
               { label: 'Batch target', value: detail?.batch_id ? <span className="mono">{detail.batch_id}</span> : 'Aggregate / auto' },
             ]}
             />

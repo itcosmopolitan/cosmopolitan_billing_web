@@ -19,6 +19,7 @@ import { fmt } from '@/utils/helpers'
 import { roundAmount, amountInputStep } from '@/utils/decimalPrecision'
 import { PAYMENT_METHOD_WITH_CREDIT_OPTIONS } from '@/utils/dropdownOptions'
 import { fetchAllPages } from '@/utils/fetchAllPages'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const ACTIVE_STATUSES = new Set(['pending', 'partial', 'overdue'])
 
@@ -298,7 +299,7 @@ export default function VendorPaymentFormPage() {
       <div style={{ display: 'grid', gap: 18 }}>
         <FormGroup label="Vendor" required>
           {isEdit ? (
-            <div style={{ fontWeight: 500, fontSize: 14 }}>{vendor?.name || '—'}</div>
+            <div style={{ fontWeight: 500, fontSize: 14 }}>{vendor?.name || NOT_SET}</div>
           ) : (
             <AutocompleteDropdown
               value={vendor?.id || ''}

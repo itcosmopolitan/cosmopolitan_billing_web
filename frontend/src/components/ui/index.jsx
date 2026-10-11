@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import AutocompleteDropdown from './AutocompleteDropdown'
 import { humanizeValue } from '@/utils/helpers'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 export { default as AutocompleteDropdown } from './AutocompleteDropdown'
 export { default as DatePicker } from './DatePicker'
 
@@ -157,7 +158,7 @@ export function Chip({ status, label, custom }) {
 /** Credit-note / vendor-credit return flag on invoices and bills. */
 export function ReturnStatusChip({ status }) {
   if (!status || status === 'none') {
-    return <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
+    return <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{NOT_APPLICABLE}</span>
   }
   const map = {
     partial: { color: 'var(--amber)', label: 'Partial Return' },

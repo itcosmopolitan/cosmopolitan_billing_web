@@ -1,9 +1,10 @@
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
 import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/decimalPrecision'
+import { NOT_SET } from './emptyValue'
 
 // ─── Currency formatting ──────────────────────────────────────────────────────
 export const fmt = (amount, decimals) => {
-  if (amount === null || amount === undefined) return '—'
+  if (amount === null || amount === undefined) return NOT_SET
   return formatAmountNumber(amount, decimals ?? getAmountDecimals())
 }
 
@@ -13,25 +14,25 @@ export const fmtNum = (n) => Number(n).toLocaleString('en-MV')
 
 // ─── Date formatting ──────────────────────────────────────────────────────────
 export const fmtDate = (d) => {
-  if (!d) return '—'
+  if (!d) return NOT_SET
   try { return format(typeof d === 'string' ? parseISO(d) : d, 'dd MMM yyyy') }
   catch { return d }
 }
 
 export const fmtDateShort = (d) => {
-  if (!d) return '—'
+  if (!d) return NOT_SET
   try { return format(typeof d === 'string' ? parseISO(d) : d, 'dd MMM') }
   catch { return d }
 }
 
 export const fmtDateTime = (d) => {
-  if (!d) return '—'
+  if (!d) return NOT_SET
   try { return format(typeof d === 'string' ? parseISO(d) : d, 'dd MMM yyyy, h:mm a') }
   catch { return d }
 }
 
 export const fmtRelative = (d) => {
-  if (!d) return '—'
+  if (!d) return NOT_SET
   try { return formatDistanceToNow(typeof d === 'string' ? parseISO(d) : d, { addSuffix: true }) }
   catch { return d }
 }
@@ -74,12 +75,12 @@ export const formatLabel = (value) => {
 export const humanizeLabel = (value) => formatLabel(value)
 
 export const humanizeValue = (value) => {
-  if (value === null || value === undefined || value === '') return '—'
+  if (value === null || value === undefined || value === '') return NOT_SET
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   if (typeof value === 'number') return String(value)
   if (typeof value === 'string') {
     const normalized = value.trim()
-    if (normalized === '') return '—'
+    if (normalized === '') return NOT_SET
 
     const map = {
       true: 'Yes',

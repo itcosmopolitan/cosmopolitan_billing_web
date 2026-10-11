@@ -9,6 +9,7 @@ import {
   allocationSum,
   isAllocationValid,
 } from '@/utils/batchAllocation'
+import { NOT_SET } from '@/utils/emptyValue'
 
 /**
  * Reusable per-line batch allocation editor. Used by:
@@ -200,7 +201,7 @@ export default function BatchAllocationModal({
                       style={{ fontSize: 12, color: expInfo.dateColor, fontWeight: expInfo.expired || expInfo.nearExpiry ? 600 : 400 }}
                       title={expInfo.title}
                     >
-                      {b.expiryDate ? fmtDate(b.expiryDate) : '—'}
+                      {b.expiryDate ? fmtDate(b.expiryDate) : NOT_SET}
                       {expInfo.daysLeft != null && expInfo.daysLeft >= 0 && (
                         <span style={{ marginLeft: 6, fontSize: 10.5, color: 'var(--text-muted)' }}>
                           ({expInfo.statusLabel})

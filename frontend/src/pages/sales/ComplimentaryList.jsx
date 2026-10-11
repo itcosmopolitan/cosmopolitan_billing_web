@@ -25,6 +25,7 @@ import {
 import ListFilters, { EMPTY_LIST_FILTERS } from './ListFilters'
 import ComplimentaryDetailPanel from './ComplimentaryDetailPanel'
 import { COMPLIMENTARY_REASONS } from './complimentaryOptions'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const FILTER_FIELDS = ['customer', 'reason', 'date']
 export default function ComplimentaryList({ toolbarActions, refreshKey = 0, branches = [] }) {
@@ -246,11 +247,11 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
                             </td>
                           )
                         }
-                        if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{row.branch_name || row.branch_id || 'N/A'}</td>
+                        if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{row.branch_name || row.branch_id || NOT_SET}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{row.date}</td>
                         if (id === 'reason') return <td key={id} style={{ fontSize: 12 }}>{row.reason}</td>
-                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{row.child_counter_name || '—'}</td>
-                        if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{row.created_by || 'N/A'}</td>
+                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{row.child_counter_name || NOT_SET}</td>
+                        if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{row.created_by || NOT_SET}</td>
                         return null
                       })}
                       <td className="text-right" data-no-row-click>

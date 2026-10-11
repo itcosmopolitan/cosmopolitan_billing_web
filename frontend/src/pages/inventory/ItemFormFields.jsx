@@ -5,6 +5,7 @@ import TaxedPriceInput, { GST_TAX_MODE_OPTIONS, normalizeTaxMode } from './Taxed
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { catalogExclusiveAmount, catalogInclusiveAmount } from '@/utils/taxCalc'
 import { profitPercentage } from './itemFormShared'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 
 function SegmentedControl({ value, options, onChange, ariaLabel }) {
   return (
@@ -225,7 +226,7 @@ export default function ItemFormFields({
               <span className="branch-price-modal__gp-label">
                 GP%
                 <span className={`branch-price-table__gp${retailGp != null && retailGp < 0 ? ' is-neg' : ''}`}>
-                  {retailGp == null ? '—' : `${retailGp.toFixed(1)}%`}
+                  {retailGp == null ? NOT_APPLICABLE : `${retailGp.toFixed(1)}%`}
                 </span>
               </span>
               <SegmentedControl
@@ -288,7 +289,7 @@ export default function ItemFormFields({
                         <>
                           GP%
                           <span className={`branch-price-table__gp${wholesaleGp != null && wholesaleGp < 0 ? ' is-neg' : ''}`}>
-                            {wholesaleGp == null ? '—' : `${wholesaleGp.toFixed(1)}%`}
+                            {wholesaleGp == null ? NOT_APPLICABLE : `${wholesaleGp.toFixed(1)}%`}
                           </span>
                         </>
                       ) : null}
@@ -309,7 +310,7 @@ export default function ItemFormFields({
                         <>
                           GP%
                           <span className={`branch-price-table__gp${staffGp != null && staffGp < 0 ? ' is-neg' : ''}`}>
-                            {staffGp == null ? '—' : `${staffGp.toFixed(1)}%`}
+                            {staffGp == null ? NOT_APPLICABLE : `${staffGp.toFixed(1)}%`}
                           </span>
                         </>
                       ) : null}
@@ -336,7 +337,7 @@ export default function ItemFormFields({
                         <>
                           GP%
                           <span className={`branch-price-table__gp${wholesaleGp != null && wholesaleGp < 0 ? ' is-neg' : ''}`}>
-                            {wholesaleGp == null ? '—' : `${wholesaleGp.toFixed(1)}%`}
+                            {wholesaleGp == null ? NOT_APPLICABLE : `${wholesaleGp.toFixed(1)}%`}
                           </span>
                         </>
                       ) : null}
@@ -360,7 +361,7 @@ export default function ItemFormFields({
                         <>
                           GP%
                           <span className={`branch-price-table__gp${staffGp != null && staffGp < 0 ? ' is-neg' : ''}`}>
-                            {staffGp == null ? '—' : `${staffGp.toFixed(1)}%`}
+                            {staffGp == null ? NOT_APPLICABLE : `${staffGp.toFixed(1)}%`}
                           </span>
                         </>
                       ) : null}

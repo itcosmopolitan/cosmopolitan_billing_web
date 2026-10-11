@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { NOT_SET } from '@/utils/emptyValue'
 
 export function txnHref(area, tab, id) {
   if (!area || !tab || !id) return null
@@ -19,7 +20,7 @@ export function purchaseTxnHref(kind, id) {
  * Document number that opens the related transaction detail drawer.
  */
 export default function TxnLink({ to, children, style }) {
-  if (!children) return '—'
+  if (!children) return NOT_SET
   if (!to) {
     return <span className="mono" style={{ fontSize: 12, ...style }}>{children}</span>
   }

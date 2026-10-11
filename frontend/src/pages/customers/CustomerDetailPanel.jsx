@@ -6,6 +6,7 @@ import { formatBranchKams } from '@/utils/customerKam'
 import { Chip, AlertBar, Tag } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import { CUSTOMER_TYPE_LABELS, CUSTOMER_CLASSIFICATION_LABELS } from '@/utils/dropdownOptions'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 function mapCustomer(c) {
   if (!c) return null
@@ -59,7 +60,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
   const branchLabel = branchName
     || branches.find((b) => b.id === detail?.branchId)?.name
     || detail?.branchId
-    || '—'
+    || NOT_SET
 
   const addressLines = [
     detail?.street1,
@@ -72,7 +73,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
 
   const summary = [
     { label: 'Outstanding (MVR)', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
-    { label: 'Store credit (MVR)', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
+    { label: 'Store credit (MVR)', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : NOT_APPLICABLE, tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
     { label: 'Account limit (MVR)', value: fmt(detail?.creditLimit) },
     { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
   ]
@@ -124,10 +125,10 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
           <DetailSection title="Contact">
             <DetailFields fields={[
               { label: 'Customer name', value: detail?.name },
-              { label: 'Customer ID', value: <span className="mono">{detail?.customerCode || '—'}</span> },
-              { label: 'Phone', value: detail?.phone || '—' },
-              { label: 'Email', value: detail?.email || '—' },
-              { label: 'GST Reg No', value: detail?.gstIn || '—' },
+              { label: 'Customer ID', value: <span className="mono">{detail?.customerCode || NOT_SET}</span> },
+              { label: 'Phone', value: detail?.phone || NOT_SET },
+              { label: 'Email', value: detail?.email || NOT_SET },
+              { label: 'GST Reg No', value: detail?.gstIn || NOT_SET },
               { label: 'Branch', value: branchLabel },
               { label: 'Status', value: <Chip status={detail?.active ? 'active' : 'inactive'} /> },
             ]}
@@ -165,10 +166,10 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
                   </Tag>
                 ),
               },
-              { label: 'Key account managers', value: formatBranchKams(detail?.keyAccountManagerNames, branches) || '—' },
+              { label: 'Key account managers', value: formatBranchKams(detail?.keyAccountManagerNames, branches) || NOT_SET },
               { label: 'Credit eligible', value: detail?.isCreditEligible ? 'Yes' : 'No' },
-              { label: 'Credit terms', value: detail?.isCreditEligible ? (detail?.creditTerms || '—') : '—' },
-              { label: 'Account limit', value: detail?.isCreditEligible ? fmt(detail?.creditLimit) : '—' },
+              { label: 'Credit terms', value: detail?.isCreditEligible ? (detail?.creditTerms || NOT_SET) : NOT_APPLICABLE },
+              { label: 'Account limit', value: detail?.isCreditEligible ? fmt(detail?.creditLimit) : NOT_APPLICABLE },
               {
                 label: 'Outstanding',
                 value: <span style={{ color: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(detail?.outstanding)}</span>,
@@ -177,7 +178,7 @@ export default function CustomerDetailPanel({ open, customer, onClose, onOpenLed
                 label: 'Store credit',
                 value: detail?.creditBalance > 0
                   ? <span style={{ color: 'var(--accent)' }}>{fmt(detail.creditBalance)}</span>
-                  : '—',
+                  : NOT_APPLICABLE,
               },
               { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
             ]}

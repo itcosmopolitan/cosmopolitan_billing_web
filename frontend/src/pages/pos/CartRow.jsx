@@ -29,6 +29,7 @@ import {
   lineTaxAmount,
   lineTaxableAmount,
 } from '@/utils/taxCalc'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 /** Qty/rate keep entry precision in the UI; settings rounding happens on save. */
 const entryStep = entryInputStep
@@ -93,9 +94,9 @@ export default function CartRow({
   const afterEntity = Math.max(0, roundAmount((Number(item.lineTotal) || 0) - (Number(entityDiscountShare) || 0)))
   const lineTax = lineTaxAmount(afterEntity, item.taxRate)
   const lineTotalExcl = lineTaxableAmount(afterEntity, item.taxRate)
-  const hsn = item.hsnCode || '—'
+  const hsn = item.hsnCode || NOT_SET
   const metadata = getInvoiceItemMetadata(item)
-  const uom = metadata.units === '' ? '—' : metadata.units
+  const uom = metadata.units === '' ? NOT_SET : metadata.units
   const [batches, setBatches] = useState([])
   const [loadingBatches, setLoadingBatches] = useState(false)
   const hasStock = item.availableStock != null || item.available_stock != null
@@ -258,8 +259,8 @@ export default function CartRow({
                 `HSN ${hsn}`,
                 `UOM ${uom}`,
                 stockMode === 'clubbed'
-                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : '—'} · Here ${fmtQty(branchStockQty)}`
-                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : '—'}`,
+                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : NOT_SET} · Here ${fmtQty(branchStockQty)}`
+                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : NOT_SET}`,
               ].filter(Boolean).join(' · ')}
               aria-label={`Details for ${item.name || 'item'}: HSN, unit, stock${tracked ? ', batches' : ''}`}
             >
@@ -279,8 +280,8 @@ export default function CartRow({
               <span aria-hidden style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
               <span title="Available stock" style={{ color: stockExceeded ? 'var(--amber)' : undefined, flexShrink: 0 }}>
                 {stockMode === 'clubbed'
-                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : '—'} · Here ${fmtQty(branchStockQty)}`
-                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : '—'}`}
+                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : NOT_SET} · Here ${fmtQty(branchStockQty)}`
+                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : NOT_SET}`}
                 {stockExceeded ? ' ⚠' : ''}
               </span>
               {tracked && (
@@ -321,7 +322,7 @@ export default function CartRow({
             else handleCartFieldArrowNav(e, 'packaging', cartIndex)
           }}
           aria-label={`Packaging for ${item.name || 'item'}`}
-          placeholder="—"
+          placeholder={NOT_APPLICABLE}
           style={{ width: 120, padding: '4px 7px', fontSize: 12 }}
         />
       </td>

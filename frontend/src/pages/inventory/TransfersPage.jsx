@@ -13,6 +13,7 @@ import { formatLabel } from '@/utils/helpers'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import RowActionsMenu from './RowActionsMenu'
 import TransferDetailPanel from './TransferDetailPanel'
+import { NOT_SET } from '@/utils/emptyValue'
 
 // In-flight request cache to avoid duplicate identical fetches across
 // remounts (helps reduce dev StrictMode double-calls showing in Network).
@@ -510,7 +511,7 @@ export default function TransfersPage() {
                             </td>
                           )
                         }
-                        if (id === 'counter') return <td key={id}>{t.child_counter_name || '—'}</td>
+                        if (id === 'counter') return <td key={id}>{t.child_counter_name || NOT_SET}</td>
                         if (id === 'items') {
                           return (
                             <td key={id}>
@@ -527,7 +528,7 @@ export default function TransfersPage() {
                           )
                         }
                         if (id === 'date') {
-                          return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || 'N/A'}</td>
+                          return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || NOT_SET}</td>
                         }
                         return null
                       })}

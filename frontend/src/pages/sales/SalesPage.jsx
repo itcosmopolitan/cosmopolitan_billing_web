@@ -44,6 +44,7 @@ import {
   invoiceHasReturn,
   invoiceReturnPath,
 } from './salesFormShared'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 // Sales Phase 1 (2026-05-23): Credit Purchases tab dropped — same data is
 // reachable via Invoices tab + payment_mode filter. Sales Orders + Returns
@@ -85,9 +86,9 @@ const VALID_TABS = new Set(TABS.map((t) => t.id))
 // em-dash so it's obvious nothing was captured.
 const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'bank_transfer', 'credit'])
 function displayPaymentMode(raw) {
-  if (!raw) return '—'
+  if (!raw) return NOT_SET
   const v = String(raw).trim().toLowerCase()
-  if (!VALID_PAYMENT_MODES.has(v)) return '—'
+  if (!VALID_PAYMENT_MODES.has(v)) return NOT_SET
   return formatLabel(v)
 }
 
@@ -95,7 +96,7 @@ function displayKeyAccountManager(row) {
   return row?.customerKeyAccountManager
     || row?.customer_key_account_manager
     || row?.keyAccountManager
-    || '—'
+    || NOT_SET
 }
 
 export default function SalesPage() {
@@ -1275,16 +1276,16 @@ export default function SalesPage() {
                         if (id === 'kam') {
                           return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(inv)}</td>
                         }
-                        if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || 'N/A'}</td>
-                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{inv.childCounterName || inv.child_counter_name || '—'}</td>
+                        if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{inv.branchName || inv.branchId || NOT_SET}</td>
+                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{inv.childCounterName || inv.child_counter_name || NOT_SET}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.date}</td>
-                        if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.cashier || 'N/A'}</td>
+                        if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{inv.cashier || NOT_SET}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(inv.total)}</td>
                         if (id === 'paid') return <td key={id} className="text-right mono" style={{ color: (inv.paidAmount || 0) >= inv.total ? 'var(--green)' : 'var(--amber)' }}>{fmt(inv.paidAmount || 0)}</td>
                         if (id === 'mode') {
                           return (
-                            <td key={id}>{displayPaymentMode(inv.paymentMode) === '—'
-                              ? <span style={{ color: 'var(--text-muted)' }}>—</span>
+                            <td key={id}>{displayPaymentMode(inv.paymentMode) === NOT_SET
+                              ? <span style={{ color: 'var(--text-muted)' }}>{NOT_SET}</span>
                               : <Tag>{displayPaymentMode(inv.paymentMode)}</Tag>}</td>
                           )
                         }
@@ -1507,9 +1508,9 @@ export default function SalesPage() {
                         if (id === 'number') return <td key={id}><CopyableId value={q.number} label={q.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                         if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{q.customerName || 'Walk-in'}</td>
                         if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(q)}</td>
-                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{q.childCounterName || q.child_counter_name || '—'}</td>
+                        if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{q.childCounterName || q.child_counter_name || NOT_SET}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.date}</td>
-                        if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || '—'}</td>
+                        if (id === 'valid_until') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{q.validUntil || NOT_SET}</td>
                         if (id === 'amount') return <td key={id} className="text-right mono">{fmt(q.total)}</td>
                         if (id === 'status') return <td key={id}><Chip status={conv.chip} label={conv.label} /></td>
                         if (id === 'linked') {
@@ -1517,7 +1518,7 @@ export default function SalesPage() {
                             <td key={id}>
                               {linked
                                 ? <CopyableId value={linked} label={linked} style={{ color: 'var(--accent)', fontSize: 12 }} />
-                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                                : <span style={{ color: 'var(--text-muted)' }}>{NOT_APPLICABLE}</span>}
                             </td>
                           )
                         }
@@ -1800,7 +1801,7 @@ export default function SalesPage() {
                         if (id === 'credited') {
                           return (
                             <td key={id} className="text-right mono" style={{ color: r.creditedAmount > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                              {r.creditedAmount > 0 ? fmt(r.creditedAmount) : '—'}
+                              {r.creditedAmount > 0 ? fmt(r.creditedAmount) : NOT_APPLICABLE}
                             </td>
                           )
                         }
@@ -1813,7 +1814,7 @@ export default function SalesPage() {
                             </td>
                           )
                         }
-                        if (id === 'reason') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || '—'}</td>
+                        if (id === 'reason') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reason || NOT_SET}</td>
                         if (id === 'status') return <td key={id}><Chip status={r.status === 'processed' ? 'paid' : r.status} label={formatLabel(r.status)} /></td>
                         return null
                       })}
@@ -1977,7 +1978,7 @@ export default function SalesPage() {
                             return (
                               <td key={id}>{p.paymentMode
                                 ? <Chip status={p.paymentMode} label={formatLabel(p.paymentMode)} />
-                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                                : <span style={{ color: 'var(--text-muted)' }}>{NOT_SET}</span>}</td>
                             )
                           }
                           if (id === 'invoices') {
@@ -1991,7 +1992,7 @@ export default function SalesPage() {
                           if (id === 'store_credit') {
                             return (
                               <td key={id} className="text-right mono" style={{ color: (p.creditApplied || 0) > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>
-                                {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : '—'}
+                                {(p.creditApplied || 0) > 0 ? fmt(p.creditApplied) : NOT_APPLICABLE}
                               </td>
                             )
                           }
@@ -2148,9 +2149,9 @@ export default function SalesPage() {
                           if (id === 'number') return <td key={id}><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
                           if (id === 'customer') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{o.customerName || 'Walk-in'}</td>
                           if (id === 'kam') return <td key={id} style={{ fontSize: 12 }}>{displayKeyAccountManager(o)}</td>
-                          if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{o.childCounterName || o.child_counter_name || '—'}</td>
+                          if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{o.childCounterName || o.child_counter_name || NOT_SET}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
-                          if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
+                          if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || NOT_SET}</td>
                           if (id === 'amount') return <td key={id} className="text-right mono">{fmt(o.total)}</td>
                           if (id === 'status') return <td key={id}><Chip status={conv.chip} label={conv.label} /></td>
                           if (id === 'linked') {
@@ -2158,7 +2159,7 @@ export default function SalesPage() {
                               <td key={id}>
                                 {linked
                                   ? <CopyableId value={linked} label={linked} style={{ color: 'var(--accent)', fontSize: 12 }} />
-                                  : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                                  : <span style={{ color: 'var(--text-muted)' }}>{NOT_APPLICABLE}</span>}
                               </td>
                             )
                           }

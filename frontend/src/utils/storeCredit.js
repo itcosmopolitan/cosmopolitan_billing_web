@@ -1,3 +1,4 @@
+import { NOT_SET } from './emptyValue'
 /** Cap account-credit draw to what's available and what's owed. */
 export function storeCreditApplyAmount(available, due, apply = true) {
   if (!apply) return 0
@@ -63,5 +64,5 @@ export function formatSettlementLabel({ paymentMode, storeCreditApplied, payment
     return `Account credit + ${modeLabel}`
   }
   if (credit > 0 && !modeLabel) return 'Account credit'
-  return modeLabel || '—'
+  return modeLabel || NOT_SET
 }

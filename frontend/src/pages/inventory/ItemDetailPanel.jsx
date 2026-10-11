@@ -8,11 +8,12 @@ import { exclusiveFromInclusive, inclusiveFromExclusive } from '@/utils/taxCalc'
 import { Chip, EmptyState } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import { unwrapPaged } from '@/utils/pagination'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 /** Costs are stored GST-exclusive. */
 function catalogCostLabel(exclusive, taxRate) {
   const exc = Number(exclusive)
-  if (!Number.isFinite(exc)) return '—'
+  if (!Number.isFinite(exc)) return NOT_SET
   const rate = Number(taxRate) || 0
   if (rate <= 0) return fmt(exc)
   const inc = inclusiveFromExclusive(exc, rate)
@@ -26,7 +27,7 @@ function catalogCostLabel(exclusive, taxRate) {
 
 function catalogPriceLabel(inclusive, taxRate) {
   const inc = Number(inclusive)
-  if (!Number.isFinite(inc)) return '—'
+  if (!Number.isFinite(inc)) return NOT_SET
   const rate = Number(taxRate) || 0
   if (rate <= 0) return fmt(inc)
   const excl = exclusiveFromInclusive(inc, rate)
@@ -202,17 +203,17 @@ export default function ItemDetailPanel({
           <DetailSection title="General details">
             <DetailFields fields={[
               { label: 'Item name', value: detail?.name },
-              { label: 'SKU', value: <span className="mono">{detail?.sku || '—'}</span> },
-              { label: 'Barcode', value: detail?.barcode || '—' },
-              { label: 'Category', value: detail?.categoryName || detail?.category?.name || '—' },
-              { label: 'Brand', value: detail?.brand || '—' },
-              { label: 'Unit', value: detail?.unit || '—' },
-              { label: 'HSN code', value: detail?.hsn_code || '—' },
-              { label: 'Country of origin', value: detail?.country_of_origin || '—' },
-              { label: 'Tax rate', value: detail?.tax_rate != null ? `${detail.tax_rate}%` : '—' },
+              { label: 'SKU', value: <span className="mono">{detail?.sku || NOT_SET}</span> },
+              { label: 'Barcode', value: detail?.barcode || NOT_SET },
+              { label: 'Category', value: detail?.categoryName || detail?.category?.name || NOT_SET },
+              { label: 'Brand', value: detail?.brand || NOT_SET },
+              { label: 'Unit', value: detail?.unit || NOT_SET },
+              { label: 'HSN code', value: detail?.hsn_code || NOT_SET },
+              { label: 'Country of origin', value: detail?.country_of_origin || NOT_SET },
+              { label: 'Tax rate', value: detail?.tax_rate != null ? `${detail.tax_rate}%` : NOT_SET },
               { label: 'Status', value: statusChip(detail) },
-              { label: 'Created by', value: detail?.created_by || '—' },
-              { label: 'Packaging', value: detail?.packaging || (detail?.is_packaging ? `Yes (${detail.packaging_quantity != null ? fmtQty(detail.packaging_quantity) : '—'} per pack)` : '—') },
+              { label: 'Created by', value: detail?.created_by || NOT_SET },
+              { label: 'Packaging', value: detail?.packaging || (detail?.is_packaging ? `Yes (${detail.packaging_quantity != null ? fmtQty(detail.packaging_quantity) : NOT_SET} per pack)` : NOT_APPLICABLE) },
             ]}
             />
           </DetailSection>
@@ -232,7 +233,7 @@ export default function ItemDetailPanel({
                   ? catalogPriceLabel(detail?.staff_price, detail?.tax_rate)
                   : `${Number(detail?.staff_discount_pct || 0)}% off`,
               },
-              { label: 'Default reorder level', value: detail?.default_reorder_level != null || detail?.reorder_level != null ? fmtQty(detail?.default_reorder_level ?? detail?.reorder_level) : '—' },
+              { label: 'Default reorder level', value: detail?.default_reorder_level != null || detail?.reorder_level != null ? fmtQty(detail?.default_reorder_level ?? detail?.reorder_level) : NOT_SET },
             ]}
             />
           </DetailSection>
@@ -303,7 +304,7 @@ export default function ItemDetailPanel({
                             : `${Number(b.effective_staff_discount_pct || 0)}% off`}
                           {b.staff_pricing_mode && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>override</div>}
                         </td>
-                        <td className="text-right mono">{b.effective_reorder_level != null ? fmtQty(b.effective_reorder_level) : '—'}</td>
+                        <td className="text-right mono">{b.effective_reorder_level != null ? fmtQty(b.effective_reorder_level) : NOT_SET}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -343,10 +344,10 @@ export default function ItemDetailPanel({
                   {batches.map((b) => (
                     <tr key={b.id}>
                       <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber || b.batch_number}</td>
-                      {isMaster && <td style={{ fontSize: 12 }}>{b.branchName || b.branch_name || b.branch_id || '—'}</td>}
+                      {isMaster && <td style={{ fontSize: 12 }}>{b.branchName || b.branch_name || b.branch_id || NOT_SET}</td>}
                       <td className="text-right mono">{fmtQty(b.quantity ?? b.qty ?? 0)}</td>
-                      <td style={{ fontSize: 12 }}>{b.mfgDate || b.mfg_date ? fmtDate(b.mfgDate || b.mfg_date) : '—'}</td>
-                      <td style={{ fontSize: 12 }}>{b.expiryDate || b.expiry_date ? fmtDate(b.expiryDate || b.expiry_date) : '—'}</td>
+                      <td style={{ fontSize: 12 }}>{b.mfgDate || b.mfg_date ? fmtDate(b.mfgDate || b.mfg_date) : NOT_SET}</td>
+                      <td style={{ fontSize: 12 }}>{b.expiryDate || b.expiry_date ? fmtDate(b.expiryDate || b.expiry_date) : NOT_SET}</td>
                       <td className="text-right mono">{fmt(b.costPrice ?? b.cost_price)}</td>
                       <td><Chip status={b.active === false ? 'inactive' : 'active'} /></td>
                     </tr>

@@ -3,6 +3,7 @@ import { formatAmountNumber, formatQtyNumber, getAmountDecimals } from '@/utils/
 import { getInvoiceItemMetadata } from '@/utils/invoiceItemMetadata'
 import amountToWords from '@/utils/amountToWords'
 import { calcInvoiceSummary, exclusiveFromInclusive } from '@/utils/taxCalc'
+import { NOT_SET } from '@/utils/emptyValue'
 
 export interface InvoiceLineItem {
   itemNo?: string
@@ -131,7 +132,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     invoiceNo: `${sale?.number || sale?.invoiceNo || sale?.invoice_no || ''}`,
     orderNo: sale?.orderNo || sale?.order_no || '',
     purchaseOrderNo: sale?.purchaseOrderNo || sale?.purchase_order_no || '',
-    postingDate: postingDate || '—',
+    postingDate: postingDate || NOT_SET,
     phoneNo: sale?.phoneNo || sale?.phone_no || branch?.phone || '',
     email: sale?.email || branch?.email || '',
     homePage: sale?.homePage || sale?.homepage || branch?.homepage || branch?.website || '',

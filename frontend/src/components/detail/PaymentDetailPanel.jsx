@@ -3,6 +3,7 @@ import { fmt, formatLabel } from '@/utils/helpers'
 import { Chip, AlertBar } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
 import TxnLink, { purchaseTxnHref, salesTxnHref } from '@/components/detail/TxnLink'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 /**
  * Shared payment detail drawer for sales & purchase payments.
@@ -28,11 +29,11 @@ export default function PaymentDetailPanel({
     { label: 'Amount (MVR)', value: fmt(detail?.totalAmount), tone: 'var(--green)' },
     {
       label: 'Store credit applied (MVR)',
-      value: (detail?.creditApplied || 0) > 0 ? fmt(detail.creditApplied) : '—',
+      value: (detail?.creditApplied || 0) > 0 ? fmt(detail.creditApplied) : NOT_APPLICABLE,
       tone: (detail?.creditApplied || 0) > 0 ? 'var(--amber)' : undefined,
     },
-    { label: 'Method', value: detail?.paymentMode ? formatLabel(detail.paymentMode) : '—' },
-    { label: 'Date', value: detail?.date || '—' },
+    { label: 'Method', value: detail?.paymentMode ? formatLabel(detail.paymentMode) : NOT_SET },
+    { label: 'Date', value: detail?.date || NOT_SET },
   ]
   const nextAction = canEdit && !detail?.voided
     ? {
@@ -56,7 +57,7 @@ export default function PaymentDetailPanel({
       onClose={onClose}
       icon="💸"
       title={detail?.number || 'Payment'}
-      subtitle={[partyName || '—', detail?.date].filter(Boolean).join(' · ')}
+      subtitle={[partyName || NOT_SET, detail?.date].filter(Boolean).join(' · ')}
       size="lg"
       summary={summary}
       tabs={[
@@ -86,15 +87,15 @@ export default function PaymentDetailPanel({
         <>
           <DetailSection title="Payment info">
             <DetailFields fields={[
-              { label: partyLabel, value: partyName || '—' },
-              { label: 'Date', value: detail?.date || '—' },
+              { label: partyLabel, value: partyName || NOT_SET },
+              { label: 'Date', value: detail?.date || NOT_SET },
               {
                 label: 'Method',
                 value: detail?.paymentMode
                   ? <Chip status={detail.paymentMode} label={formatLabel(detail.paymentMode)} />
-                  : '—',
+                  : NOT_SET,
               },
-              { label: 'Reference', value: detail?.paymentRef || '—' },
+              { label: 'Reference', value: detail?.paymentRef || NOT_SET },
               {
                 label: 'Total amount (MVR)',
                 value: <span className="mono" style={{ color: 'var(--green)', fontWeight: 600 }}>{fmt(detail?.totalAmount)}</span>,
@@ -103,9 +104,9 @@ export default function PaymentDetailPanel({
                 label: 'Store credit applied (MVR)',
                 value: (detail?.creditApplied || 0) > 0
                   ? <span className="mono" style={{ color: 'var(--amber)' }}>{fmt(detail.creditApplied)}</span>
-                  : '—',
+                  : NOT_APPLICABLE,
               }] : []),
-              { label: 'Created by', value: detail?.createdBy || '—' },
+              { label: 'Created by', value: detail?.createdBy || NOT_SET },
             ]}
             />
           </DetailSection>

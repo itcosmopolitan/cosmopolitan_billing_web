@@ -3,6 +3,7 @@ import { vendorsAPI } from '@/api'
 import { fmt } from '@/utils/helpers'
 import { Chip, AlertBar } from '@/components/ui'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 function mapVendor(v) {
   if (!v) return null
@@ -40,9 +41,9 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
 
   const summary = [
     { label: 'Outstanding (MVR)', value: fmt(detail?.outstanding), tone: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' },
-    { label: 'Vendor credit (MVR)', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : '—', tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
+    { label: 'Vendor credit (MVR)', value: detail?.creditBalance > 0 ? fmt(detail.creditBalance) : NOT_APPLICABLE, tone: detail?.creditBalance > 0 ? 'var(--accent)' : undefined },
     { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
-    { label: 'Payment terms', value: detail?.payment_terms || '—' },
+    { label: 'Payment terms', value: detail?.payment_terms || NOT_SET },
   ]
 
   return (
@@ -88,16 +89,16 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
           <DetailSection title="Contact">
             <DetailFields fields={[
               { label: 'Company / vendor', value: detail?.name },
-              { label: 'Contact person', value: detail?.contact_person || '—' },
-              { label: 'Phone', value: detail?.phone || '—' },
-              { label: 'Email', value: detail?.email || '—' },
-              { label: 'GSTIN', value: detail?.gstin || '—' },
+              { label: 'Contact person', value: detail?.contact_person || NOT_SET },
+              { label: 'Phone', value: detail?.phone || NOT_SET },
+              { label: 'Email', value: detail?.email || NOT_SET },
+              { label: 'GSTIN', value: detail?.gstin || NOT_SET },
               { label: 'Status', value: <Chip status={detail?.active ? 'active' : 'inactive'} /> },
             ]}
             />
           </DetailSection>
           <DetailSection title="Address">
-            <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{detail?.address || '—'}</div>
+            <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{detail?.address || NOT_SET}</div>
           </DetailSection>
         </>
       )}
@@ -106,7 +107,7 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
         <>
           <DetailSection title="Payables">
             <DetailFields fields={[
-              { label: 'Payment terms', value: detail?.payment_terms || '—' },
+              { label: 'Payment terms', value: detail?.payment_terms || NOT_SET },
               {
                 label: 'Outstanding',
                 value: <span style={{ color: detail?.outstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(detail?.outstanding)}</span>,
@@ -115,7 +116,7 @@ export default function VendorDetailPanel({ open, vendor, onClose, onOpenLedger 
                 label: 'Vendor credit',
                 value: detail?.creditBalance > 0
                   ? <span style={{ color: 'var(--accent)' }}>{fmt(detail.creditBalance)}</span>
-                  : '—',
+                  : NOT_APPLICABLE,
               },
               { label: 'Total purchases (MVR)', value: fmt(detail?.totalPurchases) },
             ]}

@@ -7,6 +7,7 @@ import {
   isAllocationValid,
   formatAllocationSummary,
 } from '@/utils/batchAllocation'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 
 /**
  * Inline batch split widget for sales invoice lines (consumption).
@@ -63,7 +64,7 @@ export default function LineBatchAllocationField({
   }, [batches, need, allocationCustom, tracked])
 
   if (!tracked || !itemId) {
-    return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
+    return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{NOT_APPLICABLE}</span>
   }
 
   const valid = isAllocationValid(allocation, need)

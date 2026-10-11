@@ -22,6 +22,7 @@ import {
   notifyInvoiceConfigChanged,
   DEFAULT_INVOICE_CONFIG,
 } from '@/utils/invoiceConfig'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const SCOPE_LABELS = {
   per_branch: 'Per Branch',
@@ -259,7 +260,7 @@ export function TaxConfigTab({ refreshKey = 0 }) {
                         </span>
                       </td>
                       <td><span style={{ fontWeight: 500 }}>{r.label}</span></td>
-                      <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.examples || '—'}</td>
+                      <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{r.examples || NOT_SET}</td>
                       <td><Chip status={r.is_active ? 'active' : 'inactive'} /></td>
                       <td className="text-right">
                         <RowActionsMenu
@@ -581,7 +582,7 @@ export function NumberingTab({ refreshKey = 0 }) {
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
             Preview{form.scope === 'per_branch' ? ` (sample branch code ${SAMPLE_BRANCH_CODE})` : ''}
           </div>
-          <div style={{ fontFamily: 'DM Mono', fontSize: 13, color: 'var(--accent)' }}>{liveSample || '—'}</div>
+          <div style={{ fontFamily: 'DM Mono', fontSize: 13, color: 'var(--accent)' }}>{liveSample || NOT_SET}</div>
         </div>
       </Modal>
     </>
@@ -687,9 +688,9 @@ export function InvoiceTemplateTab({ refreshKey = 0 }) {
   }
 
   const previewCompany = orgPreview.name || 'Cosmopolitian Campa brothers'
-  const previewAddress = orgPreview.address || '-'
-  const previewPhone = orgPreview.phone || '—'
-  const previewGst = orgPreview.gstin || '—'
+  const previewAddress = orgPreview.address || NOT_SET
+  const previewPhone = orgPreview.phone || NOT_SET
+  const previewGst = orgPreview.gstin || NOT_SET
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'start' }}>

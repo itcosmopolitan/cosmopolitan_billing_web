@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { getInvoiceItemMetadata } from './invoiceItemMetadata'
+import { NOT_APPLICABLE } from './emptyValue'
 
 function packingDisplay(item) {
   const value = getInvoiceItemMetadata(item).packaging
-  return value === '' ? '—' : value
+  return value === '' ? NOT_APPLICABLE : value
 }
 
 describe('POS packaging metadata', () => {
@@ -35,6 +36,6 @@ describe('POS packaging metadata', () => {
       is_packaging: false,
       packaging_quantity: null,
       unit: 'Pcs',
-    })).toBe('—')
+    })).toBe(NOT_APPLICABLE)
   })
 })

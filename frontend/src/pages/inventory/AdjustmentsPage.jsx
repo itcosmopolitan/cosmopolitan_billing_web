@@ -19,6 +19,7 @@ import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import RowActionsMenu from './RowActionsMenu'
 import AdjustmentDetailPanel from './AdjustmentDetailPanel'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 // In-flight request cache to avoid duplicate identical fetches across
 // remounts (helps reduce dev StrictMode double-calls showing in Network).
@@ -56,7 +57,7 @@ function resolvedColumnLabel(tab) {
 function PersonWhen({ name, at }) {
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{name || '—'}</div>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{name || NOT_SET}</div>
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
         {fmtDateTime(at || null)}
       </div>
@@ -566,7 +567,7 @@ export default function AdjustmentsPage() {
                         if (id === 'branch') {
                           return <td key={id} style={{ fontSize: 13 }}>{r.branch_name || r.branch_id}</td>
                         }
-                        if (id === 'counter') return <td key={id}>{r.child_counter_name || '—'}</td>
+                        if (id === 'counter') return <td key={id}>{r.child_counter_name || NOT_SET}</td>
                         if (id === 'item') {
                           return (
                             <td key={id}>
@@ -606,7 +607,7 @@ export default function AdjustmentsPage() {
                           return (
                             <td key={id}>
                               {r.status === 'pending' ? (
-                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
+                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{NOT_APPLICABLE}</span>
                               ) : (
                                 <PersonWhen
                                   name={r.resolved_by || r.approved_by || r.rejected_by}
@@ -770,7 +771,7 @@ export default function AdjustmentsPage() {
                     >
                       <td><input type="radio" readOnly checked={newForm.batch_id === b.id} /></td>
                       <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : '—'}</td>
+                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : NOT_SET}</td>
                       <td className="text-right mono">{fmtQty(b.quantity)}</td>
                     </tr>
                   ))}

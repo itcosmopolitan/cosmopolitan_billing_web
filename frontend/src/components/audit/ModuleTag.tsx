@@ -1,4 +1,5 @@
 import { formatLabel } from "@/utils/helpers";
+import { NOT_SET } from '@/utils/emptyValue'
 
 const styles: Record<string, { background: string; color: string }> = {
   sales: { background: "var(--blue-bg)", color: "var(--blue)" },
@@ -11,8 +12,8 @@ const styles: Record<string, { background: string; color: string }> = {
 
 const toDisplayModule = (module: string) => {
   const value = (module || "").trim();
-  if (!value) return "-";
-  return formatLabel(value) || "-";
+  if (!value) return NOT_SET;
+  return formatLabel(value) || NOT_SET;
 };
 
 export function ModuleTag({ module }: { module: string }) {

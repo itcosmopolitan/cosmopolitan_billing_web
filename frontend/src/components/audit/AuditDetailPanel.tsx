@@ -4,6 +4,7 @@ import type { AuditLog } from "../../types/audit";
 import { RiskBadge } from "./RiskBadge";
 import { useAppStore } from "../../store";
 import { humanizeLabel, humanizeValue } from "@/utils/helpers";
+import { NOT_SET } from '@/utils/emptyValue'
 
 interface Props {
   log: AuditLog | null;
@@ -23,17 +24,17 @@ export function AuditDetailPanel({ log, onClose }: Props) {
 
   const formatLocalTimestamp = (value: string) => {
     const raw = (value || "").trim();
-    if (!raw) return "-";
+    if (!raw) return NOT_SET;
     const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(raw);
     const date = new Date(hasTz ? raw : `${raw}Z`);
-    if (Number.isNaN(date.getTime())) return value || "-";
+    if (Number.isNaN(date.getTime())) return value || NOT_SET;
 
     return format(date, "d MMM yyyy, h:mm a");
   };
 
   const parseDevice = (userAgent: string | null | undefined) => {
     const ua = (userAgent || "").trim();
-    if (!ua) return "-";
+    if (!ua) return NOT_SET;
 
     let browser = "";
     const edge = ua.match(/Edg\/(\d+)/i);
@@ -65,12 +66,12 @@ export function AuditDetailPanel({ log, onClose }: Props) {
   const toTitleCase = (value: string) => humanizeLabel(value) || value
 
   const formatSimpleValue = (value: unknown): string => {
-    if (value === null || value === undefined || value === "") return "-";
+    if (value === null || value === undefined || value === "") return NOT_SET;
     return humanizeValue(value);
   };
 
   const resolveBranchName = (branchId: unknown) => {
-    if (branchId === null || branchId === undefined || branchId === "") return "—";
+    if (branchId === null || branchId === undefined || branchId === "") return NOT_SET;
     const id = String(branchId);
     const branch = branches.find((b: { id: string; name?: string }) => b.id === id);
     return branch?.name || id;
@@ -168,7 +169,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
           const itemName = typeof change.item_name === "string" ? `${change.item_name}: ` : "";
           const before = humanizeValue(change.before ?? change.old);
           const after = humanizeValue(change.after ?? change.new);
-          const value = before !== "-" || after !== "-"
+          const value = before !== NOT_SET || after !== NOT_SET
             ? `${before} → ${after}`
             : humanizeValue(change.detail ?? change);
           return {
@@ -218,22 +219,22 @@ export function AuditDetailPanel({ log, onClose }: Props) {
       if (branch?.name) return branch.name;
       return String(log.branch_id);
     }
-    return "—";
+    return NOT_SET;
   })();
 
   const roleLabel = ((): string => {
     const r = log.user_role ?? '';
     const s = String(r).trim();
-    if (!s) return '—';
-    if (s.toLowerCase() === 'unknown') return '—';
+    if (!s) return NOT_SET;
+    if (s.toLowerCase() === 'unknown') return NOT_SET;
     return toTitleCase(s);
   })();
 
   const moduleLabel = ((): string => {
     const m = log.module ?? '';
     const s = String(m).trim();
-    if (!s) return '—';
-    return humanizeLabel(s) || '—';
+    if (!s) return NOT_SET;
+    return humanizeLabel(s) || NOT_SET;
   })();
 
   const actionName = toTitleCase(log.action || 'Event');
@@ -274,7 +275,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">User</div>
-            <div className="text-sm font-medium text-[var(--text-secondary)]">{log.user_name || '—'}</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{log.user_name || NOT_SET}</div>
           </div>
           <div>
             <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Role</div>
@@ -283,7 +284,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
 
           <div>
             <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">IP Address</div>
-            <div className="text-sm font-medium text-[var(--text-secondary)]">{log.ip_address || '—'}</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{log.ip_address || NOT_SET}</div>
           </div>
           <div>
             <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Device</div>
@@ -296,7 +297,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
           </div>
           <div>
             <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Branch</div>
-            <div className="text-sm font-medium text-[var(--text-secondary)]">{branchLabel || '—'}</div>
+            <div className="text-sm font-medium text-[var(--text-secondary)]">{branchLabel || NOT_SET}</div>
           </div>
 
           <div>
@@ -312,13 +313,13 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         {/* REFERENCE CHIP */}
         <div className="mb-4">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Reference</div>
-          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-2 font-mono text-sm text-[var(--accent)]">{log.reference_id || '—'}</div>
+          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-raised)] px-3 py-2 font-mono text-sm text-[var(--accent)]">{log.reference_id || NOT_SET}</div>
         </div>
 
         <div className="mb-4">
           <div className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Description</div>
           <div className="whitespace-pre-wrap break-words rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-4 text-sm text-[var(--text-secondary)]">
-            {log.detail || '—'}
+            {log.detail || NOT_SET}
           </div>
         </div>
 
@@ -335,7 +336,7 @@ export function AuditDetailPanel({ log, onClose }: Props) {
               {metadataDisplayRows.map((row, index) => {
                 const val = String(row.value ?? '');
                 const isLong = val.length > 24;
-                const displayVal = isLong ? `${val.slice(0, 8)}...` : val || '-';
+                const displayVal = isLong ? `${val.slice(0, 8)}...` : val || NOT_SET;
                 return (
                   <div key={`${row.label}-${index}`} className="rounded-lg bg-[var(--bg-raised)] px-3 py-2">
                     <div className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">{row.label}</div>

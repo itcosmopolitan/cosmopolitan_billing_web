@@ -9,6 +9,7 @@ import {
   lineGstFromInclusive,
   lineTaxableFromInclusive,
 } from '@/utils/taxCalc'
+import { NOT_SET } from '@/utils/emptyValue'
 
 // ─── 80mm Thermal Receipt (IFS-style layout) ──────────────────────────────
 // Paper width: 80mm → ~300px printable area at 96dpi (72mm content, 4mm margins)
@@ -43,7 +44,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
   const docNo = sale.number || sale.docNo || ''
 
   const formatCurrency = (value) => {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) return '—'
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return NOT_SET
     return fmt(value)
   }
 
@@ -168,7 +169,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
             <div class="box-title">Payment Details</div>
             <div class="kv"><span class="label">Cash Collected (MVR)</span><span class="value">${formatCurrency(cashCollected)}</span></div>
             <div class="kv"><span class="label">Cash Refunded (MVR)</span><span class="value">${formatCurrency(-Math.abs(cashRefunded))}</span></div>
-            <div class="kv"><span class="label">Credit / Debit Card No</span><span class="value">${cardNo || '—'}</span></div>
+            <div class="kv"><span class="label">Credit / Debit Card No</span><span class="value">${cardNo || NOT_SET}</span></div>
             ${cardNo ? `<div class="kv"><span class="label">Card Amt (MVR)</span><span class="value">${formatCurrency(cardAmt)}</span></div>` : ''}
             <div class="kv" style="margin-top:2px;"><span class="label">Payment Mode</span><span class="value">${formatSettlementLabel({
               paymentMode: sale.paymentMode || sale.payment_mode || sale.method,
@@ -354,7 +355,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 10, borderBottom: '1px dashed #000', marginBottom: 3, paddingBottom: 2 }}>Payment Details</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Cash Collected (MVR)</span><span>{fmt(cashCollected)}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Cash Refunded (MVR)</span><span>{fmt(-Math.abs(cashRefunded))}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Credit / Debit Card No</span><span>{cardNo || '—'}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Credit / Debit Card No</span><span>{cardNo || NOT_SET}</span></div>
             {cardNo && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}><span>Card Amt (MVR)</span><span>{fmt(cardAmt)}</span></div>}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, marginTop: 2 }}>
               <span>Payment Mode</span>

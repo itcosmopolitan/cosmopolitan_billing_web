@@ -10,6 +10,7 @@ import {
 } from '@/utils/documentFormTotals'
 import { documentMargin } from '@/utils/marginCalc'
 import { internalGstReverseSummary } from '@/utils/pricingDiscounts'
+import { NOT_SET } from '@/utils/emptyValue'
 
 /**
  * Discount + totals footer for sales/purchase document forms.
@@ -259,7 +260,7 @@ export default function DocumentTotalsStrip({
             disabled={readOnly}
           />
         ) : (
-          <div className="document-totals-footer__notes-readonly">{notes || '—'}</div>
+          <div className="document-totals-footer__notes-readonly">{notes || NOT_SET}</div>
         )}
         {notesHint ? (
           <div className="document-totals-footer__notes-hint">{notesHint}</div>

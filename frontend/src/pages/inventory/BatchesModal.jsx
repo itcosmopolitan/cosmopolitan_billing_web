@@ -6,6 +6,7 @@ import { fmt, fmtDate, fmtDateTime, fmtQty } from '@/utils/helpers'
 import { amountInputStep, qtyInputStep } from '@/utils/decimalPrecision'
 import { batchExpiryStatus } from '@/utils/batchExpiry'
 import { validateBatchDates, todayISO } from '@/utils/batchDates'
+import { NOT_SET } from '@/utils/emptyValue'
 
 // Blank shape used by both add & edit modes. Keeping a single shape avoids
 // the "undefined controlled input" gotcha when flipping between modes.
@@ -328,12 +329,12 @@ export default function BatchesModal({ item, branchId, onClose, onChanged, canAd
                     <Chip label={b.sourceType || 'manual'} />
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.receivedDate ? fmtDate(b.receivedDate) : fmtDateTime(b.createdAt)}</td>
-                  <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : '—'}</td>
+                  <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.mfgDate ? fmtDate(b.mfgDate) : NOT_SET}</td>
                   <td
                     style={{ fontSize: 12, color: expInfo.dateColor, fontWeight: expInfo.expired || expInfo.nearExpiry ? 600 : 400 }}
                     title={expInfo.title}
                   >
-                    {b.expiryDate ? fmtDate(b.expiryDate) : '—'}
+                    {b.expiryDate ? fmtDate(b.expiryDate) : NOT_SET}
                   </td>
                   <td className="text-right mono" style={{ fontWeight: 600 }}>{fmtQty(b.quantity)}<span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 10.5 }}> / {fmtQty(b.initialQty)}</span></td>
                   <td title={expInfo.title}>

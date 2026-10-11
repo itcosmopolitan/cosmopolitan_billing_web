@@ -5,6 +5,7 @@ import { settingsAPI } from '@/api'
 import { EMPTY_POS_DISPLAY, isValidDisplayCode, normalizeDisplayCode } from './displayShared'
 import { fmt, fmtQty } from '@/utils/helpers'
 import { setDecimalPrecision } from '@/utils/decimalPrecision'
+import { NOT_SET } from '@/utils/emptyValue'
 
 function DisplayCodeEntry() {
   const navigate = useNavigate()
@@ -325,7 +326,7 @@ function CustomerDisplayLive({ roomId }) {
                 ) : (
                   items.map((row, i) => (
                     <tr key={`${row.name}-${i}`}>
-                      <td style={{ fontWeight: 500, fontSize: 15 }}>{row.name || '—'}</td>
+                      <td style={{ fontWeight: 500, fontSize: 15 }}>{row.name || NOT_SET}</td>
                       <td className="text-right mono">{fmtQty(row.qty)}</td>
                       <td className="text-right mono">{fmt(row.price)}</td>
                       <td className="text-right mono" style={{ fontWeight: 600 }}>{fmt(row.subtotal)}</td>

@@ -1,9 +1,10 @@
 /** Compact ↑/↓ margin % (and optional MVR) for line / document summaries. */
 import { formatAmountNumber } from '@/utils/decimalPrecision'
+import { NOT_APPLICABLE } from '@/utils/emptyValue'
 
 export default function MarginBadge({ margin, showAmount = false, size = 'sm' }) {
   if (!margin || margin.pct == null || Number.isNaN(margin.pct)) {
-    return <span style={{ color: 'var(--text-muted)' }}>—</span>
+    return <span style={{ color: 'var(--text-muted)' }}>{NOT_APPLICABLE}</span>
   }
   const positive = margin.pct >= 0
   const fontSize = size === 'lg' ? 13 : 12

@@ -12,6 +12,7 @@ import CloseDayModal from './CloseDayModal'
 import UnlockDayModal from './UnlockDayModal'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import './PettyCashPage.css'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 const SALES_TABS = ['Entries', 'Breakdown', 'Day History']
 
@@ -183,7 +184,7 @@ export default function CashPage({ ledger = 'sales' }) {
         },
         {
           label: 'Variance (MVR)',
-          value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
+          value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : NOT_APPLICABLE,
           color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
         },
       ]
@@ -200,7 +201,7 @@ export default function CashPage({ ledger = 'sales' }) {
         },
         {
           label: 'Variance (MVR)',
-          value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : '—',
+          value: isLocked ? (variance >= 0 ? '+' : '') + fmt(variance) : NOT_APPLICABLE,
           color: variance === 0 ? 'var(--green)' : Math.abs(variance) <= threshold ? 'var(--amber)' : 'var(--red)',
         },
       ]
@@ -299,7 +300,7 @@ export default function CashPage({ ledger = 'sales' }) {
       {/* ─── Tab: Entries ─── */}
       {tab === 'Entries' && (
         <Card
-          title={`${isPettyCash ? 'Petty Cash Movements' : 'Cash Sales & Purchase Entries'} — ${activeBranch?.name || '—'} / ${date}`}
+          title={`${isPettyCash ? 'Petty Cash Movements' : 'Cash Sales & Purchase Entries'} — ${activeBranch?.name || NOT_SET} / ${date}`}
           bodyPadding={false}
         >
           {loading ? (
@@ -383,7 +384,7 @@ export default function CashPage({ ledger = 'sales' }) {
                       if (id === 'entry_number') {
                         return (
                           <td key={id} style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono,monospace' }}>
-                            {e.entry_number || '—'}
+                            {e.entry_number || NOT_SET}
                           </td>
                         )
                       }
@@ -400,7 +401,7 @@ export default function CashPage({ ledger = 'sales' }) {
                         )
                       }
                       if (id === 'counter') {
-                        return <td key={id} style={{ fontSize: 12 }}>{e.child_counter_name || '—'}</td>
+                        return <td key={id} style={{ fontSize: 12 }}>{e.child_counter_name || NOT_SET}</td>
                       }
                       if (id === 'category') {
                         return <td key={id} style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.category}</td>

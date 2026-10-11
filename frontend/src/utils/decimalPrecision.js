@@ -1,3 +1,4 @@
+import { NOT_SET } from './emptyValue'
 /** Org-level display precision for amounts and quantities. Default is 2. */
 
 export const DEFAULT_AMOUNT_DECIMALS = 2
@@ -195,9 +196,9 @@ export function formatAmountFieldValue(n) {
 }
 
 export function formatQtyNumber(n, decimals) {
-  if (n === null || n === undefined || n === '') return '—'
+  if (n === null || n === undefined || n === '') return NOT_SET
   const value = Number(n)
-  if (!Number.isFinite(value)) return '—'
+  if (!Number.isFinite(value)) return NOT_SET
   const d = decimals ?? getQtyDecimals()
   return value.toLocaleString('en-MV', {
     minimumFractionDigits: d,
@@ -206,9 +207,9 @@ export function formatQtyNumber(n, decimals) {
 }
 
 export function formatAmountNumber(n, decimals) {
-  if (n === null || n === undefined || n === '') return '—'
+  if (n === null || n === undefined || n === '') return NOT_SET
   const value = Number(n)
-  if (!Number.isFinite(value)) return '—'
+  if (!Number.isFinite(value)) return NOT_SET
   const d = decimals ?? getAmountDecimals()
   return value.toLocaleString('en-MV', {
     minimumFractionDigits: d,

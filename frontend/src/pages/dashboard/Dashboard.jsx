@@ -5,6 +5,7 @@ import { dashAPI } from '@/api'
 import { useAppStore } from '@/store'
 import { KPICard, Card, BarList } from '@/components/ui'
 import { fmt } from '@/utils/helpers'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const QUICK_ACTIONS = [
   { icon: '🧾', label: 'New Sale', path: '/pos' },
@@ -206,7 +207,7 @@ export default function Dashboard() {
             <Row label="Items expiring (30d)" value={String(kpis.expiring_count ?? 0)} />
             <Row label="Low stock items" value={String(kpis.low_stock_count ?? 0)} />
             <Row label="Overdue invoices" value={String(kpis.overdue_invoices ?? 0)} />
-            <Row label="Active branch" value={activeBranch?.name || '—'} />
+            <Row label="Active branch" value={activeBranch?.name || NOT_SET} />
           </div>
         </Card>
       </div>

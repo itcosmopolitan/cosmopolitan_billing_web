@@ -53,6 +53,7 @@ import {
   canShowDeleteBillPayment,
   canShowDeleteBillReturn,
 } from './purchaseFormShared'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 const VALID_TAB_IDS = new Set(['bills', 'orders', 'grns', 'returns', 'payments'])
 
@@ -80,9 +81,9 @@ const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['draft', 'approved', 'void']
 // non-allow-list value (renders as em-dash instead of fabricating CASH).
 const VALID_PAYMENT_MODES = new Set(['cash', 'card', 'upi', 'bank_transfer'])
 function displayPaymentMode(raw) {
-  if (!raw) return '—'
+  if (!raw) return NOT_SET
   const v = String(raw).trim().toLowerCase()
-  if (!VALID_PAYMENT_MODES.has(v)) return '—'
+  if (!VALID_PAYMENT_MODES.has(v)) return NOT_SET
   return formatLabel(v)
 }
 
@@ -1069,16 +1070,16 @@ export default function PurchasesPage() {
                         </td>
                         {billColumnPrefs.visibleIds.map((id) => {
                           if (id === 'number') return <td key={id}><CopyableId value={b.number} label={b.number} style={{ color: 'var(--purple)', fontSize: 12 }} /></td>
-                          if (id === 'vendor') return <td key={id}><div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{b.vendorName || 'N/A'}</div></td>
+                          if (id === 'vendor') return <td key={id}><div style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{b.vendorName || NOT_SET}</div></td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.date}</td>
-                          if (id === 'due_date') return <td key={id} style={{ fontSize: 12, color: b.status === 'overdue' ? 'var(--red)' : 'var(--text-muted)' }}>{b.dueDate || '—'}</td>
+                          if (id === 'due_date') return <td key={id} style={{ fontSize: 12, color: b.status === 'overdue' ? 'var(--red)' : 'var(--text-muted)' }}>{b.dueDate || NOT_SET}</td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{fmt(b.total || 0)}</td>
                           if (id === 'paid') return <td key={id} className="text-right mono" style={{ color: 'var(--green)' }}>{fmt(b.paidAmount || 0)}</td>
                           if (id === 'balance') return <td key={id} className="text-right mono" style={{ color: balance > 0 ? 'var(--red)' : 'var(--green)' }}>{fmt(balance)}</td>
                           if (id === 'mode') {
                             return (
-                              <td key={id}>{displayPaymentMode(b.paymentMode) === '—'
-                                ? <span style={{ color: 'var(--text-muted)' }}>—</span>
+                              <td key={id}>{displayPaymentMode(b.paymentMode) === NOT_SET
+                                ? <span style={{ color: 'var(--text-muted)' }}>{NOT_SET}</span>
                                 : <Chip status={b.paymentMode} label={displayPaymentMode(b.paymentMode)} />}</td>
                             )
                           }
@@ -1280,9 +1281,9 @@ export default function PurchasesPage() {
                         </td>
                         {orderColumnPrefs.visibleIds.map((id) => {
                           if (id === 'number') return <td key={id}><CopyableId value={o.number} label={o.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                          if (id === 'vendor') return <td key={id}><div style={{ fontWeight: 500, fontSize: 13 }}>{o.vendorName || 'N/A'}</div></td>
+                          if (id === 'vendor') return <td key={id}><div style={{ fontWeight: 500, fontSize: 13 }}>{o.vendorName || NOT_SET}</div></td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.date}</td>
-                          if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || '—'}</td>
+                          if (id === 'expected') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{o.expectedDate || NOT_SET}</td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600 }}>{fmt(o.total || 0)}</td>
                           if (id === 'status') return <td key={id}><Chip status={conv.chip} label={conv.label} /></td>
                           if (id === 'linked') {
@@ -1290,7 +1291,7 @@ export default function PurchasesPage() {
                               <td key={id}>
                                 {linked
                                   ? <CopyableId value={linked} label={linked} style={{ color: 'var(--accent)', fontSize: 12 }} />
-                                  : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                                  : <span style={{ color: 'var(--text-muted)' }}>{NOT_APPLICABLE}</span>}
                               </td>
                             )
                           }
@@ -1478,8 +1479,8 @@ export default function PurchasesPage() {
                         <ColumnPrefsSpacer />
                         {grnColumnPrefs.visibleIds.map((id) => {
                           if (id === 'number') return <td key={id}><CopyableId value={g.number} label={g.number} style={{ color: 'var(--green)', fontSize: 12 }} /></td>
-                          if (id === 'po') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.poNumber || '—'}</td>
-                          if (id === 'vendor') return <td key={id} style={{ fontWeight: 500, fontSize: 13 }}>{g.vendorName || 'N/A'}</td>
+                          if (id === 'po') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.poNumber || NOT_SET}</td>
+                          if (id === 'vendor') return <td key={id} style={{ fontWeight: 500, fontSize: 13 }}>{g.vendorName || NOT_SET}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{g.date}</td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600 }}>{fmt(g.total || 0)}</td>
                           if (id === 'status') return <td key={id}><Chip status={g.status} /></td>
@@ -1488,7 +1489,7 @@ export default function PurchasesPage() {
                               <td key={id}>
                                 {billNumber
                                   ? <CopyableId value={billNumber} label={billNumber} style={{ color: 'var(--accent)', fontSize: 12 }} />
-                                  : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                                  : <span style={{ color: 'var(--text-muted)' }}>{NOT_SET}</span>}
                               </td>
                             )
                           }
@@ -1806,18 +1807,18 @@ export default function PurchasesPage() {
                         </td>
                         {paymentColumnPrefs.visibleIds.map((id) => {
                           if (id === 'number') return <td key={id}><CopyableId value={p.number} label={p.number} style={{ color: 'var(--accent)', fontSize: 12 }} /></td>
-                          if (id === 'vendor') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.vendorName || '—'}</td>
+                          if (id === 'vendor') return <td key={id} style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: 13 }}>{p.vendorName || NOT_SET}</td>
                           if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.date}</td>
                           if (id === 'method') {
                             return (
                               <td key={id}>{p.paymentMode
                                 ? <Chip status={p.paymentMode} label={formatLabel(p.paymentMode)} />
-                                : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                                : <span style={{ color: 'var(--text-muted)' }}>{NOT_SET}</span>}</td>
                             )
                           }
                           if (id === 'bills') return <td key={id}><span style={{ fontSize: 12 }}>{allocCount} {allocCount === 1 ? 'bill' : 'bills'}</span></td>
                           if (id === 'total') return <td key={id} className="text-right mono" style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(p.totalAmount || 0)}</td>
-                          if (id === 'reference') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || '—'}</td>
+                          if (id === 'reference') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.paymentRef || NOT_SET}</td>
                           if (id === 'status') {
                             return (
                               <td key={id}>
@@ -2021,7 +2022,7 @@ export default function PurchasesPage() {
           }
         }}
         partyLabel="Vendor"
-        partyName={payDetail?.vendorName || '—'}
+        partyName={payDetail?.vendorName || NOT_SET}
         accentColor="var(--purple)"
         canVoid={can('purchases.edit')}
         canEdit={can('purchases.edit')}

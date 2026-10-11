@@ -1,4 +1,5 @@
 import { catalogExclusiveAmount, catalogInclusiveAmount, convertEnteredTaxAmount } from '@/utils/taxCalc'
+import { NOT_SET } from '@/utils/emptyValue'
 
 /** Normalize GST rate for form/dropdown ids (``8`` not ``8.0``). */
 export function normalizeTaxRateValue(rate, fallback = '8') {
@@ -329,7 +330,7 @@ export function buildBranchUpdatePayload(branchConfigs, previouslyListedIds = []
 export function formatCategoryPriceLabel(mode, pct, price, fmtFn) {
   if (mode === 'price') {
     const n = Number(price)
-    return Number.isFinite(n) && n > 0 ? fmtFn(n) : '—'
+    return Number.isFinite(n) && n > 0 ? fmtFn(n) : NOT_SET
   }
   const d = Number(pct)
   if (!Number.isFinite(d) || d === 0) return '0% off'

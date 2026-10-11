@@ -6,6 +6,7 @@ import KpiCard from '../components/KpiCard'
 import PermissionGate from '../components/PermissionGate'
 import { useDashboardQuery } from '../hooks/useDashboardQuery'
 import { formatCompactCurrency, formatNumber, formatPercent } from '../utils/formatCurrency'
+import { NOT_SET } from '@/utils/emptyValue'
 
 const spark = (rows = [], key) => rows.map((row) => ({ value: row[key] || 0 }))
 
@@ -25,9 +26,9 @@ export default function OperationsDashboard({ filters, autoRefresh }) {
     <div style={{ display: 'grid', gap: 16 }}>
       <div className="grid-kpi">
         <KpiCard title="Daily Transactions" value={formatNumber(kpis.daily_transactions)} delta={deltas.daily_transactions} tone="info" sparkline={spark(charts.branch_performance, 'sales')} loading={loading} />
-        <KpiCard title="Peak Sales Hour" value={kpis.peak_sales_hour || '—'} delta={deltas.peak_sales_hour} tone="warning" sparkline={spark(charts.hourly_heatmap, 'value')} loading={loading} />
-        <KpiCard title="Best Branch" value={kpis.best_branch || '—'} delta={deltas.best_branch} tone="success" sparkline={spark(charts.branch_performance, 'sales')} loading={loading} />
-        <KpiCard title="Best Staff" value={kpis.best_staff || '—'} delta={deltas.best_staff} tone="success" sparkline={spark(charts.staff_sales, 'sales')} loading={loading} permission="dashboard.staff_performance.view" />
+        <KpiCard title="Peak Sales Hour" value={kpis.peak_sales_hour || NOT_SET} delta={deltas.peak_sales_hour} tone="warning" sparkline={spark(charts.hourly_heatmap, 'value')} loading={loading} />
+        <KpiCard title="Best Branch" value={kpis.best_branch || NOT_SET} delta={deltas.best_branch} tone="success" sparkline={spark(charts.branch_performance, 'sales')} loading={loading} />
+        <KpiCard title="Best Staff" value={kpis.best_staff || NOT_SET} delta={deltas.best_staff} tone="success" sparkline={spark(charts.staff_sales, 'sales')} loading={loading} permission="dashboard.staff_performance.view" />
       </div>
 
       <div className="grid-3">

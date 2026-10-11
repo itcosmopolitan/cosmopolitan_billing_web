@@ -45,6 +45,7 @@ import { cashTenderError } from '@/utils/cashTender'
 import { itemsAPI } from '@/api'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload, formatAllocationSummary } from '@/utils/batchAllocation'
+import { NOT_SET } from '@/utils/emptyValue'
 
 export default function ConvertToInvoiceModal({
   open,
@@ -327,7 +328,7 @@ export default function ConvertToInvoiceModal({
                   )}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                     {!info && line.item_id && (
-                      <span style={mutedPillStyle}>—</span>
+                      <span style={mutedPillStyle}>{NOT_SET}</span>
                     )}
                     {info && !tracked && (
                       <span style={mutedPillStyle}>Not batch-tracked</span>

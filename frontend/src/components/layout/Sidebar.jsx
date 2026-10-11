@@ -8,6 +8,7 @@ import { Avatar } from '@/components/ui'
 import BrandLogo from '@/components/BrandLogo'
 import * as Icon from '@/components/ui/Icons'
 import { roleLabels } from '@/utils/helpers'
+import { NOT_SET } from '@/utils/emptyValue'
 
 // Phase 2: each nav item declares the permission required to *see* it.
 // Items without `perm` (or with perm: null) are visible to everyone (e.g. a
@@ -450,7 +451,7 @@ export default function Sidebar() {
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                 lineHeight: 1.2,
               }}>
-                {user?.name || '—'}
+                {user?.name || NOT_SET}
               </div>
               <div style={{
                 fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2,
@@ -543,7 +544,7 @@ export default function Sidebar() {
           }}>
             <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
               <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {user?.name || '—'}
+                {user?.name || NOT_SET}
               </div>
               <div style={{
                 fontSize: 11, color: 'var(--text-muted)', marginTop: 3,

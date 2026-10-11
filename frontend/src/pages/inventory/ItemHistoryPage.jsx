@@ -20,6 +20,7 @@ import {
   PageActionsMenu, buildListPageMenuActions,
 } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 /* ── Category & transaction-type options ──────────────────────────────── */
 const CATEGORY_OPTIONS = [
@@ -390,19 +391,19 @@ export default function ItemHistoryPage() {
                         </td>
                         <td>
                           <span className="mono" style={{ color: 'var(--accent)', fontWeight: 500 }}>
-                            {m.docNumber || '—'}
+                            {m.docNumber || NOT_SET}
                           </span>
                         </td>
                         <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.party || '—'}
+                          {m.party || NOT_SET}
                         </td>
                         <td className="text-right mono" style={{ fontWeight: 500 }}>
-                          {m.qty != null ? fmtQty(m.qty) : '—'}
+                          {m.qty != null ? fmtQty(m.qty) : NOT_APPLICABLE}
                         </td>
-                        <td className="text-right mono">{m.amount != null ? fmt(m.amount) : '—'}</td>
-                        <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{m.time || '—'}</td>
+                        <td className="text-right mono">{m.amount != null ? fmt(m.amount) : NOT_APPLICABLE}</td>
+                        <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{m.time || NOT_SET}</td>
                         <td style={{ color: 'var(--text-muted)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.createdBy || '—'}
+                          {m.createdBy || NOT_SET}
                         </td>
                       </tr>
                     ))

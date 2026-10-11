@@ -16,6 +16,7 @@ import {
 
 import { formatSettlementLabel } from '@/utils/storeCredit'
 import { displayExclusiveUnitRate, lineTaxableFromInclusive, lineGstFromInclusive } from '@/utils/taxCalc'
+import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 function displayPaymentMode(raw, detail) {
   if (detail) {
@@ -25,7 +26,7 @@ function displayPaymentMode(raw, detail) {
       payments: detail.payments,
     })
   }
-  if (!raw) return '—'
+  if (!raw) return NOT_SET
 
   const value = String(raw).trim()
   const lower = value.toLowerCase()
@@ -58,7 +59,7 @@ function formatDiscPct(item) {
 
 function formatFileSize(bytes) {
   const size = Number(bytes || 0)
-  if (!size) return '—'
+  if (!size) return NOT_SET
   if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
@@ -158,17 +159,17 @@ export default function SalesTxnDetailPanel({
   const summary = kind === 'invoice' ? [
     { label: 'Total (MVR)', value: fmt(detail?.total) },
     { label: 'Paid (MVR)', value: fmt(detail?.paidAmount || 0), tone: 'var(--green)' },
-    { label: 'Balance due (MVR)', value: balDue > 0.01 ? fmt(balDue) : '—', tone: balDue > 0.01 ? 'var(--red)' : undefined },
+    { label: 'Balance due (MVR)', value: balDue > 0.01 ? fmt(balDue) : NOT_APPLICABLE, tone: balDue > 0.01 ? 'var(--red)' : undefined },
     { label: 'Status', value: <Chip status={detail?.status} /> },
   ] : kind === 'return' ? [
     { label: 'Credit total (MVR)', value: fmt(detail?.total), tone: 'var(--red)' },
-    { label: 'Credited (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
-    { label: 'Refund', value: detail?.refundMethod || '—' },
+    { label: 'Credited (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : NOT_APPLICABLE },
+    { label: 'Refund', value: detail?.refundMethod || NOT_SET },
     { label: 'Status', value: <Chip status={detail?.status === 'processed' ? 'paid' : detail?.status} label={formatLabel(detail?.status)} /> },
   ] : [
     { label: 'Total (MVR)', value: fmt(detail?.total) },
     { label: 'Lines', value: lineCount },
-    { label: kind === 'quote' ? 'Valid until' : 'Expected', value: detail?.validUntil || detail?.expectedDate || '—' },
+    { label: kind === 'quote' ? 'Valid until' : 'Expected', value: detail?.validUntil || detail?.expectedDate || NOT_SET },
     {
       label: 'Status',
       value: (
@@ -448,13 +449,13 @@ export default function SalesTxnDetailPanel({
                   </div>
                 ),
               },
-              { label: 'Branch', value: detail?.branchName || detail?.branchId || '—' },
+              { label: 'Branch', value: detail?.branchName || detail?.branchId || NOT_SET },
               ...(kind === 'invoice' ? [
-                { label: 'Cashier', value: detail?.cashier || 'N/A' },
+                { label: 'Cashier', value: detail?.cashier || NOT_SET },
                 { label: 'Payment mode', value: displayPaymentMode(detail?.paymentMode, detail) },
-                { label: 'Payment ref', value: detail?.paymentRef || '—' },
+                { label: 'Payment ref', value: detail?.paymentRef || NOT_SET },
                 { label: 'Return status', value: <ReturnStatusChip status={detail?.returnStatus} /> },
-                { label: 'Credited (returns) (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                { label: 'Credited (returns) (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : NOT_APPLICABLE },
                 ...(detail?.salesOrderNumber ? [{
                   label: 'Sales order',
                   value: (
@@ -473,8 +474,8 @@ export default function SalesTxnDetailPanel({
                 }] : []),
               ] : []),
               ...(kind === 'quote' ? [
-                { label: 'Valid until', value: detail?.validUntil || '—' },
-                { label: 'Created by', value: detail?.createdBy || '—' },
+                { label: 'Valid until', value: detail?.validUntil || NOT_SET },
+                { label: 'Created by', value: detail?.createdBy || NOT_SET },
                 {
                   label: 'Linked SO',
                   value: detail?.convertedOrderNumber
@@ -483,7 +484,7 @@ export default function SalesTxnDetailPanel({
                         {detail.convertedOrderNumber}
                       </TxnLink>
                     )
-                    : '—',
+                    : NOT_APPLICABLE,
                 },
                 {
                   label: 'Linked invoice',
@@ -493,12 +494,12 @@ export default function SalesTxnDetailPanel({
                         {detail.convertedInvoiceNumber}
                       </TxnLink>
                     )
-                    : '—',
+                    : NOT_APPLICABLE,
                 },
               ] : []),
               ...(kind === 'order' ? [
-                { label: 'Expected date', value: detail?.expectedDate || '—' },
-                { label: 'Created by', value: detail?.createdBy || '—' },
+                { label: 'Expected date', value: detail?.expectedDate || NOT_SET },
+                { label: 'Created by', value: detail?.createdBy || NOT_SET },
                 {
                   label: 'Converted invoice',
                   value: detail?.convertedInvoiceNumber
@@ -507,7 +508,7 @@ export default function SalesTxnDetailPanel({
                         {detail.convertedInvoiceNumber}
                       </TxnLink>
                     )
-                    : '—',
+                    : NOT_APPLICABLE,
                 },
               ] : []),
               ...(kind === 'return' ? [
@@ -519,9 +520,9 @@ export default function SalesTxnDetailPanel({
                         {detail.invoiceNumber}
                       </TxnLink>
                     )
-                    : '—',
+                    : NOT_APPLICABLE,
                 },
-                { label: 'Reason', value: detail?.reason || '—' },
+                { label: 'Reason', value: detail?.reason || NOT_SET },
                 {
                   label: 'Refund method',
                   value: (
@@ -530,9 +531,9 @@ export default function SalesTxnDetailPanel({
                     </Tag>
                   ),
                 },
-                { label: 'Created by', value: detail?.createdBy || '—' },
+                { label: 'Created by', value: detail?.createdBy || NOT_SET },
               ] : []),
-              { label: 'Date', value: detail?.date || '—' },
+              { label: 'Date', value: detail?.date || NOT_SET },
               {
                 label: 'Status',
                 value: (
@@ -641,8 +642,8 @@ export default function SalesTxnDetailPanel({
                       <td>{allocation.item_name || allocation.item_id}</td>
                       <td>{allocation.owner_branch_name || allocation.owner_branch_id}</td>
                       <td className="text-right">{fmtQty(allocation.qty)}</td>
-                      <td>{allocation.source_batch_no || '—'}</td>
-                      <td>{allocation.expiry_date || '—'}</td>
+                      <td>{allocation.source_batch_no || NOT_SET}</td>
+                      <td>{allocation.expiry_date || NOT_SET}</td>
                       <td className="text-right">{fmt(allocation.unit_cost)}</td>
                       <td className="text-right">{fmt(allocation.total_cost)}</td>
                     </tr>
@@ -661,17 +662,17 @@ export default function SalesTxnDetailPanel({
             fields={[
               { label: 'Subtotal (MVR)', value: fmt(detail?.subtotal || ((detail?.total || 0) - (detail?.taxTotal || 0))) },
               { label: 'GST (MVR)', value: fmt(detail?.taxTotal || 0) },
-              { label: 'Discount (MVR)', value: (detail?.discount || 0) > 0 ? `-${fmt(detail.discount)}` : '—' },
+              { label: 'Discount (MVR)', value: (detail?.discount || 0) > 0 ? `-${fmt(detail.discount)}` : NOT_APPLICABLE },
               {
                 label: kind === 'return' ? 'Credit total (MVR)' : 'Total (MVR)',
                 value: <strong style={{ color: kind === 'return' ? 'var(--red)' : 'var(--accent)' }}>{fmt(detail?.total)}</strong>,
               },
               ...(kind === 'invoice' ? [
                 { label: 'Paid (MVR)', value: <span style={{ color: 'var(--green)' }}>{fmt(detail?.paidAmount || 0)}</span> },
-                { label: 'Balance due (MVR)', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : '—' },
+                { label: 'Balance due (MVR)', value: balDue > 0.01 ? <span style={{ color: 'var(--red)' }}>{fmt(balDue)}</span> : NOT_APPLICABLE },
               ] : []),
               ...(kind === 'return' ? [
-                { label: 'Added to store credit (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : '—' },
+                { label: 'Added to store credit (MVR)', value: (detail?.creditedAmount || 0) > 0 ? fmt(detail.creditedAmount) : NOT_APPLICABLE },
               ] : []),
             ]}
           />
@@ -701,7 +702,7 @@ export default function SalesTxnDetailPanel({
                       <td className="mono" style={{ fontSize: 12 }}>{proof.filename}</td>
                       <td>{(proof.content_type || proof.contentType) === 'application/pdf' ? 'PDF' : 'PNG'}</td>
                       <td>{formatFileSize(proof.size)}</td>
-                      <td>{(proof.uploaded_at || proof.uploadedAt) ? new Date(proof.uploaded_at || proof.uploadedAt).toLocaleString() : '—'}</td>
+                      <td>{(proof.uploaded_at || proof.uploadedAt) ? new Date(proof.uploaded_at || proof.uploadedAt).toLocaleString() : NOT_SET}</td>
                       <td><Chip status="paid" label="Uploaded" /></td>
                       <td className="text-right">
                         <button
@@ -749,13 +750,13 @@ export default function SalesTxnDetailPanel({
                     <td>
                       <TxnLink to={salesTxnHref('payment', p.id)}>{p.number}</TxnLink>
                     </td>
-                    <td>{p.date || '—'}</td>
+                    <td>{p.date || NOT_SET}</td>
                     <td>
                       {p.paymentMode
                         ? <Chip status={p.paymentMode} label={p.paymentMode === 'credit' ? 'Store credit' : displayPaymentMode(p.paymentMode)} />
-                        : '—'}
+                        : NOT_SET}
                     </td>
-                    <td className="mono" style={{ fontSize: 12 }}>{p.paymentRef || '—'}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{p.paymentRef || NOT_SET}</td>
                     <td className="text-right mono" style={{ color: p.voided ? undefined : 'var(--green)', fontWeight: 600 }}>
                       {fmt(p.amount)}
                     </td>

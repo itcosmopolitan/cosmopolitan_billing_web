@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { fmt } from '@/utils/helpers'
 import RecordDetailDrawer, { DetailFields, DetailSection } from '@/components/detail/RecordDetailDrawer'
+import { NOT_SET } from '@/utils/emptyValue'
 
 export default function ComplimentaryDetailPanel({ open, onClose, entry, onPrint, onExport }) {
   const [tab, setTab] = useState('overview')
@@ -9,7 +10,7 @@ export default function ComplimentaryDetailPanel({ open, onClose, entry, onPrint
   const summary = [
     { label: 'Amount (cost) (MVR)', value: fmt(entry?.cost_value) },
     { label: 'Lines', value: lines.length },
-    { label: 'Reason', value: entry?.reason || '—' },
+    { label: 'Reason', value: entry?.reason || NOT_SET },
     { label: 'Taxable amount (MVR)', value: fmt(0) },
   ]
 
@@ -63,10 +64,10 @@ export default function ComplimentaryDetailPanel({ open, onClose, entry, onPrint
           <DetailSection title="Basic info">
             <DetailFields fields={[
               { label: 'Customer', value: entry?.customer_name || 'Walk-in' },
-              { label: 'Branch', value: entry?.branch_name || '—' },
-              { label: 'Reason', value: entry?.reason || '—' },
-              { label: 'Date', value: entry?.date || '—' },
-              { label: 'Cashier', value: entry?.created_by || '—' },
+              { label: 'Branch', value: entry?.branch_name || NOT_SET },
+              { label: 'Reason', value: entry?.reason || NOT_SET },
+              { label: 'Date', value: entry?.date || NOT_SET },
+              { label: 'Cashier', value: entry?.created_by || NOT_SET },
             ]}
             />
           </DetailSection>
@@ -104,7 +105,7 @@ export default function ComplimentaryDetailPanel({ open, onClose, entry, onPrint
                             {lot.qty} from batch {lot.batch_id}
                           </div>
                         ))
-                      : '—'}
+                      : NOT_SET}
                   </td>
                 </tr>
               ))}
