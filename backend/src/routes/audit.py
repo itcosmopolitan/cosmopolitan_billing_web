@@ -87,7 +87,12 @@ def _build_operation_type_filter(operation_type: str):
     key = operation_type.strip().lower()
     action = func.lower(AuditLog.action)
     if key == "created":
-        return or_(action.ilike("%create%"), action.ilike("%created%"))
+        return or_(
+            action.ilike("%create%"),
+            action.ilike("%created%"),
+            action.ilike("%record%"),
+            action.ilike("%recorded%"),
+        )
     if key == "deleted":
         return or_(action.ilike("%delete%"), action.ilike("%deleted%"))
     if key == "edited" or key == "updated":

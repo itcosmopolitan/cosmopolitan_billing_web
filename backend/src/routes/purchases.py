@@ -1079,11 +1079,38 @@ async def create_bill(
                 source_ref=bill_num,
                 recorded_by="Staff",
             )
+        _log_purchase_bill_history(
+            db,
+            user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_recorded",
+            action="record_purchase_payment",
+            detail=f"Recorded payment of {round(paid_amount, 2)} for {bill.number}",
+            metadata={
+                "payment_id": bpay.id,
+                "payment_number": bpay.number,
+                "amount": round(paid_amount, 2),
+                "payment_mode": data.payment_mode,
+                "payment_ref": data.payment_ref or "",
+                "source": "bill_create",
+            },
+        )
 
     if direct and bill.vendor_id and bill_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
 
     # Draft stays private — notification fires on submit.
+    _log_purchase_bill_history(
+        db,
+        user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="created",
+        action="create_purchase_bill",
+        detail=f"Created purchase bill {bill.number}",
+        metadata={"status": bill_status, "total": round(float(bill.total or 0), 2)},
+    )
     await db.commit()
     await _write_post_commit_audit(
         db,
@@ -1100,6 +1127,24 @@ async def create_bill(
             "total": float(bill.total or 0),
         },
     )
+    if paid_at_create:
+        await _write_post_commit_audit(
+            db,
+            action="Payment Recorded",
+            reference_id=bpay.number,
+            detail=f"Recorded vendor payment {bpay.number} of MVR {round(paid_amount, 2)} for {bill.number}",
+            user=user,
+            request=request,
+            branch_id=bill.branch_id,
+            metadata={
+                "payment_id": bpay.id,
+                "bill_id": bill.id,
+                "bill_number": bill.number,
+                "amount": round(paid_amount, 2),
+                "payment_mode": data.payment_mode,
+                "source": "bill_create",
+            },
+        )
     if float(data.discount or 0) > 0:
         await _write_post_commit_audit(
             db,
@@ -1115,7 +1160,13 @@ async def create_bill(
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
 @router.post("/{bill_id}/payment", dependencies=[Depends(require_perm("purchases.edit"))])
-async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def record_payment(
+    bill_id: str,
+    data: PaymentIn,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Record a payment against a purchase bill.
 
     Overpayment (amount > balance) routes excess to vendor.credit_balance.
@@ -1257,6 +1308,22 @@ async def record_payment(bill_id: str, data: PaymentIn, db: AsyncSession = Depen
         )
 
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Payment Recorded",
+        reference_id=pay.number,
+        detail=f"Recorded vendor payment {pay.number} of MVR {round(float(data.amount), 2)} for {b.number}",
+        user=user,
+        request=request,
+        branch_id=b.branch_id,
+        metadata={
+            "payment_id": pay.id,
+            "bill_id": b.id,
+            "bill_number": b.number,
+            "amount": round(float(data.amount), 2),
+            "payment_mode": data.mode,
+        },
+    )
     return {
         "status": b.status,
         "paid_amount": b.paid_amount,
@@ -1291,6 +1358,16 @@ async def submit_bill(
     if bill.created_by and bill.created_by != user.name and not await can_direct_commit(user, db, "purchases.approve"):
         raise HTTPException(403, "Only the creator can submit this draft for approval")
     bill.status = InvoiceStatus.pending_approval
+    _log_purchase_bill_history(
+        db,
+        user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="submitted",
+        action="submit_purchase_bill",
+        detail=f"Submitted purchase bill {bill.number} for approval",
+        metadata={"status": "pending_approval"},
+    )
     from src.notifications.store import emit_bill_pending, notify_refresh
     await emit_bill_pending(db, bill)
     await db.commit()
@@ -1404,6 +1481,23 @@ async def approve_bill(
                 source_ref=bill.number, recorded_by=user.name,
             )
         bill.paid_amount = round(total, 2)
+        _log_purchase_bill_history(
+            db,
+            user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_recorded",
+            action="record_purchase_payment",
+            detail=f"Recorded payment of {round(total, 2)} for {bill.number}",
+            metadata={
+                "payment_id": bpay.id,
+                "payment_number": bpay.number,
+                "amount": round(total, 2),
+                "payment_mode": payment_mode,
+                "payment_ref": bill.payment_ref or "",
+                "source": "bill_approval",
+            },
+        )
 
     new_status = "paid" if float(bill.paid_amount or 0) >= total else "pending"
     bill.status = new_status
@@ -1413,6 +1507,16 @@ async def approve_bill(
     if bill.vendor_id and new_status in ("pending", "partial"):
         await sync_vendor_outstanding(db, bill.vendor_id)
 
+    _log_purchase_bill_history(
+        db,
+        user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="approved",
+        action="approve_purchase_bill",
+        detail=f"Approved purchase bill {bill.number}",
+        metadata={"status": new_status, "total": round(total, 2)},
+    )
     from src.notifications.store import notify_refresh, resolve_notification
     await resolve_notification(db, f"approval.bill_pending:{bill.id}")
     await db.commit()
@@ -1423,6 +1527,24 @@ async def approve_bill(
         user=user, request=request, branch_id=bill.branch_id,
         metadata={"bill_id": bill.id, "status": new_status, "total": total},
     )
+    if payment_mode is not None:
+        await _write_post_commit_audit(
+            db,
+            action="Payment Recorded",
+            reference_id=bpay.number,
+            detail=f"Recorded vendor payment {bpay.number} of MVR {round(total, 2)} for {bill.number}",
+            user=user,
+            request=request,
+            branch_id=bill.branch_id,
+            metadata={
+                "payment_id": bpay.id,
+                "bill_id": bill.id,
+                "bill_number": bill.number,
+                "amount": round(total, 2),
+                "payment_mode": payment_mode,
+                "source": "bill_approval",
+            },
+        )
     return {"status": new_status, "number": bill.number}
 
 
@@ -1457,6 +1579,17 @@ async def reject_bill(
     bill.status = InvoiceStatus.cancelled
     if body.notes:
         bill.notes = (bill.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    _log_purchase_bill_history(
+        db,
+        user=user,
+        bill_id=bill.id,
+        bill_number=bill.number,
+        event_type="rejected",
+        action="reject_purchase_bill",
+        detail=f"Rejected purchase bill {bill.number}",
+        metadata={"status": "cancelled", "reason": body.notes or ""},
+        risk="medium",
+    )
     from src.notifications.store import notify_refresh, resolve_notification
     await resolve_notification(db, f"approval.bill_pending:{bill.id}")
     await db.commit()
@@ -1956,6 +2089,7 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user:
 async def update_payment(
     payment_id: str,
     data: VendorPaymentCreate,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -2118,8 +2252,41 @@ async def update_payment(
             source_ref=pay.number,
             recorded_by=getattr(user, "name", None) or data.created_by or "Staff",
         )
+    for allocation in data.allocations:
+        bill = bill_by_id[allocation.bill_id]
+        _log_purchase_bill_history(
+            db,
+            user=user,
+            bill_id=bill.id,
+            bill_number=bill.number,
+            event_type="payment_updated",
+            action="update_vendor_payment",
+            detail=f"Updated payment {pay.number} allocation on {bill.number}",
+            metadata={
+                "payment_id": pay.id,
+                "payment_number": pay.number,
+                "amount": round(float(allocation.amount), 2),
+                "payment_mode": data.payment_mode,
+            },
+        )
     await sync_vendor_outstanding(db, data.vendor_id)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Payment Updated",
+        reference_id=pay.number,
+        detail=f"Updated vendor payment {pay.number} for MVR {round(total_amount, 2)}",
+        user=user,
+        request=request,
+        branch_id=pay.branch_id,
+        metadata={
+            "payment_id": pay.id,
+            "vendor_id": pay.vendor_id,
+            "amount": round(total_amount, 2),
+            "payment_mode": data.payment_mode,
+            "allocations_count": len(data.allocations),
+        },
+    )
     return {
         "id": pay.id,
         "number": pay.number,
@@ -2218,7 +2385,12 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
 
 # ─── PAYMENTS: CREATE (multi-bill) ──────────────────────────────────────────
 @router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("purchases.edit"))])
-async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_payment(
+    data: VendorPaymentCreate,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Record a payment to a vendor across one or more bills.
 
     Allocation amount may exceed bill balance — excess accumulates in
@@ -2402,6 +2574,22 @@ async def create_payment(data: VendorPaymentCreate, db: AsyncSession = Depends(g
             )
 
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Payment Recorded",
+        reference_id=payment.number,
+        detail=f"Recorded vendor payment {payment.number} for MVR {round(total_amount, 2)}",
+        user=user,
+        request=request,
+        branch_id=payment.branch_id,
+        metadata={
+            "payment_id": payment.id,
+            "vendor_id": payment.vendor_id,
+            "amount": round(total_amount, 2),
+            "payment_mode": data.payment_mode,
+            "allocations_count": len(data.allocations),
+        },
+    )
     return {
         "id": payment.id,
         "number": pay_num,
@@ -2885,14 +3073,39 @@ async def _apply_vendor_return(
     return _return_dict(ret, li_res.scalars().all())
 
 @router.post("/returns/{return_id}/approve", dependencies=[Depends(require_perm("purchases.edit"))])
-async def approve_return(return_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def approve_return(
+    return_id: str,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     result = await db.execute(select(VendorReturn).where(VendorReturn.id == return_id))
     ret = result.scalar_one_or_none()
     if not ret:
         raise HTTPException(404, "Return not found")
     await enforce_branch_access(ret.branch_id, user=user, db=db)
     ret.status = "paid"
+    _log_vendor_return_history(
+        db,
+        user=user,
+        return_id=ret.id,
+        return_number=ret.number,
+        event_type="approved",
+        action="approve_vendor_return",
+        detail=f"Approved vendor return {ret.number}",
+        metadata={"status": "paid"},
+    )
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Vendor Return Approved",
+        reference_id=ret.number,
+        detail=f"Approved vendor return {ret.number}",
+        user=user,
+        request=request,
+        branch_id=ret.branch_id,
+        metadata={"return_id": ret.id, "status": "paid"},
+    )
     li_res = await db.execute(select(ReturnLineItem).where(ReturnLineItem.return_id == return_id))
     return _return_dict(ret, li_res.scalars().all())
 
@@ -3967,6 +4180,7 @@ async def submit_order(
 async def approve_order(
     order_id: str,
     body: POApprove,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -3984,11 +4198,31 @@ async def approve_order(
     po.status = PurchaseOrderStatus.confirmed
     if body.notes:
         po.notes = (po.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
+    _log_purchase_order_history(
+        db,
+        user=user,
+        order_id=po.id,
+        order_number=po.number,
+        event_type="approved",
+        action="approve_purchase_order",
+        detail=f"Approved purchase order {po.number}",
+        metadata={"status": "confirmed", "notes": body.notes},
+    )
     from src.notifications.store import notify_refresh, resolve_notification
 
     await resolve_notification(db, f"approval.purchase_order_pending:{order_id}")
     await db.commit()
     await notify_refresh()
+    await _write_post_commit_audit(
+        db,
+        action="Purchase Order Approved",
+        reference_id=po.number,
+        detail=f"Approved purchase order {po.number}",
+        user=user,
+        request=request,
+        branch_id=po.branch_id,
+        metadata={"order_id": po.id, "status": "confirmed"},
+    )
     return {"status": "confirmed", "number": po.number}
 
 
@@ -4000,6 +4234,7 @@ class POReject(BaseModel):
 async def reject_order(
     order_id: str,
     body: POReject,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -4014,11 +4249,32 @@ async def reject_order(
     po.status = PurchaseOrderStatus.cancelled
     if body.notes:
         po.notes = (po.notes or "") + f"\n[Rejected by {user.name}] {body.notes}"
+    _log_purchase_order_history(
+        db,
+        user=user,
+        order_id=po.id,
+        order_number=po.number,
+        event_type="rejected",
+        action="reject_purchase_order",
+        detail=f"Rejected purchase order {po.number}",
+        metadata={"status": "cancelled", "notes": body.notes},
+        risk="medium",
+    )
     from src.notifications.store import notify_refresh, resolve_notification
 
     await resolve_notification(db, f"approval.purchase_order_pending:{order_id}")
     await db.commit()
     await notify_refresh()
+    await _write_post_commit_audit(
+        db,
+        action="Purchase Order Rejected",
+        reference_id=po.number,
+        detail=f"Rejected purchase order {po.number}",
+        user=user,
+        request=request,
+        branch_id=po.branch_id,
+        metadata={"order_id": po.id, "status": "cancelled", "notes": body.notes},
+    )
     return {"status": "cancelled", "number": po.number}
 
 
@@ -4990,7 +5246,12 @@ async def create_bill_from_grn(
 
 
 @router.post("/grns/{grn_id}/cancel", dependencies=[Depends(require_perm("purchases.edit"))])
-async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def cancel_grn(
+    grn_id: str,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Cancel a received GRN — reverses stock. Blocked if billed or consumed."""
     res = await db.execute(
         select(GoodsReceiptNote)
@@ -5015,7 +5276,28 @@ async def cancel_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User
     if grn_status == "received":
         await reverse_grn_stock(db, grn_id=grn.id, branch_id=grn.branch_id, line_items=grn.line_items)
     grn.status = GRNStatus.cancelled
+    _log_grn_history(
+        db,
+        user=user,
+        grn_id=grn.id,
+        grn_number=grn.number,
+        event_type="cancelled",
+        action="cancel_grn",
+        detail=f"Cancelled GRN {grn.number}",
+        metadata={"previous_status": grn_status, "stock_reversed": grn_status == "received"},
+        risk="medium",
+    )
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="GRN Cancelled",
+        reference_id=grn.number,
+        detail=f"Cancelled GRN {grn.number}",
+        user=user,
+        request=request,
+        branch_id=grn.branch_id,
+        metadata={"grn_id": grn.id, "previous_status": grn_status, "stock_reversed": grn_status == "received"},
+    )
     return {"status": "cancelled"}
 
 

@@ -118,8 +118,8 @@ async def _write_post_commit_audit(
         user_id=user.id if user is not None else "system",
         user_name=user.name if user is not None else "System",
         user_role=role,
-        ip_address=getattr(request.state, "ip_address", None),
-        device_info=getattr(request.state, "device_info", None),
+        ip_address=(getattr(request.state, "ip_address", None) if request is not None else None),
+        device_info=(getattr(request.state, "device_info", None) if request is not None else None),
         branch_id=branch_id,
         metadata=metadata,
     )
@@ -899,7 +899,12 @@ async def list_categories(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/categories", dependencies=[Depends(require_perm("item_master.create", "item_master.edit"))], status_code=201)
-async def create_category(data: InventoryCategoryCreate, db: AsyncSession = Depends(get_db)):
+async def create_category(
+    data: InventoryCategoryCreate,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(400, "Category name is required")
@@ -917,6 +922,16 @@ async def create_category(data: InventoryCategoryCreate, db: AsyncSession = Depe
     )
     db.add(category)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Item Category Created",
+        reference_id=category.id,
+        detail=f"Created item category {category.name}",
+        user=user,
+        request=request,
+        branch_id=None,
+        metadata={"category_id": category.id, "name": category.name},
+    )
     return {"id": category.id, "name": category.name, "icon": category.icon, "message": "Category created"}
 
 @router.get("/", dependencies=[Depends(require_perm(*ITEM_CATALOG_READ))])
@@ -2535,7 +2550,9 @@ async def patch_item(
 async def delete_item(
     item_id: str,
     branch_id: Optional[str] = Query(None),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     result = await db.execute(select(Item).where(Item.id == item_id))
     item = result.scalar_one_or_none()
@@ -2556,6 +2573,7 @@ async def delete_item(
         )
 
     if branch_id:
+        item_name = item.name
         adjustment_ref = await db.execute(
             select(AdjustmentRequest.id)
             .where(
@@ -2613,6 +2631,16 @@ async def delete_item(
                 await db.execute(delete(Item).where(Item.id == item_id))
 
         await db.commit()
+        await _write_post_commit_audit(
+            db,
+            action="Item Branch Deleted",
+            reference_id=item_id,
+            detail=f"Removed item {item_name} from branch {branch_id}",
+            user=user,
+            request=request,
+            branch_id=branch_id,
+            metadata={"item_id": item_id, "item_name": item_name, "scope": "branch"},
+        )
         return {"deleted": item_id, "branch_id": branch_id}
 
     adjustment_ref = await db.execute(
@@ -2633,6 +2661,7 @@ async def delete_item(
             "Cannot delete item because it is still referenced by stock adjustment history",
         )
 
+    item_name = item.name
     await db.execute(delete(ItemBatch).where(ItemBatch.item_id == item_id))
     await db.execute(delete(ItemBranchConfig).where(ItemBranchConfig.item_id == item_id))
     await db.execute(delete(ItemStock).where(ItemStock.item_id == item_id))
@@ -2645,10 +2674,25 @@ async def delete_item(
             "Cannot delete item because it is still referenced by other records",
         )
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Item Deleted",
+        reference_id=item_id,
+        detail=f"Deleted item {item_name}",
+        user=user,
+        request=request,
+        branch_id=None,
+        metadata={"item_id": item_id, "item_name": item_name, "scope": "global"},
+    )
     return {"deleted": item_id}
 
 @router.post("/adjust", dependencies=[Depends(require_perm("adjustments.approve"))])
-async def adjust_stock(data: StockAdjustRequest, db: AsyncSession = Depends(get_db)):
+async def adjust_stock(
+    data: StockAdjustRequest,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Direct stock apply — restricted to approvers (e.g. API integrations).
 
     UI flows should use POST /adjustments/ and approve instead.
@@ -2670,6 +2714,21 @@ async def adjust_stock(data: StockAdjustRequest, db: AsyncSession = Depends(get_
     except ValueError as e:
         raise HTTPException(400, str(e))
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Stock Adjusted",
+        reference_id=data.item_id,
+        detail=f"Adjusted stock for item {data.item_id} to {data.new_qty}",
+        user=user,
+        request=request,
+        branch_id=data.branch_id,
+        metadata={
+            "item_id": data.item_id,
+            "new_qty": data.new_qty,
+            "reason": data.reason,
+            "batch_id": data.batch_id,
+        },
+    )
     return result
 
 
@@ -2765,6 +2824,7 @@ async def list_item_batches(
 async def create_item_batch(
     item_id: str,
     data: BatchCreate,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -2806,6 +2866,21 @@ async def create_item_batch(
         # Duplicate batch number for this item/branch (see add_batch_atomic).
         raise HTTPException(400, str(e))
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Item Batch Created",
+        reference_id=batch.batch_number or batch.id,
+        detail=f"Created batch {batch.batch_number or batch.id} for {item.name}",
+        user=user,
+        request=request,
+        branch_id=batch.branch_id,
+        metadata={
+            "item_id": item.id,
+            "batch_id": batch.id,
+            "quantity": batch.quantity,
+            "expiry_date": batch.expiry_date,
+        },
+    )
     return _batch_dict(batch, item_name=item.name)
 
 
@@ -2816,6 +2891,7 @@ async def create_item_batch(
 async def patch_batch(
     batch_id: str,
     data: BatchPatch,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -2856,6 +2932,16 @@ async def patch_batch(
     for k, v in updates.items():
         setattr(b, k, v)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Item Batch Updated",
+        reference_id=b.batch_number or b.id,
+        detail=f"Updated batch {b.batch_number or b.id}",
+        user=user,
+        request=request,
+        branch_id=b.branch_id,
+        metadata={"item_id": b.item_id, "batch_id": b.id, "changed_fields": sorted(updates.keys())},
+    )
     return _batch_dict(b)
 
 

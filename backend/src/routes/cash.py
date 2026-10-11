@@ -343,7 +343,9 @@ async def list_categories(
 @router.post("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_WRITE))], status_code=201)
 async def create_category(
     data: CashCategoryCreate,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
     org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if not org:
@@ -372,6 +374,16 @@ async def create_category(
     db.add(cat)
     await db.commit()
     await db.refresh(cat)
+    await _write_post_commit_audit(
+        db,
+        action="Cash Category Created",
+        reference_id=cat.id,
+        detail=f"Created cash category {cat.name}",
+        user=current_user,
+        request=request,
+        branch_id=None,
+        metadata={"category_id": cat.id, "name": cat.name, "direction": cat.direction},
+    )
     return _serialize_cash_category(cat)
 
 
@@ -379,7 +391,9 @@ async def create_category(
 async def update_category(
     cat_id: str,
     data: CashCategoryUpdate,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
 ):
     cat = (await db.execute(select(CashCategory).where(CashCategory.id == cat_id))).scalar_one_or_none()
     if not cat:
@@ -395,18 +409,44 @@ async def update_category(
     if data.sort_order is not None:
         cat.sort_order = data.sort_order
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Cash Category Updated",
+        reference_id=cat.id,
+        detail=f"Updated cash category {cat.name}",
+        user=current_user,
+        request=request,
+        branch_id=None,
+        metadata={"category_id": cat.id, "changed_fields": sorted(data.model_fields_set)},
+    )
     return {"message": "Category updated"}
 
 
 @router.delete("/categories/{cat_id}", dependencies=[Depends(require_perm("settings.edit"))])
-async def delete_category(cat_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_category(
+    cat_id: str,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(current_user),
+):
     cat = (await db.execute(select(CashCategory).where(CashCategory.id == cat_id))).scalar_one_or_none()
     if not cat:
         raise HTTPException(404, "Category not found")
     if cat.is_system:
         raise HTTPException(400, "System categories cannot be deleted")
+    category_name = cat.name
     await db.delete(cat)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Cash Category Deleted",
+        reference_id=cat_id,
+        detail=f"Deleted cash category {category_name}",
+        user=current_user,
+        request=request,
+        branch_id=None,
+        metadata={"category_id": cat_id, "name": category_name},
+    )
     return {"message": "Category deleted"}
 
 
@@ -544,6 +584,7 @@ async def add_entry(
 async def update_entry(
     entry_id: str,
     data: CashEntryUpdate,
+    request: Request = None,
     branch_id: str = Depends(enforce_branch_access),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),
@@ -588,12 +629,28 @@ async def update_entry(
     if data.ref is not None:
         entry.ref = data.ref
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Cash Entry Updated",
+        reference_id=entry.entry_number or entry.id,
+        detail=f"Updated cash entry {entry.entry_number or entry.id}",
+        user=current_user,
+        request=request,
+        branch_id=branch_id,
+        metadata={
+            "entry_id": entry.id,
+            "changed_fields": sorted(data.model_fields_set),
+            "amount": round(float(entry.amount or 0), 2),
+            "category": entry.category,
+        },
+    )
     return serialize_cash_entry(entry)
 
 
 @router.delete("/{branch_id}/entries/{entry_id}", dependencies=[Depends(require_perm("cash.edit"))])
 async def delete_entry(
     entry_id: str,
+    request: Request = None,
     branch_id: str = Depends(enforce_branch_access),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),
@@ -610,8 +667,21 @@ async def delete_entry(
     close = await _get_day_close(db, branch_id, entry.date, entry_ledger)
     if close and close.is_locked:
         raise HTTPException(409, "Day is locked. Contact an admin to unlock.")
+    entry_ref = entry.entry_number or entry.id
+    entry_amount = round(float(entry.amount or 0), 2)
+    entry_category = entry.category
     await db.delete(entry)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Cash Entry Deleted",
+        reference_id=entry_ref,
+        detail=f"Deleted cash entry {entry_ref}",
+        user=current_user,
+        request=request,
+        branch_id=branch_id,
+        metadata={"entry_id": entry_id, "amount": entry_amount, "category": entry_category},
+    )
     return {"message": "Entry deleted"}
 
 
@@ -619,6 +689,7 @@ async def delete_entry(
 async def void_entry(
     entry_id: str,
     data: VoidRequest,
+    request: Request = None,
     branch_id: str = Depends(enforce_branch_access),
     current_user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
@@ -662,6 +733,21 @@ async def void_entry(
     )
     db.add(reversal)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Cash Entry Voided",
+        reference_id=entry.entry_number or entry.id,
+        detail=f"Voided cash entry {entry.entry_number or entry.id}",
+        user=current_user,
+        request=request,
+        branch_id=branch_id,
+        metadata={
+            "entry_id": entry.id,
+            "reversal_id": reversal.id,
+            "amount": round(float(entry.amount or 0), 2),
+            "reason": data.reason,
+        },
+    )
     return {"message": "Entry voided", "reversal_id": reversal.id}
 
 

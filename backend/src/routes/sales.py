@@ -1475,6 +1475,7 @@ async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), user:
 async def update_invoice(
     invoice_id: str,
     data: InvoiceUpdate,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -1566,6 +1567,7 @@ async def update_invoice(
     inv.discount = round(data.discount, 2)
     inv.total = round(total, 2)
     inv.notes = data.notes
+    settlement_recorded = False
     if not is_approval_held:
         _recompute_invoice_status(inv)
 
@@ -1615,13 +1617,70 @@ async def update_invoice(
                 notes="Invoice edit settlement",
                 store_credit_amount=data.store_credit_amount,
             )
+            settlement_recorded = True
+            _log_sales_invoice_history(
+                db,
+                user=user,
+                invoice_id=inv.id,
+                invoice_number=inv.number,
+                event_type="payment_recorded",
+                action="record_customer_payment",
+                detail=f"Recorded settlement of {round(float(inv.total or 0), 2)} for {inv.number}",
+                metadata={
+                    "amount": round(float(inv.total or 0), 2),
+                    "payment_mode": data.payment_mode,
+                    "payment_ref": data.payment_ref or "",
+                    "store_credit_amount": round(float(data.store_credit_amount or 0), 2),
+                    "source": "invoice_edit",
+                },
+                branch_id=inv.branch_id,
+            )
         else:
             inv.payment_mode = None
             # Editing an unpaid live invoice — re-check walk-in/retail + account limit.
             if float(inv.paid_amount or 0) <= 0.001:
                 await _validate_unpaid_account_limit(db, inv.customer_id, float(inv.total or 0))
 
+    _log_sales_invoice_history(
+        db,
+        user=user,
+        invoice_id=inv.id,
+        invoice_number=inv.number,
+        event_type="updated",
+        action="update_sales_invoice",
+        detail=f"Updated invoice {inv.number}",
+        metadata={"total": round(float(inv.total or 0), 2), "status": str(inv.status.value) if hasattr(inv.status, "value") else str(inv.status)},
+        branch_id=inv.branch_id,
+    )
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Sales Invoice Updated",
+        module="Sales",
+        reference_id=inv.number,
+        detail=f"Updated sales invoice {inv.number}",
+        user=user,
+        request=request,
+        branch_id=inv.branch_id,
+        metadata={"invoice_id": inv.id, "total": round(float(inv.total or 0), 2)},
+    )
+    if settlement_recorded:
+        await _write_post_commit_audit(
+            db,
+            action="Payment Recorded",
+            module="Sales",
+            reference_id=inv.number,
+            detail=f"Recorded settlement of MVR {round(float(inv.total or 0), 2)} for {inv.number}",
+            user=user,
+            request=request,
+            branch_id=inv.branch_id,
+            metadata={
+                "invoice_id": inv.id,
+                "amount": round(float(inv.total or 0), 2),
+                "payment_mode": data.payment_mode,
+                "source": "invoice_edit",
+            },
+        )
     result = await db.execute(
         select(SaleInvoice)
         .options(
@@ -3216,6 +3275,7 @@ async def get_payment(payment_id: str, db: AsyncSession = Depends(get_db), user:
 async def update_payment(
     payment_id: str,
     data: CustomerPaymentCreate,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -3397,6 +3457,23 @@ async def update_payment(
 
     await sync_customer_outstanding(db, data.customer_id)
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Payment Updated",
+        module="Sales",
+        reference_id=pay.number,
+        detail=f"Updated customer payment {pay.number} for MVR {round(total_amount, 2)}",
+        user=user,
+        request=request,
+        branch_id=pay.branch_id,
+        metadata={
+            "payment_id": pay.id,
+            "customer_id": pay.customer_id,
+            "amount": round(total_amount, 2),
+            "payment_mode": data.payment_mode,
+            "allocations_count": len(data.allocations),
+        },
+    )
     return {
         "id": pay.id,
         "number": pay.number,
@@ -3500,7 +3577,12 @@ async def void_payment(payment_id: str, db: AsyncSession = Depends(get_db), user
 
 # ─── PAYMENTS: CREATE (multi-invoice) ────────────────────────────────────────
 @router.post("/payments/", status_code=201, dependencies=[Depends(require_perm("invoices.edit"))])
-async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def create_payment(
+    data: CustomerPaymentCreate,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Record a payment that may apply to MULTIPLE invoices in one go.
 
     Validation chain:
@@ -3734,6 +3816,23 @@ async def create_payment(data: CustomerPaymentCreate, db: AsyncSession = Depends
     await sync_customer_outstanding(db, data.customer_id)
 
     await db.commit()
+    await _write_post_commit_audit(
+        db,
+        action="Payment Recorded",
+        module="Sales",
+        reference_id=payment.number,
+        detail=f"Recorded customer payment {payment.number} for MVR {round(total_amount, 2)}",
+        user=user,
+        request=request,
+        branch_id=payment.branch_id,
+        metadata={
+            "payment_id": payment.id,
+            "customer_id": payment.customer_id,
+            "amount": round(total_amount, 2),
+            "payment_mode": data.payment_mode,
+            "allocations_count": len(data.allocations),
+        },
+    )
     return {
         "id": payment.id,
         "number": pay_num,

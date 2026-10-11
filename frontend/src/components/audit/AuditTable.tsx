@@ -15,9 +15,14 @@ const ACTION_LABELS: Record<string, string> = {
   create_invoice: "Invoice Created",
   delete_invoice: "Invoice Deleted",
   record_invoice_payment: "Payment Recorded",
+  record_customer_payment: "Payment Recorded",
+  record_purchase_payment: "Payment Recorded",
+  update_customer_payment: "Payment Updated",
+  update_vendor_payment: "Payment Updated",
   update_invoice_status: "Invoice Status Updated",
   delete_payment: "Payment Deleted",
   delete_customer_payment: "Customer Payment Deleted",
+  delete_vendor_payment: "Vendor Payment Deleted",
 };
 
 const toDisplayAction = (action: string) => {
