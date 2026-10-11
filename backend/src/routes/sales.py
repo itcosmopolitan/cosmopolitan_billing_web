@@ -64,6 +64,7 @@ from src.routes._child_counters import validate_child_counter
 from src.routes._credit_ledger import adjust_customer_credit
 from src.routes._payment_ledger import record_customer_payment, void_payment_record
 from src.routes._cash_ledger import (
+    SALE_CASH_CATEGORY,
     first_nonempty,
     record_cash_in,
     record_cash_out,
@@ -2654,6 +2655,7 @@ async def record_payment(
             user=user,
             notes="Invoice payment",
             overpay_credit=credit_applied,
+            credit_settlement=True,
         )
 
     if pre_row.customer_id:
@@ -3425,19 +3427,6 @@ async def update_payment(
             amount=round(float(a.amount), 2),
         ))
     await record_customer_payment(db, pay)
-    if data.payment_mode == "cash":
-        await record_cash_in(
-            db,
-            branch_id=require_cash_branch_id(pay_branch_id),
-            amount=round(total_amount, 2),
-            date=pay.date,
-            description=f"Payment {pay.number}",
-            category="Sale — Cash",
-            source_type="customer_payment",
-            source_id=pay.id,
-            source_ref=pay.number,
-            recorded_by=getattr(user, "name", None) or data.created_by or "Staff",
-        )
 
     if data.payment_mode == "credit":
         await adjust_customer_credit(
@@ -3751,19 +3740,6 @@ async def create_payment(
             amount=round(float(a.amount), 2),
         ))
     await record_customer_payment(db, payment)
-    if data.payment_mode == "cash":
-        await record_cash_in(
-            db,
-            branch_id=require_cash_branch_id(pay_branch_id),
-            amount=round(total_amount, 2),
-            date=data.date or today,
-            description=f"Payment {pay_num}",
-            category="Sale — Cash",
-            source_type="customer_payment",
-            source_id=payment.id,
-            source_ref=pay_num,
-            recorded_by=data.created_by or "Staff",
-        )
 
     # 2026-05-30: credit-mode debit. The settle loop above marked the
     # invoices paid; now draw the total down from credit_balance + audit.
@@ -3982,6 +3958,7 @@ async def _write_tender_payment(
     notes: str,
     overpay_credit: float = 0.0,
     applied_amount: Optional[float] = None,
+    credit_settlement: bool = False,
 ) -> CustomerPayment:
     """Write a cash/card/upi/bank_transfer CustomerPayment (+ cash drawer)."""
     amount = round(float(amount), 2)
@@ -4017,14 +3994,19 @@ async def _write_tender_payment(
             amount=applied_to_invoice,
         ))
     await record_customer_payment(db, pay)
-    if mode == "cash" and amount > 0:
+    # Cash taken with the sale belongs in the trade cash register. Cash
+    # collected later only to clear outstanding credit does not.
+    if mode == "cash" and amount > 0 and not credit_settlement:
+        description = (
+            f"Sale {inv.number}" if "POS" in (notes or "") else f"Payment on {inv.number}"
+        )
         await record_cash_in(
             db,
             branch_id=require_cash_branch_id(inv.branch_id, getattr(user, "branch_id", None)),
             amount=amount,
             date=today,
-            description=f"Sale {inv.number}" if "POS" in (notes or "") else f"Payment on {inv.number}",
-            category="Sale — Cash",
+            description=description,
+            category=SALE_CASH_CATEGORY,
             source_type="customer_payment",
             source_id=pay.id,
             source_ref=pay.number,
@@ -6585,6 +6567,19 @@ async def convert_order_to_invoice(
             amount=round(paid, 2),
         ))
         await record_customer_payment(db, conv_pay)
+        if payment_mode == "cash":
+            await record_cash_in(
+                db,
+                branch_id=require_cash_branch_id(inv.branch_id, getattr(user, "branch_id", None)),
+                amount=round(paid, 2),
+                date=today,
+                description=f"Sale {inv.number} (from {so.number})",
+                category=SALE_CASH_CATEGORY,
+                source_type="customer_payment",
+                source_id=conv_pay.id,
+                source_ref=conv_pay.number,
+                recorded_by=getattr(user, "name", None) or "Staff",
+            )
 
     if so.customer_id:
         await sync_customer_outstanding(db, so.customer_id)

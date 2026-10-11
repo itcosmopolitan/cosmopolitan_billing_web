@@ -13,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
 from src.models import (
-    AuditLog, Branch, CashCategory, CashDayClose, CashEntry, Organisation,
-    PettyCashDayClose, User,
+    AuditLog, Branch, CashCategory, CashDayClose, CashEntry, CustomerPayment,
+    Organisation, PettyCashDayClose, User,
 )
+from src.routes._cash_ledger import CREDIT_SETTLEMENT_CATEGORY
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
 from src.routes._serializers import serialize_cash_day_close, serialize_cash_entry
 from src.routes._child_counters import validate_child_counter
@@ -36,29 +37,54 @@ SALES_CASH_SOURCE_TYPES = (
 )
 
 
+def _credit_settlement_cash_clause():
+    """Cash received later to clear an outstanding credit sale.
+
+    Same-day cash sales stay in the trade register. These settlements do not,
+    including rows already posted before that rule.
+    """
+    category = func.lower(func.trim(func.coalesce(CashEntry.category, "")))
+    description = func.lower(func.trim(func.coalesce(CashEntry.description, "")))
+    invoice_payment_ids = select(CustomerPayment.id).where(
+        CustomerPayment.notes == "Invoice payment",
+    )
+    return or_(
+        category == CREDIT_SETTLEMENT_CATEGORY.casefold(),
+        description.like("credit settlement%"),
+        and_(
+            CashEntry.source_type == "customer_payment",
+            description.like("payment %"),
+            ~description.like("payment on %"),
+        ),
+        and_(
+            CashEntry.source_type == "customer_payment",
+            CashEntry.source_id.is_not(None),
+            CashEntry.source_id.in_(invoice_payment_ids),
+        ),
+    )
+
+
 def _cash_ledger_filter(ledger: str):
     if ledger not in ("sales", "petty"):
         raise HTTPException(400, "Ledger must be 'sales' or 'petty'")
 
     if ledger == "sales":
-        voided_sales_entry_ids = select(CashEntry.id).where(
+        trade_cash = and_(
             or_(
                 CashEntry.source_type.in_(SALES_CASH_SOURCE_TYPES),
                 and_(
                     CashEntry.source_type == "manual",
                     func.lower(func.trim(CashEntry.category)) == "opening balance",
                 ),
-            )
+            ),
+            ~_credit_settlement_cash_clause(),
         )
+        voided_sales_entry_ids = select(CashEntry.id).where(trade_cash)
         return or_(
-            CashEntry.source_type.in_(SALES_CASH_SOURCE_TYPES),
+            trade_cash,
             and_(
                 CashEntry.source_type == "void",
                 CashEntry.source_id.in_(voided_sales_entry_ids),
-            ),
-            and_(
-                CashEntry.source_type == "manual",
-                func.lower(func.trim(CashEntry.category)) == "opening balance",
             ),
         )
 

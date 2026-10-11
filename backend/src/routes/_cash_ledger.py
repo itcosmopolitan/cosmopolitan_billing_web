@@ -6,7 +6,8 @@ atomically after all side effects.
 
 Source-type values (source_type on CashEntry):
   'sale_invoice'       — POS / invoice paid at create with payment_mode=cash
-  'customer_payment'   — payment recorded against an existing invoice
+  'customer_payment'   — cash collected with the sale. Later cash that only
+                         settles outstanding credit is not posted here.
   'sale_return'        — cash refund issued on a sales return
   'purchase_payment'   — vendor bill paid in cash (standalone payment)
   'vendor_advance'     — cash advance paid to vendor
@@ -28,6 +29,9 @@ from src.models import (
     SaleInvoice,
     SalesReturn,
 )
+
+SALE_CASH_CATEGORY = "Sale — Cash"
+CREDIT_SETTLEMENT_CATEGORY = "Credit Settlement"
 
 
 async def _source_child_counter(

@@ -20,7 +20,7 @@ if "src.routes" not in sys.modules:
     routes_pkg.__path__ = [str(ROOT / "src" / "routes")]
     sys.modules["src.routes"] = routes_pkg
 
-from src.models import CashDayClose, CashEntry, PettyCashDayClose  # noqa: E402
+from src.models import CashDayClose, CashEntry, CustomerPayment, PettyCashDayClose  # noqa: E402
 from src.routes._cash_ledger import first_nonempty, require_cash_branch_id  # noqa: E402
 from src.routes.cash import _cash_ledger_filter, _day_close_model  # noqa: E402
 
@@ -40,6 +40,7 @@ def test_require_cash_branch_id_rejects_blank():
 def test_sales_and_petty_ledgers_keep_manual_and_system_cash_separate():
     engine = create_engine("sqlite:///:memory:")
     CashEntry.__table__.create(engine)
+    CustomerPayment.__table__.create(engine)
     rows = [
         {
             "id": "sale", "branch_id": "br-001", "type": "in", "category": "Sale — Cash",
@@ -76,8 +77,40 @@ def test_sales_and_petty_ledgers_keep_manual_and_system_cash_separate():
             "description": "Void opening float", "amount": 50, "date": "2026-10-05",
             "source_type": "void", "source_id": "opening", "is_system": True,
         },
+        {
+            "id": "invoice-cash", "branch_id": "br-001", "type": "in", "category": "Sale — Cash",
+            "description": "Payment on INV-100", "amount": 80, "date": "2026-10-05",
+            "source_type": "customer_payment", "source_id": "pay-with-sale", "is_system": True,
+        },
+        {
+            "id": "credit-settlement", "branch_id": "br-001", "type": "in", "category": "Credit Settlement",
+            "description": "Credit settlement PAY-2026-1002 — INV-9", "amount": 60, "date": "2026-10-08",
+            "source_type": "customer_payment", "source_id": "pay-settlement", "is_system": True,
+        },
+        {
+            "id": "credit-settlement-void", "branch_id": "br-001", "type": "out", "category": "Credit Settlement",
+            "description": "Void: CE-261008-1", "amount": 60, "date": "2026-10-08",
+            "source_type": "void", "source_id": "credit-settlement", "is_system": True,
+        },
+        {
+            "id": "old-settlement", "branch_id": "br-001", "type": "in", "category": "Sale — Cash",
+            "description": "Payment PAY-2026-1000", "amount": 25, "date": "2026-10-07",
+            "source_type": "customer_payment", "source_id": "pay-old", "is_system": True,
+        },
+        {
+            "id": "later-invoice-payment", "branch_id": "br-001", "type": "in", "category": "Sale — Cash",
+            "description": "Payment on INV-200", "amount": 30, "date": "2026-10-09",
+            "source_type": "customer_payment", "source_id": "pay-later", "is_system": True,
+        },
     ]
     with engine.begin() as connection:
+        connection.execute(CustomerPayment.__table__.insert(), {
+            "id": "pay-later",
+            "number": "PAY-2026-1001",
+            "date": "2026-10-09",
+            "payment_mode": "cash",
+            "notes": "Invoice payment",
+        })
         connection.execute(CashEntry.__table__.insert(), rows)
         sales_ids = set(connection.execute(
             select(CashEntry.id).where(CashEntry.branch_id == "br-001", _cash_ledger_filter("sales"))
@@ -86,7 +119,7 @@ def test_sales_and_petty_ledgers_keep_manual_and_system_cash_separate():
             select(CashEntry.id).where(CashEntry.branch_id == "br-001", _cash_ledger_filter("petty"))
         ).scalars())
 
-    assert sales_ids == {"sale", "purchase", "sales-void", "opening", "opening-void"}
+    assert sales_ids == {"sale", "purchase", "sales-void", "opening", "opening-void", "invoice-cash"}
     assert petty_ids == {"petty", "petty-void"}
 
 
