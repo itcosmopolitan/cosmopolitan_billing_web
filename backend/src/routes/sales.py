@@ -1554,7 +1554,7 @@ async def update_invoice(
     elif data.customer_name is not None:
         next_customer_id = None
     await _apply_internal_customer_gst(
-        db, next_customer_id, data.items, data.branch_id or inv.branch_id,
+        db, next_customer_id, data.items, inv.branch_id,
     )
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
 
@@ -2775,9 +2775,23 @@ async def delete_invoice_payments(
     result = await bulk_delete_payments(BulkDeleteIn(ids=pay_ids), db=db, user=user)
     # bulk_delete_payments commits; reload in case payment_mode still lingers.
     inv = (await db.execute(select(SaleInvoice).where(SaleInvoice.id == invoice_id))).scalar_one_or_none()
-    if inv is not None and (inv.paid_amount or 0) <= 0 and inv.payment_mode:
-        inv.payment_mode = None
-        inv.payment_ref = None
+    if inv is not None:
+        remaining_allocs = int((await db.execute(
+            select(func.count(CustomerPaymentAllocation.id))
+            .join(CustomerPayment, CustomerPaymentAllocation.payment_id == CustomerPayment.id)
+            .where(
+                CustomerPaymentAllocation.invoice_id == invoice_id,
+                or_(CustomerPayment.voided == False, CustomerPayment.voided.is_(None)),  # noqa: E712
+            )
+        )).scalar() or 0)
+        # Invoices paid before the allocation-rounding fix keep a sub-unit
+        # remainder in paid_amount; with no payments left it must be zero.
+        if remaining_allocs == 0 and (inv.paid_amount or 0) > 0:
+            inv.paid_amount = 0
+        if (inv.paid_amount or 0) <= 0:
+            inv.payment_mode = None
+            inv.payment_ref = None
+            _recompute_invoice_status(inv)
         await db.commit()
     return {**result, "number": inv.number if inv is not None else None}
 
@@ -3984,6 +3998,7 @@ async def _write_tender_payment(
             amount - float(overpay_credit or 0),
             float(applied_amount) if applied_amount is not None else amount,
         ),
+        2,
     )
     if applied_to_invoice > 0:
         db.add(CustomerPaymentAllocation(

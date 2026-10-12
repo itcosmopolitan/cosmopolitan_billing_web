@@ -214,6 +214,7 @@ export default function POSPage() {
   const [showAddDiscountReason, setShowAddDiscountReason] = useState(false)
   const [newDiscountReason, setNewDiscountReason] = useState('')
   const [editingInvoice, setEditingInvoice] = useState(null)
+  const skipNavGuardRef = useRef(false)
   const [editLoading, setEditLoading] = useState(false)
   const [stockModeByBranch, setStockModeByBranch] = useState({})
   const [stockPool, setStockPool] = useState(null)
@@ -267,7 +268,13 @@ export default function POSPage() {
   // (heldBills) and is unaffected.
   useNavigationBlocker(
     cart.length > 0 && !pendingNav,
-    useCallback((proceed) => setPendingNav(() => proceed), []),
+    useCallback((proceed) => {
+      if (skipNavGuardRef.current) {
+        proceed()
+        return
+      }
+      setPendingNav(() => proceed)
+    }, []),
   )
 
   useEffect(() => {
@@ -802,7 +809,16 @@ export default function POSPage() {
       store.clearCart()
       setEditingInvoice(null)
       clientRequestRef.current = null
-      if (editInvoiceId) navigate('/pos', { replace: true })
+      if (editInvoiceId) {
+        // The cart was just cleared but the blocker stays installed until the
+        // next render, so bypass it for this programmatic navigation.
+        skipNavGuardRef.current = true
+        try {
+          navigate('/pos', { replace: true })
+        } finally {
+          skipNavGuardRef.current = false
+        }
+      }
       // Drop cached batch lists for sold lines — quantities changed server-side.
       setBatchListByItem((prev) => {
         const next = { ...prev }
