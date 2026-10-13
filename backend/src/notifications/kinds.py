@@ -6,6 +6,7 @@ KIND_PERMS: dict[str, tuple[str, ...]] = {
     "batch.near_expiry": ("items.view", "item_master.view"),
     "batch.expired": ("items.view", "item_master.view"),
     "approval.adjustment_pending": ("adjustments.approve",),
+    "approval.complimentary_pending": ("complimentary.approve",),
     "approval.transfer_pending": ("transfers.approve",),
     "approval.purchase_order_pending": ("purchases.approve",),
     "approval.bill_pending": ("purchases.approve",),

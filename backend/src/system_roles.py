@@ -16,7 +16,7 @@ SYSTEM_ROLES: list[tuple[str, str, str, str, str, list[str]]] = [
         "Final approver; manages branch operations, sales, inventory, and purchases.",
         ["dashboard.*", "pos.*", "invoices.*",
          "item_master.*", "items.*",
-         "transfers.*", "adjustments.*",
+         "transfers.*", "adjustments.*", "complimentary.*",
          "customers.*", "vendors.*",
          "purchases.*",
          "cash.*", "reports.*"]),

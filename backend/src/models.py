@@ -908,6 +908,12 @@ class ComplimentaryEntry(Base):
     date          = Column(String, nullable=False)
     total_cost    = Column(Float, default=0)
     notes         = Column(Text)
+    status        = Column(String, default="approved", server_default="approved")
+    requested_by  = Column(String, nullable=True)
+    approved_by   = Column(String, nullable=True)
+    rejected_by   = Column(String, nullable=True)
+    rejection_notes = Column(Text, nullable=True)
+    resolved_at   = Column(DateTime, nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
     customer   = relationship("Customer")
@@ -925,6 +931,8 @@ class ComplimentaryLineItem(Base):
     cost_price       = Column(Float, default=0)
     cost_total       = Column(Float, default=0)
     batch_allocation = Column(Text)
+    requested_allocation = Column(Text, nullable=True)
+    preferred_batch_id   = Column(String, nullable=True)
 
     entry = relationship("ComplimentaryEntry", back_populates="line_items")
     item  = relationship("Item")

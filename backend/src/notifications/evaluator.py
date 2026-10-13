@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import (
     AdjustmentRequest,
+    ComplimentaryEntry,
     AdjustmentStatus,
     Branch,
     InvoiceStatus,
@@ -336,6 +337,39 @@ async def _scan_pending_adjustments(
     return out
 
 
+async def _scan_pending_complimentary(
+    db: AsyncSession,
+    branch_ids: list[str],
+    branch_names: dict[str, str],
+) -> list[NotificationCandidate]:
+    q = (
+        select(ComplimentaryEntry)
+        .where(ComplimentaryEntry.status == "pending")
+        .order_by(ComplimentaryEntry.created_at.desc())
+        .limit(_MAX_PER_KIND)
+    )
+    if branch_ids:
+        q = q.where(ComplimentaryEntry.branch_id.in_(branch_ids))
+    out: list[NotificationCandidate] = []
+    for entry in (await db.execute(q)).scalars().all():
+        bname = branch_names.get(entry.branch_id, entry.branch_name or "")
+        out.append(
+            NotificationCandidate(
+                id=f"approval.complimentary_pending:{entry.id}",
+                kind="approval.complimentary_pending",
+                severity="info",
+                title=f"{entry.reason} entry {entry.number} awaiting approval",
+                body=entry.customer_name or "Walk-in",
+                branch_id=entry.branch_id,
+                branch_name=bname or None,
+                href="/sales?tab=complimentary",
+                created_at=entry.created_at or datetime.utcnow(),
+                exclude_user_name=entry.requested_by,
+            )
+        )
+    return out
+
+
 async def _scan_pending_transfers(
     db: AsyncSession,
     branch_ids: list[str],
@@ -607,6 +641,7 @@ async def _compute_notifications(
             "batch.near_expiry",
             "batch.expired",
             "approval.adjustment_pending",
+            "approval.complimentary_pending",
             "approval.transfer_pending",
             "approval.purchase_order_pending",
             "finance.invoice_overdue",
@@ -628,6 +663,8 @@ async def _compute_notifications(
         )
     if _can_see_kind(grants, "approval.adjustment_pending"):
         candidates.extend(await _scan_pending_adjustments(db, branch_ids, branch_names))
+    if _can_see_kind(grants, "approval.complimentary_pending"):
+        candidates.extend(await _scan_pending_complimentary(db, branch_ids, branch_names))
     if _can_see_kind(grants, "approval.transfer_pending"):
         candidates.extend(await _scan_pending_transfers(db, branch_ids, branch_names))
     if branch_ids and _can_see_any(grants, "ops.transfer_in_transit"):
@@ -660,6 +697,7 @@ async def gather_scan_candidates(
     candidates.extend(await _scan_out_of_stock(db, branch_ids, branch_names))
     candidates.extend(await _scan_batch_expiry(db, branch_ids, branch_names, within_days=within_days))
     candidates.extend(await _scan_pending_adjustments(db, branch_ids, branch_names))
+    candidates.extend(await _scan_pending_complimentary(db, branch_ids, branch_names))
     candidates.extend(await _scan_pending_transfers(db, branch_ids, branch_names))
     candidates.extend(await _scan_transfers_in_transit(db, branch_ids, branch_names))
     candidates.extend(await _scan_pending_purchase_orders(db, branch_ids, branch_names))

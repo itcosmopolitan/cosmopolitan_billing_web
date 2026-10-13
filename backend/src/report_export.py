@@ -53,6 +53,7 @@ REPORT_EXPORT_PATHS: dict[str, str] = {
     "outOfStock": "out-of-stock",
     "stockTransfers": "stock-transfers",
     "spoilageDamage": "spoilage-damage",
+    "complimentaryIssues": "complimentary-issues",
     "expiryBatches": "expiry-batches",
     "dailyTax": "daily-tax",
     "monthlyTax": "monthly-tax",

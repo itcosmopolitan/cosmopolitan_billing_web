@@ -10,13 +10,14 @@ from src.database import get_db
 from src.models import (
     AdjustmentRequest,
     AdjustmentStatus,
+    ComplimentaryEntry,
     Role,
     StockTransfer,
     TransferStatus,
     User,
 )
 from src.permissions import MODULE_SUMMARY_READ, expand
-from src.security import current_user, enforce_branch_access_optional
+from src.security import current_user, enforce_branch_access_optional, get_allowed_branch_ids
 
 router = APIRouter()
 
@@ -106,6 +107,40 @@ async def _adjustment_summary(
     }
 
 
+COMPLIMENTARY_STATUSES = ("draft", "pending", "approved", "rejected")
+
+
+async def _complimentary_summary(
+    db: AsyncSession,
+    *,
+    user: User,
+    branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
+) -> dict[str, int]:
+    # Mirror the scoping in list_complimentary so tab counts match the rows.
+    zeros = {status: 0 for status in COMPLIMENTARY_STATUSES}
+    conds = []
+    if child_counter_id:
+        conds.append(ComplimentaryEntry.child_counter_id == child_counter_id)
+    if branch_id:
+        conds.append(ComplimentaryEntry.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if not branch_ids:
+            return {**zeros, "total": 0}
+        conds.append(ComplimentaryEntry.branch_id.in_(branch_ids))
+
+    q = select(ComplimentaryEntry.status, func.count(ComplimentaryEntry.id)).group_by(
+        ComplimentaryEntry.status
+    )
+    if conds:
+        q = q.where(*conds)
+    counts = {status: int(count) for status, count in (await db.execute(q)).all()}
+    result = {status: counts.get(status, 0) for status in COMPLIMENTARY_STATUSES}
+    result["total"] = sum(result.values())
+    return result
+
+
 @router.get("/")
 async def get_module_summary(
     module: str = Query(..., min_length=1),
@@ -116,7 +151,7 @@ async def get_module_summary(
 ):
     """Status counts for list section tabs.
 
-    Supported modules: `transfers`, `adjustments`.
+    Supported modules: `transfers`, `adjustments`, `complimentary`.
     """
     key = module.strip().lower()
     allowed = MODULE_SUMMARY_READ.get(key)
@@ -134,6 +169,10 @@ async def get_module_summary(
     if key == "adjustments":
         return await _adjustment_summary(
             db, branch_id=branch_id, child_counter_id=child_counter_id,
+        )
+    if key == "complimentary":
+        return await _complimentary_summary(
+            db, user=user, branch_id=branch_id, child_counter_id=child_counter_id,
         )
 
     raise HTTPException(400, f"Unknown module: {module}")

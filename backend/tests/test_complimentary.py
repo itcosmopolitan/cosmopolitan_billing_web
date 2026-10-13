@@ -20,15 +20,20 @@ from src.models import (  # noqa: E402
     DocumentNumbering,
     Item,
     ItemStock,
+    Notification,
+    Role,
     SaleInvoice,
     SaleLineItem,
     StockMovement,
     User,
+    UserBranch,
 )
 from src.routes.complimentary import (  # noqa: E402
     ComplimentaryCreate,
     ComplimentaryLineIn,
     ComplimentaryReasonCreate,
+    ComplimentaryReject,
+    approve_complimentary,
     create_complimentary,
     create_complimentary_reason,
     delete_complimentary,
@@ -36,7 +41,11 @@ from src.routes.complimentary import (  # noqa: E402
     get_complimentary,
     list_complimentary,
     list_complimentary_reasons,
+    reject_complimentary,
+    submit_complimentary,
 )
+from src.routes.reports import complimentary_issues  # noqa: E402
+from src.routes.summaries import _complimentary_summary  # noqa: E402
 
 
 async def _build_session() -> AsyncSession:
@@ -336,3 +345,263 @@ async def _run_complimentary_reason_delete() -> None:
 
 def test_complimentary_reason_delete() -> None:
     asyncio.run(_run_complimentary_reason_delete())
+
+
+async def _seed_approval_users(db: AsyncSession) -> dict:
+    db.add(Branch(id="b1", name="Main", code="MAIN"))
+    db.add(Role(id="role-creator", key="creator", label="Creator",
+                permissions=["invoices.create", "invoices.view"]))
+    db.add(Role(id="role-approver", key="approver", label="Approver",
+                permissions=["invoices.create", "invoices.view", "complimentary.approve"]))
+    db.add(Item(id="i1", name="Rice 5kg", unit="Bag", cost_price=40, selling_price=75, packaging="Carton"))
+    db.add(ItemStock(id="s1", item_id="i1", branch_id="b1", quantity=10))
+    for entry in DEFAULT_NUMBERING:
+        db.add(DocumentNumbering(**entry))
+    creator = User(id="u-creator", name="Creator User", username="creator", email="c@example.com",
+                   hashed_password="x", role_id="role-creator", all_branches=False)
+    approver = User(id="u-approver", name="Approver User", username="approver", email="a@example.com",
+                    hashed_password="x", role_id="role-approver", all_branches=False)
+    db.add_all([creator, approver])
+    db.add_all([UserBranch(user_id="u-creator", branch_id="b1"),
+                UserBranch(user_id="u-approver", branch_id="b1")])
+    await db.commit()
+    return {"creator": creator, "approver": approver}
+
+
+async def _draft(db: AsyncSession, user: User, qty: int = 3) -> dict:
+    return await create_complimentary(
+        ComplimentaryCreate(reason="Sample", branch_id="b1",
+                            items=[ComplimentaryLineIn(item_id="i1", qty=qty)]),
+        request=None, db=db, user=user,
+    )
+
+
+async def _run_complimentary_approval_approve() -> None:
+    db = await _build_session()
+    try:
+        users = await _seed_approval_users(db)
+        creator, approver = users["creator"], users["approver"]
+
+        created = await _draft(db, creator)
+        assert created["status"] == "draft", created
+        assert await _stock(db) == 10
+        assert (await db.execute(select(func.count(StockMovement.id)))).scalar() == 0
+
+        submitted = await submit_complimentary(created["id"], request=None, db=db, user=creator)
+        assert submitted["status"] == "pending", submitted
+        assert await _stock(db) == 10
+        pending_row = (await db.execute(
+            select(Notification).where(Notification.dedupe_key == f"approval.complimentary_pending:{created['id']}")
+        )).scalar_one()
+        assert pending_row.resolved_at is None
+
+        try:
+            await approve_complimentary(created["id"], request=None, db=db, user=creator)
+        except HTTPException as exc:
+            assert exc.status_code == 403
+        else:
+            raise AssertionError("creator approved their own entry")
+        assert await _stock(db) == 10
+
+        approved = await approve_complimentary(created["id"], request=None, db=db, user=approver)
+        assert approved["status"] == "approved", approved
+        assert approved["approved_by"] == "Approver User"
+        assert await _stock(db) == 7
+
+        movement = (await db.execute(
+            select(StockMovement).where(StockMovement.source_type == "complimentary_entry")
+        )).scalar_one()
+        assert movement.movement_type == "complimentary"
+        assert movement.delta == -3
+
+        detail = await get_complimentary(created["id"], db=db, user=approver)
+        assert detail["status"] == "approved"
+        assert detail["requested_by"] == "Creator User"
+        assert detail["approved_by"] == "Approver User"
+        assert detail["resolved_at"] is not None
+        assert detail["cost_value"] == 120.0
+
+        await db.refresh(pending_row)
+        assert pending_row.resolved_at is not None
+
+        again = await approve_complimentary(created["id"], request=None, db=db, user=approver)
+        assert again["already_processed"] is True
+        assert await _stock(db) == 7
+    finally:
+        await db.close()
+
+
+def test_complimentary_approval_approve() -> None:
+    asyncio.run(_run_complimentary_approval_approve())
+
+
+async def _run_complimentary_approval_reject_and_delete() -> None:
+    db = await _build_session()
+    try:
+        users = await _seed_approval_users(db)
+        creator, approver = users["creator"], users["approver"]
+
+        rejected_entry = await _draft(db, creator)
+        await submit_complimentary(rejected_entry["id"], request=None, db=db, user=creator)
+        rejected = await reject_complimentary(
+            rejected_entry["id"], request=None,
+            body=ComplimentaryReject(rejection_notes="Not a valid sample"),
+            db=db, user=approver,
+        )
+        assert rejected["status"] == "rejected", rejected
+        assert await _stock(db) == 10
+        detail = await get_complimentary(rejected_entry["id"], db=db, user=approver)
+        assert detail["status"] == "rejected"
+        assert detail["rejected_by"] == "Approver User"
+        assert detail["rejection_notes"] == "Not a valid sample"
+
+        try:
+            await approve_complimentary(rejected_entry["id"], request=None, db=db, user=approver)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+        else:
+            raise AssertionError("rejected entry was approved")
+
+        draft = await _draft(db, creator, qty=2)
+        result = await delete_complimentary(draft["id"], request=None, db=db, user=creator)
+        assert result["restored_qty"] == 0
+        assert await _stock(db) == 10
+
+        pending = await _draft(db, creator, qty=4)
+        await submit_complimentary(pending["id"], request=None, db=db, user=creator)
+        await delete_complimentary(pending["id"], request=None, db=db, user=creator)
+        assert await _stock(db) == 10
+        pending_row = (await db.execute(
+            select(Notification).where(Notification.dedupe_key == f"approval.complimentary_pending:{pending['id']}")
+        )).scalar_one()
+        assert pending_row.resolved_at is not None
+
+        to_approve = await _draft(db, creator, qty=2)
+        await submit_complimentary(to_approve["id"], request=None, db=db, user=creator)
+        await approve_complimentary(to_approve["id"], request=None, db=db, user=approver)
+        assert await _stock(db) == 8
+        await delete_complimentary(to_approve["id"], request=None, db=db, user=approver)
+        assert await _stock(db) == 10
+    finally:
+        await db.close()
+
+
+def test_complimentary_approval_reject_and_delete() -> None:
+    asyncio.run(_run_complimentary_approval_reject_and_delete())
+
+
+async def _run_complimentary_direct_commit() -> None:
+    db = await _build_session()
+    try:
+        user = await _seed(db)
+        direct = await _draft_direct(db, user)
+        assert direct["status"] == "approved", direct
+        assert await _stock(db) == 7
+    finally:
+        await db.close()
+
+
+async def _run_complimentary_approval_filter() -> None:
+    db = await _build_session()
+    try:
+        users = await _seed_approval_users(db)
+        draft = await _draft(db, users["creator"])
+        direct_user = users["approver"]
+        direct = await _draft(db, direct_user, qty=1)
+        assert direct["status"] == "approved", direct
+        drafts = await list_complimentary(
+            branch_id=None, reason=None, status="draft", search=None, date_from=None, date_to=None,
+            skip=0, limit=50, db=db, user=users["creator"],
+        )
+        assert [row["id"] for row in drafts["items"]] == [draft["id"]]
+        await submit_complimentary(draft["id"], request=None, db=db, user=users["creator"])
+        pending = await list_complimentary(
+            branch_id=None, reason=None, status="pending", search=None, date_from=None, date_to=None,
+            skip=0, limit=50, db=db, user=users["creator"],
+        )
+        assert [row["id"] for row in pending["items"]] == [draft["id"]]
+    finally:
+        await db.close()
+
+
+async def _draft_direct(db: AsyncSession, user: User) -> dict:
+    return await create_complimentary(
+        ComplimentaryCreate(reason="Sample", branch_id="b1",
+                            items=[ComplimentaryLineIn(item_id="i1", qty=3)]),
+        request=None, db=db, user=user,
+    )
+
+
+def test_complimentary_direct_commit() -> None:
+    asyncio.run(_run_complimentary_direct_commit())
+
+
+def test_complimentary_approval_filter() -> None:
+    asyncio.run(_run_complimentary_approval_filter())
+
+
+async def _run_complimentary_summary_counts() -> None:
+    db = await _build_session()
+    try:
+        users = await _seed_approval_users(db)
+        creator, approver = users["creator"], users["approver"]
+
+        await _draft(db, creator)
+        pending = await _draft(db, creator)
+        await submit_complimentary(pending["id"], request=None, db=db, user=creator)
+        approved = await _draft(db, creator)
+        await submit_complimentary(approved["id"], request=None, db=db, user=creator)
+        await approve_complimentary(approved["id"], request=None, db=db, user=approver)
+
+        counts = await _complimentary_summary(db, user=approver)
+        assert counts == {"draft": 1, "pending": 1, "approved": 1, "rejected": 0, "total": 3}, counts
+
+        scoped = await _complimentary_summary(db, user=approver, branch_id="b1")
+        assert scoped == counts, scoped
+
+        assert (await _complimentary_summary(db, user=approver, branch_id="missing"))["total"] == 0
+    finally:
+        await db.close()
+
+
+def test_complimentary_summary_counts() -> None:
+    asyncio.run(_run_complimentary_summary_counts())
+
+
+async def _run_complimentary_issues_report() -> None:
+    db = await _build_session()
+    try:
+        users = await _seed_approval_users(db)
+        creator, approver = users["creator"], users["approver"]
+
+        approved = await _draft(db, creator, qty=2)
+        await submit_complimentary(approved["id"], request=None, db=db, user=creator)
+        await approve_complimentary(approved["id"], request=None, db=db, user=approver)
+        await _draft(db, creator)
+        pending = await _draft(db, creator)
+        await submit_complimentary(pending["id"], request=None, db=db, user=creator)
+
+        def report(**kwargs):
+            base = dict(branch_id=None, search=None, sort_by=None, sort_order="desc",
+                        skip=0, limit=50, date_from=None, date_to=None, db=db, user=approver)
+            base.update(kwargs)
+            return complimentary_issues(**base)
+
+        result = await report()
+        assert result["total"] == 1, result
+        row = result["items"][0]
+        assert row["entry_number"] == approved["number"], row
+        assert row["product"] == "Rice 5kg" and row["quantity"] == 2, row
+        assert row["unit_cost"] == 40 and row["cost_value"] == 80, row
+        assert row["customer"] == "Walk-in", row
+        assert row["approved_by"] == "Approver User" and row["requested_by"] == "Creator User", row
+
+        assert (await report(search="Rice"))["total"] == 1
+        assert (await report(search="no-such-item"))["total"] == 0
+        assert (await report(branch_id="b1"))["total"] == 1
+    finally:
+        await db.close()
+
+
+def test_complimentary_issues_report() -> None:
+    asyncio.run(_run_complimentary_issues_report())

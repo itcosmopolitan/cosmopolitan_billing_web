@@ -238,7 +238,11 @@ export default function ComplimentaryFormPage() {
           batch_allocation: toApiPayload(it.batchAllocation),
         })),
       })
-      toast.success(`${form.reason} entry ${res?.number || ''} saved`)
+      if (res?.status === 'draft') {
+        toast.success(`${form.reason} entry ${res?.number || ''} saved as draft. Submit it for approval from the list.`)
+      } else {
+        toast.success(`${form.reason} entry ${res?.number || ''} saved`)
+      }
       navigate('/sales?tab=complimentary')
     } catch (err) {
       console.error('Failed to save complimentary entry:', err)

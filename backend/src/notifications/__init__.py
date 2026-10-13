@@ -16,6 +16,7 @@ from src.notifications.stock_alerts import (
 )
 from src.notifications.store import (
     emit_adjustment_pending,
+    emit_complimentary_pending,
     emit_item_pending,
     emit_po_pending,
     emit_transfer_in_transit,
@@ -52,6 +53,7 @@ __all__ = [
     "upsert_notification",
     "upsert_from_candidate",
     "emit_adjustment_pending",
+    "emit_complimentary_pending",
     "emit_transfer_pending",
     "emit_transfer_in_transit",
     "emit_po_pending",

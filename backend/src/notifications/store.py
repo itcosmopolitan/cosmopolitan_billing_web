@@ -271,6 +271,23 @@ async def emit_adjustment_pending(db: AsyncSession, ar) -> None:
     )
 
 
+async def emit_complimentary_pending(db: AsyncSession, entry) -> None:
+    await upsert_notification(
+        db,
+        dedupe_key=f"approval.complimentary_pending:{entry.id}",
+        kind="approval.complimentary_pending",
+        severity="info",
+        title=f"{entry.reason} entry {entry.number} awaiting approval",
+        body=entry.customer_name or "Walk-in",
+        branch_id=entry.branch_id,
+        module="complimentary",
+        ref_type="complimentary",
+        ref_id=entry.id,
+        href="/sales?tab=complimentary",
+        exclude_user_name=entry.requested_by,
+    )
+
+
 async def emit_transfer_pending(db: AsyncSession, t) -> None:
     await upsert_notification(
         db,

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { salesAPI } from '@/api'
+import { salesAPI, summariesAPI } from '@/api'
 import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
-import { fmt } from '@/utils/helpers'
+import { fmt, formatLabel } from '@/utils/helpers'
 import { unwrapPaged, DEFAULT_PAGE_SIZE } from '@/utils/pagination'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import { warmDocumentPdf, printDocumentPdf, downloadDocumentPdf } from '@/utils/documentPdf'
 import { prepareComplimentaryPayload } from '@/utils/printInvoice'
+import { tabsWithCounts } from '@/utils/moduleSummary'
 import { useRowActionBusy } from '@/utils/useRowActionBusy'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import {
@@ -16,22 +17,31 @@ import {
   CopyableId,
   ColumnPrefsSpacer,
   ColumnPrefsTrigger,
+  Chip,
   CustomizeColumnsModal,
   PaginationBar,
   RowActionsMenu,
   SortableHeader,
   TablePanel,
+  Tabs,
 } from '@/components/ui'
 import ListFilters, { EMPTY_LIST_FILTERS } from './ListFilters'
 import ComplimentaryDetailPanel from './ComplimentaryDetailPanel'
 import { COMPLIMENTARY_REASONS } from './complimentaryOptions'
 import { NOT_SET } from '@/utils/emptyValue'
 
+const TAB_DEFS = [
+  { id: 'all', label: 'All' },
+  { id: 'draft', label: 'Draft' },
+  { id: 'pending', label: 'Pending Approval' },
+  { id: 'approved', label: 'Approved' },
+  { id: 'rejected', label: 'Rejected' },
+]
 const FILTER_FIELDS = ['customer', 'reason', 'date']
 export default function ComplimentaryList({ toolbarActions, refreshKey = 0, branches = [] }) {
   const can = useCan()
   const columnPrefs = useColumnPrefs('sales.complimentary')
-  const { isRowBusy, runRowAction } = useRowActionBusy()
+  const { actionBusy, actionKind, isRowBusy, runRowAction } = useRowActionBusy()
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -42,6 +52,9 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
   const [customerId, setCustomerId] = useState('')
   const [customerLabel, setCustomerLabel] = useState('')
   const [reason, setReason] = useState('')
+  const [tab, setTab] = useState('all')
+  const [summary, setSummary] = useState(null)
+  const tabs = useMemo(() => tabsWithCounts(TAB_DEFS, summary), [summary])
   const childCounterId = usePOSStore((s) => s.selectedChildCounter)
   const activeBranchId = useAppStore((s) => s.activeBranch?.id)
   const [reasonNames, setReasonNames] = useState(COMPLIMENTARY_REASONS)
@@ -71,24 +84,30 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    salesAPI.complimentary
-      .list({
+    Promise.all([
+      salesAPI.complimentary.list({
         skip,
         limit,
         search: search || undefined,
         customer_id: customerId || undefined,
         reason: reason || undefined,
+        status: tab === 'all' ? undefined : tab,
         child_counter_id: childCounterId || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         sort_by: sortBy,
         sort_order: sortOrder,
-      })
-      .then((raw) => {
+      }),
+      summariesAPI.get('complimentary', {
+        child_counter_id: childCounterId || undefined,
+      }).catch(() => null),
+    ])
+      .then(([raw, summaryData]) => {
         if (cancelled) return
         const { items, total: t } = unwrapPaged(raw)
         setRows(items)
         setTotal(t)
+        setSummary(summaryData)
       })
       .catch((err) => console.error('Failed to load complimentary entries', err))
       .finally(() => {
@@ -97,7 +116,7 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
     return () => {
       cancelled = true
     }
-  }, [skip, limit, search, customerId, reason, childCounterId, dateFrom, dateTo, sortBy, sortOrder, reloadKey, refreshKey])
+  }, [skip, limit, search, customerId, reason, tab, childCounterId, dateFrom, dateTo, sortBy, sortOrder, reloadKey, refreshKey])
 
   useEffect(() => {
     setSkip(0)
@@ -167,6 +186,48 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
     }
   }
 
+  const refreshDetail = async (id) => {
+    if (detailId !== id) return
+    try {
+      setDetail(await salesAPI.complimentary.get(id))
+    } catch (err) {
+      console.error('Failed to reload complimentary entry', err)
+    }
+  }
+
+  const submitEntry = (row) => runRowAction(row.id, 'submit', async () => {
+    try {
+      await salesAPI.complimentary.submit(row.id)
+      toast.success(`${row.number} submitted for approval`)
+      setReloadKey((k) => k + 1)
+      await refreshDetail(row.id)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to submit entry')
+    }
+  })
+
+  const approveEntry = (row) => runRowAction(row.id, 'approve', async () => {
+    try {
+      const res = await salesAPI.complimentary.approve(row.id)
+      toast.success(res?.already_processed ? `${row.number} was already approved` : `${row.number} approved and stock updated`)
+      setReloadKey((k) => k + 1)
+      await refreshDetail(row.id)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to approve entry')
+    }
+  })
+
+  const rejectEntry = (row) => runRowAction(row.id, 'reject', async () => {
+    try {
+      const res = await salesAPI.complimentary.reject(row.id)
+      toast.success(res?.already_processed ? `${row.number} was already rejected` : `${row.number} rejected`)
+      setReloadKey((k) => k + 1)
+      await refreshDetail(row.id)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to reject entry')
+    }
+  })
+
   const runComplimentaryPdf = async (id, mode) => {
     try {
       const entry = await salesAPI.complimentary.get(id)
@@ -186,6 +247,7 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
 
   return (
     <>
+      <Tabs tabs={tabs} active={tab} onChange={(t) => { setTab(t); setSkip(0) }} />
       <ListFilters
         search={search}
         onSearchChange={(v) => {
@@ -227,6 +289,7 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
                       if (id === 'branch') return <SortableHeader key={id} label="Branch" sortKey="branch_id" sortBy={sortBy} sortOrder={sortOrder} onSort={(k) => toggleSort(k)} />
                       if (id === 'date') return <SortableHeader key={id} label="Date" sortKey="date" sortBy={sortBy} sortOrder={sortOrder} onSort={(k) => toggleSort(k, 'desc')} />
                       if (id === 'reason') return <SortableHeader key={id} label="Reason" sortKey="reason" sortBy={sortBy} sortOrder={sortOrder} onSort={(k) => toggleSort(k)} />
+                      if (id === 'status') return <th key={id}>Status</th>
                       if (id === 'counter') return <th key={id}>Counter</th>
                       if (id === 'cashier') return <SortableHeader key={id} label="Cashier" sortKey="cashier" sortBy={sortBy} sortOrder={sortOrder} onSort={(k) => toggleSort(k)} />
                       return null
@@ -250,6 +313,16 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
                         if (id === 'branch') return <td key={id} style={{ fontSize: 12 }}>{row.branch_name || row.branch_id || NOT_SET}</td>
                         if (id === 'date') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{row.date}</td>
                         if (id === 'reason') return <td key={id} style={{ fontSize: 12 }}>{row.reason}</td>
+                        if (id === 'status') {
+                          return (
+                            <td key={id}>
+                              <Chip
+                                status={row.status === 'approved' ? 'active' : row.status === 'pending' ? 'pending' : 'draft'}
+                                label={formatLabel(row.status || 'approved')}
+                              />
+                            </td>
+                          )
+                        }
                         if (id === 'counter') return <td key={id} style={{ fontSize: 12 }}>{row.child_counter_name || NOT_SET}</td>
                         if (id === 'cashier') return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{row.created_by || NOT_SET}</td>
                         return null
@@ -260,6 +333,22 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
                           busy={isRowBusy(row.id)}
                           actions={[
                             { label: 'View', onClick: () => setDetailId(row.id) },
+                            {
+                              label: actionKind === 'submit' && isRowBusy(row.id) ? 'Submitting…' : 'Submit for approval',
+                              hidden: row.status !== 'draft' || !can('invoices.create'),
+                              onClick: () => submitEntry(row),
+                            },
+                            {
+                              label: actionKind === 'approve' && isRowBusy(row.id) ? 'Approving…' : 'Approve',
+                              hidden: row.status !== 'pending' || !can('complimentary.approve'),
+                              onClick: () => approveEntry(row),
+                            },
+                            {
+                              label: actionKind === 'reject' && isRowBusy(row.id) ? 'Rejecting…' : 'Reject',
+                              danger: true,
+                              hidden: row.status !== 'pending' || !can('complimentary.approve'),
+                              onClick: () => rejectEntry(row),
+                            },
                             { label: 'Print', onClick: () => printComplimentary(row.id) },
                             { label: 'Export PDF', onClick: () => exportComplimentary(row.id) },
                             {
@@ -297,6 +386,12 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
         entry={detail?.id === detailId ? detail : null}
         onPrint={(entry) => printComplimentary(entry.id)}
         onExport={(entry) => exportComplimentary(entry.id)}
+        onSubmit={submitEntry}
+        onApprove={approveEntry}
+        onReject={rejectEntry}
+        onDelete={(entry) => setPendingDelete(entry)}
+        actionBusy={actionBusy}
+        actionKind={actionKind}
       />
 
       <CustomizeColumnsModal
@@ -314,7 +409,9 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
         title="Delete complimentary entry?"
         message={
           pendingDelete
-            ? `Deleting ${pendingDelete.number} returns its stock to the branch.`
+            ? pendingDelete.status === 'approved'
+              ? `Deleting ${pendingDelete.number} returns its stock to the branch.`
+              : `Deleting ${pendingDelete.number} removes this ${formatLabel(pendingDelete.status || 'draft').toLowerCase()} entry. No stock has moved.`
             : ''
         }
         confirmLabel="Delete"

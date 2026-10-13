@@ -429,6 +429,16 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("cash_entries", "child_counter_name", "VARCHAR"),
     ("complimentary_entries", "child_counter_id", "VARCHAR"),
     ("complimentary_entries", "child_counter_name", "VARCHAR"),
+    # Maker-checker for complimentary issues. Existing rows default to approved
+    # because their stock was already deducted when they were saved.
+    ("complimentary_entries", "status", "VARCHAR DEFAULT 'approved'"),
+    ("complimentary_entries", "requested_by", "VARCHAR"),
+    ("complimentary_entries", "approved_by", "VARCHAR"),
+    ("complimentary_entries", "rejected_by", "VARCHAR"),
+    ("complimentary_entries", "rejection_notes", "TEXT"),
+    ("complimentary_entries", "resolved_at", "TIMESTAMP"),
+    ("complimentary_line_items", "requested_allocation", "TEXT"),
+    ("complimentary_line_items", "preferred_batch_id", "VARCHAR"),
     # 2026-06-09: soft void for payments (audit trail vs hard delete).
     ("customer_payments", "voided", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("customer_payments", "voided_at", "VARCHAR"),

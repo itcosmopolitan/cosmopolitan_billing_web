@@ -21,6 +21,8 @@ from src.models import (
     Branch,
     Category,
     CashEntry,
+    ComplimentaryEntry,
+    ComplimentaryLineItem,
     Customer,
     DailySalesSummary,
     InventorySnapshot,
@@ -65,6 +67,9 @@ from src.report_export import (
 )
 from src.report_catalog import build_catalog_payload, normalize_favorite_ids
 from src.security import current_user, get_allowed_branch_ids, require_perm
+
+# Mirrors routes/complimentary.STATUS_APPROVED; importing it here creates a cycle.
+COMPLIMENTARY_STATUS_APPROVED = "approved"
 
 router = APIRouter()
 logger = logging.getLogger("cosmopolitan.reports")
@@ -3585,6 +3590,94 @@ async def spoilage_damage(
         row = dict(r._mapping)
         if row.get("date") is not None:
             row["date"] = row["date"].isoformat()
+        rows.append(row)
+    return paged(rows, total, sk, lim)
+
+
+@router.get("/complimentary-issues", dependencies=[Depends(require_perm("reports.view"))])
+async def complimentary_issues(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Approved complimentary and sample issues, one row per item issued."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    start, end = _normalize_date_range(date_from, date_to)
+    allowed_branch_ids = await _resolve_branch_scope(user, db, branch_id)
+
+    conds = [or_(ComplimentaryEntry.status == COMPLIMENTARY_STATUS_APPROVED, ComplimentaryEntry.status.is_(None))]
+    branch_cond = _branch_condition(ComplimentaryEntry.branch_id, branch_id, allowed_branch_ids)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if start:
+        conds.append(ComplimentaryEntry.date >= start.isoformat())
+    if end:
+        conds.append(ComplimentaryEntry.date <= end.isoformat())
+    if search:
+        like = f"%{search}%"
+        conds.append(
+            ComplimentaryEntry.number.ilike(like)
+            | ComplimentaryEntry.customer_name.ilike(like)
+            | ComplimentaryEntry.reason.ilike(like)
+            | ComplimentaryLineItem.name.ilike(like)
+            | Item.sku.ilike(like)
+        )
+
+    sort_map = {
+        "date": ComplimentaryEntry.date,
+        "entry_number": ComplimentaryEntry.number,
+        "branch": ComplimentaryEntry.branch_name,
+        "reason": ComplimentaryEntry.reason,
+        "customer": ComplimentaryEntry.customer_name,
+        "product_code": Item.sku,
+        "product": ComplimentaryLineItem.name,
+        "quantity": ComplimentaryLineItem.qty,
+        "unit_cost": ComplimentaryLineItem.cost_price,
+        "cost_value": ComplimentaryLineItem.cost_total,
+        "requested_by": ComplimentaryEntry.requested_by,
+        "approved_by": ComplimentaryEntry.approved_by,
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
+
+    base = (
+        select(
+            ComplimentaryEntry.id.label("entry_id"),
+            ComplimentaryEntry.date.label("date"),
+            ComplimentaryEntry.number.label("entry_number"),
+            ComplimentaryEntry.branch_name.label("branch"),
+            ComplimentaryEntry.reason.label("reason"),
+            ComplimentaryEntry.customer_name.label("customer"),
+            Item.sku.label("product_code"),
+            ComplimentaryLineItem.name.label("product"),
+            ComplimentaryLineItem.qty.label("quantity"),
+            ComplimentaryLineItem.cost_price.label("unit_cost"),
+            ComplimentaryLineItem.cost_total.label("cost_value"),
+            ComplimentaryEntry.requested_by.label("requested_by"),
+            ComplimentaryEntry.approved_by.label("approved_by"),
+        )
+        .select_from(ComplimentaryLineItem)
+        .join(ComplimentaryEntry, ComplimentaryEntry.id == ComplimentaryLineItem.entry_id)
+        .join(Item, Item.id == ComplimentaryLineItem.item_id)
+        .where(and_(*conds))
+    )
+
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(
+        base.order_by(order_by_expr, ComplimentaryLineItem.id).offset(sk).limit(lim)
+    )
+    rows = []
+    for r in result.fetchall():
+        row = dict(r._mapping)
+        row["customer"] = row["customer"] or "Walk-in"
         rows.append(row)
     return paged(rows, total, sk, lim)
 

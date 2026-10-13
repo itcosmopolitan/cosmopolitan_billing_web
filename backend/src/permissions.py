@@ -32,6 +32,7 @@ PERMISSIONS: dict[str, list[str]] = {
     "transfers":   ["view", "create", "approve", "receive", "delete"],
     "stock_pools": ["view", "manage"],
     "adjustments": ["view", "create", "approve", "delete"],
+    "complimentary": ["approve"],
     "customers": ["view", "create", "edit", "delete"],
     "vendors":   ["view", "create", "edit", "delete"],
     "cash":      ["view", "entry", "edit", "close", "export", "unlock", "monitor", "approve_close"],
@@ -142,6 +143,14 @@ MODULE_SUMMARY_READ: dict[str, tuple[str, ...]] = {
         "adjustments.view",
         "adjustments.create",
         "adjustments.approve",
+    ),
+    "complimentary": (
+        "invoices.view",
+        "invoices.create",
+        "invoices.edit",
+        "pos.use",
+        "pos.refund",
+        "pos.approve_refund",
     ),
 }
 
