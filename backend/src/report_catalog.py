@@ -459,7 +459,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
             ),
             _report(
                 "complimentary-issues",
-                "Complimentary Issues",
+                "Complimentary",
                 api="complimentaryIssues",
                 default_sort="date",
                 columns=[
