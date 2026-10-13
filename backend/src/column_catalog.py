@@ -470,7 +470,9 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("customer", "Customer", locked=True),
         _col("invoice_count", "Invoice Count"),
         _col("quantity_sold", "Quantity Sold"),
+        _col("cost_of_sales", "Cost of Sales"),
         _col("sales_amount", "Sales Amount"),
+        _col("margin_pct", "Margin %"),
         _col("paid_amount", "Paid Amount"),
         _col("outstanding_amount", "Outstanding Amount"),
     ],
@@ -781,9 +783,20 @@ def resolve_table_prefs(
     locked = {c["id"] for c in columns if c.get("locked")}
 
     order = [i for i in (stored or {}).get("order") or [] if i in def_set]
-    for i in def_ids:
-        if i not in order:
-            order.append(i)
+    for index, column_id in enumerate(def_ids):
+        if column_id in order:
+            continue
+        insert_at = len(order)
+        for previous_id in reversed(def_ids[:index]):
+            if previous_id in order:
+                insert_at = order.index(previous_id) + 1
+                break
+        else:
+            for next_id in def_ids[index + 1:]:
+                if next_id in order:
+                    insert_at = order.index(next_id)
+                    break
+        order.insert(insert_at, column_id)
     if not order:
         order = list(defaults["order"])
 

@@ -642,9 +642,13 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
             func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
             _invoice_outstanding_expr().label("outstanding"),
             func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
+            func.coalesce(
+                func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0
+            ).label("cost_of_sales"),
         )
         .select_from(SaleInvoice)
         .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
+        .outerjoin(Item, Item.id == SaleLineItem.item_id)
         .where(and_(*inv_conds) if inv_conds else True)
         .group_by(
             SaleInvoice.date,
@@ -678,10 +682,16 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
             literal(0.0).label("paid_amount"),
             literal(0.0).label("outstanding"),
             (-func.coalesce(func.sum(SalesReturnLineItem.return_qty), 0)).label("quantity_sold"),
+            (
+                -func.coalesce(
+                    func.sum(func.coalesce(Item.cost_price, 0) * SalesReturnLineItem.return_qty), 0
+                )
+            ).label("cost_of_sales"),
         )
         .select_from(SalesReturn)
         .join(SaleInvoice, SaleInvoice.id == SalesReturn.invoice_id)
         .outerjoin(SalesReturnLineItem, SalesReturnLineItem.return_id == SalesReturn.id)
+        .outerjoin(Item, Item.id == SalesReturnLineItem.item_id)
         .where(and_(*cn_conds) if cn_conds else True)
         .group_by(
             SalesReturn.date,
@@ -2861,11 +2871,16 @@ async def customer_sales(
         cn_conds.append(SalesReturn.customer_name.ilike(f"%{search}%"))
 
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    sales_sum = func.coalesce(func.sum(docs.c.total), 0)
+    cost_sum = func.coalesce(func.sum(docs.c.cost_of_sales), 0)
+    margin_pct = _margin_pct_expr(sales_sum, sales_sum - cost_sum)
     sort_map = {
         "customer": docs.c.customer,
         "invoice_count": func.count(docs.c.doc_id),
         "quantity_sold": func.coalesce(func.sum(docs.c.quantity_sold), 0),
-        "sales_amount": func.coalesce(func.sum(docs.c.total), 0),
+        "sales_amount": sales_sum,
+        "cost_of_sales": cost_sum,
+        "margin_pct": margin_pct,
         "paid_amount": func.coalesce(func.sum(docs.c.paid_amount), 0),
         "outstanding_amount": func.coalesce(func.sum(docs.c.outstanding), 0),
     }
@@ -2878,7 +2893,9 @@ async def customer_sales(
             docs.c.customer.label("customer"),
             func.count(docs.c.doc_id).label("invoice_count"),
             func.coalesce(func.sum(docs.c.quantity_sold), 0).label("quantity_sold"),
-            func.coalesce(func.sum(docs.c.total), 0).label("sales_amount"),
+            cost_sum.label("cost_of_sales"),
+            sales_sum.label("sales_amount"),
+            margin_pct.label("margin_pct"),
             func.coalesce(func.sum(docs.c.paid_amount), 0).label("paid_amount"),
             func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding_amount"),
         )

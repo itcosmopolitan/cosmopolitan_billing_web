@@ -111,6 +111,12 @@ function computeColumnTotals(rows, columns, reportId) {
       hasAny = true
     }
   })
+  if (reportId === 'customer-sales') {
+    const sales = rows.reduce((sum, row) => sum + (Number(row?.sales_amount) || 0), 0)
+    const cost = rows.reduce((sum, row) => sum + (Number(row?.cost_of_sales) || 0), 0)
+    totals.margin_pct = sales === 0 ? 0 : Number((((sales - cost) * 100) / sales).toFixed(2))
+    hasAny = true
+  }
   return hasAny ? totals : null
 }
 

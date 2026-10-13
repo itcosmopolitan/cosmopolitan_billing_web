@@ -29,11 +29,29 @@ export function resolvePrefs(defs = [], stored) {
   const defSet = new Set(defIds)
   const defaults = defaultPrefsFromDefs(defs)
 
-  let order = (stored?.order || []).filter((id) => defSet.has(id))
-  for (const id of defIds) {
-    if (!order.includes(id)) order.push(id)
+  const order = (stored?.order || []).filter((id) => defSet.has(id))
+  for (const [index, id] of defIds.entries()) {
+    if (order.includes(id)) continue
+    let insertAt = order.length
+    for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+      const previousIndexInOrder = order.indexOf(defIds[previousIndex])
+      if (previousIndexInOrder !== -1) {
+        insertAt = previousIndexInOrder + 1
+        break
+      }
+    }
+    if (insertAt === order.length) {
+      for (let nextIndex = index + 1; nextIndex < defIds.length; nextIndex += 1) {
+        const nextIndexInOrder = order.indexOf(defIds[nextIndex])
+        if (nextIndexInOrder !== -1) {
+          insertAt = nextIndexInOrder
+          break
+        }
+      }
+    }
+    order.splice(insertAt, 0, id)
   }
-  if (!order.length) order = defaults.order
+  if (!order.length) order.push(...defaults.order)
 
   const locked = new Set(defs.filter((d) => d.locked).map((d) => d.id))
   const hiddenSource = stored?.hidden != null ? stored.hidden : defaults.hidden

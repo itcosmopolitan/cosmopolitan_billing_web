@@ -27,6 +27,7 @@ from src.models import (  # noqa: E402
     User,
 )
 from src.routes.reports import (  # noqa: E402
+    customer_sales,
     daily_sales,
     daily_sales_returns,
     product_sales,
@@ -263,6 +264,17 @@ async def _run() -> None:
         product = products["items"][0]
         assert float(product["quantity_sold"]) == 1
         assert float(product["sales_value"]) == 80
+        customers = await customer_sales(
+            date_from=today,
+            date_to=today,
+            db=db,
+            user=actor,
+        )
+        assert customers["total"] == 1
+        customer = customers["items"][0]
+        assert float(customer["sales_amount"]) == 80
+        assert float(customer["cost_of_sales"]) == 40
+        assert float(customer["margin_pct"]) == 50
         counter_products = await product_sales(
             date_from=today,
             date_to=today,
