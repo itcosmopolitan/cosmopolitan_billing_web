@@ -1,6 +1,7 @@
 import { useState, useRef, useLayoutEffect, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { api, AUTOCOMPLETE_CUSTOMER_URL } from '@/api'
+import { Trash2 } from './Icons'
 
 const GAP = 6
 const VIEWPORT_PAD = 8
@@ -89,6 +90,8 @@ export default function AutocompleteDropdown({
   clearable = false,
   onClear,
   footerAction = null,
+  canDeleteOption = null,
+  onDeleteOption = null,
   style,
   className = 'form-input',
   size = 'md',
@@ -342,51 +345,88 @@ export default function AutocompleteDropdown({
         </div>
       ) : (
         <>
-          {filteredOptions.map((o, idx) => (
-            <button
-              key={o.id || `__empty_${idx}`}
-              type="button"
-              role="option"
-              aria-selected={o.id === value}
-              disabled={o.disabled}
-              onClick={() => !o.disabled && pick(o)}
-              title={o.description ? `${o.label} · ${o.description}` : o.label}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                width: '100%',
-                height: optionRowHeight(o),
-                padding: o.description ? '4px 10px' : '0 10px',
-                border: 'none',
-                borderRadius: 6,
-                textAlign: 'left',
-                fontSize: 12,
-                lineHeight: 1.25,
-                cursor: o.disabled ? 'not-allowed' : 'pointer',
-                color: o.disabled ? 'var(--text-muted)' : 'var(--text-primary)',
-                background: o.id === value ? 'var(--accent-bg)' : 'transparent',
-                opacity: o.disabled ? 0.55 : 1,
-                overflow: 'hidden',
-              }}
-            >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {o.label}
-              </span>
-              {o.description ? (
-                <span style={{
-                  fontSize: 11,
-                  color: 'var(--text-muted)',
+          {filteredOptions.map((o, idx) => {
+            const key = o.id || `__empty_${idx}`
+            const deletable = Boolean(onDeleteOption && canDeleteOption?.(o))
+            const option = (
+              <button
+                key={key}
+                type="button"
+                role="option"
+                aria-selected={o.id === value}
+                disabled={o.disabled}
+                onClick={() => !o.disabled && pick(o)}
+                title={o.description ? `${o.label} · ${o.description}` : o.label}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  width: '100%',
+                  flex: deletable ? 1 : undefined,
+                  minWidth: 0,
+                  height: optionRowHeight(o),
+                  padding: o.description ? '4px 10px' : '0 10px',
+                  border: 'none',
+                  borderRadius: 6,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  lineHeight: 1.25,
+                  cursor: o.disabled ? 'not-allowed' : 'pointer',
+                  color: o.disabled ? 'var(--text-muted)' : 'var(--text-primary)',
+                  background: o.id === value ? 'var(--accent-bg)' : 'transparent',
+                  opacity: o.disabled ? 0.55 : 1,
                   overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
                 }}
-                >
-                  {o.description}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {o.label}
                 </span>
-              ) : null}
-            </button>
-          ))}
+                {o.description ? (
+                  <span style={{
+                    fontSize: 11,
+                    color: 'var(--text-muted)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  >
+                    {o.description}
+                  </span>
+                ) : null}
+              </button>
+            )
+            if (!deletable) return option
+            return (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {option}
+                <button
+                  type="button"
+                  aria-label={`Delete ${o.label}`}
+                  title="Delete"
+                  onClick={() => {
+                    setOpen(false)
+                    onDeleteOption(o)
+                  }}
+                  style={{
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 26,
+                    height: 26,
+                    padding: 0,
+                    border: 'none',
+                    borderRadius: 6,
+                    background: 'transparent',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            )
+          })}
           {showLoadingRow ? <LoadingRow label={resolvedLoadingLabel} /> : null}
         </>
       )}

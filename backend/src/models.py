@@ -1680,6 +1680,8 @@ class CashCategory(Base):
     __tablename__ = "cash_categories"
     id         = Column(String, primary_key=True)
     org_id     = Column(String, ForeignKey("organisations.id"), nullable=False)
+    # NULL = legacy shared category visible to every branch; otherwise branch-specific.
+    branch_id  = Column(String, ForeignKey("branches.id"), nullable=True)
     name       = Column(String, nullable=False)
     direction  = Column(String, nullable=False)  # in | out | both
     is_system  = Column(Boolean, default=False)

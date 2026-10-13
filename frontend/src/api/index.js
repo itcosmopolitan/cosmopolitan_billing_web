@@ -388,6 +388,7 @@ export const salesAPI = {
     remove: (id)     => api.delete(`/sales/complimentary/${id}`),
     reasons: (branchId) => api.get('/sales/complimentary/reasons', { params: { branch_id: branchId } }),
     createReason: (branchId, reason) => api.post('/sales/complimentary/reasons', { branch_id: branchId, reason }),
+    deleteReason: (branchId, reason) => api.delete('/sales/complimentary/reasons', { params: { branch_id: branchId, reason } }),
   },
 }
 
@@ -582,6 +583,7 @@ export const cashAPI = {
   categories: {
     list: (params) => api.get('/cash/categories', { params }),
     create: (data) => api.post('/cash/categories', data),
+    delete: (catId) => api.delete(`/cash/categories/${catId}`),
   },
   close:   (branchId, data) => api.post(`/cash/${branchId}/close`, data),
 }

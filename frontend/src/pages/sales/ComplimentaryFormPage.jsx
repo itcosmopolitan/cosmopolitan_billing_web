@@ -12,7 +12,7 @@ import DocumentFormShell from '@/components/DocumentFormShell'
 import DocumentNumberField from '@/components/DocumentNumberField'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import LineBatchAllocationField from '@/components/LineBatchAllocationField'
-import { AutocompleteDropdown, DatePicker, FormGroup, Modal } from '@/components/ui'
+import { AutocompleteDropdown, ConfirmDialog, DatePicker, FormGroup, Modal } from '@/components/ui'
 import InventoryItemPicker from './InventoryItemPicker'
 import { WALK_IN_CUSTOMER_NAME, WALK_IN_CUSTOMER_OPTION } from './salesFormShared'
 import { toApiPayload } from '@/utils/batchAllocation'
@@ -68,6 +68,7 @@ export default function ComplimentaryFormPage() {
   const [reasonOptions, setReasonOptions] = useState(COMPLIMENTARY_REASONS)
   const [showAddReason, setShowAddReason] = useState(false)
   const [newReason, setNewReason] = useState('')
+  const [reasonToDelete, setReasonToDelete] = useState(null)
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const patchLine = (i, patch) => setForm((f) => {
     const items = [...f.items]
@@ -176,6 +177,24 @@ export default function ComplimentaryFormPage() {
       toast.success('Reason added')
     } catch (error) {
       toast.error(error?.response?.data?.detail || error?.message || 'Failed to add reason')
+    }
+  }
+
+  const isBuiltInReason = (reason) => COMPLIMENTARY_REASONS.some(
+    (builtIn) => builtIn.toLowerCase() === String(reason).toLowerCase(),
+  )
+
+  const confirmDeleteReason = async () => {
+    const reason = reasonToDelete
+    if (!reason) return
+    setReasonToDelete(null)
+    try {
+      await salesAPI.complimentary.deleteReason(form.branchId, reason)
+      setReasonOptions((prev) => prev.filter((row) => row !== reason))
+      if (form.reason === reason) pif('reason', '')
+      toast.success('Reason deleted')
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || error?.message || 'Failed to delete reason')
     }
   }
 
@@ -290,6 +309,8 @@ export default function ComplimentaryFormPage() {
                 }}
                 emptyLabel="No reasons yet"
                 noMatchLabel="No matching reasons"
+                canDeleteOption={(o) => !isBuiltInReason(o.id)}
+                onDeleteOption={(o) => setReasonToDelete(o.id)}
                 style={{ width: '100%' }}
               />
             </FormGroup>
@@ -487,6 +508,17 @@ export default function ComplimentaryFormPage() {
           />
         </FormGroup>
       </Modal>
+
+      <ConfirmDialog
+        open={!!reasonToDelete}
+        onClose={() => setReasonToDelete(null)}
+        onConfirm={confirmDeleteReason}
+        title="Delete reason?"
+        message={reasonToDelete ? `"${reasonToDelete}" will be removed from the reason list. Existing complimentary entries keep this reason.` : ''}
+        confirmLabel="Delete"
+        danger
+        zIndex={1050}
+      />
     </DocumentFormShell>
   )
 }

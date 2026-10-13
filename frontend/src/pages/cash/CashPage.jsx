@@ -48,10 +48,18 @@ export default function CashPage({ ledger = 'sales' }) {
   const [voidSaving, setVoidSaving] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
 
-  // Fetch categories once
+  // Categories are branch-specific (plus shared ones), so refetch on branch change
   useEffect(() => {
-    cashAPI.categories.list().then((cats) => setCategories(cats || [])).catch(() => {})
-  }, [])
+    if (!branchId) {
+      setCategories([])
+      return undefined
+    }
+    let cancelled = false
+    cashAPI.categories.list({ branch_id: branchId })
+      .then((cats) => { if (!cancelled) setCategories(cats || []) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [branchId])
 
   useEffect(() => {
     const unsub = subscribeToBranchChanged(() => setVersion((v) => v + 1))

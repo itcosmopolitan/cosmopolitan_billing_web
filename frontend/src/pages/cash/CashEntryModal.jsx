@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { cashAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
-import { FormGroup, Modal, AutocompleteDropdown, DatePicker } from '@/components/ui'
+import { FormGroup, Modal, AutocompleteDropdown, DatePicker, ConfirmDialog } from '@/components/ui'
 import { amountInputStep } from '@/utils/decimalPrecision'
 import { usePOSStore } from '@/store'
 import { getConfiguredChildCounters } from '@/utils/childCounters'
@@ -57,8 +57,10 @@ export default function CashEntryModal({
   const [newCatName, setNewCatName] = useState('')
   const [newCatDirection, setNewCatDirection] = useState('out')
   const [addingCat, setAddingCat] = useState(false)
+  const [catToDelete, setCatToDelete] = useState(null)
 
   const canAddCategory = can('cash.entry', 'cash.edit', 'settings.edit')
+  const canDeleteCategory = can('settings.edit')
 
   useEffect(() => {
     if (open) {
@@ -84,10 +86,10 @@ export default function CashEntryModal({
   }, [open, editEntry, setSelectedChildCounter])
 
   useEffect(() => {
-    if (!open) return undefined
+    if (!open || !branchId) return undefined
     setCats(unwrapCategories(categories))
     let cancelled = false
-    cashAPI.categories.list()
+    cashAPI.categories.list({ branch_id: branchId })
       .then((data) => {
         if (cancelled) return
         const rows = unwrapCategories(data)
@@ -99,7 +101,7 @@ export default function CashEntryModal({
     // Parent `categories` is only used as the opening snapshot; a live refetch
     // would loop if we also write back via onCategoriesChange.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, branchId])
 
   const pf = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -133,6 +135,7 @@ export default function CashEntryModal({
     setAddingCat(true)
     try {
       const created = await cashAPI.categories.create({
+        branch_id: branchId,
         name,
         direction: newCatDirection || form.type || 'both',
       })
@@ -154,6 +157,25 @@ export default function CashEntryModal({
       // Global interceptor already toasted
     } finally {
       setAddingCat(false)
+    }
+  }
+
+  const requestDeleteCategory = (opt) => {
+    if (opt?.raw?.id) setCatToDelete(opt.raw)
+  }
+
+  const confirmDeleteCategory = async () => {
+    const cat = catToDelete
+    if (!cat) return
+    try {
+      await cashAPI.categories.delete(cat.id)
+      const next = cats.filter((c) => c.id !== cat.id)
+      setCats(next)
+      onCategoriesChange?.(next)
+      if (form.category === cat.name) pf('category', '')
+      toast.success('Category deleted')
+    } catch {
+      // Global interceptor already toasted
     }
   }
 
@@ -245,12 +267,14 @@ export default function CashEntryModal({
           <AutocompleteDropdown
             value={form.category}
             onChange={(v) => pf('category', v)}
-            options={filteredCats.map((c) => ({ id: c.name, label: c.name }))}
+            options={filteredCats.map((c) => ({ id: c.name, label: c.name, raw: c }))}
             isSearchFieldRequired
             placeholder="Select category…"
             searchPlaceholder="Search categories…"
             emptyLabel={cats.length === 0 ? 'No categories yet' : 'No categories for this type'}
             footerAction={canAddCategory ? { label: '+ Add category', onClick: openAddCategory } : null}
+            canDeleteOption={(o) => canDeleteCategory && !o.raw?.is_system}
+            onDeleteOption={requestDeleteCategory}
           />
         </FormGroup>
 
@@ -331,6 +355,17 @@ export default function CashEntryModal({
           />
         </FormGroup>
       </Modal>
+
+      <ConfirmDialog
+        open={!!catToDelete}
+        onClose={() => setCatToDelete(null)}
+        onConfirm={confirmDeleteCategory}
+        title="Delete category?"
+        message={catToDelete ? `"${catToDelete.name}" will be removed from the category list. Existing entries keep this name.` : ''}
+        confirmLabel="Delete"
+        danger
+        zIndex={1050}
+      />
     </>
   )
 }

@@ -179,6 +179,7 @@ class UnlockRequest(BaseModel):
     ledger: str = "sales"
 
 class CashCategoryCreate(BaseModel):
+    branch_id: str
     name: str
     direction: str = "both"   # in | out | both
     sort_order: int = 0
@@ -346,6 +347,7 @@ def _serialize_cash_category(c: CashCategory) -> dict:
         "id": c.id,
         "name": c.name,
         "direction": c.direction,
+        "branch_id": c.branch_id,
         "is_system": c.is_system,
         "active": c.active,
         "sort_order": c.sort_order,
@@ -354,6 +356,7 @@ def _serialize_cash_category(c: CashCategory) -> dict:
 
 @router.get("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_READ))])
 async def list_categories(
+    branch_id: str = Depends(enforce_branch_access),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(current_user),
 ):
@@ -362,8 +365,18 @@ async def list_categories(
     q = select(CashCategory).order_by(CashCategory.sort_order, CashCategory.name)
     if org:
         q = q.where(CashCategory.org_id == org.id)
+    q = q.where(or_(CashCategory.branch_id == branch_id, CashCategory.branch_id.is_(None)))
     rows = (await db.execute(q)).scalars().all()
     return [_serialize_cash_category(c) for c in rows]
+
+
+async def _assert_category_branch_allowed(user: User, db: AsyncSession, branch_id: Optional[str]) -> None:
+    """Shared (branch_id NULL) categories are not scoped; branch-specific ones need access to that branch."""
+    if branch_id is None:
+        return
+    allowed = await _resolve_branch_scope(user, db, branch_id)
+    if allowed is not None and branch_id not in allowed:
+        raise HTTPException(403, "No access to this branch")
 
 
 @router.post("/categories", dependencies=[Depends(require_perm(*CASH_CATEGORIES_WRITE))], status_code=201)
@@ -376,6 +389,8 @@ async def create_category(
     org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
     if not org:
         raise HTTPException(400, "Organisation not configured")
+    await _get_branch(db, data.branch_id)
+    await _assert_category_branch_allowed(current_user, db, data.branch_id)
     name = (data.name or "").strip()
     if len(name) < 2:
         raise HTTPException(400, "Category name must be at least 2 characters")
@@ -386,14 +401,15 @@ async def create_category(
         await db.execute(
             select(CashCategory).where(
                 CashCategory.org_id == org.id,
+                or_(CashCategory.branch_id == data.branch_id, CashCategory.branch_id.is_(None)),
                 func.lower(CashCategory.name) == name.lower(),
             )
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     if existing:
         raise HTTPException(400, "A category with this name already exists")
     cat = CashCategory(
-        id=str(uuid.uuid4()), org_id=org.id,
+        id=str(uuid.uuid4()), org_id=org.id, branch_id=data.branch_id,
         name=name, direction=direction,
         is_system=False, sort_order=data.sort_order,
     )
@@ -424,6 +440,7 @@ async def update_category(
     cat = (await db.execute(select(CashCategory).where(CashCategory.id == cat_id))).scalar_one_or_none()
     if not cat:
         raise HTTPException(404, "Category not found")
+    await _assert_category_branch_allowed(current_user, db, cat.branch_id)
     if cat.is_system and (data.name or data.direction):
         raise HTTPException(400, "System categories cannot be renamed or redirected")
     if data.name is not None:
@@ -458,6 +475,7 @@ async def delete_category(
     cat = (await db.execute(select(CashCategory).where(CashCategory.id == cat_id))).scalar_one_or_none()
     if not cat:
         raise HTTPException(404, "Category not found")
+    await _assert_category_branch_allowed(current_user, db, cat.branch_id)
     if cat.is_system:
         raise HTTPException(400, "System categories cannot be deleted")
     category_name = cat.name

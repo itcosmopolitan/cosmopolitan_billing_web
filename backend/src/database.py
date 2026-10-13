@@ -298,6 +298,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("transfer_line_items", "batch_allocation",     "TEXT"),
     ("transfer_line_items", "cost_price",           "FLOAT"),
     ("organisations", "tax_pricing_mode", "VARCHAR DEFAULT 'inclusive'"),
+    # Cash in/out categories are per branch. NULL keeps pre-existing org-wide categories shared.
+    ("cash_categories", "branch_id", "VARCHAR"),
     ("invoice_template_settings", "show_attr", "BOOLEAN DEFAULT 1"),
     ("invoice_template_settings", "show_size", "BOOLEAN DEFAULT 1"),
     ("invoice_template_settings", "show_disc", "BOOLEAN DEFAULT 1"),

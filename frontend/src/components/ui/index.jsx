@@ -310,6 +310,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = 'Confirm',
   danger = false,
+  zIndex,
 }) {
   const [submitting, setSubmitting] = useState(false)
 
@@ -338,6 +339,7 @@ export function ConfirmDialog({
       size="sm"
       icon={danger ? '⚠️' : '❓'}
       busy={submitting}
+      zIndex={zIndex}
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>

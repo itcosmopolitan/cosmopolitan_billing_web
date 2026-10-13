@@ -399,6 +399,48 @@ async def create_complimentary_reason(
     return {"id": row.id, "reason": reason}
 
 
+@router.delete("/reasons", dependencies=[Depends(require_perm("invoices.create"))])
+async def delete_complimentary_reason(
+    request: Request,
+    branch_id: str = Query(...),
+    reason: str = Query(..., min_length=1, max_length=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Remove a custom complimentary reason from a branch. Built-in reasons cannot be removed."""
+    await _resolve_branch_scope(user, db, branch_id)
+    name = reason.strip()
+    if name.lower() in {r.lower() for r in COMPLIMENTARY_REASONS}:
+        raise HTTPException(400, "Built-in complimentary reasons cannot be deleted")
+
+    row = (
+        await db.execute(
+            select(ComplimentaryReason).where(
+                ComplimentaryReason.branch_id == branch_id,
+                func.lower(ComplimentaryReason.reason) == func.lower(name),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "Complimentary reason not found")
+
+    deleted_name = row.reason
+    await db.delete(row)
+    add_audit_log(
+        db,
+        action="Complimentary reason deleted",
+        module="Sales",
+        reference_id=row.id,
+        detail=f"Deleted complimentary reason: {deleted_name}",
+        user=user,
+        request=request,
+        branch_id=branch_id,
+        metadata={"reason": deleted_name},
+    )
+    await db.commit()
+    return {"message": "Reason deleted"}
+
+
 @router.get("/{entry_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
 async def get_complimentary(
     entry_id: str,

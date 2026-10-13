@@ -32,6 +32,7 @@ from src.routes.complimentary import (  # noqa: E402
     create_complimentary,
     create_complimentary_reason,
     delete_complimentary,
+    delete_complimentary_reason,
     get_complimentary,
     list_complimentary,
     list_complimentary_reasons,
@@ -283,3 +284,55 @@ async def _run_complimentary_custom_reasons() -> None:
 
 def test_complimentary_custom_reasons() -> None:
     asyncio.run(_run_complimentary_custom_reasons())
+
+
+async def _run_complimentary_reason_delete() -> None:
+    db = await _build_session()
+    try:
+        user = await _seed(db)
+        await create_complimentary_reason(
+            ComplimentaryReasonCreate(branch_id="b1", reason="Staff tasting"),
+            request=None, db=db, user=user,
+        )
+        created = await create_complimentary(
+            ComplimentaryCreate(
+                reason="Staff tasting",
+                branch_id="b1",
+                items=[ComplimentaryLineIn(item_id="i1", qty=1)],
+            ),
+            request=None,
+            db=db,
+            user=user,
+        )
+
+        for builtin in ("Complimentary", "sample"):
+            try:
+                await delete_complimentary_reason(request=None, branch_id="b1", reason=builtin, db=db, user=user)
+            except HTTPException as exc:
+                assert exc.status_code == 400
+            else:
+                raise AssertionError(f"built-in reason {builtin!r} was deleted")
+
+        try:
+            await delete_complimentary_reason(request=None, branch_id="b1", reason="Unknown", db=db, user=user)
+        except HTTPException as exc:
+            assert exc.status_code == 404
+        else:
+            raise AssertionError("missing reason did not return 404")
+
+        result = await delete_complimentary_reason(
+            request=None, branch_id="b1", reason="  staff TASTING ", db=db, user=user,
+        )
+        assert result == {"message": "Reason deleted"}
+        assert (await list_complimentary_reasons(branch_id="b1", db=db, user=user))["reasons"] == [
+            "Complimentary", "Sample",
+        ]
+
+        detail = await get_complimentary(created["id"], db=db, user=user)
+        assert detail["reason"] == "Staff tasting"
+    finally:
+        await db.close()
+
+
+def test_complimentary_reason_delete() -> None:
+    asyncio.run(_run_complimentary_reason_delete())
