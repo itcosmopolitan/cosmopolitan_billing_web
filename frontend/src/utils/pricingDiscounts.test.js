@@ -110,3 +110,31 @@ describe('sales pricing for same-GSTIN customers', () => {
     })
   })
 })
+
+describe('stale 0% GST on reopened documents', () => {
+  const saved = { item_id: 'item-1', name: 'Vanilla', qty: 1, price: 108, taxRate: 0, masterTaxRate: 8 }
+
+  it('restores the item-master rate for a taxable customer', () => {
+    const [line] = applyCustomerPricingToSaleLines([saved], { id: 'c1', classification: 'external' }, '33AAZCS1429R1Z1')
+    expect(line.taxRate).toBe(8)
+  })
+
+  it('keeps 0% for an internal customer', () => {
+    const [line] = applyCustomerPricingToSaleLines([saved], { id: 'c2', classification: 'internal' }, '33AAZCS1429R1Z1')
+    expect(line.taxRate).toBe(0)
+  })
+
+  it('keeps 0% for a same-GSTIN customer', () => {
+    const [line] = applyCustomerPricingToSaleLines(
+      [saved], { id: 'c3', gstin: '33AAZCS1429R1Z1' }, '33AAZCS1429R1Z1',
+    )
+    expect(line.taxRate).toBe(0)
+  })
+
+  it('keeps 0% for a 0% item', () => {
+    const [line] = applyCustomerPricingToSaleLines(
+      [{ ...saved, masterTaxRate: 0 }], { id: 'c1', classification: 'external' }, '33AAZCS1429R1Z1',
+    )
+    expect(line.taxRate).toBe(0)
+  })
+})

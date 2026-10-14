@@ -16,6 +16,7 @@
  * OrderFormModal for the rationale + legacy-row handling notes — the
  * implementation here is the same.
  */
+import { useRef } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
@@ -66,6 +67,7 @@ export default function QuoteFormModal({
   embedded = false,
 }) {
   const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const selectedCustomerRef = useRef('')
   const customerCtx = {
     customer_type: quoteForm.customerType,
     classification: quoteForm.customerClassification,
@@ -183,6 +185,7 @@ export default function QuoteFormModal({
             disabled={readOnly}
             value={quoteForm.customerId || ''}
             onSelectOption={async (opt) => {
+              selectedCustomerRef.current = opt?.id || ''
               if (!opt?.id) {
                 pqf('customerId', '')
                 pqf('customerName', WALK_IN_CUSTOMER_NAME)
@@ -204,6 +207,7 @@ export default function QuoteFormModal({
               pqf('items', applyCustomerPricingToSaleLines(quoteForm.items, ctx, organisationGstin))
               try {
                 const c = await customersAPI.get(opt.id)
+                if (selectedCustomerRef.current !== opt.id) return
                 pqf('customerType', customerPricingType(c.customer_type || c.type || type))
                 pqf('customerClassification', customerClassification(c))
                 pqf('customerGstin', customerGstin(c))

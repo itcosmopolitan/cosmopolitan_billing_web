@@ -2,7 +2,7 @@
  * Invoice modal — create from scratch or from a prefilled conversion
  * (quotation → invoice, sales order → invoice).
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker, AlertBar } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
@@ -63,6 +63,7 @@ export default function InvoiceFormModal({
   embedded = false,
 }) {
   const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const selectedCustomerRef = useRef('')
   const customerCtx = {
     customer_type: invoiceForm.customerType,
     classification: invoiceForm.customerClassification,
@@ -217,6 +218,7 @@ export default function InvoiceFormModal({
             <AutocompleteDropdown
               value={invoiceForm.customerId || ''}
               onSelectOption={async (opt) => {
+                selectedCustomerRef.current = opt?.id || ''
                 if (!opt?.id) {
                   pif('customerId', '')
                   pif('customerName', WALK_IN_CUSTOMER_NAME)
@@ -243,6 +245,7 @@ export default function InvoiceFormModal({
                 pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, ctx, organisationGstin))
                 try {
                   const c = await customersAPI.get(opt.id)
+                  if (selectedCustomerRef.current !== opt.id) return
                   pif('customerCreditBalance', Number(c?.credit_balance || 0))
                   pif('customerCreditLimit', Number(c?.credit_limit || 0))
                   pif('customerOutstanding', Number(c?.outstanding || 0))

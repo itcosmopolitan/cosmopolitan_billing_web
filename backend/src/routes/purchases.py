@@ -12,13 +12,14 @@ from sqlalchemy.orm import selectinload
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
 from src.document_numbering import allocate_number, next_free_prefixed_number, resolve_number
-from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
+from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 from src.models import (
     AuditLog,
     GRNLineItem,
     GRNStatus,
     GoodsReceiptNote,
     InvoiceStatus,
+    Item,
     ItemBatch,
     Organisation,
     PurchaseBill,
@@ -3550,13 +3551,29 @@ async def _vendor_gstin_matches_org(db: AsyncSession, vendor_id: Optional[str]) 
     return bool(vendor_gst and org_gst and vendor_gst == org_gst)
 
 
+async def _load_item_tax_rates(db: AsyncSession, item_ids) -> dict:
+    ids = {i for i in item_ids if i}
+    if not ids:
+        return {}
+    rows = (await db.execute(select(Item.id, Item.tax_rate).where(Item.id.in_(ids)))).all()
+    return {row[0]: row[1] for row in rows}
+
+
 async def _apply_internal_vendor_pricing(
     db: AsyncSession, vendor_id: Optional[str], lines, branch_id: Optional[str],
 ) -> None:
     """Same GSTIN as organisation → item lines take 0% GST and no line discount,
     mirroring the internal-transfer rule on sales docs. The entered cost is kept.
-    Free-text lines without an item are left as entered."""
-    if not lines or not await _vendor_gstin_matches_org(db, vendor_id):
+    Otherwise a 0% item line is a stale client value, so the item-master rate is
+    restored. Free-text lines without an item are left as entered."""
+    if not lines:
+        return
+    if not await _vendor_gstin_matches_org(db, vendor_id):
+        master_rates = await _load_item_tax_rates(db, (getattr(l, "item_id", None) for l in lines))
+        for line in lines:
+            item_id = getattr(line, "item_id", None)
+            if item_id in master_rates:
+                line.tax_rate = restore_zero_rate(line.tax_rate, master_rates[item_id])
         return
     for line in lines:
         if not getattr(line, "item_id", None):
@@ -4378,14 +4395,22 @@ async def convert_order_to_bill(
 
     tax_mode = await _get_org_tax_mode(db)
     line_rows = []
+    po_taxable = not await _vendor_gstin_matches_org(db, po.vendor_id)
+    po_master_rates = (
+        await _load_item_tax_rates(db, (ln.item_id for ln in po.line_items)) if po_taxable else {}
+    )
     for line in po.line_items:
         recv = receipts_by_item.get(line.item_id)
+        line_rate = (
+            restore_zero_rate(line.tax_rate, po_master_rates[line.item_id])
+            if line.item_id in po_master_rates else line.tax_rate
+        )
         wrapper = type("Line", (), {
             "item_id": line.item_id,
             "name": line.name,
             "qty": line.qty,
             "cost": line.cost,
-            "tax_rate": line.tax_rate,
+            "tax_rate": line_rate,
             "discount": line.discount or 0,
             "id": line.id,
             "ordered_qty": line.qty,
@@ -4395,7 +4420,7 @@ async def convert_order_to_bill(
         })()
         gross = round(line.qty * line.cost, 2)
         line_net = round(gross * (1 - (line.discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
+        line_tax = line_tax_amount(line_net, line_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
     bill_num = await resolve_number(
@@ -4990,14 +5015,22 @@ async def receive_from_po(
             receipts_by_item[r.item_id] = r
 
     line_rows = []
+    po_taxable = not await _vendor_gstin_matches_org(db, po.vendor_id)
+    po_master_rates = (
+        await _load_item_tax_rates(db, (ln.item_id for ln in po.line_items)) if po_taxable else {}
+    )
     for line in po.line_items:
         recv = receipts_by_item.get(line.item_id)
+        line_rate = (
+            restore_zero_rate(line.tax_rate, po_master_rates[line.item_id])
+            if line.item_id in po_master_rates else line.tax_rate
+        )
         wrapper = type("Line", (), {
             "item_id": line.item_id,
             "name": line.name,
             "qty": line.qty,
             "cost": line.cost,
-            "tax_rate": line.tax_rate,
+            "tax_rate": line_rate,
             "discount": line.discount or 0,
             "id": line.id,
             "ordered_qty": line.qty,
@@ -5007,7 +5040,7 @@ async def receive_from_po(
         })()
         gross = round(line.qty * line.cost, 2)
         line_net = round(gross * (1 - (line.discount or 0) / 100), 2)
-        line_tax = line_tax_amount(line_net, line.tax_rate or 0, tax_mode)
+        line_tax = line_tax_amount(line_net, line_rate or 0, tax_mode)
         line_rows.append((wrapper, line_net, line_tax))
 
     create_kwargs = dict(

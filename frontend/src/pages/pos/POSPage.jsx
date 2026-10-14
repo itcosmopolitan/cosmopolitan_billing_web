@@ -171,6 +171,7 @@ function invoiceToCartSession(inv, customer) {
 }
 
 export default function POSPage() {
+  const posSelectedCustomerRef = useRef(null)
   const can = useCan()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -1450,14 +1451,17 @@ export default function POSPage() {
               if (!id) store.setCustomer(null)
             }}
             onSelectOption={async (opt) => {
+              posSelectedCustomerRef.current = opt?.id || null
               if (!opt?.id) {
                 store.setCustomer(null)
                 return
               }
               try {
                 const c = await customersAPI.get(opt.id)
+                if (posSelectedCustomerRef.current !== opt.id) return
                 store.setCustomer(c)
               } catch {
+                if (posSelectedCustomerRef.current !== opt.id) return
                 store.setCustomer({
                   id: opt.id,
                   name: opt.label,

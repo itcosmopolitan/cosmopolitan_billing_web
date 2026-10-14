@@ -23,7 +23,7 @@ from src.document_numbering import (
     next_free_prefixed_number,
     resolve_number,
 )
-from src.tax_calc import line_tax_amount, line_taxable_amount, rollup_inclusive_lines
+from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 from src.models import (
     AuditLog,
     Branch,
@@ -504,6 +504,27 @@ async def _apply_internal_customer_gst(
         return
     if await _customer_is_internal(db, customer_id):
         _strip_gst_from_inclusive_items(items)
+        return
+    # Taxable customer: a 0% line for a taxable item is a stale client value
+    # (e.g. left over from a previously selected internal customer).
+    item_map = await _load_items_by_id(
+        db, {i.item_id for i in items if getattr(i, "item_id", None)},
+    )
+    for item in items:
+        master = item_map.get(getattr(item, "item_id", None))
+        if master is not None:
+            item.tax_rate = restore_zero_rate(item.tax_rate, master.tax_rate)
+
+
+async def _is_taxable_customer(db: AsyncSession, customer_id: Optional[str]) -> bool:
+    """False for same-GSTIN transfers and internal customers (0% GST by rule)."""
+    if await _customer_gstin_matches_org(db, customer_id):
+        return False
+    return not await _customer_is_internal(db, customer_id)
+
+
+def _line_rate_from_master(stored_rate, item) -> float:
+    return restore_zero_rate(stored_rate, getattr(item, "tax_rate", None) if item else None)
 
 
 def _log_sales_invoice_history(
@@ -6315,6 +6336,17 @@ async def convert_order_to_invoice(
     allow_oversell = await get_allow_overselling(db)
     tax_mode = await _get_org_tax_mode(db)
     internal_customer = await _customer_is_internal(db, so.customer_id)
+    taxable_customer = await _is_taxable_customer(db, so.customer_id)
+    rate_item_map = await _load_items_by_id(
+        db, {ln.item_id for ln, _ in convert_plan if ln.item_id},
+    )
+    line_rates = {
+        ln.id: (
+            _line_rate_from_master(ln.tax_rate, rate_item_map.get(ln.item_id))
+            if taxable_customer else float(ln.tax_rate or 0)
+        )
+        for ln, _ in convert_plan
+    }
     orig_inclusive = 0.0
     for li in so.line_items:
         orig_inclusive += _inclusive_after_line_discount(
@@ -6326,7 +6358,7 @@ async def convert_order_to_invoice(
         convert_inclusives.append(_inclusive_after_line_discount(
             convert_qty, float(so_line.price or 0), float(so_line.discount or 0),
         ))
-        convert_rates.append(float(so_line.tax_rate or 0))
+        convert_rates.append(line_rates[so_line.id])
     if internal_customer:
         convert_inclusives[:] = [
             line_taxable_amount(amount, rate)
@@ -6394,7 +6426,7 @@ async def convert_order_to_invoice(
             name=_current_item_name(item_map, so_line.item_id, so_line.name),
             qty=convert_qty,
             price=_exclusive_unit_price(so_line.price, so_line.tax_rate) if internal_customer else so_line.price,
-            tax_rate=0 if internal_customer else so_line.tax_rate,
+            tax_rate=0 if internal_customer else line_rates[so_line.id],
             discount=so_line.discount or 0,
             line_total=after,
             **_snapshot_item_metadata(item_obj),
@@ -6632,6 +6664,25 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
     today = datetime.now().strftime("%Y-%m-%d")
     so_num = await next_free_prefixed_number(db, SalesOrder, doc_prefix="SO", min_seq=1000)
 
+    taxable_customer = await _is_taxable_customer(db, quote.customer_id)
+    item_map = await _load_items_by_id(
+        db, {line.item_id for line in quote.line_items if line.item_id},
+    )
+    line_rates = {
+        ql.id: (
+            _line_rate_from_master(ql.tax_rate, item_map.get(ql.item_id))
+            if taxable_customer else float(ql.tax_rate or 0)
+        )
+        for ql in quote.line_items
+    }
+    so_subtotal, so_tax_total, so_total = quote.subtotal, quote.tax_total, quote.total
+    if any(line_rates[ql.id] != float(ql.tax_rate or 0) for ql in quote.line_items):
+        _rows, so_subtotal, so_tax_total, so_total = rollup_inclusive_lines(
+            [_inclusive_after_line_discount(ql.qty, ql.price, ql.discount or 0) for ql in quote.line_items],
+            [line_rates[ql.id] for ql in quote.line_items],
+            quote.discount or 0,
+        )
+
     so = SalesOrder(
         id=str(uuid.uuid4()), number=so_num,
         customer_id=quote.customer_id,
@@ -6642,17 +6693,14 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
         child_counter_name=quote.child_counter_name,
         created_by=quote.created_by or "Staff",
         date=today,
-        subtotal=quote.subtotal,
-        tax_total=quote.tax_total,
+        subtotal=so_subtotal,
+        tax_total=so_tax_total,
         discount=quote.discount,
-        total=quote.total,
+        total=so_total,
         status=SalesOrderStatus.confirmed,
         notes=f"From quotation {quote.number}" + (f": {quote.notes}" if quote.notes else ""),
     )
     db.add(so)
-    item_map = await _load_items_by_id(
-        db, {line.item_id for line in quote.line_items if line.item_id},
-    )
     created_lines = []
     for ql in quote.line_items:
         li = SalesOrderLineItem(
@@ -6660,7 +6708,7 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
             item_id=ql.item_id,
             name=_current_item_name(item_map, ql.item_id, ql.name),
             qty=ql.qty, price=ql.price,
-            tax_rate=ql.tax_rate, discount=ql.discount or 0,
+            tax_rate=line_rates[ql.id], discount=ql.discount or 0,
             line_total=ql.line_total,
         )
         db.add(li)
@@ -6741,6 +6789,17 @@ async def convert_quote_to_invoice(
     inv_tax_total = quote.tax_total
     inv_total = quote.total
     quote_taxed = None
+    taxable_customer = await _is_taxable_customer(db, quote.customer_id)
+    rate_item_map = await _load_items_by_id(
+        db, {l.item_id for l in (quote.line_items or []) if l.item_id},
+    )
+    line_rates = {
+        l.id: (
+            _line_rate_from_master(l.tax_rate, rate_item_map.get(l.item_id))
+            if taxable_customer else float(l.tax_rate or 0)
+        )
+        for l in (quote.line_items or [])
+    }
     if internal_customer:
         exclusives = [
             line_taxable_amount(
@@ -6751,6 +6810,12 @@ async def convert_quote_to_invoice(
         ]
         quote_taxed, inv_subtotal, inv_tax_total, inv_total = rollup_inclusive_lines(
             exclusives, [0.0] * len(exclusives), quote.discount or 0,
+        )
+    elif any(line_rates[l.id] != float(l.tax_rate or 0) for l in (quote.line_items or [])):
+        _rows, inv_subtotal, inv_tax_total, inv_total = rollup_inclusive_lines(
+            [_inclusive_after_line_discount(l.qty, l.price, l.discount or 0) for l in quote.line_items],
+            [line_rates[l.id] for l in quote.line_items],
+            quote.discount or 0,
         )
 
     if not data.payment_received:
@@ -6809,7 +6874,7 @@ async def convert_quote_to_invoice(
         else:
             unit_price = line.price
             line_total = line.line_total
-            tax_rate = line.tax_rate
+            tax_rate = line_rates[line.id]
         li = SaleLineItem(
             id=str(uuid.uuid4()), invoice_id=inv.id,
             item_id=line.item_id,

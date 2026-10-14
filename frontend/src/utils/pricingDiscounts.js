@@ -165,7 +165,11 @@ export function applyInternalGstToSaleLines(items, customerOrValue, orgGstin) {
         lineDiscountPct: 0,
       }
     }
-    const rate = Number(it.catalogTaxRate ?? it.taxRate) || 0
+    let rate = Number(it.catalogTaxRate ?? it.taxRate) || 0
+    // A saved 0% on a taxable customer is stale; restore the item-master rate.
+    if (rate <= 0 && !isInternalCustomer(customerOrValue)) {
+      rate = Math.max(0, Number(it.masterTaxRate) || 0)
+    }
     const inclusive = Number(it.price) || 0
     return { ...it, ...linePricingForCustomer(inclusive, rate, customerOrValue, orgGstin) }
   })

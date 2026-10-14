@@ -19,6 +19,7 @@
  * load fine; their picker shows the cached name as "selected" so the
  * operator can still review or × out and re-pick.
  */
+import { useRef } from 'react'
 import { Modal, FormGroup, AutocompleteDropdown, DatePicker } from '@/components/ui'
 import { AUTOCOMPLETE_CUSTOMER_URL, customersAPI } from '@/api'
 import { useAppStore } from '@/store'
@@ -72,6 +73,7 @@ export default function OrderFormModal({
   embedded = false,
 }) {
   const organisationGstin = useAppStore((s) => s.organisationGstin)
+  const selectedCustomerRef = useRef('')
   const customerCtx = {
     customer_type: orderForm.customerType,
     classification: orderForm.customerClassification,
@@ -199,6 +201,7 @@ export default function OrderFormModal({
               disabled={readOnly}
               value={orderForm.customerId || ''}
               onSelectOption={async (opt) => {
+                selectedCustomerRef.current = opt?.id || ''
                 if (!opt?.id) {
                   pof('customerId', '')
                   pof('customerName', WALK_IN_CUSTOMER_NAME)
@@ -220,6 +223,7 @@ export default function OrderFormModal({
                 pof('items', applyCustomerPricingToSaleLines(orderForm.items, ctx, organisationGstin))
                 try {
                   const c = await customersAPI.get(opt.id)
+                  if (selectedCustomerRef.current !== opt.id) return
                   pof('customerType', customerPricingType(c.customer_type || c.type || type))
                   pof('customerClassification', customerClassification(c))
                   pof('customerGstin', customerGstin(c))

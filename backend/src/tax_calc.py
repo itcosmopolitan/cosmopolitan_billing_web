@@ -92,3 +92,17 @@ def rollup_inclusive_lines(
     subtotal = round(subtotal, 2)
     tax_total = round(tax_total, 2)
     return rows, subtotal, tax_total, round(subtotal + tax_total, 2)
+
+
+def restore_zero_rate(stored_rate: float | None, master_rate: float | None) -> float:
+    """GST rate for a line on a document that is NOT tax-exempt.
+
+    Zero GST is only legitimate for internal customers/transfers (handled by
+    the caller) or items that are 0% in the item master. For anything else a
+    stored/submitted 0% is a stale value, so fall back to the item master rate.
+    A non-zero rate is kept as the line's snapshot.
+    """
+    stored = float(stored_rate or 0)
+    if stored > 0:
+        return stored
+    return max(0.0, float(master_rate or 0))

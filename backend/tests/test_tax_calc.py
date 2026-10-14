@@ -43,3 +43,14 @@ def test_entity_discount_reduces_tax_on_inclusive_price():
     assert taxable == 90.00
     assert subtotal == 90.00
     assert tax_total == 7.20
+
+
+def test_restore_zero_rate():
+    from src.tax_calc import restore_zero_rate
+
+    assert restore_zero_rate(0, 8) == 8
+    assert restore_zero_rate(None, 8) == 8
+    assert restore_zero_rate(0, 0) == 0
+    assert restore_zero_rate(0, None) == 0
+    assert restore_zero_rate(18, 8) == 18
+    assert restore_zero_rate(5, 0) == 5

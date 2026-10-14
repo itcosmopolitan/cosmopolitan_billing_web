@@ -39,6 +39,7 @@ export async function enrichSaleLinesWithCosts(items, branchId) {
         costPrice: needsCost
           ? (branchId ? effectiveCostFromBranches(branchData, branchId, fallback) : fallback)
           : line.costPrice,
+        masterTaxRate: Number(item?.tax_rate ?? item?.taxRate) || 0,
         batchTracking: line.batchTracking || Boolean(item?.batch_tracking),
         expiryTracking: line.expiryTracking || Boolean(item?.expiry_tracking),
       })
