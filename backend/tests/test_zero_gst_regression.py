@@ -18,6 +18,8 @@ from src.models import (  # noqa: E402
     Branch,
     Customer,
     Item,
+    ItemBranchConfig,
+    ItemStock,
     Organisation,
     PurchaseOrderLineItem,
     QuotationLineItem,
@@ -55,6 +57,10 @@ async def _session():
         Customer(id="ext", name="External", gstin="29ABCDE1234F1Z5", classification="external"),
         Customer(id="int", name="Internal", classification="internal"),
         Customer(id="same", name="Same", gstin=ORG_GSTIN, classification="external"),
+        ItemBranchConfig(id="cfg8", item_id="i8", branch_id="b1", is_available=True),
+        ItemBranchConfig(id="cfg0", item_id="i0", branch_id="b1", is_available=True),
+        ItemStock(id="st8", item_id="i8", branch_id="b1", quantity=100),
+        ItemStock(id="st0", item_id="i0", branch_id="b1", quantity=100),
         Vendor(id="vext", name="VExt", gstin="29ABCDE1234F1Z5"),
         Vendor(id="vsame", name="VSame", gstin=ORG_GSTIN),
     ])
@@ -214,3 +220,174 @@ def test_repair_script_fixes_zeroed_quote_and_skips_internal(monkeypatch):
     assert fixed == 1
     assert (tax, subtotal) == (8.0, 100.0)
     assert internal_tax == 0
+
+
+# ── Conversion paths ──────────────────────────────────────────────────────
+
+
+async def _zeroed_quote(db, customer_id):
+    from src.models import Quotation
+    user = (await db.execute(select(User).where(User.id == "u1"))).scalar_one()
+    await create_quotation(
+        QuotationCreate(
+            customer_id=customer_id, customer_name="C", branch_id="b1", branch_name="Main",
+            items=[LineItemIn(item_id="i8", name="Eight", qty=1, price=108, tax_rate=8)],
+        ),
+        db=db, user=user,
+    )
+    q = (await db.execute(select(Quotation))).scalar_one()
+    ql = (await db.execute(select(QuotationLineItem))).scalar_one()
+    # Simulate legacy bad data: persisted with 0% GST.
+    ql.tax_rate = 0
+    q.tax_total = 0
+    q.subtotal = q.total
+    await db.commit()
+    return q, user
+
+
+def test_quote_to_invoice_restores_rate_and_totals_for_external_customer():
+    from src.models import SaleInvoice, SaleLineItem
+    from src.routes.sales import ConvertToInvoiceIn, convert_quote_to_invoice
+
+    async def go(db):
+        q, user = await _zeroed_quote(db, "ext")
+        await convert_quote_to_invoice(q.id, ConvertToInvoiceIn(payment_received=True, payment_mode="cash"), db=db, user=user)
+        line = (await db.execute(select(SaleLineItem))).scalar_one()
+        inv = (await db.execute(select(SaleInvoice))).scalar_one()
+        return line.tax_rate, inv.tax_total, inv.subtotal, inv.total
+    rate, tax, subtotal, total = _run(go)
+    assert rate == 8
+    assert (tax, subtotal, total) == (8.0, 100.0, 108.0)
+
+
+@pytest.mark.parametrize("cid", ["same", "int"])
+def test_quote_to_order_keeps_zero_for_zero_gst_customers(cid):
+    from src.models import SalesOrder
+
+    async def go(db):
+        q, user = await _zeroed_quote(db, cid)
+        await convert_quote_to_order(q.id, db=db, user=user)
+        line = (await db.execute(select(SalesOrderLineItem))).scalar_one()
+        so = (await db.execute(select(SalesOrder))).scalar_one()
+        return line.tax_rate, so.tax_total
+    rate, tax = _run(go)
+    assert rate == 0
+    assert tax == 0
+
+
+def test_order_to_invoice_restores_rate_for_external_customer():
+    from src.models import SaleLineItem
+    from src.routes.sales import ConvertToInvoiceIn, convert_order_to_invoice
+
+    async def go(db):
+        q, user = await _zeroed_quote(db, "ext")
+        res = await convert_quote_to_order(q.id, db=db, user=user)
+        from src.models import SalesOrder
+        order_id = (await db.execute(select(SalesOrder.id))).scalar_one()
+        await convert_order_to_invoice(order_id, ConvertToInvoiceIn(payment_received=True, payment_mode="cash"), db=db, user=user)
+        return (await db.execute(select(SaleLineItem))).scalar_one().tax_rate
+    rate = _run(go)
+    assert rate == 8
+
+
+def test_quote_to_order_keeps_non_zero_snapshot_rate():
+    from src.models import Quotation
+
+    async def go(db):
+        user = (await db.execute(select(User).where(User.id == "u1"))).scalar_one()
+        await create_quotation(
+            QuotationCreate(
+                customer_id="ext", customer_name="C", branch_id="b1", branch_name="Main",
+                items=[LineItemIn(item_id="i8", name="Eight", qty=1, price=118, tax_rate=18)],
+            ),
+            db=db, user=user,
+        )
+        q = (await db.execute(select(Quotation))).scalar_one()
+        await convert_quote_to_order(q.id, db=db, user=user)
+        return (await db.execute(select(SalesOrderLineItem))).scalar_one().tax_rate
+    assert _run(go) == 18
+
+
+def test_zero_percent_item_stays_zero_through_quote_to_order():
+    from src.models import Quotation
+
+    async def go(db):
+        user = (await db.execute(select(User).where(User.id == "u1"))).scalar_one()
+        await create_quotation(
+            QuotationCreate(
+                customer_id="ext", customer_name="C", branch_id="b1", branch_name="Main",
+                items=[LineItemIn(item_id="i0", name="Zero", qty=1, price=100, tax_rate=0)],
+            ),
+            db=db, user=user,
+        )
+        q = (await db.execute(select(Quotation))).scalar_one()
+        await convert_quote_to_order(q.id, db=db, user=user)
+        return (await db.execute(select(SalesOrderLineItem))).scalar_one().tax_rate
+    assert _run(go) == 0
+
+
+def test_update_quotation_restores_stale_zero():
+    from src.models import Quotation
+    from src.routes.sales import update_quotation
+
+    async def go(db):
+        q, user = await _zeroed_quote(db, "ext")
+        await update_quotation(
+            q.id,
+            QuotationCreate(
+                customer_id="ext", customer_name="C", branch_id="b1", branch_name="Main",
+                items=[LineItemIn(item_id="i8", name="Eight", qty=1, price=108, tax_rate=0)],
+            ),
+            db=db, user=user,
+        )
+        q2 = (await db.execute(select(Quotation))).scalar_one()
+        line = (await db.execute(select(QuotationLineItem))).scalar_one()
+        return line.tax_rate, q2.tax_total
+    rate, tax = _run(go)
+    assert rate == 8
+    assert tax == 8.0
+
+
+def test_mixed_lines_only_zero_taxable_line_is_restored():
+    async def go(db):
+        user = (await db.execute(select(User).where(User.id == "u1"))).scalar_one()
+        await create_quotation(
+            QuotationCreate(
+                customer_id="ext", customer_name="C", branch_id="b1", branch_name="Main",
+                items=[
+                    LineItemIn(item_id="i8", name="Eight", qty=1, price=108, tax_rate=0),
+                    LineItemIn(item_id="i0", name="Zero", qty=1, price=100, tax_rate=0),
+                ],
+            ),
+            db=db, user=user,
+        )
+        rows = (await db.execute(select(QuotationLineItem))).scalars().all()
+        return {r.item_id: r.tax_rate for r in rows}
+    assert _run(go) == {"i8": 8, "i0": 0}
+
+
+def test_po_to_bill_restores_rate_for_external_vendor_only():
+    from src.models import PurchaseLineItem, PurchaseOrder
+    from src.routes.purchases import ConvertPOToBillIn, convert_order_to_bill
+
+    async def go(db, vendor_id):
+        user = (await db.execute(select(User).where(User.id == "u1"))).scalar_one()
+        await create_purchase_order(
+            PurchaseOrderCreate(
+                vendor_id=vendor_id, vendor_name="V", branch_id="b1", branch_name="Main",
+                items=[PurchaseOrderLineIn(item_id="i8", name="Eight", qty=1, cost=50, tax_rate=8, discount=0)],
+                discount=0, notes="t",
+            ),
+            db=db, user=user,
+        )
+        po = (await db.execute(select(PurchaseOrder))).scalar_one()
+        for ln in (await db.execute(select(PurchaseOrderLineItem))).scalars().all():
+            ln.tax_rate = 0
+        await db.commit()
+        await convert_order_to_bill(po.id, ConvertPOToBillIn(payment_received=False), db=db, user=user)
+        return (await db.execute(select(PurchaseLineItem))).scalar_one().tax_rate
+
+    ext = _run(lambda db: go(db, "vext"))
+    same = _run(lambda db: go(db, "vsame"))
+    assert ext == 8
+    assert same == 0
