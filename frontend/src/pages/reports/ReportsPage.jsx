@@ -7,7 +7,7 @@ import { fmt, fmtDate, fmtNum, fmtQty, statusLabel } from '@/utils/helpers'
 import {
   Card, SearchBar, PaginationBar, SortableHeader, MultiSelect,
   DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, AutocompleteDropdown,
-  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
+  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, SegmentedToggle,
 } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
@@ -67,6 +67,16 @@ const NON_SUMMABLE_KEYS = new Set([
   'margin_pct',
 ])
 
+/**
+ * Margin % footer = margin / sales over the footer totals, matching the backend
+ * row formula. Give either a `margin` column key or a `cost` column key.
+ */
+const MARGIN_PCT_TOTAL_SOURCES = {
+  'product-sales': { sales: 'sales_value', margin: 'profit' },
+  'category-sales': { sales: 'sales_value', margin: 'profit' },
+  'customer-sales': { sales: 'sales_amount', cost: 'cost_of_sales' },
+}
+
 /** Reports that already encode their own totals / structure. */
 const NO_FOOTER_TOTALS_REPORTS = new Set(['profit-loss'])
 
@@ -111,10 +121,12 @@ function computeColumnTotals(rows, columns, reportId) {
       hasAny = true
     }
   })
-  if (reportId === 'customer-sales') {
-    const sales = rows.reduce((sum, row) => sum + (Number(row?.sales_amount) || 0), 0)
-    const cost = rows.reduce((sum, row) => sum + (Number(row?.cost_of_sales) || 0), 0)
-    totals.margin_pct = sales === 0 ? 0 : Number((((sales - cost) * 100) / sales).toFixed(2))
+  const marginSource = MARGIN_PCT_TOTAL_SOURCES[reportId]
+  if (marginSource && columns.some((column) => column.key === 'margin_pct')) {
+    const sumOf = (key) => rows.reduce((sum, row) => sum + (Number(row?.[key]) || 0), 0)
+    const sales = sumOf(marginSource.sales)
+    const margin = marginSource.margin ? sumOf(marginSource.margin) : sales - sumOf(marginSource.cost)
+    totals.margin_pct = sales === 0 ? 0 : Number(((margin * 100) / sales).toFixed(2))
     hasAny = true
   }
   return hasAny ? totals : null
@@ -141,6 +153,7 @@ const DRILLDOWN_PARAM_KEYS = [
   'skip',
   'drill_from',
   'drill_label',
+  'gst_mode',
 ]
 
 /** Parent filter snapshot carried on child URLs so Back restores parent, not child. */
@@ -154,9 +167,32 @@ const PARENT_FILTER_PARAM_KEYS = [
   'parent_sort_by',
   'parent_sort_order',
   'parent_skip',
+  'parent_gst_mode',
 ]
 
 const REPORT_URL_FILTER_KEYS = [...DRILLDOWN_PARAM_KEYS, ...PARENT_FILTER_PARAM_KEYS]
+
+const GST_MODE_OPTIONS = [
+  { id: 'inclusive', label: 'Incl. GST' },
+  { id: 'exclusive', label: 'Excl. GST' },
+]
+
+/** Reports where the GST toggle is hidden. */
+const GST_TOGGLE_HIDDEN_REPORTS = new Set([
+  'sales-register',
+  'tax-summary',
+  'petty-cash',
+  'stock-movement',
+  'low-stock',
+  'out-of-stock',
+  'stock-transfers',
+  'spoilage-damage',
+])
+
+/** GST-inclusive is the backend default, so only the exclusive mode is sent. */
+function gstParamForApi(gstMode) {
+  return gstMode === 'exclusive' ? { gst_mode: 'exclusive' } : {}
+}
 
 function readDrilldownFilters(searchParams) {
   const filters = {}
@@ -233,7 +269,7 @@ function txnTypesDirty(draftIds, appliedIds) {
   return draftKey !== appliedKey
 }
 
-function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, childCounterId, transactionType, sortBy, sortOrder, skip }) {
+function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, childCounterId, transactionType, gstMode, sortBy, sortOrder, skip }) {
   return {
     parent_date_from: dateFrom || '',
     parent_date_to: dateTo || '',
@@ -244,6 +280,7 @@ function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, child
     ...(sortBy ? { parent_sort_by: sortBy } : {}),
     ...(sortOrder ? { parent_sort_order: sortOrder } : {}),
     ...(skip > 0 ? { parent_skip: String(skip) } : {}),
+    ...(gstMode === 'exclusive' ? { parent_gst_mode: 'exclusive' } : {}),
   }
 }
 
@@ -265,6 +302,7 @@ function restoreParentFilters(urlFilters, fallbacks = {}) {
     ...(urlFilters.parent_sort_by ? { sort_by: urlFilters.parent_sort_by } : {}),
     ...(urlFilters.parent_sort_order ? { sort_order: urlFilters.parent_sort_order } : {}),
     ...(urlFilters.parent_transaction_type ? { transaction_type: urlFilters.parent_transaction_type } : {}),
+    ...(urlFilters.parent_gst_mode ? { gst_mode: urlFilters.parent_gst_mode } : {}),
     ...(Number.isFinite(skip) && skip > 0 ? { skip: String(skip) } : {}),
   }
 }
@@ -1045,6 +1083,22 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions)
   ))
   const [childCounterId, setChildCounterId] = useState(() => searchParams.get('child_counter_id') || '')
+  const [gstModeSetting, setGstMode] = useState(() => (
+    searchParams.get('gst_mode') === 'exclusive' ? 'exclusive' : 'inclusive'
+  ))
+  const gstToggleVisible = !GST_TOGGLE_HIDDEN_REPORTS.has(report.id)
+  const gstMode = gstToggleVisible ? gstModeSetting : 'inclusive'
+  const gstToggle = gstToggleVisible ? (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <label className="form-label">GST</label>
+      <SegmentedToggle
+        ariaLabel="Show amounts with or without GST"
+        value={gstModeSetting}
+        onChange={setGstMode}
+        options={GST_MODE_OPTIONS}
+      />
+    </div>
+  ) : null
   const [appliedFilters, setAppliedFilters] = useState(() => ({
     dateFrom: initialFrom,
     dateTo: initialAsOf,
@@ -1156,6 +1210,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       parent_sort_order: _pso,
       parent_skip: _psk,
       parent_transaction_type: _ptt,
+      gst_mode: _gst,
+      parent_gst_mode: _pgst,
       transaction_type: _tt,
       sort_by: _sb,
       sort_order: _so,
@@ -1203,6 +1259,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setBranchIds(nextBranches)
     setTransactionTypes(nextTxn)
     setChildCounterId(nextCounterId)
+    setGstMode(urlFilters.gst_mode === 'exclusive' ? 'exclusive' : 'inclusive')
     setAppliedFilters({
       dateFrom: nextFrom,
       dateTo: nextTo,
@@ -1242,6 +1299,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           skip,
           limit: report.id === 'profit-loss' ? Math.max(limit, 100) : limit,
           ...drillFilters,
+          ...gstParamForApi(gstMode),
           ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
           ...(supportsChildCounterFilter && appliedFilters.childCounterId
             ? { child_counter_id: appliedFilters.childCounterId }
@@ -1279,6 +1337,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     limit,
     runKey,
     drillFilters,
+    gstMode,
     urlFilters.branch_id,
     txnTypeOptions,
     supportsChildCounterFilter,
@@ -1305,6 +1364,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           sort_by: sortBy,
           sort_order: sortOrder,
           ...drillFilters,
+          ...gstParamForApi(gstMode),
           ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
           ...(supportsChildCounterFilter && appliedFilters.childCounterId
             ? { child_counter_id: appliedFilters.childCounterId }
@@ -1343,6 +1403,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     txnTypeOptions,
     isAsOfDate,
     supportsChildCounterFilter,
+    gstMode,
   ])
 
   useEffect(() => {
@@ -1411,6 +1472,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       sort_by: sortBy,
       sort_order: sortOrder,
       ...drillFilters,
+      ...gstParamForApi(gstMode),
       ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
       ...(supportsChildCounterFilter && appliedFilters.childCounterId
         ? { child_counter_id: appliedFilters.childCounterId }
@@ -1506,6 +1568,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       ...filters,
       drill_from: report.id,
       drill_label: drill.label || '',
+      ...gstParamForApi(gstMode),
       // Keep parent date/branch/sort snapshot separate from child drill filters.
       ...parentFiltersFromState({
         dateFrom: appliedFilters.dateFrom,
@@ -1514,6 +1577,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         branchLabel: appliedBranchLabel,
         childCounterId: appliedFilters.childCounterId,
         transactionType: appliedTxnParam,
+        gstMode,
         sortBy,
         sortOrder,
         skip,
@@ -1541,6 +1605,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           }
         : {}),
       ...(appliedFilters.childCounterId ? { child_counter_id: appliedFilters.childCounterId } : {}),
+      ...gstParamForApi(gstMode),
       ...(txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
         ? { transaction_type: txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions) }
         : {}),
@@ -1706,6 +1771,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                     placeholder="All types"
                   />
                 </div>
+                {gstToggle}
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -1718,6 +1784,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
               </div>
             )}
             {txnTypeOptions.length === 0 && reportSearchField}
+            {txnTypeOptions.length === 0 && gstToggle && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{gstToggle}</div>
+            )}
           </div>
         ) : (
           <div style={{
@@ -1791,6 +1860,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                 />
               </div>
             )}
+            {gstToggle}
             <button
               type="button"
               className="btn btn-primary"

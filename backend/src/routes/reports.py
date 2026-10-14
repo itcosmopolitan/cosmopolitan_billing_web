@@ -16,6 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from src import config
 from src.database import get_db
 from src.date_utils import MAX_REPORT_DATE_RANGE_DAYS, parse_date_range
+from src.gst_display import (
+    doc_amount_expr,
+    is_exclusive,
+    line_amount_expr,
+    scale_doc_rows,
+    scale_line_rows,
+)
 from src.models import (
     AdjustmentRequest,
     Branch,
@@ -629,8 +636,11 @@ def _sales_register_union_query(inv_conds, cn_conds):
     return inv_q.union_all(cn_q).subquery()
 
 
-def _signed_sales_docs_subquery(inv_conds, cn_conds):
-    """One row per invoice (+) and credit note (−) with signed totals/qty."""
+def _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive: bool = False):
+    """One row per invoice (+) and credit note (−) with signed totals/qty.
+
+    With ``exclusive`` set, money columns are restated net of GST.
+    """
     per_inv = (
         select(
             SaleInvoice.date.label("doc_date"),
@@ -641,14 +651,27 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
             SaleInvoice.branch_name.label("branch"),
             SaleInvoice.customer_id.label("customer_id"),
             SaleInvoice.customer_name.label("customer"),
-            SaleInvoice.total.label("total"),
-            func.coalesce(SaleInvoice.discount, 0).label("discount"),
+            doc_amount_expr(SaleInvoice.total, SaleInvoice.total, SaleInvoice.tax_total, exclusive).label("total"),
+            doc_amount_expr(
+                func.coalesce(SaleInvoice.discount, 0), SaleInvoice.total, SaleInvoice.tax_total, exclusive
+            ).label("discount"),
             func.coalesce(SaleInvoice.tax_total, 0).label("tax_total"),
-            func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
-            _invoice_outstanding_expr().label("outstanding"),
+            doc_amount_expr(
+                func.coalesce(SaleInvoice.paid_amount, 0), SaleInvoice.total, SaleInvoice.tax_total, exclusive
+            ).label("paid_amount"),
+            doc_amount_expr(
+                _invoice_outstanding_expr(), SaleInvoice.total, SaleInvoice.tax_total, exclusive
+            ).label("outstanding"),
             func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
             func.coalesce(
-                func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0
+                func.sum(
+                    line_amount_expr(
+                        func.coalesce(Item.cost_price, 0) * SaleLineItem.qty,
+                        SaleLineItem.tax_rate,
+                        exclusive,
+                    )
+                ),
+                0,
             ).label("cost_of_sales"),
         )
         .select_from(SaleInvoice)
@@ -681,7 +704,9 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
             SalesReturn.branch_name.label("branch"),
             SalesReturn.customer_id.label("customer_id"),
             SalesReturn.customer_name.label("customer"),
-            (-func.coalesce(SalesReturn.total, 0)).label("total"),
+            (-doc_amount_expr(
+                func.coalesce(SalesReturn.total, 0), SalesReturn.total, SalesReturn.tax_total, exclusive
+            )).label("total"),
             literal(0.0).label("discount"),
             (-func.coalesce(SalesReturn.tax_total, 0)).label("tax_total"),
             literal(0.0).label("paid_amount"),
@@ -689,7 +714,14 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
             (-func.coalesce(func.sum(SalesReturnLineItem.return_qty), 0)).label("quantity_sold"),
             (
                 -func.coalesce(
-                    func.sum(func.coalesce(Item.cost_price, 0) * SalesReturnLineItem.return_qty), 0
+                    func.sum(
+                        line_amount_expr(
+                            func.coalesce(Item.cost_price, 0) * SalesReturnLineItem.return_qty,
+                            SalesReturnLineItem.tax_rate,
+                            exclusive,
+                        )
+                    ),
+                    0,
                 )
             ).label("cost_of_sales"),
         )
@@ -714,10 +746,21 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds):
     return per_inv.union_all(per_cn).subquery()
 
 
-def _signed_sales_lines_query(inv_conds, cn_conds):
-    """Invoice lines (positive qty/value) UNION credit-note lines (negative)."""
+def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
+    """Invoice lines (positive qty/value) UNION credit-note lines (negative).
+
+    With ``exclusive`` set, money columns are restated net of GST.
+    """
     _, inv_taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
     _, cn_taxable, _ = _tax_line_exprs(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate)
+    inv_cost = line_amount_expr(
+        func.coalesce(Item.cost_price, 0) * SaleLineItem.qty, SaleLineItem.tax_rate, exclusive
+    )
+    cn_cost = line_amount_expr(
+        func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0),
+        SalesReturnLineItem.tax_rate,
+        exclusive,
+    )
     inv_q = (
         select(
             SaleInvoice.id.label("invoice_id"),
@@ -733,18 +776,19 @@ def _signed_sales_lines_query(inv_conds, cn_conds):
             SaleInvoice.cashier.label("cashier"),
             SaleInvoice.child_counter_name.label("child_counter"),
             SaleLineItem.qty.label("quantity"),
-            SaleLineItem.price.label("unit_price"),
-            SaleLineItem.discount.label("discount"),
-            SaleLineItem.line_total.label("line_total"),
+            line_amount_expr(SaleLineItem.price, SaleLineItem.tax_rate, exclusive).label("unit_price"),
+            line_amount_expr(SaleLineItem.discount, SaleLineItem.tax_rate, exclusive).label("discount"),
+            line_amount_expr(SaleLineItem.line_total, SaleLineItem.tax_rate, exclusive).label("line_total"),
             inv_taxable.label("taxable_total"),
-            (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty).label("cost_value"),
-            (
-                inv_taxable
-                - (func.coalesce(Item.cost_price, 0) * SaleLineItem.qty)
-            ).label("profit"),
+            inv_cost.label("cost_value"),
+            (inv_taxable - inv_cost).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
-            func.coalesce(SaleInvoice.paid_amount, 0).label("paid_amount"),
-            _invoice_outstanding_expr().label("remaining_amount"),
+            doc_amount_expr(
+                func.coalesce(SaleInvoice.paid_amount, 0), SaleInvoice.total, SaleInvoice.tax_total, exclusive
+            ).label("paid_amount"),
+            doc_amount_expr(
+                _invoice_outstanding_expr(), SaleInvoice.total, SaleInvoice.tax_total, exclusive
+            ).label("remaining_amount"),
             literal("Invoice").label("transaction_type"),
             cast(SaleInvoice.status, String).label("status"),
             _null_str().label("document_id"),
@@ -771,17 +815,14 @@ def _signed_sales_lines_query(inv_conds, cn_conds):
             SaleInvoice.cashier.label("cashier"),
             SaleInvoice.child_counter_name.label("child_counter"),
             (-func.coalesce(SalesReturnLineItem.return_qty, 0)).label("quantity"),
-            SalesReturnLineItem.price.label("unit_price"),
+            line_amount_expr(SalesReturnLineItem.price, SalesReturnLineItem.tax_rate, exclusive).label("unit_price"),
             literal(0.0).label("discount"),
-            (-func.coalesce(SalesReturnLineItem.line_total, 0)).label("line_total"),
+            (-func.coalesce(
+                line_amount_expr(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate, exclusive), 0
+            )).label("line_total"),
             (-cn_taxable).label("taxable_total"),
-            (
-                -func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0)
-            ).label("cost_value"),
-            (
-                -cn_taxable
-                + (func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0))
-            ).label("profit"),
+            (-cn_cost).label("cost_value"),
+            (-cn_taxable + cn_cost).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
             literal(0.0).label("paid_amount"),
             literal(0.0).label("remaining_amount"),
@@ -1039,8 +1080,12 @@ def _signed_purchase_docs_subquery(bill_conds, vr_conds):
     return per_bill.union_all(per_vr).subquery()
 
 
-def _signed_purchase_lines_query(bill_conds, vr_conds):
-    """Bill lines (positive qty/value) UNION vendor-return lines (negative)."""
+def _signed_purchase_lines_query(bill_conds, vr_conds, exclusive: bool = False):
+    """Bill lines (positive qty/value) UNION vendor-return lines (negative).
+
+    When ``exclusive`` is set, unit cost and line total are restated net of GST
+    at each line's tax rate. Discount is a percentage and is left unchanged.
+    """
     bill_q = (
         select(
             PurchaseBill.id.label("bill_id"),
@@ -1051,9 +1096,9 @@ def _signed_purchase_lines_query(bill_conds, vr_conds):
             PurchaseBill.vendor_name.label("vendor"),
             PurchaseBill.branch_name.label("branch"),
             PurchaseLineItem.qty.label("quantity"),
-            PurchaseLineItem.cost.label("unit_cost"),
+            line_amount_expr(PurchaseLineItem.cost, PurchaseLineItem.tax_rate, exclusive).label("unit_cost"),
             PurchaseLineItem.discount.label("discount"),
-            PurchaseLineItem.line_total.label("line_total"),
+            line_amount_expr(PurchaseLineItem.line_total, PurchaseLineItem.tax_rate, exclusive).label("line_total"),
             literal("Bill").label("transaction_type"),
             cast(PurchaseBill.status, String).label("status"),
             _null_str().label("document_id"),
@@ -1073,9 +1118,9 @@ def _signed_purchase_lines_query(bill_conds, vr_conds):
             VendorReturn.vendor_name.label("vendor"),
             VendorReturn.branch_name.label("branch"),
             (-func.coalesce(ReturnLineItem.return_qty, 0)).label("quantity"),
-            ReturnLineItem.cost.label("unit_cost"),
+            line_amount_expr(ReturnLineItem.cost, ReturnLineItem.tax_rate, exclusive).label("unit_cost"),
             literal(0.0).label("discount"),
-            (-func.coalesce(ReturnLineItem.line_total, 0)).label("line_total"),
+            (-func.coalesce(line_amount_expr(ReturnLineItem.line_total, ReturnLineItem.tax_rate, exclusive), 0)).label("line_total"),
             literal("Debit Note").label("transaction_type"),
             cast(VendorReturn.status, String).label("status"),
             VendorReturn.id.label("document_id"),
@@ -1478,6 +1523,7 @@ async def tax_summary_detail(
     full_rate: Optional[float] = None,
     tax_percentage: Optional[float] = None,
     transaction_type: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -1485,11 +1531,15 @@ async def tax_summary_detail(
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
-    """Child register: documents contributing to one configured tax rate."""
+    """Child register: documents contributing to one configured tax rate.
+
+    Amounts are gross (taxable + tax) by default; exclusive mode shows taxable only.
+    """
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
     start_s = start.isoformat() if hasattr(start, "isoformat") else start
     end_s = end.isoformat() if hasattr(end, "isoformat") else end
+    exclusive = is_exclusive(gst_mode)
 
     if full_rate is not None:
         slab_rate = float(full_rate)
@@ -1620,11 +1670,12 @@ async def tax_summary_detail(
                 continue
             taxable = sign * float(mapping.get("taxable_amount") or 0)
             tax_amt = sign * float(mapping.get("full_tax") or 0)
+            transaction_amount = taxable if exclusive else taxable + tax_amt
             rows.append({
                 "date": mapping.get("date"),
                 "entry_number": mapping.get("entry_number") or "",
                 "transaction_type": mapping.get("transaction_type") or "",
-                "transaction_amount": round(taxable, 2),
+                "transaction_amount": round(transaction_amount, 2),
                 "tax_amount": round(tax_amt, 2),
                 "document_id": mapping.get("document_id"),
                 "detail_kind": {
@@ -1669,6 +1720,7 @@ async def sales_register(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -1690,6 +1742,18 @@ async def sales_register(
     inv_conds = _sale_filters(**filter_kwargs)
     cn_conds = _cn_filters(**filter_kwargs)
     docs = _sales_register_union_query(inv_conds, cn_conds)
+    if is_exclusive(gst_mode):
+        doc_amount_cols = {"discount", "net_amount", "paid_amount", "remaining_amount"}
+        docs = select(
+            *[
+                (
+                    doc_amount_expr(docs.c[name], docs.c.net_amount, docs.c.tax_amount, True)
+                    if name in doc_amount_cols
+                    else docs.c[name]
+                ).label(name)
+                for name in docs.c.keys()
+            ]
+        ).subquery()
 
     sort_map = {
         "invoice_number": docs.c.invoice_number,
@@ -1734,6 +1798,7 @@ async def sales_lines(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -1793,7 +1858,7 @@ async def sales_lines(
             inv_conds.append(Item.category_id == category_id)
             cn_conds.append(Item.category_id == category_id)
 
-    lines = _signed_sales_lines_query(inv_conds, cn_conds).subquery()
+    lines = _signed_sales_lines_query(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode)).subquery()
     sort_map = {
         "invoice_number": lines.c.invoice_number,
         "invoice_date": lines.c.invoice_date,
@@ -1834,6 +1899,7 @@ async def daily_sales(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -1866,7 +1932,7 @@ async def daily_sales(
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
-    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
     base_q = (
         select(
             docs.c.doc_date.label("date"),
@@ -1915,10 +1981,12 @@ async def daily_sales_returns(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
     """Credit notes (sales returns) aggregated by return date."""
+    exclusive = is_exclusive(gst_mode)
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
     start_s = _iso_date(start)
@@ -1963,8 +2031,24 @@ async def daily_sales_returns(
             func.coalesce(func.sum(qty_sq.c.qty), 0).label("quantity_returned"),
             func.coalesce(func.sum(SalesReturn.subtotal), 0).label("gross_returns"),
             func.coalesce(func.sum(SalesReturn.tax_total), 0).label("tax"),
-            func.coalesce(func.sum(SalesReturn.credited_amount), 0).label("credited_amount"),
-            func.coalesce(func.sum(SalesReturn.total), 0).label("net_returns"),
+            func.coalesce(
+                func.sum(
+                    doc_amount_expr(
+                        func.coalesce(SalesReturn.credited_amount, 0),
+                        SalesReturn.total, SalesReturn.tax_total, exclusive,
+                    )
+                ),
+                0,
+            ).label("credited_amount"),
+            func.coalesce(
+                func.sum(
+                    doc_amount_expr(
+                        func.coalesce(SalesReturn.total, 0),
+                        SalesReturn.total, SalesReturn.tax_total, exclusive,
+                    )
+                ),
+                0,
+            ).label("net_returns"),
         )
         .select_from(SalesReturn)
         .outerjoin(qty_sq, qty_sq.c.return_id == SalesReturn.id)
@@ -1978,8 +2062,8 @@ async def daily_sales_returns(
         "quantity_returned": func.coalesce(func.sum(qty_sq.c.qty), 0),
         "gross_returns": func.coalesce(func.sum(SalesReturn.subtotal), 0),
         "tax": func.coalesce(func.sum(SalesReturn.tax_total), 0),
-        "credited_amount": func.coalesce(func.sum(SalesReturn.credited_amount), 0),
-        "net_returns": func.coalesce(func.sum(SalesReturn.total), 0),
+        "credited_amount": base_q.selected_columns.credited_amount,
+        "net_returns": base_q.selected_columns.net_returns,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
 
@@ -2013,6 +2097,7 @@ async def product_sales(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2042,7 +2127,7 @@ async def product_sales(
         inv_conds.append(SaleLineItem.name.ilike(f"%{search}%"))
         cn_conds.append(SalesReturnLineItem.name.ilike(f"%{search}%"))
 
-    lines = _signed_sales_lines_query(inv_conds, cn_conds).subquery()
+    lines = _signed_sales_lines_query(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode)).subquery()
     sales_sum = func.coalesce(func.sum(lines.c.line_total), 0)
     cost_sum = func.coalesce(func.sum(lines.c.cost_value), 0)
     profit_sum = func.coalesce(func.sum(lines.c.profit), 0)
@@ -2540,6 +2625,7 @@ async def payment_sales(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2565,7 +2651,7 @@ async def payment_sales(
         cn_conds.append(cn_branch)
 
     _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
-    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
 
     sort_map = {
         "payment_method": docs.c.payment_mode,
@@ -2628,6 +2714,7 @@ async def category_sales(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2657,7 +2744,7 @@ async def category_sales(
         inv_conds.append(Category.name.ilike(f"%{search}%"))
         cn_conds.append(Category.name.ilike(f"%{search}%"))
 
-    lines = _signed_sales_lines_query(inv_conds, cn_conds).subquery()
+    lines = _signed_sales_lines_query(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode)).subquery()
     sales_sum = func.coalesce(func.sum(lines.c.line_total), 0)
     cost_sum = func.coalesce(func.sum(lines.c.cost_value), 0)
     profit_sum = func.coalesce(func.sum(lines.c.profit), 0)
@@ -2704,6 +2791,7 @@ async def branch_sales(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2729,7 +2817,7 @@ async def branch_sales(
         cn_conds.append(cn_branch)
 
     _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
-    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
     sort_map = {
         "branch": docs.c.branch,
         "invoice_count": func.count(docs.c.doc_id),
@@ -2773,6 +2861,7 @@ async def cashier_sales(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2798,7 +2887,7 @@ async def cashier_sales(
         cn_conds.append(cn_branch)
 
     _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
-    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
     sort_map = {
         "cashier": docs.c.cashier,
         "invoice_count": func.count(docs.c.doc_id),
@@ -2847,6 +2936,7 @@ async def customer_sales(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2875,7 +2965,7 @@ async def customer_sales(
         inv_conds.append(SaleInvoice.customer_name.ilike(f"%{search}%"))
         cn_conds.append(SalesReturn.customer_name.ilike(f"%{search}%"))
 
-    docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
     sales_sum = func.coalesce(func.sum(docs.c.total), 0)
     cost_sum = func.coalesce(func.sum(docs.c.cost_of_sales), 0)
     margin_pct = _margin_pct_expr(sales_sum, sales_sum - cost_sum)
@@ -2930,6 +3020,7 @@ async def purchase_register(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -2970,6 +3061,8 @@ async def purchase_register(
     total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
     result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
+    if is_exclusive(gst_mode):
+        scale_doc_rows(rows, ["total", "paid", "balance"], total_key="total", tax_key="tax")
     return paged(rows, total, sk, lim)
 
 
@@ -2983,10 +3076,12 @@ async def daily_purchase_returns(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
     """Vendor returns (debit notes) aggregated by return date."""
+    exclusive = is_exclusive(gst_mode)
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
     start_s = _iso_date(start)
@@ -3017,6 +3112,10 @@ async def daily_purchase_returns(
 
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
+    net_expr = doc_amount_expr(VendorReturn.total, VendorReturn.total, VendorReturn.tax_total, exclusive)
+    credited_expr = doc_amount_expr(
+        VendorReturn.credited_amount, VendorReturn.total, VendorReturn.tax_total, exclusive
+    )
 
     base_q = (
         select(
@@ -3025,8 +3124,8 @@ async def daily_purchase_returns(
             func.coalesce(func.sum(qty_sq.c.qty), 0).label("quantity_returned"),
             func.coalesce(func.sum(VendorReturn.subtotal), 0).label("gross_returns"),
             func.coalesce(func.sum(VendorReturn.tax_total), 0).label("tax"),
-            func.coalesce(func.sum(VendorReturn.credited_amount), 0).label("credited_amount"),
-            func.coalesce(func.sum(VendorReturn.total), 0).label("net_returns"),
+            func.coalesce(func.sum(credited_expr), 0).label("credited_amount"),
+            func.coalesce(func.sum(net_expr), 0).label("net_returns"),
         )
         .select_from(VendorReturn)
         .outerjoin(qty_sq, qty_sq.c.return_id == VendorReturn.id)
@@ -3040,8 +3139,8 @@ async def daily_purchase_returns(
         "quantity_returned": func.coalesce(func.sum(qty_sq.c.qty), 0),
         "gross_returns": func.coalesce(func.sum(VendorReturn.subtotal), 0),
         "tax": func.coalesce(func.sum(VendorReturn.tax_total), 0),
-        "credited_amount": func.coalesce(func.sum(VendorReturn.credited_amount), 0),
-        "net_returns": func.coalesce(func.sum(VendorReturn.total), 0),
+        "credited_amount": func.coalesce(func.sum(credited_expr), 0),
+        "net_returns": func.coalesce(func.sum(net_expr), 0),
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
 
@@ -3077,6 +3176,7 @@ async def purchase_lines(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -3123,7 +3223,7 @@ async def purchase_lines(
             | VendorReturn.vendor_name.ilike(f"%{search}%")
         )
 
-    lines = _signed_purchase_lines_query(bill_conds, vr_conds).subquery()
+    lines = _signed_purchase_lines_query(bill_conds, vr_conds, exclusive=is_exclusive(gst_mode)).subquery()
     sort_map = {
         "bill_number": lines.c.bill_number,
         "bill_date": lines.c.bill_date,
@@ -3158,9 +3258,11 @@ async def vendor_purchases(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
+    exclusive = is_exclusive(gst_mode)
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
     start, end = _normalize_date_range(date_from, date_to)
     start_s = _iso_date(start)
@@ -3186,13 +3288,16 @@ async def vendor_purchases(
         vr_conds.append(VendorReturn.vendor_name.ilike(f"%{search}%"))
 
     docs = _signed_purchase_docs_subquery(bill_conds, vr_conds)
+    total_expr = doc_amount_expr(docs.c.total, docs.c.total, docs.c.tax_total, exclusive)
+    paid_expr = doc_amount_expr(docs.c.paid_amount, docs.c.total, docs.c.tax_total, exclusive)
+    outstanding_expr = doc_amount_expr(docs.c.outstanding, docs.c.total, docs.c.tax_total, exclusive)
     sort_map = {
         "vendor": docs.c.vendor,
         "purchase_count": func.count(docs.c.doc_id),
         "quantity_purchased": func.coalesce(func.sum(docs.c.quantity_purchased), 0),
-        "purchase_amount": func.coalesce(func.sum(docs.c.total), 0),
-        "paid_amount": func.coalesce(func.sum(docs.c.paid_amount), 0),
-        "outstanding_amount": func.coalesce(func.sum(docs.c.outstanding), 0),
+        "purchase_amount": func.coalesce(func.sum(total_expr), 0),
+        "paid_amount": func.coalesce(func.sum(paid_expr), 0),
+        "outstanding_amount": func.coalesce(func.sum(outstanding_expr), 0),
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "purchase_amount", "desc")
@@ -3204,9 +3309,9 @@ async def vendor_purchases(
             docs.c.vendor.label("vendor"),
             func.count(docs.c.doc_id).label("purchase_count"),
             func.coalesce(func.sum(docs.c.quantity_purchased), 0).label("quantity_purchased"),
-            func.coalesce(func.sum(docs.c.total), 0).label("purchase_amount"),
-            func.coalesce(func.sum(docs.c.paid_amount), 0).label("paid_amount"),
-            func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding_amount"),
+            func.coalesce(func.sum(total_expr), 0).label("purchase_amount"),
+            func.coalesce(func.sum(paid_expr), 0).label("paid_amount"),
+            func.coalesce(func.sum(outstanding_expr), 0).label("outstanding_amount"),
         )
         .select_from(docs)
         .group_by(docs.c.vendor_id, docs.c.vendor)
@@ -3228,6 +3333,7 @@ async def product_purchases(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -3255,7 +3361,7 @@ async def product_purchases(
         bill_conds.append(PurchaseLineItem.name.ilike(f"%{search}%"))
         vr_conds.append(ReturnLineItem.name.ilike(f"%{search}%"))
 
-    lines = _signed_purchase_lines_query(bill_conds, vr_conds).subquery()
+    lines = _signed_purchase_lines_query(bill_conds, vr_conds, exclusive=is_exclusive(gst_mode)).subquery()
     sort_map = {
         "product": lines.c.product,
         "quantity_purchased": func.coalesce(func.sum(lines.c.quantity), 0),
@@ -3295,6 +3401,7 @@ async def current_stock(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     conds = []
@@ -3315,6 +3422,11 @@ async def current_stock(
         .subquery()
     )
     reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
+    stock_value_expr = line_amount_expr(
+        ItemStock.quantity * func.coalesce(Item.cost_price, 0),
+        Item.tax_rate,
+        is_exclusive(gst_mode),
+    )
 
     sort_map = {
         "product_code": Item.sku,
@@ -3323,7 +3435,7 @@ async def current_stock(
         "branch": Branch.name,
         "available_stock": ItemStock.quantity,
         "reserved_stock": reserved_expr,
-        "stock_value": ItemStock.quantity * func.coalesce(Item.cost_price, 0),
+        "stock_value": stock_value_expr,
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product_name", "asc")
@@ -3337,7 +3449,7 @@ async def current_stock(
             Branch.name.label("branch"),
             ItemStock.quantity.label("available_stock"),
             reserved_expr.label("reserved_stock"),
-            (ItemStock.quantity * func.coalesce(Item.cost_price, 0)).label("stock_value"),
+            stock_value_expr.label("stock_value"),
         )
         .join(Item, Item.id == ItemStock.item_id)
         .join(Branch, Branch.id == ItemStock.branch_id)
@@ -3604,10 +3716,14 @@ async def complimentary_issues(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """Approved complimentary and sample issues, one row per item issued."""
+    exclusive = is_exclusive(gst_mode)
+    unit_cost_expr = line_amount_expr(ComplimentaryLineItem.cost_price, Item.tax_rate, exclusive)
+    cost_value_expr = line_amount_expr(ComplimentaryLineItem.cost_total, Item.tax_rate, exclusive)
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     start, end = _normalize_date_range(date_from, date_to)
@@ -3640,8 +3756,8 @@ async def complimentary_issues(
         "product_code": Item.sku,
         "product": ComplimentaryLineItem.name,
         "quantity": ComplimentaryLineItem.qty,
-        "unit_cost": ComplimentaryLineItem.cost_price,
-        "cost_value": ComplimentaryLineItem.cost_total,
+        "unit_cost": unit_cost_expr,
+        "cost_value": cost_value_expr,
         "requested_by": ComplimentaryEntry.requested_by,
         "approved_by": ComplimentaryEntry.approved_by,
     }
@@ -3658,8 +3774,8 @@ async def complimentary_issues(
             Item.sku.label("product_code"),
             ComplimentaryLineItem.name.label("product"),
             ComplimentaryLineItem.qty.label("quantity"),
-            ComplimentaryLineItem.cost_price.label("unit_cost"),
-            ComplimentaryLineItem.cost_total.label("cost_value"),
+            unit_cost_expr.label("unit_cost"),
+            cost_value_expr.label("cost_value"),
             ComplimentaryEntry.requested_by.label("requested_by"),
             ComplimentaryEntry.approved_by.label("approved_by"),
         )
@@ -3691,6 +3807,7 @@ async def expiry_batches(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     within_days: int = Query(30, ge=1, le=365),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Active batches that are expired or due to expire within `within_days`."""
@@ -3716,7 +3833,11 @@ async def expiry_batches(
             | ItemBatch.batch_number.ilike(like)
         )
 
-    stock_value = ItemBatch.quantity * func.coalesce(ItemBatch.cost_price, Item.cost_price, 0)
+    stock_value = line_amount_expr(
+        ItemBatch.quantity * func.coalesce(ItemBatch.cost_price, Item.cost_price, 0),
+        Item.tax_rate,
+        is_exclusive(gst_mode),
+    )
     sort_map = {
         "product_code": Item.sku,
         "product": Item.name,
@@ -4003,10 +4124,14 @@ async def outstanding_receivables(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
     outstanding = _invoice_outstanding_expr()
+    outstanding_out = doc_amount_expr(
+        outstanding, SaleInvoice.total, SaleInvoice.tax_total, is_exclusive(gst_mode)
+    )
     conds = [
         outstanding > 0.01,
         SaleInvoice.status != InvoiceStatus.cancelled,
@@ -4029,7 +4154,7 @@ async def outstanding_receivables(
         "invoice_number": SaleInvoice.number,
         "invoice_date": SaleInvoice.date,
         "due_date": SaleInvoice.date,
-        "outstanding_amount": outstanding,
+        "outstanding_amount": outstanding_out,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "due_date", "asc")
     sk = normalize_skip(skip)
@@ -4041,7 +4166,7 @@ async def outstanding_receivables(
             SaleInvoice.number.label("invoice_number"),
             SaleInvoice.date.label("invoice_date"),
             SaleInvoice.date.label("due_date"),
-            outstanding.label("outstanding_amount"),
+            outstanding_out.label("outstanding_amount"),
         )
         .select_from(SaleInvoice)
         .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
@@ -4072,9 +4197,14 @@ async def outstanding_payables(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     start, end = _normalize_date_range(date_from, date_to)
+    payable_expr = PurchaseBill.total - PurchaseBill.paid_amount
+    payable_out = doc_amount_expr(
+        payable_expr, PurchaseBill.total, PurchaseBill.tax_total, is_exclusive(gst_mode)
+    )
     conds = [
         PurchaseBill.total > PurchaseBill.paid_amount,
         ~_vendor_is_internal_company(),
@@ -4094,7 +4224,7 @@ async def outstanding_payables(
         "bill_number": PurchaseBill.number,
         "bill_date": PurchaseBill.date,
         "due_date": PurchaseBill.due_date,
-        "outstanding_amount": PurchaseBill.total - PurchaseBill.paid_amount,
+        "outstanding_amount": payable_out,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "due_date", "asc")
     sk = normalize_skip(skip)
@@ -4106,7 +4236,7 @@ async def outstanding_payables(
             PurchaseBill.number.label("bill_number"),
             PurchaseBill.date.label("bill_date"),
             PurchaseBill.due_date.label("due_date"),
-            (PurchaseBill.total - PurchaseBill.paid_amount).label("outstanding_amount"),
+            payable_out.label("outstanding_amount"),
         )
         .select_from(PurchaseBill)
         .outerjoin(Vendor, Vendor.id == PurchaseBill.vendor_id)
@@ -4135,12 +4265,20 @@ async def _sales_aging_detail_rows(
     date_from: Optional[str],
     date_to: Optional[str],
     customer_id: Optional[str],
+    gst_mode: Optional[str] = None,
     db: AsyncSession,
 ) -> tuple[list[dict[str, Any]], date]:
     # Aging uses a single as-of cutoff (date_to). date_from is ignored so older
     # open balances still appear in later buckets.
     as_of = _normalize_as_of_date(date_to)
+    exclusive = is_exclusive(gst_mode)
     outstanding = _invoice_outstanding_expr()
+    outstanding_out = doc_amount_expr(
+        outstanding, SaleInvoice.total, SaleInvoice.tax_total, exclusive
+    )
+    original_out = doc_amount_expr(
+        SaleInvoice.total, SaleInvoice.total, SaleInvoice.tax_total, exclusive
+    )
     conds = [
         outstanding > 0.01,
         SaleInvoice.status != InvoiceStatus.cancelled,
@@ -4177,8 +4315,8 @@ async def _sales_aging_detail_rows(
             SaleInvoice.number.label("invoice_number"),
             SalesOrder.number.label("order_number"),
             SaleInvoice.due_date.label("due_date"),
-            SaleInvoice.total.label("original_amount"),
-            outstanding.label("balance"),
+            original_out.label("original_amount"),
+            outstanding_out.label("balance"),
         )
         .select_from(SaleInvoice)
         .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
@@ -4209,11 +4347,19 @@ async def _purchase_aging_detail_rows(
     date_from: Optional[str],
     date_to: Optional[str],
     vendor_id: Optional[str],
+    gst_mode: Optional[str] = None,
     db: AsyncSession,
 ) -> tuple[list[dict[str, Any]], date]:
     as_of = _normalize_as_of_date(date_to)
+    exclusive = is_exclusive(gst_mode)
     vr_agg = _active_vendor_return_totals()
     outstanding = _bill_outstanding_expr(vr_agg)
+    outstanding_out = doc_amount_expr(
+        outstanding, PurchaseBill.total, PurchaseBill.tax_total, exclusive
+    )
+    original_out = doc_amount_expr(
+        _original_bill_total(vr_agg), PurchaseBill.total, PurchaseBill.tax_total, exclusive
+    )
     conds = [
         outstanding > 0.01,
         PurchaseBill.status != InvoiceStatus.cancelled,
@@ -4242,8 +4388,8 @@ async def _purchase_aging_detail_rows(
             PurchaseBill.number.label("bill_number"),
             PurchaseOrder.number.label("po_number"),
             PurchaseBill.due_date.label("due_date"),
-            _original_bill_total(vr_agg).label("original_amount"),
-            outstanding.label("balance"),
+            original_out.label("original_amount"),
+            outstanding_out.label("balance"),
         )
         .select_from(PurchaseBill)
         .outerjoin(vr_agg, vr_agg.c.bill_id == PurchaseBill.id)
@@ -4328,6 +4474,7 @@ async def sales_aging_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     customer_id: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Open AR invoices aged by invoice date as of date_to."""
@@ -4338,6 +4485,7 @@ async def sales_aging_detail(
         date_from=date_from,
         date_to=date_to,
         customer_id=customer_id,
+        gst_mode=gst_mode,
         db=db,
     )
     rows = _sort_aging_rows(rows, sort_by, sort_order, "invoice_date")
@@ -4356,6 +4504,7 @@ async def sales_aging(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     customer_id: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Customer-level AR aging totals. Row drill-down opens sales-aging-detail."""
@@ -4366,6 +4515,7 @@ async def sales_aging(
         date_from=date_from,
         date_to=date_to,
         customer_id=customer_id,
+        gst_mode=gst_mode,
         db=db,
     )
     rows = _summarize_sales_aging(detail_rows)
@@ -4384,6 +4534,7 @@ async def purchase_aging_detail(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     vendor_id: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Open AP bills aged by bill date as of date_to."""
@@ -4393,6 +4544,7 @@ async def purchase_aging_detail(
         date_from=date_from,
         date_to=date_to,
         vendor_id=vendor_id,
+        gst_mode=gst_mode,
         db=db,
     )
     rows = _sort_aging_rows(rows, sort_by, sort_order, "bill_date")
@@ -4410,6 +4562,7 @@ async def purchase_aging(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     vendor_id: Optional[str] = None,
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Vendor-level AP aging totals. Row drill-down opens purchase-aging-detail."""
@@ -4419,6 +4572,7 @@ async def purchase_aging(
         date_from=date_from,
         date_to=date_to,
         vendor_id=vendor_id,
+        gst_mode=gst_mode,
         db=db,
     )
     rows = _summarize_purchase_aging(detail_rows)
@@ -4492,6 +4646,7 @@ async def top_customers(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -4518,6 +4673,17 @@ async def top_customers(
 
     _apply_sales_child_counter_filter(inv_conds, cn_conds, child_counter_id)
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds)
+    if is_exclusive(gst_mode):
+        docs = select(
+            docs.c.doc_id,
+            docs.c.customer_id,
+            docs.c.customer,
+            docs.c.quantity_sold,
+            doc_amount_expr(docs.c.total, docs.c.total, docs.c.tax_total, True).label("total"),
+            doc_amount_expr(
+                docs.c.outstanding, docs.c.total, docs.c.tax_total, True
+            ).label("outstanding"),
+        ).subquery()
     outstanding_amount = func.coalesce(func.sum(docs.c.outstanding), 0)
     quantity_sold = func.coalesce(func.sum(docs.c.quantity_sold), 0)
     sort_map = {
@@ -4559,6 +4725,7 @@ async def vendor_outstanding(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: Optional[object] = Depends(current_user),
 ):
@@ -4581,13 +4748,32 @@ async def vendor_outstanding(
         .group_by(PurchaseLineItem.bill_id)
         .subquery()
     )
+    exclusive = is_exclusive(gst_mode)
     quantity_purchased = func.coalesce(func.sum(bill_qty.c.qty), 0)
-    outstanding_amount = func.coalesce(func.sum(PurchaseBill.total - PurchaseBill.paid_amount), 0)
+    outstanding_amount = func.coalesce(
+        func.sum(
+            doc_amount_expr(
+                PurchaseBill.total - PurchaseBill.paid_amount,
+                PurchaseBill.total,
+                PurchaseBill.tax_total,
+                exclusive,
+            )
+        ),
+        0,
+    )
+    purchase_amount = func.coalesce(
+        func.sum(
+            doc_amount_expr(
+                PurchaseBill.total, PurchaseBill.total, PurchaseBill.tax_total, exclusive
+            )
+        ),
+        0,
+    )
     sort_map = {
         "vendor": PurchaseBill.vendor_name,
         "purchase_count": func.count(PurchaseBill.id),
         "quantity_purchased": quantity_purchased,
-        "purchase_amount": func.coalesce(func.sum(PurchaseBill.total), 0),
+        "purchase_amount": purchase_amount,
         "outstanding_amount": outstanding_amount,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "outstanding_amount", "desc")
@@ -4599,7 +4785,7 @@ async def vendor_outstanding(
             PurchaseBill.vendor_name.label("vendor"),
             func.count(PurchaseBill.id).label("purchase_count"),
             quantity_purchased.label("quantity_purchased"),
-            func.coalesce(func.sum(PurchaseBill.total), 0).label("purchase_amount"),
+            purchase_amount.label("purchase_amount"),
             outstanding_amount.label("outstanding_amount"),
         )
         .select_from(PurchaseBill)
@@ -4798,9 +4984,11 @@ async def pool_issues(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    exclusive = is_exclusive(gst_mode)
     allowed_branch_ids = await _resolve_branch_scope(user, db, branch_id)
     selected = _parse_selected_branch_ids(branch_id)
     if selected and allowed_branch_ids is not None and any(
@@ -4838,8 +5026,11 @@ async def pool_issues(
             PoolSaleAllocation.source_batch_no.label("batch_number"),
             PoolSaleAllocation.expiry_date.label("expiry_date"),
             PoolSaleAllocation.qty.label("quantity"),
-            PoolSaleAllocation.unit_cost.label("unit_cost"),
-            (PoolSaleAllocation.qty * PoolSaleAllocation.unit_cost).label("total_cost"),
+            line_amount_expr(PoolSaleAllocation.unit_cost, SaleLineItem.tax_rate, exclusive).label("unit_cost"),
+            (
+                PoolSaleAllocation.qty
+                * line_amount_expr(PoolSaleAllocation.unit_cost, SaleLineItem.tax_rate, exclusive)
+            ).label("total_cost"),
         )
         .select_from(PoolSaleAllocation)
         .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)
