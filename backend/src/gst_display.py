@@ -6,6 +6,7 @@ restated net of GST:
 - document-level amounts use the document ratio: amount * (total - tax) / total
 
 GST columns themselves (tax amounts) and quantities / percentages are never restated.
+Cost Value columns (stored cost) are never restated either.
 """
 
 from __future__ import annotations

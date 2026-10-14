@@ -753,14 +753,11 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
     """
     _, inv_taxable, _ = _tax_line_exprs(SaleLineItem.line_total, SaleLineItem.tax_rate)
     _, cn_taxable, _ = _tax_line_exprs(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate)
-    inv_cost = line_amount_expr(
-        func.coalesce(Item.cost_price, 0) * SaleLineItem.qty, SaleLineItem.tax_rate, exclusive
-    )
-    cn_cost = line_amount_expr(
-        func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0),
-        SalesReturnLineItem.tax_rate,
-        exclusive,
-    )
+    inv_cost_stored = func.coalesce(Item.cost_price, 0) * SaleLineItem.qty
+    cn_cost_stored = func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0)
+    # Cost Value always shows the stored GST-inclusive cost; profit uses the mode's cost to match taxable sales.
+    inv_cost = line_amount_expr(inv_cost_stored, SaleLineItem.tax_rate, exclusive)
+    cn_cost = line_amount_expr(cn_cost_stored, SalesReturnLineItem.tax_rate, exclusive)
     inv_q = (
         select(
             SaleInvoice.id.label("invoice_id"),
@@ -780,7 +777,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
             line_amount_expr(SaleLineItem.discount, SaleLineItem.tax_rate, exclusive).label("discount"),
             line_amount_expr(SaleLineItem.line_total, SaleLineItem.tax_rate, exclusive).label("line_total"),
             inv_taxable.label("taxable_total"),
-            inv_cost.label("cost_value"),
+            inv_cost_stored.label("cost_value"),
             (inv_taxable - inv_cost).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
             doc_amount_expr(
@@ -821,7 +818,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
                 line_amount_expr(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate, exclusive), 0
             )).label("line_total"),
             (-cn_taxable).label("taxable_total"),
-            (-cn_cost).label("cost_value"),
+            (-cn_cost_stored).label("cost_value"),
             (-cn_taxable + cn_cost).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
             literal(0.0).label("paid_amount"),
@@ -3723,7 +3720,7 @@ async def complimentary_issues(
     """Approved complimentary and sample issues, one row per item issued."""
     exclusive = is_exclusive(gst_mode)
     unit_cost_expr = line_amount_expr(ComplimentaryLineItem.cost_price, Item.tax_rate, exclusive)
-    cost_value_expr = line_amount_expr(ComplimentaryLineItem.cost_total, Item.tax_rate, exclusive)
+    cost_value_expr = ComplimentaryLineItem.cost_total
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     start, end = _normalize_date_range(date_from, date_to)

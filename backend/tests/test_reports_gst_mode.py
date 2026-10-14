@@ -18,6 +18,8 @@ from src.database import Base  # noqa: E402
 from src.gst_display import excl_amount, is_exclusive, scale_doc_rows  # noqa: E402
 from src.models import (  # noqa: E402
     Branch,
+    ComplimentaryEntry,
+    ComplimentaryLineItem,
     Customer,
     InvoiceStatus,
     Item,
@@ -30,10 +32,13 @@ from src.models import (  # noqa: E402
     Vendor,
 )
 from src.routes.reports import (  # noqa: E402
+    category_sales,
+    complimentary_issues,
     daily_sales,
     daily_sales_returns,
     outstanding_payables,
     outstanding_receivables,
+    product_sales,
     purchase_register,
     sales_aging_detail,
     sales_lines,
@@ -299,7 +304,7 @@ async def _run_sales_reports():
         assert cn_excl["net_sales"] == pytest.approx(-50.0)
         assert cn_excl["tax"] == -4.0
 
-        # Sales lines: unit price, line total and cost restated; taxable unchanged.
+        # Sales lines: unit price, line total and profit restated; Cost Value stays GST-inclusive.
         sl_incl = await sales_lines(skip=0, limit=50, **common)
         sl_excl = await sales_lines(skip=0, limit=50, gst_mode="exclusive", **common)
         inv_line_incl = _row_by(sl_incl["items"], "transaction_type", "Invoice")
@@ -316,12 +321,20 @@ async def _run_sales_reports():
         cn_line = _row_by(sl_excl["items"], "transaction_type", "Credit Note")
         assert inv_line["unit_price"] == pytest.approx(100.0)
         assert inv_line["line_total"] == pytest.approx(100.0)
-        assert inv_line["cost_value"] == pytest.approx(60 * 100 / 108)
+        assert inv_line["cost_value"] == 60.0
         assert inv_line["taxable_total"] == pytest.approx(100.0)
         assert inv_line["profit"] == pytest.approx(100 - 60 * 100 / 108)
         assert cn_line["line_total"] == pytest.approx(-50.0)
-        assert cn_line["cost_value"] == pytest.approx(-30 * 100 / 108)
+        assert cn_line["cost_value"] == -30.0
         assert cn_line["taxable_total"] == pytest.approx(-50.0)
+
+        # Product and category sales: sales restated; Cost Value stays GST-inclusive in both modes.
+        for report in (product_sales, category_sales):
+            incl = await report(skip=0, limit=50, **common)
+            excl = await report(skip=0, limit=50, gst_mode="exclusive", **common)
+            assert incl["items"][0]["cost_value"] == 30.0
+            assert excl["items"][0]["cost_value"] == 30.0
+            assert excl["items"][0]["sales_value"] == pytest.approx(50.0)
 
         # Daily sales returns: credited and net restated; gross and tax unchanged.
         dr_incl = await daily_sales_returns(skip=0, limit=50, **common)
@@ -344,6 +357,36 @@ async def _run_sales_reports():
 
 def test_gst_mode_sales_reports():
     asyncio.run(_run_sales_reports())
+
+
+async def _run_complimentary_cost():
+    db = await _build_session()
+    try:
+        user = await _seed(db)
+        db.add(Item(id="it-1", name="Widget", cost_price=60.0, tax_rate=8.0))
+        db.add(ComplimentaryEntry(
+            id="ce-1", number="CMP-1", reason="Sample", branch_id="b1", branch_name="Main",
+            date=INVOICE_DATE, status="approved", total_cost=60.0,
+        ))
+        db.add(ComplimentaryLineItem(
+            id="cl-1", entry_id="ce-1", item_id="it-1", name="Widget",
+            qty=1, cost_price=60.0, cost_total=60.0,
+        ))
+        await db.commit()
+        common = dict(date_from=INVOICE_DATE, date_to=AS_OF, db=db, user=user)
+
+        # Cost Value stays GST-inclusive; Unit Cost is still restated in exclusive mode.
+        incl = await complimentary_issues(skip=0, limit=50, **common)
+        excl = await complimentary_issues(skip=0, limit=50, gst_mode="exclusive", **common)
+        assert incl["items"][0]["cost_value"] == 60.0
+        assert excl["items"][0]["cost_value"] == 60.0
+        assert excl["items"][0]["unit_cost"] == pytest.approx(60 * 100 / 108)
+    finally:
+        await db.close()
+
+
+def test_gst_mode_complimentary_cost():
+    asyncio.run(_run_complimentary_cost())
 
 
 async def _run_tax_summary_detail():
