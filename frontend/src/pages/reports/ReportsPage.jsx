@@ -177,6 +177,10 @@ const GST_MODE_OPTIONS = [
   { id: 'exclusive', label: 'Excl. GST' },
 ]
 
+/** Sales-amount columns whose header changes when the GST toggle is Excl. GST. */
+const GST_EXCL_SALES_LABEL_KEYS = new Set(['sales_value', 'sales_amount'])
+const GST_EXCL_SALES_LABEL = 'Sales Amount(MVR)\n(Excl. GST)'
+
 /** Reports where the GST toggle is hidden. */
 const GST_TOGGLE_HIDDEN_REPORTS = new Set([
   'sales-register',
@@ -1183,6 +1187,12 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       .filter(Boolean)
   }, [columnPrefs.ready, columnPrefs.prefs, columnByKey, report.columns])
 
+  const headerColumns = useMemo(() => visibleColumns.map((col) => (
+    gstMode === 'exclusive' && GST_EXCL_SALES_LABEL_KEYS.has(col.key)
+      ? { ...col, label: GST_EXCL_SALES_LABEL }
+      : col
+  )), [gstMode, visibleColumns])
+
   const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 
   const columnTotals = useMemo(() => {
@@ -1486,7 +1496,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       report_api: report.api,
       params,
       search: appliedSearchQuery || null,
-      columns: visibleColumns.map((col) => ({
+      columns: headerColumns.map((col) => ({
         key: col.key,
         label: col.label || '',
         format: col.format || null,
@@ -1887,7 +1897,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                   {columnPrefs.ready && (
                     <ColumnPrefsTrigger onClick={columnPrefs.openCustomize} />
                   )}
-                  {visibleColumns.map((column) => (
+                  {headerColumns.map((column) => (
                     column.sortable === false ? (
                       <th key={column.key} className={column.align === 'right' ? 'text-right' : ''}>{displayColumnLabel(column)}</th>
                     ) : (

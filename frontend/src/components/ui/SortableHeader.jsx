@@ -40,7 +40,7 @@ export function SortableHeader({
           padding: 0,
         }}
       >
-        <span>{label}</span>
+        <span style={{ whiteSpace: 'pre-line' }}>{label}</span>
         {active && <span aria-hidden="true">{arrow}</span>}
       </button>
     </th>
