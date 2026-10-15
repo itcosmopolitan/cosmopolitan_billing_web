@@ -75,9 +75,9 @@ describe('sales pricing for same-GSTIN customers', () => {
   const externalCustomer = { gstin: '29AAAAA0000A1Z5' }
   const saleItem = { id: 'item-1', selling_price: 100, cost_price: 40, tax_rate: 18 }
 
-  it('picks the retail price with no discount instead of cost', () => {
+  it('picks the cost price with no discount instead of retail', () => {
     const resolved = resolveSaleLinePricing(saleItem, internalCustomer, orgGstin)
-    expect(resolved).toMatchObject({ price: 100, discountPct: 0, internalTransfer: true })
+    expect(resolved).toMatchObject({ price: 40, discountPct: 0, internalTransfer: true })
   })
 
   it('keeps the retail price for external customers', () => {
@@ -90,11 +90,12 @@ describe('sales pricing for same-GSTIN customers', () => {
     expect(priced).toMatchObject({ price: 55, taxRate: 0, internalTransfer: true })
   })
 
-  it('keeps the typed line price and clears discount when the customer is same-GSTIN', () => {
+  it('replaces the typed line price with cost at 0% GST for same-GSTIN customers', () => {
     const line = {
       item_id: 'item-1',
       qty: 1,
       price: 55,
+      costPrice: 40,
       taxRate: 18,
       catalogTaxRate: 18,
       lineDiscount: 5,
@@ -102,12 +103,34 @@ describe('sales pricing for same-GSTIN customers', () => {
     }
     const [out] = applyCustomerPricingToSaleLines([line], internalCustomer, orgGstin)
     expect(out).toMatchObject({
-      price: 55,
+      price: 40,
       taxRate: 0,
       lineDiscount: 0,
       lineDiscountValue: 0,
       internalTransfer: true,
     })
+  })
+
+  it('keeps the existing price when the line has no known cost', () => {
+    const line = { item_id: 'item-1', qty: 1, price: 55, taxRate: 18, catalogTaxRate: 18 }
+    const [out] = applyCustomerPricingToSaleLines([line], internalCustomer, orgGstin)
+    expect(out).toMatchObject({ price: 55, taxRate: 0, internalTransfer: true })
+  })
+
+  it('restores the selling price when switching from same-GSTIN to an external customer', () => {
+    const [transfer] = applyCustomerPricingToSaleLines(
+      [{ item_id: 'item-1', qty: 1, price: 100, costPrice: 40, taxRate: 18, catalogTaxRate: 18 }],
+      internalCustomer,
+      orgGstin,
+    )
+    const [out] = applyCustomerPricingToSaleLines(
+      [{ ...transfer, retailPrice: 100 }],
+      externalCustomer,
+      orgGstin,
+    )
+    expect(out.internalTransfer).toBe(false)
+    expect(out.price).toBe(100)
+    expect(out.taxRate).toBe(18)
   })
 })
 

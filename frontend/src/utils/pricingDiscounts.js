@@ -105,8 +105,8 @@ export function lineCostPrice(item) {
 /**
  * Charge GST-exclusive unit price for internal customers.
  * Catalog amounts stay inclusive; GST is subtracted from the line amount.
- * When customer GSTIN matches org GSTIN, keep the line price at 0% GST
- * (internal transfer) with no line discount.
+ * When customer GSTIN matches org GSTIN, the line is priced at the passed
+ * (cost) price at 0% GST (internal transfer) with no line discount.
  */
 export function linePricingForCustomer(inclusivePrice, taxRate, customerOrValue, orgGstin) {
   const catalogRate = Number(taxRate) || 0
@@ -156,9 +156,11 @@ export function applyInternalGstToSaleLines(items, customerOrValue, orgGstin) {
     if (!it?.item_id && !it?.itemId && !it?.id) return it
     if (isInternalTransferByGstin(customerOrValue, orgGstin)) {
       const rate = Number(it.catalogTaxRate ?? it.taxRate ?? it.tax_rate) || 0
+      // Lines loaded from a saved document carry no cost; keep their price until re-picked.
+      const transferPrice = lineCostPrice(it) || Number(it.price) || 0
       return {
         ...it,
-        ...linePricingForCustomer(it.price, rate, customerOrValue, orgGstin),
+        ...linePricingForCustomer(transferPrice, rate, customerOrValue, orgGstin),
         lineDiscount: 0,
         lineDiscountType: '%',
         lineDiscountValue: 0,
@@ -267,9 +269,9 @@ export function resolveCategoryLinePricing(item, customerOrType) {
 export function resolveSaleLinePricing(item, customerOrValue, orgGstin) {
   if (isInternalTransferByGstin(customerOrValue, orgGstin)) {
     return {
-      price: discountPatternFromItem(item).retailPrice,
+      price: lineCostPrice(item),
       discountPct: 0,
-      mode: 'retail',
+      mode: 'cost',
       internalTransfer: true,
       catalogRate: Number(item?.catalogTaxRate ?? item?.taxRate ?? item?.tax_rate) || 0,
     }
