@@ -68,13 +68,13 @@ const NON_SUMMABLE_KEYS = new Set([
 ])
 
 /**
- * Margin % footer = margin / sales over the footer totals, matching the backend
- * row formula. Give either a `margin` column key or a `cost` column key.
+ * Margin % footer = margin / taxable sales over the footer totals, matching the
+ * backend row formula. Give either a `margin` row key or a `cost` row key.
  */
 const MARGIN_PCT_TOTAL_SOURCES = {
-  'product-sales': { sales: 'sales_value', margin: 'profit' },
-  'category-sales': { sales: 'sales_value', margin: 'profit' },
-  'customer-sales': { sales: 'sales_amount', cost: 'cost_of_sales' },
+  'product-sales': { taxable: 'taxable_sales', margin: 'profit' },
+  'category-sales': { taxable: 'taxable_sales', margin: 'profit' },
+  'customer-sales': { taxable: 'taxable_sales', cost: 'cost_of_sales' },
 }
 
 /** Reports that already encode their own totals / structure. */
@@ -124,9 +124,9 @@ function computeColumnTotals(rows, columns, reportId) {
   const marginSource = MARGIN_PCT_TOTAL_SOURCES[reportId]
   if (marginSource && columns.some((column) => column.key === 'margin_pct')) {
     const sumOf = (key) => rows.reduce((sum, row) => sum + (Number(row?.[key]) || 0), 0)
-    const sales = sumOf(marginSource.sales)
-    const margin = marginSource.margin ? sumOf(marginSource.margin) : sales - sumOf(marginSource.cost)
-    totals.margin_pct = sales === 0 ? 0 : Number(((margin * 100) / sales).toFixed(2))
+    const taxable = sumOf(marginSource.taxable)
+    const margin = marginSource.margin ? sumOf(marginSource.margin) : taxable - sumOf(marginSource.cost)
+    totals.margin_pct = taxable === 0 ? 0 : Number(((margin * 100) / taxable).toFixed(2))
     hasAny = true
   }
   return hasAny ? totals : null
@@ -187,6 +187,10 @@ const GST_TOGGLE_HIDDEN_REPORTS = new Set([
   'out-of-stock',
   'stock-transfers',
   'spoilage-damage',
+  'current-stock',
+  'expiry-batches',
+  'complimentary-issues',
+  'pool-issues',
 ])
 
 /** GST-inclusive is the backend default, so only the exclusive mode is sent. */

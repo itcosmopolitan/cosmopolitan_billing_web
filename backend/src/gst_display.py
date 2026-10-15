@@ -1,12 +1,13 @@
 """Report-level GST display mode: GST-inclusive (default) or GST-exclusive amounts.
 
-Stored amounts are always GST-inclusive. In exclusive mode, money columns are
-restated net of GST:
+Stored sale and purchase amounts are GST-inclusive. In exclusive mode, those money
+columns are restated net of GST:
 - line-level amounts use the line's tax rate: amount * 100 / (100 + rate)
 - document-level amounts use the document ratio: amount * (total - tax) / total
 
-GST columns themselves (tax amounts) and quantities / percentages are never restated.
-Cost Value columns (stored cost) are never restated either.
+Cost is always GST-exclusive, so cost columns (cost price, cost value, cost of sales,
+stock value) are never restated. GST columns themselves (tax amounts) and quantities /
+percentages are never restated either.
 """
 
 from __future__ import annotations
@@ -74,18 +75,3 @@ def scale_doc_rows(
         for key in key_list:
             if row.get(key) is not None:
                 row[key] = round(float(row[key]) * ratio, 2)
-
-
-def scale_line_rows(
-    rows: Iterable[dict[str, Any]],
-    keys: Iterable[str],
-    *,
-    rate_key: str = "tax_rate",
-) -> None:
-    """Restate line-level amount columns in place at each line's tax rate."""
-    key_list = list(keys)
-    for row in rows:
-        rate = row.get(rate_key)
-        for key in key_list:
-            if row.get(key) is not None:
-                row[key] = excl_amount(row[key], rate)

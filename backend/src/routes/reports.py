@@ -21,7 +21,6 @@ from src.gst_display import (
     is_exclusive,
     line_amount_expr,
     scale_doc_rows,
-    scale_line_rows,
 )
 from src.models import (
     AdjustmentRequest,
@@ -662,17 +661,9 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive: bool = False):
             doc_amount_expr(
                 _invoice_outstanding_expr(), SaleInvoice.total, SaleInvoice.tax_total, exclusive
             ).label("outstanding"),
+            (func.coalesce(SaleInvoice.total, 0) - func.coalesce(SaleInvoice.tax_total, 0)).label("taxable_amount"),
             func.coalesce(func.sum(SaleLineItem.qty), 0).label("quantity_sold"),
-            func.coalesce(
-                func.sum(
-                    line_amount_expr(
-                        func.coalesce(Item.cost_price, 0) * SaleLineItem.qty,
-                        SaleLineItem.tax_rate,
-                        exclusive,
-                    )
-                ),
-                0,
-            ).label("cost_of_sales"),
+            func.coalesce(func.sum(func.coalesce(Item.cost_price, 0) * SaleLineItem.qty), 0).label("cost_of_sales"),
         )
         .select_from(SaleInvoice)
         .outerjoin(SaleLineItem, SaleLineItem.invoice_id == SaleInvoice.id)
@@ -711,17 +702,11 @@ def _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive: bool = False):
             (-func.coalesce(SalesReturn.tax_total, 0)).label("tax_total"),
             literal(0.0).label("paid_amount"),
             literal(0.0).label("outstanding"),
+            (-(func.coalesce(SalesReturn.total, 0) - func.coalesce(SalesReturn.tax_total, 0))).label("taxable_amount"),
             (-func.coalesce(func.sum(SalesReturnLineItem.return_qty), 0)).label("quantity_sold"),
             (
                 -func.coalesce(
-                    func.sum(
-                        line_amount_expr(
-                            func.coalesce(Item.cost_price, 0) * SalesReturnLineItem.return_qty,
-                            SalesReturnLineItem.tax_rate,
-                            exclusive,
-                        )
-                    ),
-                    0,
+                    func.sum(func.coalesce(Item.cost_price, 0) * SalesReturnLineItem.return_qty), 0
                 )
             ).label("cost_of_sales"),
         )
@@ -755,9 +740,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
     _, cn_taxable, _ = _tax_line_exprs(SalesReturnLineItem.line_total, SalesReturnLineItem.tax_rate)
     inv_cost_stored = func.coalesce(Item.cost_price, 0) * SaleLineItem.qty
     cn_cost_stored = func.coalesce(Item.cost_price, 0) * func.coalesce(SalesReturnLineItem.return_qty, 0)
-    # Cost Value always shows the stored GST-inclusive cost; profit uses the mode's cost to match taxable sales.
-    inv_cost = line_amount_expr(inv_cost_stored, SaleLineItem.tax_rate, exclusive)
-    cn_cost = line_amount_expr(cn_cost_stored, SalesReturnLineItem.tax_rate, exclusive)
+    # Cost is GST-exclusive and never restated, so profit = taxable sales - stored cost in both modes.
     inv_q = (
         select(
             SaleInvoice.id.label("invoice_id"),
@@ -778,7 +761,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
             line_amount_expr(SaleLineItem.line_total, SaleLineItem.tax_rate, exclusive).label("line_total"),
             inv_taxable.label("taxable_total"),
             inv_cost_stored.label("cost_value"),
-            (inv_taxable - inv_cost).label("profit"),
+            (inv_taxable - inv_cost_stored).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
             doc_amount_expr(
                 func.coalesce(SaleInvoice.paid_amount, 0), SaleInvoice.total, SaleInvoice.tax_total, exclusive
@@ -819,7 +802,7 @@ def _signed_sales_lines_query(inv_conds, cn_conds, exclusive: bool = False):
             )).label("line_total"),
             (-cn_taxable).label("taxable_total"),
             (-cn_cost_stored).label("cost_value"),
-            (-cn_taxable + cn_cost).label("profit"),
+            (-cn_taxable + cn_cost_stored).label("profit"),
             SaleInvoice.payment_mode.label("payment_mode"),
             literal(0.0).label("paid_amount"),
             literal(0.0).label("remaining_amount"),
@@ -1080,8 +1063,9 @@ def _signed_purchase_docs_subquery(bill_conds, vr_conds):
 def _signed_purchase_lines_query(bill_conds, vr_conds, exclusive: bool = False):
     """Bill lines (positive qty/value) UNION vendor-return lines (negative).
 
-    When ``exclusive`` is set, unit cost and line total are restated net of GST
-    at each line's tax rate. Discount is a percentage and is left unchanged.
+    When ``exclusive`` is set, line totals are restated net of GST at each line's
+    tax rate. Unit cost is GST-exclusive and left unchanged, as is the discount
+    (a percentage).
     """
     bill_q = (
         select(
@@ -1093,7 +1077,7 @@ def _signed_purchase_lines_query(bill_conds, vr_conds, exclusive: bool = False):
             PurchaseBill.vendor_name.label("vendor"),
             PurchaseBill.branch_name.label("branch"),
             PurchaseLineItem.qty.label("quantity"),
-            line_amount_expr(PurchaseLineItem.cost, PurchaseLineItem.tax_rate, exclusive).label("unit_cost"),
+            PurchaseLineItem.cost.label("unit_cost"),
             PurchaseLineItem.discount.label("discount"),
             line_amount_expr(PurchaseLineItem.line_total, PurchaseLineItem.tax_rate, exclusive).label("line_total"),
             literal("Bill").label("transaction_type"),
@@ -1115,7 +1099,7 @@ def _signed_purchase_lines_query(bill_conds, vr_conds, exclusive: bool = False):
             VendorReturn.vendor_name.label("vendor"),
             VendorReturn.branch_name.label("branch"),
             (-func.coalesce(ReturnLineItem.return_qty, 0)).label("quantity"),
-            line_amount_expr(ReturnLineItem.cost, ReturnLineItem.tax_rate, exclusive).label("unit_cost"),
+            ReturnLineItem.cost.label("unit_cost"),
             literal(0.0).label("discount"),
             (-func.coalesce(line_amount_expr(ReturnLineItem.line_total, ReturnLineItem.tax_rate, exclusive), 0)).label("line_total"),
             literal("Debit Note").label("transaction_type"),
@@ -2128,7 +2112,8 @@ async def product_sales(
     sales_sum = func.coalesce(func.sum(lines.c.line_total), 0)
     cost_sum = func.coalesce(func.sum(lines.c.cost_value), 0)
     profit_sum = func.coalesce(func.sum(lines.c.profit), 0)
-    margin_pct = _margin_pct_expr(sales_sum, profit_sum)
+    taxable_sum = func.coalesce(func.sum(lines.c.taxable_total), 0)
+    margin_pct = _margin_pct_expr(taxable_sum, profit_sum)
     sort_map = {
         "product_code": lines.c.product_code,
         "product_name": lines.c.product_name,
@@ -2154,6 +2139,7 @@ async def product_sales(
             cost_sum.label("cost_value"),
             profit_sum.label("profit"),
             margin_pct.label("margin_pct"),
+            taxable_sum.label("taxable_sales"),
         )
         .select_from(lines)
         .group_by(lines.c.item_id, lines.c.product_code, lines.c.product_name, lines.c.category)
@@ -2745,7 +2731,8 @@ async def category_sales(
     sales_sum = func.coalesce(func.sum(lines.c.line_total), 0)
     cost_sum = func.coalesce(func.sum(lines.c.cost_value), 0)
     profit_sum = func.coalesce(func.sum(lines.c.profit), 0)
-    margin_pct = _margin_pct_expr(sales_sum, profit_sum)
+    taxable_sum = func.coalesce(func.sum(lines.c.taxable_total), 0)
+    margin_pct = _margin_pct_expr(taxable_sum, profit_sum)
     sort_map = {
         "category": lines.c.category,
         "quantity_sold": func.coalesce(func.sum(lines.c.quantity), 0),
@@ -2767,6 +2754,7 @@ async def category_sales(
             cost_sum.label("cost_value"),
             profit_sum.label("profit"),
             margin_pct.label("margin_pct"),
+            taxable_sum.label("taxable_sales"),
         )
         .select_from(lines)
         .group_by(lines.c.category_id, lines.c.category)
@@ -2965,7 +2953,8 @@ async def customer_sales(
     docs = _signed_sales_docs_subquery(inv_conds, cn_conds, exclusive=is_exclusive(gst_mode))
     sales_sum = func.coalesce(func.sum(docs.c.total), 0)
     cost_sum = func.coalesce(func.sum(docs.c.cost_of_sales), 0)
-    margin_pct = _margin_pct_expr(sales_sum, sales_sum - cost_sum)
+    taxable_sum = func.coalesce(func.sum(docs.c.taxable_amount), 0)
+    margin_pct = _margin_pct_expr(taxable_sum, taxable_sum - cost_sum)
     sort_map = {
         "customer": docs.c.customer,
         "invoice_count": func.count(docs.c.doc_id),
@@ -2988,6 +2977,7 @@ async def customer_sales(
             cost_sum.label("cost_of_sales"),
             sales_sum.label("sales_amount"),
             margin_pct.label("margin_pct"),
+            taxable_sum.label("taxable_sales"),
             func.coalesce(func.sum(docs.c.paid_amount), 0).label("paid_amount"),
             func.coalesce(func.sum(docs.c.outstanding), 0).label("outstanding_amount"),
         )
@@ -3398,7 +3388,6 @@ async def current_stock(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
-    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     conds = []
@@ -3419,11 +3408,7 @@ async def current_stock(
         .subquery()
     )
     reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
-    stock_value_expr = line_amount_expr(
-        ItemStock.quantity * func.coalesce(Item.cost_price, 0),
-        Item.tax_rate,
-        is_exclusive(gst_mode),
-    )
+    stock_value_expr = ItemStock.quantity * func.coalesce(Item.cost_price, 0)
 
     sort_map = {
         "product_code": Item.sku,
@@ -3713,13 +3698,11 @@ async def complimentary_issues(
     limit: int = Query(50, ge=1, le=500),
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """Approved complimentary and sample issues, one row per item issued."""
-    exclusive = is_exclusive(gst_mode)
-    unit_cost_expr = line_amount_expr(ComplimentaryLineItem.cost_price, Item.tax_rate, exclusive)
+    unit_cost_expr = ComplimentaryLineItem.cost_price
     cost_value_expr = ComplimentaryLineItem.cost_total
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
@@ -3804,7 +3787,6 @@ async def expiry_batches(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     within_days: int = Query(30, ge=1, le=365),
-    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Active batches that are expired or due to expire within `within_days`."""
@@ -3830,11 +3812,8 @@ async def expiry_batches(
             | ItemBatch.batch_number.ilike(like)
         )
 
-    stock_value = line_amount_expr(
-        ItemBatch.quantity * func.coalesce(ItemBatch.cost_price, Item.cost_price, 0),
-        Item.tax_rate,
-        is_exclusive(gst_mode),
-    )
+    stock_value = ItemBatch.quantity * func.coalesce(ItemBatch.cost_price, Item.cost_price, 0)
+
     sort_map = {
         "product_code": Item.sku,
         "product": Item.name,
@@ -4981,11 +4960,9 @@ async def pool_issues(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
-    gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    exclusive = is_exclusive(gst_mode)
     allowed_branch_ids = await _resolve_branch_scope(user, db, branch_id)
     selected = _parse_selected_branch_ids(branch_id)
     if selected and allowed_branch_ids is not None and any(
@@ -5023,11 +5000,8 @@ async def pool_issues(
             PoolSaleAllocation.source_batch_no.label("batch_number"),
             PoolSaleAllocation.expiry_date.label("expiry_date"),
             PoolSaleAllocation.qty.label("quantity"),
-            line_amount_expr(PoolSaleAllocation.unit_cost, SaleLineItem.tax_rate, exclusive).label("unit_cost"),
-            (
-                PoolSaleAllocation.qty
-                * line_amount_expr(PoolSaleAllocation.unit_cost, SaleLineItem.tax_rate, exclusive)
-            ).label("total_cost"),
+            PoolSaleAllocation.unit_cost.label("unit_cost"),
+            (PoolSaleAllocation.qty * PoolSaleAllocation.unit_cost).label("total_cost"),
         )
         .select_from(PoolSaleAllocation)
         .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)

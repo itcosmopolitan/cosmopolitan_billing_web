@@ -34,6 +34,7 @@ from src.models import (  # noqa: E402
 from src.routes.reports import (  # noqa: E402
     category_sales,
     complimentary_issues,
+    customer_sales,
     daily_sales,
     daily_sales_returns,
     outstanding_payables,
@@ -304,7 +305,7 @@ async def _run_sales_reports():
         assert cn_excl["net_sales"] == pytest.approx(-50.0)
         assert cn_excl["tax"] == -4.0
 
-        # Sales lines: unit price, line total and profit restated; Cost Value stays GST-inclusive.
+        # Sales lines: unit price and line total restated; cost is always exclusive and never restated.
         sl_incl = await sales_lines(skip=0, limit=50, **common)
         sl_excl = await sales_lines(skip=0, limit=50, gst_mode="exclusive", **common)
         inv_line_incl = _row_by(sl_incl["items"], "transaction_type", "Invoice")
@@ -323,18 +324,32 @@ async def _run_sales_reports():
         assert inv_line["line_total"] == pytest.approx(100.0)
         assert inv_line["cost_value"] == 60.0
         assert inv_line["taxable_total"] == pytest.approx(100.0)
-        assert inv_line["profit"] == pytest.approx(100 - 60 * 100 / 108)
+        # Profit = taxable sales (exclusive) - cost (already exclusive), so 100 - 60.
+        assert inv_line["profit"] == pytest.approx(40.0)
         assert cn_line["line_total"] == pytest.approx(-50.0)
         assert cn_line["cost_value"] == -30.0
         assert cn_line["taxable_total"] == pytest.approx(-50.0)
 
-        # Product and category sales: sales restated; Cost Value stays GST-inclusive in both modes.
+        # Product and category sales: sales restated; cost is never restated.
+        # Margin % = profit / taxable sales, so it is 40% in both modes (20 / 50).
         for report in (product_sales, category_sales):
             incl = await report(skip=0, limit=50, **common)
             excl = await report(skip=0, limit=50, gst_mode="exclusive", **common)
             assert incl["items"][0]["cost_value"] == 30.0
             assert excl["items"][0]["cost_value"] == 30.0
             assert excl["items"][0]["sales_value"] == pytest.approx(50.0)
+            for result in (incl, excl):
+                assert result["items"][0]["taxable_sales"] == pytest.approx(50.0)
+                assert result["items"][0]["profit"] == pytest.approx(20.0)
+                assert result["items"][0]["margin_pct"] == pytest.approx(40.0)
+
+        # Customer sales: same margin rule; cost of sales is never restated.
+        cust_incl = await customer_sales(skip=0, limit=50, **common)
+        cust_excl = await customer_sales(skip=0, limit=50, gst_mode="exclusive", **common)
+        for result in (cust_incl, cust_excl):
+            assert result["items"][0]["cost_of_sales"] == pytest.approx(30.0)
+            assert result["items"][0]["taxable_sales"] == pytest.approx(50.0)
+            assert result["items"][0]["margin_pct"] == pytest.approx(40.0)
 
         # Daily sales returns: credited and net restated; gross and tax unchanged.
         dr_incl = await daily_sales_returns(skip=0, limit=50, **common)
@@ -375,12 +390,10 @@ async def _run_complimentary_cost():
         await db.commit()
         common = dict(date_from=INVOICE_DATE, date_to=AS_OF, db=db, user=user)
 
-        # Cost Value stays GST-inclusive; Unit Cost is still restated in exclusive mode.
-        incl = await complimentary_issues(skip=0, limit=50, **common)
-        excl = await complimentary_issues(skip=0, limit=50, gst_mode="exclusive", **common)
-        assert incl["items"][0]["cost_value"] == 60.0
-        assert excl["items"][0]["cost_value"] == 60.0
-        assert excl["items"][0]["unit_cost"] == pytest.approx(60 * 100 / 108)
+        # Cost is always GST-exclusive: neither Unit Cost nor Cost Value is restated.
+        result = await complimentary_issues(skip=0, limit=50, **common)
+        assert result["items"][0]["cost_value"] == 60.0
+        assert result["items"][0]["unit_cost"] == pytest.approx(60.0)
     finally:
         await db.close()
 
