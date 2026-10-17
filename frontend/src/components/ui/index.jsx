@@ -704,16 +704,19 @@ export function MultiSelect({ options, value, onChange, placeholder = 'Choose…
       const inPopover = popoverRef.current && popoverRef.current.contains(e.target)
       if (!inTrigger && !inPopover) setOpen(false)
     }
+    // Capture phase + stopPropagation so Escape closes only this popover, not a parent Drawer/Modal.
     const onKey = (e) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     window.addEventListener('scroll', reposition, true)
     window.addEventListener('resize', reposition)
     return () => {
       document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
       window.removeEventListener('scroll', reposition, true)
       window.removeEventListener('resize', reposition)
     }

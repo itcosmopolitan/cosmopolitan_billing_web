@@ -5,11 +5,12 @@ import toast from 'react-hot-toast'
 import { reportsAPI } from '@/api'
 import { fmt, fmtDate, fmtNum, fmtQty, statusLabel } from '@/utils/helpers'
 import {
-  Card, SearchBar, PaginationBar, SortableHeader, MultiSelect,
-  DatePicker, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, AutocompleteDropdown,
-  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer, SegmentedToggle,
+  Card, SearchBar, PaginationBar, SortableHeader,
+  TableLoadingPanel, PageActionsMenu, buildListPageMenuActions,
+  CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
+import ListFilters from '@/pages/sales/ListFilters'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { useAppStore } from '@/store'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
@@ -176,6 +177,7 @@ const GST_MODE_OPTIONS = [
   { id: 'inclusive', label: 'Incl. GST' },
   { id: 'exclusive', label: 'Excl. GST' },
 ]
+const DEFAULT_GST_MODE = 'exclusive'
 
 /** Sales-amount columns whose header changes when the GST toggle is Excl. GST. */
 const GST_EXCL_SALES_LABEL_KEYS = new Set(['sales_value', 'sales_amount'])
@@ -197,9 +199,9 @@ const GST_TOGGLE_HIDDEN_REPORTS = new Set([
   'pool-issues',
 ])
 
-/** GST-inclusive is the backend default, so only the exclusive mode is sent. */
+/** Always send the mode: the backend defaults to inclusive, but the report default is exclusive. */
 function gstParamForApi(gstMode) {
-  return gstMode === 'exclusive' ? { gst_mode: 'exclusive' } : {}
+  return { gst_mode: gstMode }
 }
 
 function readDrilldownFilters(searchParams) {
@@ -271,12 +273,6 @@ function txnParamForApi(ids, options) {
   return ids.filter(Boolean).join(',')
 }
 
-function txnTypesDirty(draftIds, appliedIds) {
-  const draftKey = [...(draftIds || [])].sort().join(',')
-  const appliedKey = [...(appliedIds || [])].sort().join(',')
-  return draftKey !== appliedKey
-}
-
 function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, childCounterId, transactionType, gstMode, sortBy, sortOrder, skip }) {
   return {
     parent_date_from: dateFrom || '',
@@ -288,7 +284,7 @@ function parentFiltersFromState({ dateFrom, dateTo, branchId, branchLabel, child
     ...(sortBy ? { parent_sort_by: sortBy } : {}),
     ...(sortOrder ? { parent_sort_order: sortOrder } : {}),
     ...(skip > 0 ? { parent_skip: String(skip) } : {}),
-    ...(gstMode === 'exclusive' ? { parent_gst_mode: 'exclusive' } : {}),
+    parent_gst_mode: gstMode,
   }
 }
 
@@ -1081,48 +1077,25 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     () => TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS,
     [report.api],
   )
-  const [dateFrom, setDateFrom] = useState(() => initialFrom)
-  const [dateTo, setDateTo] = useState(() => initialAsOf)
-  const [branchIds, setBranchIds] = useState(() => {
-    const fromUrl = parseBranchIds(searchParams.get('branch_id'))
-    return fromUrl
-  })
-  const [transactionTypes, setTransactionTypes] = useState(() => (
-    parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions)
-  ))
-  const [childCounterId, setChildCounterId] = useState(() => searchParams.get('child_counter_id') || '')
-  const [gstModeSetting, setGstMode] = useState(() => (
-    searchParams.get('gst_mode') === 'exclusive' ? 'exclusive' : 'inclusive'
-  ))
   const gstToggleVisible = !GST_TOGGLE_HIDDEN_REPORTS.has(report.id)
-  const gstMode = gstToggleVisible ? gstModeSetting : 'inclusive'
-  const gstToggle = gstToggleVisible ? (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <label className="form-label">GST</label>
-      <SegmentedToggle
-        ariaLabel="Show amounts with or without GST"
-        value={gstModeSetting}
-        onChange={setGstMode}
-        options={GST_MODE_OPTIONS}
-      />
-    </div>
-  ) : null
   const [appliedFilters, setAppliedFilters] = useState(() => ({
     dateFrom: initialFrom,
     dateTo: initialAsOf,
     branchIds: parseBranchIds(searchParams.get('branch_id')),
     transactionTypes: parseTxnTypeIds(searchParams.get('transaction_type'), txnTypeOptions),
     childCounterId: searchParams.get('child_counter_id') || '',
+    gstMode: searchParams.get('gst_mode') === 'inclusive' ? 'inclusive' : DEFAULT_GST_MODE,
   }))
+  const gstMode = gstToggleVisible ? appliedFilters.gstMode : 'inclusive'
   const childCounterOptions = useMemo(() => {
-    const selectedBranchIds = new Set(branchIds)
+    const selectedBranchIds = new Set(appliedFilters.branchIds)
     return (storeBranches || [])
       .filter((branch) => !selectedBranchIds.size || selectedBranchIds.has(branch.id))
       .flatMap((branch) => (branch.child_counters || []).map((counter) => ({
         id: counter.id,
         label: `${counter.name} (${branch.name})`,
       })))
-  }, [storeBranches, branchIds])
+  }, [storeBranches, appliedFilters.branchIds])
   const [sortBy, setSortBy] = useState(
     () => searchParams.get('sort_by') || report.defaultSort || report.columns[0]?.key,
   )
@@ -1250,7 +1223,6 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     if (!allBranchIds.length) return
     const urlBranchIds = parseBranchIds(urlFilters.branch_id)
     if (urlBranchIds.length) return
-    setBranchIds((prev) => (prev.length ? prev : allBranchIds))
     setAppliedFilters((prev) => (
       prev.branchIds.length ? prev : { ...prev, branchIds: allBranchIds }
     ))
@@ -1268,18 +1240,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       : (allBranchIds.length ? allBranchIds : [])
     const nextTxn = parseTxnTypeIds(urlFilters.transaction_type, txnTypeOptions)
     const nextCounterId = urlFilters.child_counter_id || ''
-    setDateFrom(nextFrom)
-    setDateTo(nextTo)
-    setBranchIds(nextBranches)
-    setTransactionTypes(nextTxn)
-    setChildCounterId(nextCounterId)
-    setGstMode(urlFilters.gst_mode === 'exclusive' ? 'exclusive' : 'inclusive')
     setAppliedFilters({
       dateFrom: nextFrom,
       dateTo: nextTo,
       branchIds: nextBranches,
       transactionTypes: nextTxn,
       childCounterId: nextCounterId,
+      gstMode: urlFilters.gst_mode === 'inclusive' ? 'inclusive' : DEFAULT_GST_MODE,
     })
     setSortBy(urlFilters.sort_by || report.defaultSort || report.columns[0]?.key)
     setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
@@ -1426,29 +1393,69 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setTotal(searchRows.length)
   }, [appliedSearchQuery, searchRows, skip, limit])
 
-  const applyFilters = () => {
+  const handleFiltersApply = (next) => {
     setSkip(0)
-    const nextTo = dateTo
-    const nextFrom = isAsOfDate ? nextTo : dateFrom
-    if (isAsOfDate && dateFrom !== nextTo) setDateFrom(nextTo)
+    const nextTo = next.dateTo
+    const nextFrom = isAsOfDate ? nextTo : next.dateFrom
     setAppliedFilters({
       dateFrom: nextFrom,
       dateTo: nextTo,
-      branchIds: [...branchIds],
-      transactionTypes: [...transactionTypes],
-      childCounterId,
+      branchIds: [...next.branchIds],
+      transactionTypes: [...next.transactionTypes],
+      childCounterId: next.childCounterId,
+      gstMode: next.gstMode,
     })
   }
 
-  const filtersDirty = useMemo(() => {
-    const sameDates = isAsOfDate
-      ? dateTo === appliedFilters.dateTo
-      : (dateFrom === appliedFilters.dateFrom && dateTo === appliedFilters.dateTo)
-    const draftKey = [...branchIds].sort().join(',')
-    const appliedKey = [...(appliedFilters.branchIds || [])].sort().join(',')
-    return !(sameDates && draftKey === appliedKey && childCounterId === appliedFilters.childCounterId)
-      || txnTypesDirty(transactionTypes, appliedFilters.transactionTypes)
-  }, [isAsOfDate, dateFrom, dateTo, branchIds, transactionTypes, childCounterId, appliedFilters])
+  const handleFiltersClear = () => {
+    setSkip(0)
+    if (isDrilldown) {
+      setAppliedFilters((prev) => ({
+        ...prev,
+        transactionTypes: parseTxnTypeIds(null, txnTypeOptions),
+        gstMode: DEFAULT_GST_MODE,
+      }))
+      return
+    }
+    setAppliedFilters({
+      dateFrom: isAsOfDate ? today : defaultFrom,
+      dateTo: today,
+      branchIds: allBranchIds,
+      transactionTypes: parseTxnTypeIds(null, txnTypeOptions),
+      childCounterId: '',
+      gstMode: DEFAULT_GST_MODE,
+    })
+  }
+
+  const handleRemoveChip = (key) => {
+    setSkip(0)
+    setAppliedFilters((prev) => {
+      if (key === 'date' || key === 'asOf') {
+        return { ...prev, dateFrom: isAsOfDate ? today : defaultFrom, dateTo: today }
+      }
+      if (key === 'branch') return { ...prev, branchIds: allBranchIds }
+      if (key === 'childCounter') return { ...prev, childCounterId: '' }
+      if (key === 'transactionType') return { ...prev, transactionTypes: parseTxnTypeIds(null, txnTypeOptions) }
+      if (key === 'gst') return { ...prev, gstMode: DEFAULT_GST_MODE }
+      return prev
+    })
+  }
+
+  const reportFilterFields = useMemo(() => {
+    const fields = []
+    if (!isDrilldown) {
+      fields.push(isAsOfDate ? 'asOf' : 'date', 'branch')
+      if (supportsChildCounterFilter) fields.push('childCounter')
+    }
+    if (txnTypeOptions.length) fields.push('transactionType')
+    if (gstToggleVisible) fields.push('gst')
+    return fields
+  }, [isDrilldown, isAsOfDate, supportsChildCounterFilter, txnTypeOptions, gstToggleVisible])
+
+  const defaultDateRange = useMemo(
+    () => ({ from: isAsOfDate ? today : defaultFrom, to: today }),
+    [isAsOfDate, today, defaultFrom],
+  )
 
   const handleSort = (key) => {
     const nextOrder = sortBy === key && sortOrder === 'asc' ? 'desc' : 'asc'
@@ -1629,21 +1636,6 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     }))
   }
 
-  const reportSearchField = (
-    <div style={{ width: 380, maxWidth: '100%' }}>
-      <label className="form-label">Search report rows</label>
-      <SearchBar
-        value={searchQuery}
-        onChange={(value) => {
-          setSearchQuery(value)
-          setSkip(0)
-        }}
-        placeholder="Invoice, order, customer, item..."
-        style={{ width: '100%' }}
-      />
-    </div>
-  )
-
   return (
     <div className="page-container page-container--list">
       <div className="section-hdr">
@@ -1705,8 +1697,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         </div>
       </div>
 
-      <div className="filter-toolbar-stack">
-        {isDrilldown ? (
+      {isDrilldown && (
+        <div className="filter-toolbar-stack">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{
             display: 'flex',
@@ -1767,126 +1759,29 @@ function ReportDetailPage({ report, reportMap, onBack }) {
               <span style={{ color: 'var(--text-muted)' }}>{appliedDrillParams}</span>
             ) : null}
           </div>
-            {txnTypeOptions.length > 0 && (
-              <div style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 12,
-                alignItems: 'end',
-              }}>
-                {reportSearchField}
-                <div style={{ width: 220, maxWidth: '100%' }}>
-                  <label className="form-label">Transaction Type</label>
-                  <MultiSelect
-                    options={txnTypeOptions}
-                    value={transactionTypes}
-                    defaultName="All types"
-                    onChange={setTransactionTypes}
-                    placeholder="All types"
-                  />
-                </div>
-                {gstToggle}
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={applyFilters}
-                  disabled={loading || !filtersDirty}
-                  style={{ height: 36, width: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap' }}
-                >
-                  Apply filters
-                </button>
-              </div>
-            )}
-            {txnTypeOptions.length === 0 && reportSearchField}
-            {txnTypeOptions.length === 0 && gstToggle && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{gstToggle}</div>
-            )}
           </div>
-        ) : (
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 12,
-            alignItems: 'end',
-          }}>
-            {reportSearchField}
-            <div style={{ width: 220, maxWidth: '100%' }}>
-              {isAsOfDate ? (
-                <>
-                  <label className="form-label">As of</label>
-                  <DatePicker
-                    value={dateTo}
-                    onChange={(value) => {
-                      setDateTo(value)
-                      setDateFrom(value)
-                    }}
-                  />
-                </>
-              ) : (
-                <>
-                  <label className="form-label">From</label>
-                  <DatePicker value={dateFrom} onChange={setDateFrom} />
-                </>
-              )}
-            </div>
-            {!isAsOfDate && (
-              <div style={{ width: 220, maxWidth: '100%' }}>
-                <label className="form-label">To</label>
-                <DatePicker value={dateTo} onChange={setDateTo} />
-              </div>
-            )}
-            <div style={{ width: 220, maxWidth: '100%' }}>
-              <label className="form-label">Branch</label>
-              <MultiSelect
-                options={branchOptions}
-                value={branchIds}
-                defaultName="All Branches"
-                onChange={setBranchIds}
-                placeholder="All Branches"
-              />
-            </div>
-            {supportsChildCounterFilter && (
-              <div style={{ width: 220, maxWidth: '100%' }}>
-                <label className="form-label">Child Counter</label>
-                <AutocompleteDropdown
-                  value={childCounterId}
-                  onChange={setChildCounterId}
-                  options={[
-                    { id: '', label: 'All counters' },
-                    ...childCounterOptions,
-                  ]}
-                  selectedLabel="All counters"
-                  placeholder="Select counter"
-                  searchPlaceholder="Search counters…"
-                  isSearchFieldRequired
-                />
-              </div>
-            )}
-            {txnTypeOptions.length > 0 && (
-              <div style={{ width: 220, maxWidth: '100%' }}>
-                <label className="form-label">Transaction Type</label>
-                <MultiSelect
-                  options={txnTypeOptions}
-                  value={transactionTypes}
-                  defaultName="All types"
-                  onChange={setTransactionTypes}
-                  placeholder="All types"
-                />
-              </div>
-            )}
-            {gstToggle}
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={applyFilters}
-              disabled={loading || !filtersDirty}
-              style={{ height: 36, width: 'auto', flex: '0 0 auto', whiteSpace: 'nowrap' }}
-            >
-              Apply filters
-            </button>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      <ListFilters
+        search={searchQuery}
+        onSearchChange={(value) => {
+          setSearchQuery(value)
+          setSkip(0)
+        }}
+        searchPlaceholder="Invoice, order, customer, item..."
+        filters={appliedFilters}
+        onApply={handleFiltersApply}
+        onClear={handleFiltersClear}
+        onRemoveChip={handleRemoveChip}
+        fields={reportFilterFields}
+        defaultDateRange={defaultDateRange}
+        branchOptions={branchOptions}
+        childCounterOptions={childCounterOptions}
+        transactionTypeOptions={txnTypeOptions}
+        gstOptions={GST_MODE_OPTIONS}
+        defaultGstMode={DEFAULT_GST_MODE}
+      />
 
       <div className="list-page-panel">
         <Card bodyPadding={false}>
