@@ -550,6 +550,9 @@ class ItemBatch(Base):
     received_date = Column(String)                          # YYYY-MM-DD
     notes         = Column(Text)
     active        = Column(Boolean, default=True)
+    # Oversold placeholder: holds the negative balance when a sale exceeds the
+    # on-hand batches under allow_overselling. Settled by the next receipt.
+    is_overdraw   = Column(Boolean, default=False, nullable=False)
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -55,7 +55,7 @@ async def get_available_qty(
     reserved = await get_reserved_qty(
         db, item_id=item_id, branch_id=branch_id, exclude_source_ref=exclude_source_ref,
     )
-    return max(0.0, as_qty(physical - reserved))
+    return as_qty(physical - reserved)
 
 
 async def record_stock_movement(
@@ -98,8 +98,14 @@ async def reserve_for_sales_order(
     order_id: str,
     branch_id: str,
     lines: list,
+    allow_oversell: bool = False,
 ) -> None:
-    """Create active reservations for each catalog line on a confirmed SO."""
+    """Create active reservations for each catalog line on a confirmed SO.
+
+    Under overselling the reservation is still recorded (so Reserved and
+    Available stay accurate) but the shortage check is skipped, since the
+    order is allowed to exceed on-hand stock.
+    """
     claimed: dict[str, float] = {}
     for line in lines:
         need = as_qty(getattr(line, "qty", 0))
@@ -110,8 +116,8 @@ async def reserve_for_sales_order(
         available = await get_available_qty(
             db, item_id=line.item_id, branch_id=branch_id, exclude_source_ref=order_id,
         )
-        available = max(0.0, as_qty(available - claimed.get(line.item_id, 0.0)))
-        if need > available:
+        available = as_qty(available - claimed.get(line.item_id, 0.0))
+        if not allow_oversell and need > available:
             raise ValueError(
                 f"Insufficient stock for {line.name}: need {need}, available {available}"
             )
@@ -172,10 +178,9 @@ async def refresh_so_reservations(
     lines: list,
 ) -> None:
     """Re-sync active reservations after a partial SO→invoice convert."""
-    if await get_allow_overselling(db, branch_id):
-        return
     await release_reservations(db, source_type="sales_order", source_ref=order_id)
     if lines:
         await reserve_for_sales_order(
             db, order_id=order_id, branch_id=branch_id, lines=lines,
+            allow_oversell=await get_allow_overselling(db, branch_id),
         )

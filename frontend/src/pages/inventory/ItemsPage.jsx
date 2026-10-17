@@ -215,8 +215,8 @@ export default function ItemsPage({ mode = 'branch' }) {
     return {
       items:    items.length,
       low:      items.filter((p) => p.available_stock > 0 && p.available_stock <= p.reorder_level).length,
-      outStock: items.filter((p) => p.available_stock === 0).length,
-      stockVal: items.reduce((sum, p) => sum + (p.available_stock || 0) * (p.cost_price || 0), 0),
+      outStock: items.filter((p) => (p.available_stock || 0) <= 0).length,
+      stockVal: items.reduce((sum, p) => sum + Math.max(0, p.available_stock || 0) * (p.cost_price || 0), 0),
       tracked:  items.filter((p) => p.batch_tracking).length,
       expiring: nearExpiry.length,
     }
@@ -456,7 +456,7 @@ export default function ItemsPage({ mode = 'branch' }) {
           Reserved: item.reserved_stock || 0,
           Available: (item.available_stock || 0) - (item.reserved_stock || 0),
           'Reorder Level': item.reorder_level,
-          'Stock Value (MVR)': (item.available_stock || 0) * (item.cost_price || 0),
+          'Stock Value (MVR)': Math.max(0, item.available_stock || 0) * (item.cost_price || 0),
         }),
     })), `${isMaster ? 'ItemMaster' : 'ItemsStock'}_${new Date().toISOString().split('T')[0]}.csv`)
     toast.success('Items exported')
@@ -1163,7 +1163,7 @@ export default function ItemsPage({ mode = 'branch' }) {
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: item.available_stock === 0 ? 'var(--red)' : item.available_stock <= item.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: (item.available_stock || 0) <= 0 ? 'var(--red)' : item.available_stock <= item.reorder_level ? 'var(--amber)' : 'var(--text-primary)' }}>
                   {fmtQty(item.available_stock || 0)}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Current stock</div>

@@ -3408,7 +3408,11 @@ async def current_stock(
         .subquery()
     )
     reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
-    stock_value_expr = ItemStock.quantity * func.coalesce(Item.cost_price, 0)
+    # Oversold (negative) quantity is shown as-is, but valued at zero.
+    stock_value_expr = case(
+        (ItemStock.quantity > 0, ItemStock.quantity * func.coalesce(Item.cost_price, 0)),
+        else_=literal(0.0),
+    )
 
     sort_map = {
         "product_code": Item.sku,

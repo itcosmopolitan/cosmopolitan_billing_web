@@ -17,10 +17,10 @@ from src.qty import as_qty, coerce_qty_value
 from src.routes._atomic import (
     add_batch_atomic,
     adjust_stock_atomic,
-    clamp_stock_to_zero_with_ledger,
     consume_batches_atomic,
     is_tracked,
 )
+from src.routes._stock_ledger import get_available_qty
 from src.routes.items import _upsert_branch_config
 from src.routes._serializers import get_user_branch_ids, serialize_transfer
 from src.routes._child_counters import validate_child_counter
@@ -855,10 +855,14 @@ async def _dispatch_transfer(
     approved_by: str,
     request: Request,
 ) -> dict:
-    """Approve & dispatch a transfer — consume source stock and mark in transit."""
-    import json
+    """Approve & dispatch a transfer — consume source stock and mark in transit.
 
-    from sqlalchemy import text as _text
+    Dispatch never takes the source below zero: every line is checked against
+    the source's available stock (physical minus active reservations) before
+    anything is mutated. Receive credits the destination with the full qty, so
+    letting a transfer go negative at the source would create stock.
+    """
+    import json
 
     if t.status == TransferStatus.transit:
         return {
@@ -870,6 +874,24 @@ async def _dispatch_transfer(
     if t.status != TransferStatus.pending:
         raise HTTPException(400, f"Transfer is already {t.status.value}")
 
+    lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
+    transfer_lines = lines_result.scalars().all()
+    requested_by_item: dict[str, float] = {}
+    for line in transfer_lines:
+        requested_by_item[line.item_id] = as_qty(requested_by_item.get(line.item_id, 0.0) + as_qty(line.qty or 0))
+    for item_id, requested in requested_by_item.items():
+        available = await get_available_qty(db, item_id=item_id, branch_id=t.from_branch_id)
+        if requested > available:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "insufficient_transfer_stock",
+                    "item_id": item_id,
+                    "requested": requested,
+                    "available": as_qty(max(0.0, available)),
+                },
+            )
+
     t.status = TransferStatus.transit
     t.approved_by = approved_by
 
@@ -878,8 +900,7 @@ async def _dispatch_transfer(
     await resolve_notification(db, f"approval.transfer_pending:{transfer_id}")
     await emit_transfer_in_transit(db, t)
 
-    lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
-    for line in lines_result.scalars().all():
+    for line in transfer_lines:
         tracked, expiry_tracked = await is_tracked(db, line.item_id)
         if tracked:
             strategy = "fefo" if expiry_tracked else "fifo"
@@ -922,22 +943,14 @@ async def _dispatch_transfer(
                         )
                     except ValueError:
                         consumed = []
-                if not consumed:
-                    await db.execute(
-                        _text(
-                            "UPDATE item_batches SET quantity = 0 "
-                            "WHERE item_id = :i AND branch_id = :b"
-                        ),
-                        {"i": line.item_id, "b": t.from_branch_id},
-                    )
-                    await clamp_stock_to_zero_with_ledger(
-                        db,
-                        item_id=line.item_id,
-                        branch_id=t.from_branch_id,
-                        movement_type="transfer",
-                        source_type="transfer",
-                        source_ref=transfer_id,
-                        notes=f"Transfer {t.ref_number} source clamp",
+                if not consumed and as_qty(line.qty) > 0:
+                    raise HTTPException(
+                        409,
+                        detail={
+                            "code": "insufficient_transfer_stock",
+                            "item_id": line.item_id,
+                            "requested": as_qty(line.qty),
+                        },
                     )
             line.batch_allocation = json.dumps(consumed)
         else:
@@ -952,14 +965,13 @@ async def _dispatch_transfer(
                     source_ref=transfer_id,
                 )
             except ValueError:
-                await clamp_stock_to_zero_with_ledger(
-                    db,
-                    item_id=line.item_id,
-                    branch_id=t.from_branch_id,
-                    movement_type="transfer",
-                    source_type="transfer",
-                    source_ref=transfer_id,
-                    notes=f"Transfer {t.ref_number} source clamp",
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "insufficient_transfer_stock",
+                        "item_id": line.item_id,
+                        "requested": as_qty(line.qty),
+                    },
                 )
     lines = await _load_transfer_lines(db, transfer_id)
     from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)
