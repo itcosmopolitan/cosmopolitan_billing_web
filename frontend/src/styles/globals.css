@@ -234,6 +234,12 @@ h4 { font-size: 14px; font-weight: 600; }
   top: 0;
   z-index: 2;
 }
+.list-page-scroll .data-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-raised);
+}
 .list-page-scroll .empty-state,
 .list-page-scroll .table-loading-panel {
   min-height: 100%;
