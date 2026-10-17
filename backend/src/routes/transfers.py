@@ -130,6 +130,23 @@ async def _lock_transfer(
         raise HTTPException(400, "Transfer reference number does not match")
     return t
 
+def transfer_branch_scope(branch_id: str, status_key: str):
+    """Branch filter for a transfer list tab. Shared with the tab summary counts.
+
+    draft/pending/rejected → source (from) owns approve/edit
+    transit → destination (to) owns receive
+    anything else (received / all) → either side of the route
+    """
+    if status_key in {"draft", "pending", "rejected"}:
+        return StockTransfer.from_branch_id == branch_id
+    if status_key == "transit":
+        return StockTransfer.to_branch_id == branch_id
+    return or_(
+        StockTransfer.from_branch_id == branch_id,
+        StockTransfer.to_branch_id == branch_id,
+    )
+
+
 @router.get("/", dependencies=[Depends(require_perm(*TRANSFER_DOCUMENT_READ))])
 async def list_transfers(
     status: Optional[str] = None,
@@ -176,20 +193,7 @@ async def list_transfers(
         q = q.where(StockTransfer.child_counter_id == child_counter_id)
         cq = cq.where(StockTransfer.child_counter_id == child_counter_id)
     if branch_id:
-        # Role of the active branch depends on status:
-        #   draft/pending/rejected → source (from) owns approve/edit
-        #   transit → destination (to) owns receive
-        #   received / all → either side of the route
-        status_key = (status or "").strip().lower()
-        if status_key in {"draft", "pending", "rejected"}:
-            branch_scope = StockTransfer.from_branch_id == branch_id
-        elif status_key == "transit":
-            branch_scope = StockTransfer.to_branch_id == branch_id
-        else:
-            branch_scope = or_(
-                StockTransfer.from_branch_id == branch_id,
-                StockTransfer.to_branch_id == branch_id,
-            )
+        branch_scope = transfer_branch_scope(branch_id, (status or "").strip().lower())
         q = q.where(branch_scope)
         cq = cq.where(branch_scope)
     if from_branch:
