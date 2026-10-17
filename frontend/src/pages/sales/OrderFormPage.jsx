@@ -166,6 +166,8 @@ export default function OrderFormPage({ mode = 'create' }) {
           price: i.price,
           tax_rate: Number(i.taxRate || 0),
           discount: lineDiscountToPercent(i),
+          unit: i.unit ?? '',
+          packaging: i.packaging ?? '',
         })),
         discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
           lineGross: saleLineGross,

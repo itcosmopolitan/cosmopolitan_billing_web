@@ -40,6 +40,8 @@ export function lineDiscountToPercent(line) {
 export const emptySaleLine = () => ({
   item_id: null,
   name: '',
+  unit: '',
+  packaging: '',
   qty: 1,
   price: 0,
   costPrice: 0,
@@ -67,6 +69,8 @@ export function mapSaleLines(items, { withOrderLineId = false } = {}) {
     ...emptySaleLine(),
     item_id: it.itemId || it.item_id || null,
     name: it.name || '',
+    unit: it.unit || '',
+    packaging: it.packaging || '',
     // DB may store extra decimals — show settings precision until the user edits.
     qty: roundQty(Number(it.qty) || 0),
     price: roundAmount(Number(it.price) || 0),

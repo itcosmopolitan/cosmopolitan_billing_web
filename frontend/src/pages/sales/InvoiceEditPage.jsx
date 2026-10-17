@@ -187,6 +187,8 @@ export default function InvoiceEditPage() {
           price: Number(i.price),
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
+          unit: i.unit ?? '',
+          packaging: i.packaging ?? '',
           batch_allocation: toApiPayload(i.batchAllocation),
         })),
         discount: entityDiscountToPayload(form.items, form.discount, form.discountType, {

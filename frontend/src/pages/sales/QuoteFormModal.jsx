@@ -122,6 +122,7 @@ export default function QuoteFormModal({
       retailPrice,
       costPrice,
       unit: inv.unit || '',
+      packaging: inv.packaging || '',
       ...pattern,
       ...priced,
       lineDiscount: resolved.discountPct,
@@ -132,7 +133,7 @@ export default function QuoteFormModal({
 
   const handleClear = (i) => {
     const next = [...quoteForm.items]
-    next[i] = { ...next[i], item_id: null, name: '', costPrice: 0 }
+    next[i] = { ...next[i], item_id: null, name: '', unit: '', packaging: '', costPrice: 0 }
     pqf('items', next)
   }
 
@@ -276,6 +277,8 @@ export default function QuoteFormModal({
           <thead>
             <tr>
               <th>Item</th>
+              <th style={{ width: 120 }}>Packaging</th>
+              <th style={{ width: 80 }}>UOM</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.) (MVR)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
@@ -307,6 +310,16 @@ export default function QuoteFormModal({
                       disabled={readOnly}
                       excludeIds={otherPickedIds}
                     />
+                  </td>
+                  <td>
+                    <input className="form-input" type="text" disabled={readOnly}
+                      value={it.packaging ?? ''}
+                      onChange={(e) => pqf('items', quoteForm.items.map((x, j) => (j === i ? { ...x, packaging: e.target.value } : x)))} />
+                  </td>
+                  <td>
+                    <input className="form-input" type="text" disabled={readOnly}
+                      value={it.unit ?? ''}
+                      onChange={(e) => pqf('items', quoteForm.items.map((x, j) => (j === i ? { ...x, unit: e.target.value } : x)))} />
                   </td>
                   <td><input className="form-input" type="number" disabled={readOnly} min={entryInputStep()} step={entryInputStep()} style={numInputStyle}
                     title="Type any decimals; rounded to settings on blur"

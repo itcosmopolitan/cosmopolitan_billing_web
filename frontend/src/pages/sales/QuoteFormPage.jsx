@@ -132,6 +132,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
           unit: i.unit || '',
+          packaging: i.packaging ?? '',
           vat_identifier: i.vatIdentifier || i.vat_identifier || 'GST',
           allow_invoice_discount: i.allowInvoiceDiscount ?? true,
           hsn_code: i.hsnCode || i.hsn_code || '',

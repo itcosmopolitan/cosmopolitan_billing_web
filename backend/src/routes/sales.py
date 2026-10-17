@@ -117,15 +117,16 @@ from src.services.audit_service import add_audit_log, build_audit_entry
 router = APIRouter()
 
 
-def _snapshot_item_metadata(item, packaging=None):
+def _snapshot_item_metadata(item, packaging=None, unit=None):
+    # Line-level packaging/unit (entered on the document) win over the item master.
     if item is None:
-        return {}
+        return {k: v for k, v in (("unit", unit), ("packaging", packaging)) if v is not None}
     return {
         "sku": item.sku,
         "barcode": item.barcode,
         "brand": item.brand,
         "country_of_origin": item.country_of_origin,
-        "unit": item.unit,
+        "unit": item.unit if unit is None else unit,
         "packaging": item.packaging if packaging is None else packaging,
         "packaging_quantity": item.packaging_quantity,
         "is_packaging": item.is_packaging,
@@ -1203,6 +1204,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
             tax_rate=item.tax_rate,
             discount=item.line_discount,
             unit=item.unit or '',
+            packaging=item.packaging,
             vat_identifier=item.vat_identifier or 'GST',
             allow_invoice_discount=item.allow_invoice_discount if item.allow_invoice_discount is not None else True,
             hsn_code=item.hsn_code or '',
@@ -1314,6 +1316,7 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
             tax_rate=line.tax_rate,
             discount=line.line_discount or 0,
             unit=line.unit or '',
+            packaging=line.packaging,
             vat_identifier=line.vat_identifier or 'GST',
             allow_invoice_discount=line.allow_invoice_discount if line.allow_invoice_discount is not None else True,
             hsn_code=line.hsn_code or '',
@@ -1626,7 +1629,7 @@ async def update_invoice(
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
             line_total=line_amount,
-            **_snapshot_item_metadata(item_obj, packaging=item.packaging),
+            **_snapshot_item_metadata(item_obj, packaging=item.packaging, unit=item.unit),
         )
         db.add(li)
         if item.item_id and not is_approval_held:
@@ -2014,7 +2017,7 @@ async def create_invoice(
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
             line_total=line_amount,
-            **_snapshot_item_metadata(item_obj, packaging=item.packaging),
+            **_snapshot_item_metadata(item_obj, packaging=item.packaging, unit=item.unit),
         )
         db.add(li)
         invoice_lines.append((item, li))
@@ -4754,7 +4757,7 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
             "itemId": i.item_id,
             "sku": getattr(_loaded_rel(i, "item"), "sku", None),
             "packing": getattr(_loaded_rel(i, "item"), "packaging", None) or getattr(_loaded_rel(i, "item"), "packaging_quantity", None),
-            "packaging": getattr(_loaded_rel(i, "item"), "packaging", None),
+            "packaging": i.packaging if i.packaging is not None else getattr(_loaded_rel(i, "item"), "packaging", None),
             "name": i.name,
             "qty": i.qty,
             "price": i.price,
@@ -4992,6 +4995,8 @@ class SalesOrderLineIn(BaseModel):
     price: float
     tax_rate: float = 0
     discount: float = 0
+    unit: Optional[str] = None
+    packaging: Optional[str] = None
 
     @field_validator("qty", mode="before")
     @classmethod
@@ -5145,7 +5150,8 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
             "id": i.id, "itemId": i.item_id, "name": i.name,
             "qty": i.qty, "price": i.price, "taxRate": i.tax_rate,
             "discount": i.discount, "lineTotal": i.line_total,
-            "unit": i.item.unit if i.item else "",
+            "unit": i.unit if i.unit is not None else (i.item.unit if i.item else ""),
+            "packaging": i.packaging if i.packaging is not None else (i.item.packaging if i.item else ""),
             "packing": i.item.packaging if i.item else "",
         } for i in items]
     return d
@@ -5903,6 +5909,8 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate, discount=line.discount or 0,
             line_total=line_net,
+            unit=line.unit,
+            packaging=line.packaging,
         )
         db.add(li)
         created_lines.append(li)
@@ -6047,6 +6055,8 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate, discount=line.discount or 0,
             line_total=line_net,
+            unit=line.unit,
+            packaging=line.packaging,
         )
         db.add(li)
         created_lines.append(li)
@@ -6438,7 +6448,7 @@ async def convert_order_to_invoice(
             tax_rate=0 if internal_customer else line_rates[so_line.id],
             discount=so_line.discount or 0,
             line_total=after,
-            **_snapshot_item_metadata(item_obj),
+            **_snapshot_item_metadata(item_obj, packaging=so_line.packaging, unit=so_line.unit),
         )
         db.add(li)
         if so_line.item_id:
@@ -6717,6 +6727,8 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
             qty=ql.qty, price=ql.price,
             tax_rate=line_rates[ql.id], discount=ql.discount or 0,
             line_total=ql.line_total,
+            unit=ql.unit,
+            packaging=ql.packaging,
         )
         db.add(li)
         created_lines.append(li)
@@ -6891,7 +6903,7 @@ async def convert_quote_to_invoice(
             tax_rate=tax_rate,
             discount=line.discount or 0,
             line_total=line_total,
-            **_snapshot_item_metadata(item_obj),
+            **_snapshot_item_metadata(item_obj, packaging=line.packaging, unit=line.unit),
         )
         db.add(li)
         if line.item_id:
@@ -8353,6 +8365,8 @@ async def _restore_sales_order_from_invoice(
                 tax_rate=float(inv_li.tax_rate or 0),
                 discount=float(inv_li.discount or 0),
                 line_total=0,
+                unit=inv_li.unit,
+                packaging=inv_li.packaging,
             )
             _, _, so_line.line_total = _line_amounts(
                 qty,

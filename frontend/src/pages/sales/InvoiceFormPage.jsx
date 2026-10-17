@@ -296,6 +296,8 @@ export default function InvoiceFormPage() {
           price: i.price,
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
+          unit: i.unit ?? '',
+          packaging: i.packaging ?? '',
           batch_allocation: toApiPayload(i.batchAllocation),
         })),
         discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {

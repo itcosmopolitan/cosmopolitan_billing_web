@@ -9,7 +9,6 @@ import {
 } from '@/utils/batchAllocation'
 import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
-import { NOT_SET } from '@/utils/emptyValue'
 
 export default function TransferFormFields({
   form,
@@ -184,8 +183,24 @@ export default function TransferFormFields({
                         />
                       </div>
                     </td>
-                    <td className="transfer-form__item-meta">{picked?.packaging || NOT_SET}</td>
-                    <td className="transfer-form__item-meta">{picked?.unit || NOT_SET}</td>
+                    <td>
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={picked?.packaging || ''}
+                        disabled
+                        aria-label={`Packaging for ${picked?.name || `item ${i + 1}`}`}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={picked?.unit || ''}
+                        disabled
+                        aria-label={`UOM for ${picked?.name || `item ${i + 1}`}`}
+                      />
+                    </td>
                     <td>
                       <input
                         className="form-input"
