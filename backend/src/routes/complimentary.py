@@ -248,7 +248,7 @@ async def create_complimentary(
 
     direct = await can_direct_commit(user, db, COMPLIMENTARY_APPROVE_PERM)
     item_map = await _load_items_by_id(db, {line.item_id for line in data.items})
-    allow_oversell = await get_allow_overselling(db)
+    allow_oversell = await get_allow_overselling(db, data.branch_id)
 
     entry = ComplimentaryEntry(
         id=str(uuid.uuid4()),
@@ -639,7 +639,7 @@ async def approve_complimentary(
         raise HTTPException(403, "You cannot approve your own complimentary entry")
 
     item_map = await _load_items_by_id(db, {li.item_id for li in entry.line_items})
-    allow_oversell = await get_allow_overselling(db)
+    allow_oversell = await get_allow_overselling(db, entry.branch_id)
     total_cost = 0.0
     for li in entry.line_items:
         item = item_map.get(li.item_id)

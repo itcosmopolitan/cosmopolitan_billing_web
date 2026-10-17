@@ -89,6 +89,7 @@ class BranchCreate(BaseModel):
     postal_code: Optional[str] = None
     has_child_counters: bool = False
     child_counters: list[ChildCounterIn] = Field(default_factory=list)
+    allow_overselling: bool = False
     gstin: Optional[str] = None
     active: bool = True
 
@@ -108,6 +109,7 @@ class BranchUpdate(BaseModel):
     postal_code: Optional[str] = None
     has_child_counters: Optional[bool] = None
     child_counters: Optional[list[ChildCounterIn]] = None
+    allow_overselling: Optional[bool] = None
     gstin: Optional[str] = None
     active: Optional[bool] = None
 
@@ -191,6 +193,7 @@ async def create_branch(
                    if data.has_child_counters
                    else []
                ),
+               allow_overselling=data.allow_overselling,
                gstin=data.gstin, active=data.active)
     db.add(b)
     await db.flush()
@@ -231,6 +234,7 @@ async def create_branch(
             "postal_code": b.postal_code,
             "has_child_counters": b.has_child_counters,
             "child_counters": b.child_counters,
+            "allow_overselling": b.allow_overselling,
             "gstin": b.gstin,
             "active": b.active,
         },

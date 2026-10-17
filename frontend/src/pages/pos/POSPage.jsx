@@ -208,7 +208,6 @@ export default function POSPage() {
   // Active allocation editor target. `null` => modal closed. Shape:
   //   { item, batches, allocation }
   const [allocEditor, setAllocEditor] = useState(null)
-  const [allowOverselling, setAllowOverselling] = useState(true)
   const [allowPriceEditing, setAllowPriceEditing] = useState(false)
   const [showRefund, setShowRefund] = useState(false)
   const [discountReasonOptions, setDiscountReasonOptions] = useState(DISCOUNT_REASON_OPTIONS)
@@ -254,6 +253,7 @@ export default function POSPage() {
     setSelectedChildCounter,
   } = store
   const activeBranchData = branches.find((branch) => branch.id === activeBranch?.id) || activeBranch
+  const allowOverselling = activeBranchData?.allow_overselling === true
   const stockMode = activeBranch?.id ? (stockModeByBranch[activeBranch.id] || 'branch') : 'branch'
   const branchHeldBills = heldBills.filter((bill) => bill.branchId === activeBranch?.id)
   const childCounters = getConfiguredChildCounters(activeBranchData)
@@ -353,12 +353,10 @@ export default function POSPage() {
     settingsAPI.getOrganisation()
       .then((res) => {
         const data = res?.data ?? res
-        setAllowOverselling(data?.allowOverselling !== false)
         setAllowPriceEditing(data?.allowPriceEditing === true)
         setOrganisationProfile(data)
       })
       .catch(() => {
-        setAllowOverselling(true)
         setAllowPriceEditing(false)
       })
   }, [setOrganisationProfile])

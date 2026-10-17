@@ -59,7 +59,7 @@ Cashier at A sells 25         →  A: 0, B: 25, invoice belongs to A at A's pric
 | Batches | Branch-scoped; transfer receive recreates the batch at the destination, copying number, dates, vendor, cost | Same pattern for pool receipts |
 | Sale flow | `sales.py › create_invoice` → `_consume_sale_line_stock` (branch-local, FEFO if expiry tracked else FIFO) → single `db.commit()` | Pool allocation slots in before the commit, same transaction |
 | Logging | Audit/activity rows are written **after** commit in a separate commit (`_write_post_commit_audit`) | Pool-draw proof must be written **inside** the sale transaction |
-| Overselling | `Organisation.allow_overselling` defaults to true; aggregate clamps to zero | Must never overdraw a *non-selling* branch |
+| Overselling | `Branch.allow_overselling` per branch (default false); when true, the selling branch's aggregate clamps to zero | Must never overdraw a *non-selling* branch |
 | Idempotency | None on `/sales/` | Required before cross-branch draws (a retry would move B's stock twice) |
 | Pricing | `create_invoice` trusts submitted line prices; no server re-resolution | Out of scope, but a test must prove pooling never alters price |
 | Schema | Runtime `create_all()` + additive helpers in `database.py`; Alembic exists separately | New tables auto-create; new columns need an additive helper **and** an Alembic file |
@@ -184,8 +184,9 @@ Pool receipts do **not** recompute A's weighted-average cost: the units are sold
    2. `add_batch_atomic` at A (the existing transfer exemption for duplicate batch numbers applies) plus `adjust_stock_atomic` with `movement_type='pool_transfer_in'`.
    3. Insert the `pool_sale_allocations` row.
 6. If a shortfall still remains after all members:
-   - `allow_overselling = false` → reject the whole invoice (HTTP 409 `insufficient_pool_stock`), full rollback.
-   - `allow_overselling = true` → the remainder follows today's behaviour at A. B is never involved.
+   - `allow_overselling = false` on the selling branch → reject the whole invoice (HTTP 409 `insufficient_pool_stock`), full rollback.
+   - `allow_overselling = true` on the selling branch → the remainder follows today's behaviour at A. B is never involved.
+   - The flag is read from the selling branch only. The lending branch's flag is irrelevant to this draw.
 7. Run the normal sale consumption at A for the **full line quantity**, passing an **explicit `batch_allocation`** for tracked items: A's own FEFO batches plus the batches just created from B. This stops FEFO at A from picking some other lot (for example an expired one) and leaving the transferred stock behind.
 
 ### 7.2 Eligibility
@@ -439,7 +440,7 @@ ORIGINAL SOURCE BRANCH/BATCH
 | Expired lots at B | Excluded from pool stock and never drawn |
 | Same batch number exists at A and B | Allowed; recreated batch at A follows the transfer exemption, with no merge |
 | Fractional quantities | Supported; allocation quantities use the sale-line numeric type |
-| Insufficient across pool | Per `allow_overselling`; B never overdrawn |
+| Insufficient across pool | Per the selling branch's `allow_overselling`; B never overdrawn |
 | Retry after timeout | Idempotent; returns the same invoice |
 | Partial/credit/unpaid POS bill requesting pool stock | Allowed when clubbed mode is enabled; every source branch/batch allocation is recorded so cancellation/return can restore stock to the original source |
 | Zero-quantity recreated batches at A | Follow existing consumed-batch handling (verify they are deactivated or ignored consistently) |

@@ -108,6 +108,7 @@ def serialize_branch(b) -> dict:
         "postal_code": b.postal_code,
         "has_child_counters": bool(getattr(b, "has_child_counters", False)),
         "child_counters": normalize_child_counters(b.id, getattr(b, "child_counters", None)),
+        "allow_overselling": bool(getattr(b, "allow_overselling", False)),
         "gstin": b.gstin,
         "gst": b.gstin,
         "homepage": getattr(b, "homepage", None) or getattr(b, "website", None),

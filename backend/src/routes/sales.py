@@ -1614,7 +1614,7 @@ async def update_invoice(
 
     item_ids = {item.item_id for item in data.items if item.item_id}
     item_map = await _load_items_by_id(db, item_ids)
-    allow_oversell = await get_allow_overselling(db)
+    allow_oversell = await get_allow_overselling(db, inv.branch_id)
     for item, line_amount, _line_taxable, _line_tax in line_rows:
         item_obj = item_map.get(item.item_id) if item.item_id else None
         li = SaleLineItem(
@@ -2000,7 +2000,7 @@ async def create_invoice(
 
     item_ids = {item.item_id for item in data.items if item.item_id}
     item_map = await _load_items_by_id(db, item_ids)
-    allow_oversell = await get_allow_overselling(db)
+    allow_oversell = await get_allow_overselling(db, data.branch_id)
 
     invoice_lines = []
     for item, line_amount, _line_taxable, _line_tax in line_rows:
@@ -2948,7 +2948,7 @@ async def approve_invoice(
     if inv.created_by and inv.created_by == user.name:
         raise HTTPException(403, "You cannot approve your own invoice")
 
-    allow_oversell = await get_allow_overselling(db)
+    allow_oversell = await get_allow_overselling(db, inv.branch_id)
 
     # Apply stock for each tracked line item
     for li in inv.line_items:
@@ -5906,7 +5906,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
         db.add(li)
         created_lines.append(li)
     # Stock reservation only for confirmed SOs; draft SOs reserve on approval.
-    if direct and not await get_allow_overselling(db):
+    if direct and not await get_allow_overselling(db, so.branch_id):
         try:
             await reserve_for_sales_order(
                 db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
@@ -6049,7 +6049,7 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
         db.add(li)
         created_lines.append(li)
     await release_reservations(db, source_type="sales_order", source_ref=so.id)
-    if so.status == SalesOrderStatus.confirmed and not await get_allow_overselling(db):
+    if so.status == SalesOrderStatus.confirmed and not await get_allow_overselling(db, so.branch_id):
         try:
             await reserve_for_sales_order(
                 db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
@@ -6104,7 +6104,7 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
     if target == SalesOrderStatus.cancelled:
         await release_reservations(db, source_type="sales_order", source_ref=so.id)
     elif target == SalesOrderStatus.confirmed and prev != SalesOrderStatus.confirmed:
-        if not await get_allow_overselling(db):
+        if not await get_allow_overselling(db, so.branch_id):
             try:
                 await reserve_for_sales_order(
                     db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items,
@@ -6209,7 +6209,7 @@ async def approve_sales_order(
     if so.created_by and so.created_by == user.name:
         raise HTTPException(403, "You cannot approve your own sales order")
     # Create stock reservation for confirmed SO
-    if not await get_allow_overselling(db):
+    if not await get_allow_overselling(db, so.branch_id):
         try:
             await reserve_for_sales_order(db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items)
         except ValueError as e:
@@ -6337,7 +6337,7 @@ async def convert_order_to_invoice(
     if not convert_plan:
         raise HTTPException(400, "Select at least one line with quantity > 0")
 
-    allow_oversell = await get_allow_overselling(db)
+    allow_oversell = await get_allow_overselling(db, so.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     internal_customer = await _customer_is_internal(db, so.customer_id)
     taxable_customer = await _is_taxable_customer(db, so.customer_id)
@@ -6721,7 +6721,7 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
     # Flush inserts for SO + lines so quotation FK back-pointer passes immediately.
     await db.flush()
     # The order is created as confirmed, so it must hold stock like any other confirmed SO.
-    if not await get_allow_overselling(db):
+    if not await get_allow_overselling(db, so.branch_id):
         try:
             await reserve_for_sales_order(
                 db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,

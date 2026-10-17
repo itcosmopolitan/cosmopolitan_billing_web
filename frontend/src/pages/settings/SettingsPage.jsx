@@ -22,7 +22,6 @@ const EMPTY_ORG_FORM = {
   website: '',
   state_code: '33',
   financial_year: 'Apr-Mar',
-  allow_overselling: true,
   allow_price_editing: false,
   amount_decimal_precision: 2,
   quantity_decimal_precision: 2,
@@ -96,7 +95,7 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [credentialsAcknowledged, setCredentialsAcknowledged] = useState(false)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[] })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -440,7 +439,6 @@ export default function SettingsPage() {
             website: data.website || '',
             state_code: data.state_code || '33',
             financial_year: data.financial_year || 'Apr-Mar',
-            allow_overselling: data.allowOverselling !== false,
             allow_price_editing: data.allowPriceEditing === true,
             amount_decimal_precision: data.amountDecimalPrecision ?? 2,
             quantity_decimal_precision: data.quantityDecimalPrecision ?? 2,
@@ -474,7 +472,6 @@ export default function SettingsPage() {
         website: orgForm.website?.trim() || '',
         state_code: orgForm.state_code?.trim() || '33',
         financial_year: orgForm.financial_year || 'Apr-Mar',
-        allow_overselling: orgForm.allow_overselling,
         allow_price_editing: orgForm.allow_price_editing,
         amount_decimal_precision: Number(orgForm.amount_decimal_precision),
         quantity_decimal_precision: Number(orgForm.quantity_decimal_precision),
@@ -491,7 +488,6 @@ export default function SettingsPage() {
         website: saved?.website ?? prev.website,
         state_code: saved?.state_code ?? prev.state_code,
         financial_year: saved?.financial_year ?? prev.financial_year,
-        allow_overselling: saved?.allowOverselling !== false,
         allow_price_editing: saved?.allowPriceEditing === true,
         amount_decimal_precision: saved?.amountDecimalPrecision ?? prev.amount_decimal_precision,
         quantity_decimal_precision: saved?.quantityDecimalPrecision ?? prev.quantity_decimal_precision,
@@ -750,6 +746,7 @@ export default function SettingsPage() {
         postal_code: branchForm.postalCode,
         has_child_counters: branchForm.hasChildCounters,
         child_counters: childCounters,
+        allow_overselling: Boolean(branchForm.allowOverselling),
         gstin: '',
         active: true,
       })
@@ -794,6 +791,7 @@ export default function SettingsPage() {
         country: editBranchForm.country,
         postal_code: editBranchForm.postal_code,
         has_child_counters: Boolean(editBranchForm.has_child_counters),
+        allow_overselling: Boolean(editBranchForm.allow_overselling),
         child_counters: editBranchForm.has_child_counters
           ? childCounters.map(counter => ({
             ...counter,
@@ -843,20 +841,6 @@ export default function SettingsPage() {
             <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
             <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             <FormGroup label="Financial Year"><AutocompleteDropdown value={orgForm.financial_year} onChange={(v) => pof('financial_year', v)} options={FINANCIAL_YEAR_OPTIONS} isSearchFieldRequired={false} disabled={!can('settings.edit')} /></FormGroup></FormRow>
-            <FormGroup label="Inventory">
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
-                <input
-                  type="checkbox"
-                  checked={orgForm.allow_overselling}
-                  onChange={e => pof('allow_overselling', e.target.checked)}
-                  disabled={!can('settings.edit')}
-                />
-                Allow overselling (sell below zero stock)
-              </label>
-              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                When off, POS, invoices, and sales orders block sales that exceed available stock.
-              </div>
-            </FormGroup>
             <FormGroup label="POS pricing">
               <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
                 <input
@@ -1162,6 +1146,19 @@ export default function SettingsPage() {
               onAdd: () => setBranchForm(form => ({ ...form, childCounters: [...form.childCounters, { name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
               onRemove: index => setBranchForm(form => ({ ...form, childCounters: form.childCounters.filter((_, i) => i !== index) })),
             })}
+            <FormGroup label="Inventory">
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(branchForm.allowOverselling)}
+                  onChange={e => pbf('allowOverselling', e.target.checked)}
+                />
+                Allow overselling at this branch (sell below zero stock)
+              </label>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
+              </div>
+            </FormGroup>
           </Modal>
           <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="lg"
               footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
@@ -1187,6 +1184,20 @@ export default function SettingsPage() {
                 onAdd: () => setEditBranchForm(form => ({ ...form, child_counters: [...(form.child_counters || []), { name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
                 onRemove: index => setEditBranchForm(form => ({ ...form, child_counters: (form.child_counters || []).filter((_, i) => i !== index) })),
               })}
+              <FormGroup label="Inventory">
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editBranchForm.allow_overselling)}
+                    onChange={e => pbfEdit('allow_overselling', e.target.checked)}
+                    disabled={!can('settings.edit')}
+                  />
+                  Allow overselling at this branch (sell below zero stock)
+                </label>
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
+                </div>
+              </FormGroup>
           </Modal>
         </>
       )}

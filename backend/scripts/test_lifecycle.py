@@ -84,9 +84,9 @@ class LifecycleTester:
         self.token = data["token"]
 
     def test_settings(self) -> None:
-        org = self.req("GET", "/settings/organisation")
-        assert "allowOverselling" in org or "allow_overselling" in org
-        self.req("PATCH", "/settings/organisation", json={"allow_overselling": True})
+        branch = self.req("GET", f"/branches/{BRANCH}")
+        assert "allow_overselling" in branch
+        self.req("PUT", f"/branches/{BRANCH}", json={"allow_overselling": True})
 
     # ─── Purchase lifecycles ─────────────────────────────────────────────────
     def test_po_convert_to_bill(self) -> dict:

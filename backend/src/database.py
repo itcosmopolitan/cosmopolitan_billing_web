@@ -476,6 +476,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("branches", "postal_code", "VARCHAR(20)"),
     ("branches", "has_child_counters", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("branches", "child_counters", "JSON DEFAULT '[]' NOT NULL"),
+    # Overselling moved from org scope to per-branch (one-time backfill below).
+    ("branches", "allow_overselling", "BOOLEAN DEFAULT 0 NOT NULL"),
     # Cash Control (2026-06-14): per-branch petty cash settings.
     ("branches", "cash_opening_mode",       "VARCHAR DEFAULT 'carry_forward'"),
     ("branches", "cash_fixed_float",        "FLOAT DEFAULT 0"),
@@ -589,6 +591,7 @@ async def init_schema() -> None:
             await _promote_qty_columns_to_float(conn)
             await _backfill_user_account_status(conn, added_columns)
             await _backfill_customer_credit_eligible(conn, added_columns)
+            await _backfill_branch_allow_overselling(conn, added_columns)
             await _backfill_customer_branch_kams(conn)
             await _ensure_audit_log_indexes(conn)
             await _ensure_stock_pool_indexes(conn)
@@ -988,6 +991,30 @@ async def _backfill_customer_credit_eligible(
             SET is_credit_eligible = TRUE
             WHERE LOWER(COALESCE(type, 'retail')) IN ('wholesale', 'staff')
               AND COALESCE(credit_limit, 0) > 0
+            """
+        )
+    )
+
+
+async def _backfill_branch_allow_overselling(
+    conn, added_columns: set[tuple[str, str]]
+) -> None:
+    """One-time: seed each branch's overselling flag from the legacy org value.
+
+    Runs only when the column is first added so later per-branch edits are kept.
+    """
+    if ("branches", "allow_overselling") not in added_columns:
+        return
+    tables = await _existing_tables(conn, ["branches", "organisations"])
+    if not {"branches", "organisations"} <= tables:
+        return
+    await conn.execute(
+        text(
+            """
+            UPDATE branches
+            SET allow_overselling = COALESCE(
+                (SELECT allow_overselling FROM organisations LIMIT 1), TRUE
+            )
             """
         )
     )

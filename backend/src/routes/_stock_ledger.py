@@ -7,14 +7,14 @@ from typing import Optional
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import ItemStock, Organisation, StockMovement, StockReservation, StockReservationStatus
+from src.models import Branch, ItemStock, StockMovement, StockReservation, StockReservationStatus
 from src.qty import as_qty
 
 
-async def get_allow_overselling(db: AsyncSession) -> bool:
-    row = (await db.execute(select(Organisation.allow_overselling).limit(1))).scalar_one_or_none()
-    if row is None:
-        return True
+async def get_allow_overselling(db: AsyncSession, branch_id: str) -> bool:
+    row = (await db.execute(
+        select(Branch.allow_overselling).where(Branch.id == branch_id)
+    )).scalar_one_or_none()
     return bool(row)
 
 
@@ -172,7 +172,7 @@ async def refresh_so_reservations(
     lines: list,
 ) -> None:
     """Re-sync active reservations after a partial SO→invoice convert."""
-    if await get_allow_overselling(db):
+    if await get_allow_overselling(db, branch_id):
         return
     await release_reservations(db, source_type="sales_order", source_ref=order_id)
     if lines:
