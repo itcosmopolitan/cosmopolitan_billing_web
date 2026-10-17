@@ -80,7 +80,8 @@ class TransferCreate(BaseModel):
     items: List[TransferLine]
     priority: str = "Normal"
     notes: Optional[str] = None
-    expected_date: Optional[str] = None
+    expected_date: str = Field(..., min_length=1)
+    recorded_date: str = Field(..., min_length=1)
 
 
 class TransferUpdate(BaseModel):
@@ -92,7 +93,8 @@ class TransferUpdate(BaseModel):
     items: List[TransferLine]
     priority: str = "Normal"
     notes: Optional[str] = None
-    expected_date: Optional[str] = None
+    expected_date: str = Field(..., min_length=1)
+    recorded_date: str = Field(..., min_length=1)
 
 
 class TransferApprove(BaseModel):
@@ -157,6 +159,8 @@ async def list_transfers(
             "status": StockTransfer.status,
             "requested_by": StockTransfer.requested_by,
             "created_at": StockTransfer.created_at,
+            "recorded_date": StockTransfer.recorded_date,
+            "request_date": StockTransfer.request_date,
         },
         default_key="created_at",
         default_order="desc",
@@ -605,6 +609,7 @@ async def create_transfer(
         priority=data.priority,
         notes=data.notes,
         request_date=data.expected_date,
+        recorded_date=data.recorded_date,
     )
     db.add(t)
     for line in _add_transfer_lines(tid, data.items):
@@ -699,7 +704,7 @@ async def update_transfer(
     t.priority = data.priority
     t.notes = data.notes
     t.request_date = data.expected_date
-
+    t.recorded_date = data.recorded_date
     existing = (
         await db.execute(
             select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id)

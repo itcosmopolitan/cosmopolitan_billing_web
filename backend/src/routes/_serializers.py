@@ -240,8 +240,9 @@ def serialize_transfer(t) -> dict:
         "priority": t.priority,
         "notes": t.notes,
         "request_date": t.request_date,
+        "recorded_date": t.recorded_date,
         "created_at": created.isoformat() if created else None,
-        "date": created.strftime("%Y-%m-%d") if created else None,
+        "date": t.recorded_date or (created.strftime("%Y-%m-%d") if created else None),
     }
 
 

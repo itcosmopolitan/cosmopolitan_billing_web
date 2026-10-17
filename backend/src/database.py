@@ -423,6 +423,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("sales_orders", "child_counter_name", "VARCHAR"),
     ("stock_transfers", "child_counter_id", "VARCHAR"),
     ("stock_transfers", "child_counter_name", "VARCHAR"),
+    ("stock_transfers", "recorded_date", "VARCHAR"),
     ("adjustment_requests", "child_counter_id", "VARCHAR"),
     ("adjustment_requests", "child_counter_name", "VARCHAR"),
     ("cash_entries", "child_counter_id", "VARCHAR"),
@@ -604,6 +605,7 @@ async def init_schema() -> None:
             await _backfill_role_ids(conn)
             await _backfill_item_branch_config(conn)
             await _backfill_cash_entry_child_counters(conn)
+            await _backfill_transfer_recorded_date(conn)
             await _migrate_adjustment_requests_per_branch_ref(conn)
             await _repair_return_invoice_totals(conn)
         except DBAPIError as e:
@@ -1331,6 +1333,18 @@ async def _existing_tables(conn, names: list[str]) -> set[str]:
         )
     ).fetchall()
     return {r[0] for r in rows}
+
+
+async def _backfill_transfer_recorded_date(conn) -> None:
+    """Transfers created before the recorded date existed use their creation day."""
+    tables = await _existing_tables(conn, ["stock_transfers"])
+    if "stock_transfers" not in tables:
+        return
+    await conn.execute(text("""
+        UPDATE stock_transfers
+        SET recorded_date = substr(CAST(created_at AS VARCHAR), 1, 10)
+        WHERE recorded_date IS NULL AND created_at IS NOT NULL
+    """))
 
 
 async def _backfill_cash_entry_child_counters(conn) -> None:

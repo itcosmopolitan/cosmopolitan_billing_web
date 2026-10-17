@@ -473,7 +473,10 @@ export default function TransfersPage() {
                         return <SortableHeader key={id} label="Status" sortKey="status" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                       }
                       if (id === 'date') {
-                        return <SortableHeader key={id} label="Date" sortKey="created_at" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                        return <SortableHeader key={id} label="Date" sortKey="recorded_date" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
+                      }
+                      if (id === 'transfer_date') {
+                        return <SortableHeader key={id} label="Transfer date" sortKey="request_date" sortBy={trSortBy} sortOrder={trSortOrder} onSort={onSort} />
                       }
                       return null
                     })}
@@ -529,6 +532,9 @@ export default function TransfersPage() {
                         }
                         if (id === 'date') {
                           return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.date || NOT_SET}</td>
+                        }
+                        if (id === 'transfer_date') {
+                          return <td key={id} style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t.request_date || NOT_SET}</td>
                         }
                         return null
                       })}

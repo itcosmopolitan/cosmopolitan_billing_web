@@ -9,6 +9,7 @@ import {
 } from '@/utils/batchAllocation'
 import { entryInputStep, roundAmount } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
+import { NOT_SET } from '@/utils/emptyValue'
 
 export default function TransferFormFields({
   form,
@@ -106,7 +107,14 @@ export default function TransferFormFields({
                 disabled={disabled}
               />
             </FormGroup>
-            <FormGroup label="Expected dispatch date">
+            <FormGroup label="Recorded Date" required>
+              <DatePicker
+                value={form.recorded_date}
+                onChange={(v) => patchForm('recorded_date', v)}
+                disabled={disabled}
+              />
+            </FormGroup>
+            <FormGroup label="Expected dispatch date" required>
               <DatePicker
                 value={form.expected_date}
                 onChange={(v) => patchForm('expected_date', v)}
@@ -132,7 +140,9 @@ export default function TransferFormFields({
             <thead>
               <tr>
                 <th style={{ width: 48 }}>#</th>
-                <th style={{ width: '34%' }}>Item</th>
+                <th style={{ width: '28%' }}>Item</th>
+                <th style={{ width: 120 }}>Packaging</th>
+                <th style={{ width: 70 }}>UOM</th>
                 <th style={{ width: 90 }}>Qty</th>
                 <th style={{ width: 120 }}>Cost Price (MVR)</th>
                 <th style={{ width: 145 }}>Total Cost Price (MVR)</th>
@@ -174,6 +184,8 @@ export default function TransferFormFields({
                         />
                       </div>
                     </td>
+                    <td className="transfer-form__item-meta">{picked?.packaging || NOT_SET}</td>
+                    <td className="transfer-form__item-meta">{picked?.unit || NOT_SET}</td>
                     <td>
                       <input
                         className="form-input"

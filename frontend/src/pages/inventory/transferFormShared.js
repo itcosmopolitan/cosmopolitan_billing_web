@@ -7,6 +7,7 @@ import {
   roundAmount,
   roundQty,
 } from '@/utils/decimalPrecision'
+import { todayISO } from '@/utils/batchDates'
 
 export const EMPTY_LINE = {
   item_id: '',
@@ -23,6 +24,7 @@ export function emptyTransfer(defaultFromId = '', defaultToId = '') {
     child_counter_id: '',
     child_counter_name: '',
     priority: 'Normal',
+    recorded_date: todayISO(),
     expected_date: '',
     notes: '',
     items: [{ ...EMPTY_LINE }],
@@ -40,6 +42,7 @@ export function formFromTransfer(transfer) {
     child_counter_id: transfer.child_counter_id || '',
     child_counter_name: transfer.child_counter_name || '',
     priority: transfer.priority || 'Normal',
+    recorded_date: transfer.recorded_date || transfer.date || '',
     expected_date: transfer.expected_date || transfer.request_date || '',
     notes: transfer.notes || '',
     items: lines.map((line) => ({
@@ -59,6 +62,12 @@ export function validateTransferForm(form, items, batchOptions) {
   }
   if (form.from_branch_id === form.to_branch_id) {
     return { ok: false, error: 'From and To branches must differ' }
+  }
+  if (!form.recorded_date) {
+    return { ok: false, error: 'Select a recorded date' }
+  }
+  if (!form.expected_date) {
+    return { ok: false, error: 'Select an expected dispatch date' }
   }
   const filled = form.items.filter((row) => row.item_id)
   if (filled.length === 0) {
@@ -105,6 +114,7 @@ export function buildTransferPayload(form, items, { requestedBy, refNumber } = {
     child_counter_name: form.child_counter_name || null,
     priority: form.priority || 'Normal',
     notes: form.notes || undefined,
+    recorded_date: form.recorded_date || undefined,
     expected_date: form.expected_date || undefined,
     items: form.items.filter((i) => i.item_id).map((row) => {
       const itm = items.find((x) => x.id === row.item_id)

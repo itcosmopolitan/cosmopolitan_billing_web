@@ -667,6 +667,13 @@ h4 { font-size: 14px; font-weight: 600; }
   max-width: 100%;
 }
 
+.transfer-form__item-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-top: 10px;
+  overflow-wrap: anywhere;
+}
+
 .transfer-form__table .form-input,
 .transfer-form__table .autocomplete-dropdown-trigger {
   width: 100%;

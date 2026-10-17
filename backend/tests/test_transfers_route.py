@@ -83,6 +83,8 @@ def test_create_transfer_only_requires_source_branch_access(monkeypatch):
                 from_branch_id="source",
                 to_branch_id="destination",
                 requested_by="Transfer user",
+                expected_date="2026-10-20",
+                recorded_date="2026-10-17",
                 items=[TransferLine(item_id="item-1", item_name="Transfer item", qty=1)],
             ),
             db=FakeDB(),
@@ -129,3 +131,54 @@ def test_transfers_route_uses_branch_aliases():
             )
 
     asyncio.run(_run())
+
+
+def test_transfer_create_and_update_require_recorded_and_expected_dates():
+    import pytest
+    from pydantic import ValidationError
+
+    from src.routes.transfers import TransferUpdate
+
+    line = TransferLine(item_id='item-1', item_name='Transfer item', qty=1)
+    base = dict(from_branch_id='source', to_branch_id='destination', items=[line])
+    valid = dict(expected_date='2026-10-20', recorded_date='2026-10-17')
+
+    for field in ('expected_date', 'recorded_date'):
+        for bad in (None, ''):
+            with pytest.raises(ValidationError):
+                TransferCreate(requested_by='Transfer user', **{**base, **valid, field: bad})
+            with pytest.raises(ValidationError):
+                TransferUpdate(ref_number='TR-1', **{**base, **valid, field: bad})
+
+    updated = TransferUpdate(ref_number='TR-1', **{**base, **valid})
+    assert updated.recorded_date == '2026-10-17'
+    assert updated.expected_date == '2026-10-20'
+
+
+def test_serialize_transfer_list_date_prefers_recorded_date():
+    from datetime import datetime
+
+    from src.models import StockTransfer, TransferStatus
+    from src.routes._serializers import serialize_transfer
+
+    created = datetime(2026, 10, 15, 9, 30)
+    recorded = StockTransfer(
+        id='tr-1', ref_number='TR-1', from_branch_id='a', to_branch_id='b',
+        status=TransferStatus.pending, created_at=created, recorded_date='2026-10-17',
+    )
+    legacy = StockTransfer(
+        id='tr-2', ref_number='TR-2', from_branch_id='a', to_branch_id='b',
+        status=TransferStatus.pending, created_at=created, recorded_date=None,
+    )
+
+    assert serialize_transfer(recorded)['date'] == '2026-10-17'
+    assert serialize_transfer(recorded)['recorded_date'] == '2026-10-17'
+    assert serialize_transfer(legacy)['date'] == '2026-10-15'
+    assert serialize_transfer(legacy)['recorded_date'] is None
+
+
+def test_transfers_list_offers_transfer_date_column_after_date():
+    from src.column_catalog import COLUMN_CATALOG
+
+    ids = [col['id'] for col in COLUMN_CATALOG['transfers.list']]
+    assert ids.index('transfer_date') == ids.index('date') + 1

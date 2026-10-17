@@ -77,6 +77,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("items", "Items"),
         _col("status", "Status", locked=True),
         _col("date", "Date"),
+        _col("transfer_date", "Transfer date"),
     ],
     "adjustments.list": [
         _col("ref_number", "Adjustment #", locked=True),

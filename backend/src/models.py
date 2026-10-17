@@ -1563,6 +1563,7 @@ class StockTransfer(Base):
     priority         = Column(String, default="Normal")
     notes            = Column(Text)
     request_date     = Column(String)
+    recorded_date    = Column(String, nullable=True)
     created_at       = Column(DateTime, default=datetime.utcnow)
 
     items = relationship("TransferLineItem", back_populates="transfer", cascade="all, delete-orphan")
