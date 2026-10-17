@@ -258,23 +258,19 @@ export default function AdjustmentsPage() {
     setActionKind('delete')
     let ok = 0
     let fail = 0
-    let lastError = null
     for (const row of deleteTargets) {
       try {
         await adjustmentsAPI.delete(row.id, { ref_number: row.ref_number })
         ok += 1
       } catch (err) {
         fail += 1
-        lastError = err
         console.error(err)
       }
     }
     if (ok > 0) {
       toast.success(`${ok} adjustment${ok > 1 ? 's' : ''} deleted`)
     }
-    if (fail > 0) {
-      toast.error(lastError?.response?.data?.detail || `${fail} adjustment${fail > 1 ? 's' : ''} could not be deleted`)
-    }
+    if (fail > 1) toast.error(`${fail} adjustments could not be deleted`)
     setDeleteTargets(null)
     setSelectedIds(new Set())
     setShowDetail(null)
@@ -318,6 +314,7 @@ export default function AdjustmentsPage() {
     if (submitting) return
     if (!newForm.item_id) { toast.error('Select an item'); return }
     if (newForm.new_qty === '' || newForm.new_qty === null) { toast.error('Enter new quantity'); return }
+    if (Number(newForm.new_qty) < 0) { toast.error('New quantity cannot be negative'); return }
     const item = pickedItem
     if (!item) return
     const selectedBranch = getChildCounterBranch(branches, newForm.branch_id, activeBranch)
@@ -362,7 +359,6 @@ export default function AdjustmentsPage() {
       bumpList()
     } catch (err) {
       console.error(err)
-      toast.error(err?.response?.data?.detail || 'Failed to submit request')
     } finally {
       setSubmitting(false)
     }
@@ -387,7 +383,6 @@ export default function AdjustmentsPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to approve')
     } finally {
       setActionBusy(null)
       setActionKind(null)
@@ -405,7 +400,6 @@ export default function AdjustmentsPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to submit')
     } finally {
       setActionBusy(null)
       setActionKind(null)
@@ -432,7 +426,6 @@ export default function AdjustmentsPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to reject')
     } finally {
       setActionBusy(null)
       setActionKind(null)
@@ -740,7 +733,7 @@ export default function AdjustmentsPage() {
                   ...f,
                   item_id: opt?.id || '',
                   batch_id: '',
-                  new_qty: raw ? String(raw.available_stock ?? 0) : '',
+                  new_qty: raw ? String(Math.max(0, raw.available_stock ?? 0)) : '',
                 }))
               }}
               disabled={submitting || !newForm.branch_id}
@@ -755,7 +748,7 @@ export default function AdjustmentsPage() {
                 <tbody>
                   <tr
                     style={{ cursor: 'pointer', background: !newForm.batch_id ? 'rgba(79,142,247,.08)' : undefined }}
-                    onClick={() => setNewForm((f) => ({ ...f, batch_id: '', new_qty: String(picked.available_stock ?? 0) }))}
+                    onClick={() => setNewForm((f) => ({ ...f, batch_id: '', new_qty: String(Math.max(0, picked.available_stock ?? 0)) }))}
                   >
                     <td style={{ width: 30 }}><input type="radio" readOnly checked={!newForm.batch_id} /></td>
                     <td colSpan={2} style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>Aggregate ({trackingLabel(picked)})</td>
@@ -767,7 +760,7 @@ export default function AdjustmentsPage() {
                     <tr
                       key={b.id}
                       style={{ cursor: 'pointer', background: newForm.batch_id === b.id ? 'rgba(79,142,247,.08)' : undefined }}
-                      onClick={() => setNewForm((f) => ({ ...f, batch_id: b.id, new_qty: String(b.quantity) }))}
+                      onClick={() => setNewForm((f) => ({ ...f, batch_id: b.id, new_qty: String(Math.max(0, b.quantity)) }))}
                     >
                       <td><input type="radio" readOnly checked={newForm.batch_id === b.id} /></td>
                       <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>

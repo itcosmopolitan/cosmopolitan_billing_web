@@ -290,6 +290,25 @@ def _format_qty_label(qty) -> str:
     return f"{n:g}"
 
 
+def _insufficient_stock_detail(
+    *, item_id: str, item_name: Optional[str], requested: float, available: float,
+) -> dict:
+    """409 body for a transfer line the source branch cannot cover."""
+    label = item_name or item_id
+    available_label = _format_qty_label(max(0.0, available))
+    return {
+        "code": "insufficient_transfer_stock",
+        "item_id": item_id,
+        "item_name": item_name,
+        "requested": as_qty(requested),
+        "available": as_qty(max(0.0, available)),
+        "message": (
+            f"Insufficient stock for {label}: requested {_format_qty_label(requested)}, "
+            f"available {available_label}"
+        ),
+    }
+
+
 def _transfer_lines_audit(lines) -> tuple[str, list[dict], float]:
     """Human line summary + structured rows for transfer audit metadata."""
     parts: list[str] = []
@@ -877,19 +896,21 @@ async def _dispatch_transfer(
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     transfer_lines = lines_result.scalars().all()
     requested_by_item: dict[str, float] = {}
+    item_names: dict[str, Optional[str]] = {}
     for line in transfer_lines:
         requested_by_item[line.item_id] = as_qty(requested_by_item.get(line.item_id, 0.0) + as_qty(line.qty or 0))
+        item_names.setdefault(line.item_id, line.item_name)
     for item_id, requested in requested_by_item.items():
         available = await get_available_qty(db, item_id=item_id, branch_id=t.from_branch_id)
         if requested > available:
             raise HTTPException(
                 409,
-                detail={
-                    "code": "insufficient_transfer_stock",
-                    "item_id": item_id,
-                    "requested": requested,
-                    "available": as_qty(max(0.0, available)),
-                },
+                detail=_insufficient_stock_detail(
+                    item_id=item_id,
+                    item_name=item_names.get(item_id),
+                    requested=requested,
+                    available=available,
+                ),
             )
 
     t.status = TransferStatus.transit
@@ -946,11 +967,12 @@ async def _dispatch_transfer(
                 if not consumed and as_qty(line.qty) > 0:
                     raise HTTPException(
                         409,
-                        detail={
-                            "code": "insufficient_transfer_stock",
-                            "item_id": line.item_id,
-                            "requested": as_qty(line.qty),
-                        },
+                        detail=_insufficient_stock_detail(
+                            item_id=line.item_id,
+                            item_name=line.item_name,
+                            requested=as_qty(line.qty),
+                            available=await get_available_qty(db, item_id=line.item_id, branch_id=t.from_branch_id),
+                        ),
                     )
             line.batch_allocation = json.dumps(consumed)
         else:
@@ -967,11 +989,12 @@ async def _dispatch_transfer(
             except ValueError:
                 raise HTTPException(
                     409,
-                    detail={
-                        "code": "insufficient_transfer_stock",
-                        "item_id": line.item_id,
-                        "requested": as_qty(line.qty),
-                    },
+                    detail=_insufficient_stock_detail(
+                        item_id=line.item_id,
+                        item_name=line.item_name,
+                        requested=as_qty(line.qty),
+                        available=await get_available_qty(db, item_id=line.item_id, branch_id=t.from_branch_id),
+                    ),
                 )
     lines = await _load_transfer_lines(db, transfer_id)
     from_label = _transfer_branch_label(t.from_branch_name, t.from_branch_id)

@@ -1,6 +1,7 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
+import { apiErrorMessage } from '@/utils/apiErrorMessage'
 
 // ─── Base client ──────────────────────────────────────────────────────────────
 export const api = axios.create({
@@ -126,6 +127,8 @@ api.interceptors.response.use(
     let msg
     if (typeof rawDetail === 'string') {
       msg = rawDetail
+    } else if (Array.isArray(rawDetail)) {
+      msg = apiErrorMessage(err, 'Request failed')
     } else if (rawDetail && typeof rawDetail === 'object') {
       msg = rawDetail.message || JSON.stringify(rawDetail)
     } else {

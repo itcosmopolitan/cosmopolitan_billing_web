@@ -231,6 +231,8 @@ async def _run_transfer_dispatch_blocked() -> None:
             assert exc.detail["code"] == "insufficient_transfer_stock"
             assert exc.detail["requested"] == 5
             assert exc.detail["available"] == 2
+            assert exc.detail["item_name"] == "Widget"
+            assert exc.detail["message"] == "Insufficient stock for Widget: requested 5, available 2"
         assert with_raises
         await db.refresh(transfer)
         assert transfer.status == TransferStatus.pending

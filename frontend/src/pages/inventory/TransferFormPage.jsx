@@ -310,7 +310,6 @@ export default function TransferFormPage({ mode = 'create' }) {
       navigate('/transfers')
     } catch (err) {
       console.error('Failed to save transfer:', err)
-      toast.error(err?.response?.data?.detail || `Failed to ${isEdit ? 'update' : 'create'} transfer`)
     } finally {
       setSaving(false)
     }
