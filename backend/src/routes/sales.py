@@ -8561,6 +8561,7 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
             await _reopen_quotation_after_child_removed(
                 db, quote=parent_quote, clear_order=True, user=user,
             )
+        await release_reservations(db, source_type="sales_order", source_ref=o.id)
         await db.delete(o)
         deleted.append({"id": o.id, "number": o.number})
     await db.commit()
