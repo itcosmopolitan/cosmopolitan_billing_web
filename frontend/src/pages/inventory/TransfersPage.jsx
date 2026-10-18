@@ -263,21 +263,17 @@ export default function TransfersPage() {
     setActionKind('delete')
     let ok = 0
     let fail = 0
-    let lastError = null
     for (const row of deleteTargets) {
       try {
         await transfersAPI.delete(row.id, { ref_number: row.ref_number })
         ok += 1
       } catch (err) {
         fail += 1
-        lastError = err
         console.error(err)
       }
     }
     if (ok > 0) toast.success(`${ok} transfer${ok > 1 ? 's' : ''} deleted`)
-    if (fail > 0) {
-      toast.error(lastError?.response?.data?.detail || `${fail} transfer${fail > 1 ? 's' : ''} could not be deleted`)
-    }
+    if (fail > 1) toast.error(`${fail} transfers could not be deleted`)
     setDeleteTargets(null)
     setSelectedIds(new Set())
     setShowDetail(null)
@@ -307,7 +303,6 @@ export default function TransfersPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to approve transfer')
     } finally {
       setActionBusy(null)
       setActionKind(null)
@@ -325,7 +320,6 @@ export default function TransfersPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to submit transfer')
     } finally {
       setActionBusy(null)
       setActionKind(null)
@@ -352,7 +346,6 @@ export default function TransfersPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to reject transfer')
     } finally {
       setActionBusy(null)
       setActionKind(null)
@@ -377,7 +370,6 @@ export default function TransfersPage() {
       setShowDetail(null)
     } catch (err) {
       console.error(err)
-      toast.error(err.response?.data?.detail || 'Failed to receive transfer')
     } finally {
       setActionBusy(null)
       setActionKind(null)

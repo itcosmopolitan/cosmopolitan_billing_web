@@ -95,6 +95,10 @@ export default function QuoteFormPage({ mode = 'create' }) {
 
   const save = async () => {
     if (saving || readOnly) return
+    if (!form.date) {
+      toast.error('Quotation date is required')
+      return
+    }
     if (form.items.length === 0) {
       toast.error('Add at least one item')
       return
@@ -118,6 +122,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
         child_counter_id: selectedCounter?.id || null,
         child_counter_name: selectedCounter?.name || null,
         created_by: user?.name || 'Staff',
+        date: form.date,
         valid_until: form.validUntil,
         shipment_date: form.shipmentDate,
         payment_terms: form.paymentTerms,
@@ -132,6 +137,7 @@ export default function QuoteFormPage({ mode = 'create' }) {
           tax_rate: Number(i.taxRate || 0),
           line_discount: lineDiscountToPercent(i),
           unit: i.unit || '',
+          packaging: i.packaging ?? '',
           vat_identifier: i.vatIdentifier || i.vat_identifier || 'GST',
           allow_invoice_discount: i.allowInvoiceDiscount ?? true,
           hsn_code: i.hsnCode || i.hsn_code || '',

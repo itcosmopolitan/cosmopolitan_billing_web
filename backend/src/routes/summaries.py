@@ -3,7 +3,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import get_db
@@ -17,9 +17,12 @@ from src.models import (
     User,
 )
 from src.permissions import MODULE_SUMMARY_READ, expand
+from src.routes.transfers import transfer_branch_scope
 from src.security import current_user, enforce_branch_access_optional, get_allowed_branch_ids
 
 router = APIRouter()
+
+TRANSFER_TAB_STATUSES = ("draft", "pending", "transit", "received", "rejected")
 
 
 async def _user_grants(user: User, db: AsyncSession) -> set[str]:
@@ -46,36 +49,22 @@ async def _transfer_summary(
     branch_id: Optional[str] = None,
     child_counter_id: Optional[str] = None,
 ) -> dict[str, int]:
-    async def _count(status: TransferStatus, *, side: str) -> int:
-        q = select(func.count(StockTransfer.id)).where(StockTransfer.status == status)
-        if child_counter_id:
-            q = q.where(StockTransfer.child_counter_id == child_counter_id)
+    # Same status and branch filters as list_transfers, so each tab count matches its rows.
+    base = select(func.count(StockTransfer.id))
+    if child_counter_id:
+        base = base.where(StockTransfer.child_counter_id == child_counter_id)
+
+    async def _count(status_key: str) -> int:
+        q = base
+        if status_key != "all":
+            q = q.where(StockTransfer.status == TransferStatus(status_key))
         if branch_id:
-            if side == "from":
-                q = q.where(StockTransfer.from_branch_id == branch_id)
-            elif side == "to":
-                q = q.where(StockTransfer.to_branch_id == branch_id)
-            else:
-                q = q.where(
-                    or_(
-                        StockTransfer.from_branch_id == branch_id,
-                        StockTransfer.to_branch_id == branch_id,
-                    )
-                )
+            q = q.where(transfer_branch_scope(branch_id, status_key))
         return int((await db.execute(q)).scalar() or 0)
 
-    # Match list_transfers status scoping for the active branch.
-    pending = await _count(TransferStatus.pending, side="from")
-    transit = await _count(TransferStatus.transit, side="to")
-    received = await _count(TransferStatus.received, side="either")
-    rejected = await _count(TransferStatus.rejected, side="from")
-    return {
-        "pending": pending,
-        "transit": transit,
-        "received": received,
-        "rejected": rejected,
-        "total": pending + transit + received + rejected,
-    }
+    result = {status: await _count(status) for status in TRANSFER_TAB_STATUSES}
+    result["total"] = await _count("all")
+    return result
 
 
 async def _adjustment_summary(

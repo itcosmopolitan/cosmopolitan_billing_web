@@ -3408,15 +3408,23 @@ async def current_stock(
         .subquery()
     )
     reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
-    stock_value_expr = ItemStock.quantity * func.coalesce(Item.cost_price, 0)
+    # Oversold (negative) quantity is shown as-is, but valued at zero.
+    stock_value_expr = case(
+        (ItemStock.quantity > 0, ItemStock.quantity * func.coalesce(Item.cost_price, 0)),
+        else_=literal(0.0),
+    )
+
+    # Same stock / reserved / available split as the Items & Stock page.
+    available_expr = ItemStock.quantity - reserved_expr
 
     sort_map = {
         "product_code": Item.sku,
         "product_name": Item.name,
         "category": Category.name,
         "branch": Branch.name,
-        "available_stock": ItemStock.quantity,
+        "stock": ItemStock.quantity,
         "reserved_stock": reserved_expr,
+        "available_qty": available_expr,
         "stock_value": stock_value_expr,
     }
 
@@ -3429,8 +3437,9 @@ async def current_stock(
             Item.name.label("product_name"),
             Category.name.label("category"),
             Branch.name.label("branch"),
-            ItemStock.quantity.label("available_stock"),
+            ItemStock.quantity.label("stock"),
             reserved_expr.label("reserved_stock"),
+            available_expr.label("available_qty"),
             stock_value_expr.label("stock_value"),
         )
         .join(Item, Item.id == ItemStock.item_id)

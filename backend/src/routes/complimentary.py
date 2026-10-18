@@ -62,6 +62,8 @@ STATUS_REJECTED = "rejected"
 class ComplimentaryLineIn(BaseModel):
     item_id: str
     qty: float = Field(..., gt=0)
+    unit: Optional[str] = None
+    packaging: Optional[str] = None
     batch_allocation: Optional[List[BatchAllocationEntry]] = None
     batch_id: Optional[str] = None
 
@@ -171,8 +173,8 @@ def _line_dict(li: ComplimentaryLineItem, item: Optional[Item] = None) -> dict:
         "cost_price": round(float(li.cost_price or 0), 2),
         "cost_total": round(float(li.cost_total or 0), 2),
         "lots": lots,
-        # Packaging lives on the item, so it is only known when the item is loaded.
-        "packaging": (item.packaging if item else None) or "",
+        # Saved line value wins; item master is the fallback for older entries.
+        "packaging": (li.packaging if li.packaging is not None else (item.packaging if item else None)) or "",
         "packing": item.packaging_quantity if item else None,
     }
 
@@ -284,7 +286,8 @@ async def create_complimentary(
             entry_id=entry.id,
             item_id=item.id,
             name=item.name,
-            unit=item.unit or "",
+            unit=line.unit if line.unit is not None else (item.unit or ""),
+            packaging=line.packaging,
             qty=qty,
             cost_price=round(cost, 2),
             cost_total=round(cost * qty, 2),

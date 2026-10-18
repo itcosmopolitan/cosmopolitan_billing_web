@@ -570,6 +570,8 @@ export default function SalesTxnDetailPanel({
                   </>
                 ) : (
                   <>
+                    <th>Packaging</th>
+                    <th>UOM</th>
                     <th className="text-right">Qty</th>
                     <th className="text-right">Price (Excl.) (MVR)</th>
                     <th className="text-right">Disc %</th>
@@ -598,6 +600,8 @@ export default function SalesTxnDetailPanel({
                     </>
                   ) : (
                     <>
+                      <td>{item.packaging || ''}</td>
+                      <td>{item.unit || ''}</td>
                       <td className="text-right mono">{fmtQty(item.qty)}</td>
                       <td className="text-right mono">{fmt(priceExcl)}</td>
                       <td className="text-right mono">{formatDiscPct(item)}</td>

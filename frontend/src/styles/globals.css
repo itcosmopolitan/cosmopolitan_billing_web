@@ -234,6 +234,12 @@ h4 { font-size: 14px; font-weight: 600; }
   top: 0;
   z-index: 2;
 }
+.list-page-scroll .data-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-raised);
+}
 .list-page-scroll .empty-state,
 .list-page-scroll .table-loading-panel {
   min-height: 100%;
@@ -665,13 +671,6 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .transfer-form__table td > * {
   max-width: 100%;
-}
-
-.transfer-form__item-meta {
-  font-size: 12px;
-  color: var(--text-muted);
-  padding-top: 10px;
-  overflow-wrap: anywhere;
 }
 
 .transfer-form__table .form-input,
@@ -1248,6 +1247,7 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .order-form-shell {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1278,7 +1278,7 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .order-form-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 

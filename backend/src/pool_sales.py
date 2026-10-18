@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.item_branch import effective_cost_price
@@ -342,8 +342,8 @@ async def consume_clubbed_sale_line(
     from src.routes._atomic import (
         add_batch_atomic,
         adjust_stock_atomic,
-        clamp_stock_to_zero_with_ledger,
         consume_batches_atomic,
+        overdraw_stock_atomic,
     )
 
     item_id = item.id
@@ -657,20 +657,31 @@ async def consume_clubbed_sale_line(
                 for entry in consumed
             ])
         if unfilled > 0:
-            await db.execute(
-                text("UPDATE item_batches SET quantity = 0 WHERE item_id = :i AND branch_id = :b"),
-                {"i": item_id, "b": sale_branch_id},
-            )
-            await clamp_stock_to_zero_with_ledger(
+            overdrawn = await overdraw_stock_atomic(
                 db,
                 item_id=item_id,
                 branch_id=sale_branch_id,
+                qty=unfilled,
+                tracked=True,
+                strategy="fefo" if expiry_tracked else "fifo",
                 movement_type="sale",
                 source_type="sale_invoice",
                 source_ref=invoice_id,
                 created_by=created_by,
-                notes=f"Oversell clamp on {invoice_number}",
+                notes=f"Oversell on {invoice_number}",
             )
+            if overdrawn:
+                existing = json.loads(line.batch_allocation) if line.batch_allocation else []
+                existing.extend([
+                    {
+                        "batch_id": entry["batch_id"],
+                        "batch_number": entry.get("batch_number"),
+                        "consumed": entry["consumed"],
+                        "expiry_date": entry.get("expiry_date"),
+                    }
+                    for entry in overdrawn
+                ])
+                line.batch_allocation = json.dumps(existing)
     else:
         sold_qty = as_qty(sum(entry["qty"] for entry in sale_batches))
         if sold_qty > 0:
@@ -685,15 +696,17 @@ async def consume_clubbed_sale_line(
                 created_by=created_by,
             )
         if unfilled > 0:
-            await clamp_stock_to_zero_with_ledger(
+            await overdraw_stock_atomic(
                 db,
                 item_id=item_id,
                 branch_id=sale_branch_id,
+                qty=unfilled,
+                tracked=False,
                 movement_type="sale",
                 source_type="sale_invoice",
                 source_ref=invoice_id,
                 created_by=created_by,
-                notes=f"Oversell clamp on {invoice_number}",
+                notes=f"Oversell on {invoice_number}",
             )
 
     return source_allocations

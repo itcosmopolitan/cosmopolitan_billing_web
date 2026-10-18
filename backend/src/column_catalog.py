@@ -605,8 +605,9 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("product_name", "Product Name"),
         _col("category", "Category"),
         _col("branch", "Branch"),
-        _col("available_stock", "Available Stock"),
-        _col("reserved_stock", "Reserved Stock"),
+        _col("stock", "Stock"),
+        _col("reserved_stock", "Reserved"),
+        _col("available_qty", "Available"),
         _col("stock_value", "Stock Value"),
     ],
     "reports.stock-movement": [

@@ -199,6 +199,8 @@ export default function ComplimentaryDetailPanel({
             <thead>
               <tr>
                 <th>Item</th>
+                <th>Packaging</th>
+                <th>UOM</th>
                 <th className="text-right">Qty</th>
                 <th className="text-right">Rate (Cost) (MVR)</th>
                 <th className="text-right">Total (Cost) (MVR)</th>
@@ -209,7 +211,9 @@ export default function ComplimentaryDetailPanel({
               {lines.map((line, idx) => (
                 <tr key={`${line.name}-${idx}`}>
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{line.name}</td>
-                  <td className="text-right">{line.qty} {line.unit}</td>
+                  <td>{line.packaging || ''}</td>
+                  <td>{line.unit || ''}</td>
+                  <td className="text-right">{line.qty}</td>
                   <td className="text-right">{fmt(line.cost_price)}</td>
                   <td className="text-right">{fmt(line.cost_total)}</td>
                   <td>

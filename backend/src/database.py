@@ -380,6 +380,10 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("sale_line_items", "is_packaging", "BOOLEAN DEFAULT 0"),
     ("sale_line_items", "hsn_code", "VARCHAR"),
     ("quotation_line_items", "unit", "VARCHAR"),
+    ("quotation_line_items", "packaging", "VARCHAR"),
+    ("sales_order_line_items", "unit", "VARCHAR"),
+    ("sales_order_line_items", "packaging", "VARCHAR"),
+    ("complimentary_line_items", "packaging", "VARCHAR"),
     ("quotation_line_items", "vat_identifier", "VARCHAR DEFAULT 'GST'"),
     ("quotation_line_items", "allow_invoice_discount", "BOOLEAN DEFAULT 1 NOT NULL"),
     ("quotation_line_items", "hsn_code", "VARCHAR"),
@@ -478,6 +482,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("branches", "child_counters", "JSON DEFAULT '[]' NOT NULL"),
     # Overselling moved from org scope to per-branch (one-time backfill below).
     ("branches", "allow_overselling", "BOOLEAN DEFAULT 0 NOT NULL"),
+    # Oversold placeholder batch marker (negative stock under overselling).
+    ("item_batches", "is_overdraw", "BOOLEAN DEFAULT 0 NOT NULL"),
     # Cash Control (2026-06-14): per-branch petty cash settings.
     ("branches", "cash_opening_mode",       "VARCHAR DEFAULT 'carry_forward'"),
     ("branches", "cash_fixed_float",        "FLOAT DEFAULT 0"),

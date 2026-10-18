@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   AUTOCOMPLETE_CUSTOMER_URL,
   AUTOCOMPLETE_CATEGORY_URL,
@@ -9,7 +9,9 @@ import {
   DatePicker,
   Drawer,
   FormGroup,
+  MultiSelect,
   SearchBar,
+  SegmentedToggle,
 } from '@/components/ui'
 import * as Icon from '@/components/ui/Icons'
 import {
@@ -31,7 +33,7 @@ export const EMPTY_LIST_FILTERS = {
   dateTo: '',
 }
 
-const NO_REASON_OPTIONS = []
+const NO_OPTIONS = []
 
 /** @deprecated use EMPTY_LIST_FILTERS */
 export const EMPTY_SALES_LIST_FILTERS = EMPTY_LIST_FILTERS
@@ -50,7 +52,23 @@ function optionLabel(options, id, fallback) {
   return options.find((o) => o.id === id)?.label || fallback || id
 }
 
-function buildChips(filters, fieldSet, statusOpts, reasonOpts) {
+function namesForIds(ids, options) {
+  return ids.length ? ids.map((id) => optionLabel(options, id, id)).join(', ') : 'none'
+}
+
+/**
+ * Chips for the applied band. A date/as-of chip is hidden while the range equals
+ * `defaultDateRange`, so removing it (which resets to that default) always has a visible effect.
+ */
+function buildChips(filters, fieldSet, {
+  statusOpts,
+  reasonOpts,
+  branchOpts,
+  childCounterOpts,
+  txnOpts,
+  defaultDateRange,
+  defaultGstMode,
+}) {
   const chips = []
   if (fieldSet.has('customer') && filters.customerId) {
     chips.push({
@@ -94,19 +112,46 @@ function buildChips(filters, fieldSet, statusOpts, reasonOpts) {
       label: `Discount is ${optionLabel(DISCOUNT_OPTIONS, filters.discount)}`,
     })
   }
-  if (fieldSet.has('date') && (filters.dateFrom || filters.dateTo)) {
+  const isDefaultDateRange = Boolean(defaultDateRange)
+    && filters.dateFrom === defaultDateRange.from
+    && filters.dateTo === defaultDateRange.to
+  if (fieldSet.has('date') && (filters.dateFrom || filters.dateTo) && !isDefaultDateRange) {
     const from = filters.dateFrom || '…'
     const to = filters.dateTo || '…'
     chips.push({ key: 'date', label: `Date between ${from} and ${to}` })
+  }
+  if (fieldSet.has('asOf') && filters.dateTo && filters.dateTo !== defaultDateRange?.to) {
+    chips.push({ key: 'asOf', label: `As of ${filters.dateTo}` })
+  }
+  const branchIds = filters.branchIds || []
+  if (fieldSet.has('branch') && branchOpts.length && branchIds.length !== branchOpts.length) {
+    chips.push({ key: 'branch', label: `Branch is ${namesForIds(branchIds, branchOpts)}` })
+  }
+  if (fieldSet.has('childCounter') && filters.childCounterId) {
+    chips.push({
+      key: 'childCounter',
+      label: `Child counter is ${optionLabel(childCounterOpts, filters.childCounterId, 'Selected counter')}`,
+    })
+  }
+  const txnIds = filters.transactionTypes || []
+  if (fieldSet.has('transactionType') && txnOpts.length && txnIds.length !== txnOpts.length) {
+    chips.push({ key: 'transactionType', label: `Transaction type is ${namesForIds(txnIds, txnOpts)}` })
+  }
+  if (fieldSet.has('gst') && filters.gstMode !== defaultGstMode) {
+    chips.push({
+      key: 'gst',
+      label: filters.gstMode === 'exclusive' ? 'Amounts excl. GST' : 'Amounts incl. GST',
+    })
   }
   return chips
 }
 
 /**
- * Shared sales/purchase list filter UI: live search + New/more + filter icon;
- * sidebar Apply shows an applied-band below the toolbar.
+ * Shared list filter UI: search + toolbar actions + filter funnel.
+ * Sales, purchases and reports use it; the funnel drawer holds every filter
+ * and the applied band shows the chips for what is currently applied.
  *
- * `fields` controls which sidebar filters render.
+ * `fields` controls which drawer filters render.
  */
 export default function ListFilters({
   search = '',
@@ -119,19 +164,34 @@ export default function ListFilters({
   toolbarActions = null,
   fields = ['status', 'date'],
   statusOptions: statusOpts = INVOICE_STATUS_OPTIONS,
-  reasonOptions = NO_REASON_OPTIONS,
+  reasonOptions = NO_OPTIONS,
+  branchOptions = NO_OPTIONS,
+  childCounterOptions = NO_OPTIONS,
+  transactionTypeOptions = NO_OPTIONS,
+  gstOptions = NO_OPTIONS,
+  defaultDateRange = null,
+  defaultGstMode,
 }) {
   const fieldSet = useMemo(() => new Set(fields), [fields])
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(filters)
 
-  useEffect(() => {
-    if (open) setDraft(filters)
-  }, [open, filters])
+  const openDrawer = () => {
+    setDraft(filters)
+    setOpen(true)
+  }
 
   const chips = useMemo(
-    () => buildChips(filters, fieldSet, statusOpts, reasonOptions),
-    [filters, fieldSet, statusOpts, reasonOptions],
+    () => buildChips(filters, fieldSet, {
+      statusOpts,
+      reasonOpts: reasonOptions,
+      branchOpts: branchOptions,
+      childCounterOpts: childCounterOptions,
+      txnOpts: transactionTypeOptions,
+      defaultDateRange,
+      defaultGstMode,
+    }),
+    [filters, fieldSet, statusOpts, reasonOptions, branchOptions, childCounterOptions, transactionTypeOptions, defaultDateRange, defaultGstMode],
   )
   const activeCount = chips.length
   const filtersActive = activeCount > 0
@@ -174,7 +234,7 @@ export default function ListFilters({
               className={`filter-trigger${filtersActive ? ' is-active' : ''}`}
               aria-label="Open filters"
               title="Filters"
-              onClick={() => setOpen(true)}
+              onClick={openDrawer}
             >
               <Icon.Filter size={18} />
               {filtersActive && (
@@ -183,7 +243,7 @@ export default function ListFilters({
             </button>
           </div>
         </div>
-        {filtersActive && (
+        {chips.length > 0 && (
           <div className="filter-applied-band" role="status" aria-label="Applied filters">
             <span className="filter-applied-band__label">Filter:</span>
             {chips.map((chip) => (
@@ -199,9 +259,11 @@ export default function ListFilters({
                 </button>
               </span>
             ))}
-            <button type="button" className="filter-applied-band__clear" onClick={handleClearAll}>
-              × Clear Filter
-            </button>
+            {filtersActive && (
+              <button type="button" className="filter-applied-band__clear" onClick={handleClearAll}>
+                × Clear Filter
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -380,6 +442,68 @@ export default function ListFilters({
                   placeholder="To"
                 />
               </div>
+            </FormGroup>
+          )}
+
+          {fieldSet.has('asOf') && (
+            <FormGroup label="As of">
+              <DatePicker
+                style={{ width: '100%' }}
+                value={draft.dateTo}
+                onChange={(v) => setDraftField('dateTo', v)}
+              />
+            </FormGroup>
+          )}
+
+          {fieldSet.has('branch') && (
+            <FormGroup label="Branch">
+              <MultiSelect
+                options={branchOptions}
+                value={draft.branchIds}
+                onChange={(ids) => setDraftField('branchIds', ids)}
+                defaultName="All Branches"
+                placeholder="All Branches"
+              />
+            </FormGroup>
+          )}
+
+          {fieldSet.has('childCounter') && (
+            <FormGroup label="Child Counter">
+              <AutocompleteDropdown
+                value={draft.childCounterId}
+                onChange={(id) => setDraftField('childCounterId', id)}
+                options={childCounterOptions}
+                prependOptions={[{ id: '', label: 'All counters' }]}
+                isSearchFieldRequired
+                placeholder="All counters"
+                searchPlaceholder="Search counters…"
+                clearable
+                onClear={() => setDraftField('childCounterId', '')}
+                style={{ width: '100%' }}
+              />
+            </FormGroup>
+          )}
+
+          {fieldSet.has('transactionType') && (
+            <FormGroup label="Transaction Type">
+              <MultiSelect
+                options={transactionTypeOptions}
+                value={draft.transactionTypes}
+                onChange={(ids) => setDraftField('transactionTypes', ids)}
+                defaultName="All types"
+                placeholder="All types"
+              />
+            </FormGroup>
+          )}
+
+          {fieldSet.has('gst') && (
+            <FormGroup label="GST">
+              <SegmentedToggle
+                ariaLabel="Show amounts with or without GST"
+                value={draft.gstMode}
+                onChange={(mode) => setDraftField('gstMode', mode)}
+                options={gstOptions}
+              />
             </FormGroup>
           )}
 

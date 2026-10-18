@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import asc, select, text
+from sqlalchemy import asc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.batch_dates import _today
@@ -88,12 +88,14 @@ async def adjust_stock_atomic(
     source_ref: Optional[str] = None,
     created_by: Optional[str] = None,
     movement_id: Optional[str] = None,
+    allow_negative: bool = False,
+    notes: Optional[str] = None,
 ) -> float:
     """Apply `delta` to the (item_id, branch_id) stock row and return the new
-    quantity. Creates the row if it doesn't exist (delta becomes the opening
-    quantity, clamped at 0). For negative deltas, refuses if the resulting
-    quantity would go below zero (raises ValueError); the WHERE clause does
-    the check so the overall operation is still race-safe.
+    quantity. Creates the row if it doesn't exist. For negative deltas, refuses
+    if the resulting quantity would go below zero (raises ValueError); the WHERE
+    clause does the check so the overall operation is still race-safe.
+    `allow_negative` skips that guard; only the overselling overdraw path uses it.
     """
     delta = as_qty(delta)
     if qty_eq(delta, 0):
@@ -106,7 +108,7 @@ async def adjust_stock_atomic(
         )
         return as_qty(row.scalar() or 0)
 
-    if delta > 0:
+    if delta > 0 or allow_negative:
         # Atomically insert-or-increment the row. This avoids the classic
         # read-modify-write race when the stock row doesn't yet exist.
         await db.execute(
@@ -171,6 +173,7 @@ async def adjust_stock_atomic(
         source_ref=source_ref,
         created_by=created_by,
         movement_id=movement_id,
+        notes=notes,
     )
     try:
         from src.notifications.stock_alerts import refresh_stock_alerts_for_item
@@ -279,6 +282,7 @@ async def add_batch_atomic(
                 ItemBatch.item_id == item_id,
                 ItemBatch.branch_id == branch_id,
                 ItemBatch.active == True,  # noqa: E712 - SQLAlchemy expression
+                ItemBatch.is_overdraw == False,  # noqa: E712
             )
         )).scalars().all()
         if any((bn or "").strip().lower() == provided.lower() for bn in existing):
@@ -292,6 +296,20 @@ async def add_batch_atomic(
         text("UPDATE items SET batch_tracking = true WHERE id = :id"),
         {"id": item_id},
     )
+    # An oversold placeholder is a debt against this branch's stock. The
+    # incoming receipt pays it down first; only the remainder lands on a lot.
+    placeholder = (await db.execute(
+        select(ItemBatch).where(
+            ItemBatch.item_id == item_id,
+            ItemBatch.branch_id == branch_id,
+            ItemBatch.is_overdraw == True,  # noqa: E712
+            ItemBatch.quantity < 0,
+        ).with_for_update()
+    )).scalars().first()
+    settled = 0.0
+    if placeholder is not None:
+        settled = as_qty(min(qty, -placeholder.quantity))
+        placeholder.quantity = as_qty(placeholder.quantity + settled)
     batch = ItemBatch(
         id=str(uuid.uuid4()),
         item_id=item_id,
@@ -299,7 +317,7 @@ async def add_batch_atomic(
         batch_number=batch_number or _next_batch_number(item_id),
         mfg_date=mfg_date,
         expiry_date=expiry_date,
-        quantity=qty,
+        quantity=as_qty(qty - settled),
         initial_qty=qty,
         cost_price=cost_price,
         vendor_id=vendor_id,
@@ -546,6 +564,129 @@ async def consume_batches_atomic(
     return consumed
 
 
+OVERDRAW_BATCH_NUMBER = "OVERDRAW"
+
+
+async def _get_or_create_overdraw_batch(
+    db: AsyncSession, *, item_id: str, branch_id: str
+) -> ItemBatch:
+    """Per (item, branch) placeholder that carries the oversold balance. Its
+    quantity is <= 0; it is never consumed (consume only reads quantity > 0)."""
+    placeholder = (await db.execute(
+        select(ItemBatch).where(
+            ItemBatch.item_id == item_id,
+            ItemBatch.branch_id == branch_id,
+            ItemBatch.is_overdraw == True,  # noqa: E712
+        ).with_for_update()
+    )).scalars().first()
+    if placeholder is None:
+        placeholder = ItemBatch(
+            id=str(uuid.uuid4()),
+            item_id=item_id,
+            branch_id=branch_id,
+            batch_number=OVERDRAW_BATCH_NUMBER,
+            quantity=0,
+            initial_qty=0,
+            cost_price=0,
+            source_type="overdraw",
+            received_date=_today(),
+            active=True,
+            is_overdraw=True,
+        )
+        db.add(placeholder)
+        await db.flush()
+    return placeholder
+
+
+async def overdraw_stock_atomic(
+    db: AsyncSession,
+    *,
+    item_id: str,
+    branch_id: str,
+    qty: float,
+    tracked: bool,
+    strategy: str = "fifo",
+    movement_type: str = "sale",
+    source_type: Optional[str] = None,
+    source_ref: Optional[str] = None,
+    created_by: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> list[dict]:
+    """Take `qty` out of stock even when it exceeds what is on hand (overselling).
+
+    Drains the positive batches first. The shortfall goes negative: onto the
+    OVERDRAW placeholder for batch-tracked items, or only onto the aggregate
+    for untracked items. Returns ledger entries in the same shape as
+    `consume_batches_atomic`, with the placeholder portion included so a
+    later restock can reverse it. Caller commits.
+    """
+    qty = as_qty(qty)
+    if qty <= 0:
+        return []
+    if not tracked:
+        await adjust_stock_atomic(
+            db,
+            item_id=item_id,
+            branch_id=branch_id,
+            delta=-qty,
+            movement_type=movement_type,
+            source_type=source_type,
+            source_ref=source_ref,
+            created_by=created_by,
+            allow_negative=True,
+            notes=notes,
+        )
+        return []
+
+    on_hand = as_qty((await db.execute(
+        select(func.coalesce(func.sum(ItemBatch.quantity), 0)).where(
+            ItemBatch.item_id == item_id,
+            ItemBatch.branch_id == branch_id,
+            ItemBatch.active == True,  # noqa: E712
+            ItemBatch.quantity > 0,
+        )
+    )).scalar() or 0)
+    take = min(on_hand, qty)
+    consumed: list[dict] = []
+    if take > 0:
+        consumed = await consume_batches_atomic(
+            db,
+            item_id=item_id,
+            branch_id=branch_id,
+            qty=take,
+            strategy=strategy,
+            movement_type=movement_type,
+            source_type=source_type,
+            source_ref=source_ref,
+            created_by=created_by,
+        )
+    short = as_qty(qty - take)
+    if short > 0:
+        placeholder = await _get_or_create_overdraw_batch(
+            db, item_id=item_id, branch_id=branch_id
+        )
+        placeholder.quantity = as_qty(placeholder.quantity - short)
+        await adjust_stock_atomic(
+            db,
+            item_id=item_id,
+            branch_id=branch_id,
+            delta=-short,
+            movement_type=movement_type,
+            source_type=source_type,
+            source_ref=source_ref,
+            created_by=created_by,
+            allow_negative=True,
+            notes=notes,
+        )
+        consumed.append({
+            "batch_id": placeholder.id,
+            "batch_number": OVERDRAW_BATCH_NUMBER,
+            "consumed": short,
+            "expiry_date": None,
+        })
+    return consumed
+
+
 async def set_batch_quantity_atomic(
     db: AsyncSession,
     *,
@@ -554,16 +695,27 @@ async def set_batch_quantity_atomic(
 ) -> Optional[ItemBatch]:
     """Absolute set on a single batch (used by per-batch stock adjustment).
     Adjusts item_stock by the delta. Returns the updated batch or None if not
-    found. Caller commits."""
-    if new_qty < 0:
-        raise ValueError("new_qty must be >= 0")
+    found. Overdraw placeholders may be negative (they hold the oversold
+    balance); ordinary batches may not. Caller commits."""
     res = await db.execute(select(ItemBatch).where(ItemBatch.id == batch_id))
     b = res.scalar_one_or_none()
     if not b:
         return None
+    if new_qty < 0 and not b.is_overdraw:
+        raise ValueError("new_qty must be >= 0")
     new_qty = as_qty(new_qty)
     delta = as_qty(new_qty - as_qty(b.quantity or 0))
     b.quantity = new_qty
+    if b.is_overdraw:
+        if not qty_eq(delta, 0):
+            await adjust_stock_atomic(
+                db,
+                item_id=b.item_id,
+                branch_id=b.branch_id,
+                delta=delta,
+                allow_negative=True,
+            )
+        return b
     if not qty_eq(delta, 0):
         # Stock should never go below zero from a per-batch absolute set, but
         # adjust_stock_atomic will refuse a negative delta that would drop the

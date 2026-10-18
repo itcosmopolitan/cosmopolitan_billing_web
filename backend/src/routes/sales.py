@@ -86,6 +86,7 @@ from src.routes._atomic import (
     clamp_stock_to_zero_with_ledger,
     consume_batches_atomic,
     is_tracked,
+    overdraw_stock_atomic,
     set_batch_quantity_atomic,
 )
 from src.pool_sales import (
@@ -116,15 +117,16 @@ from src.services.audit_service import add_audit_log, build_audit_entry
 router = APIRouter()
 
 
-def _snapshot_item_metadata(item, packaging=None):
+def _snapshot_item_metadata(item, packaging=None, unit=None):
+    # Line-level packaging/unit (entered on the document) win over the item master.
     if item is None:
-        return {}
+        return {k: v for k, v in (("unit", unit), ("packaging", packaging)) if v is not None}
     return {
         "sku": item.sku,
         "barcode": item.barcode,
         "brand": item.brand,
         "country_of_origin": item.country_of_origin,
-        "unit": item.unit,
+        "unit": item.unit if unit is None else unit,
         "packaging": item.packaging if packaging is None else packaging,
         "packaging_quantity": item.packaging_quantity,
         "is_packaging": item.is_packaging,
@@ -1202,6 +1204,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
             tax_rate=item.tax_rate,
             discount=item.line_discount,
             unit=item.unit or '',
+            packaging=item.packaging,
             vat_identifier=item.vat_identifier or 'GST',
             allow_invoice_discount=item.allow_invoice_discount if item.allow_invoice_discount is not None else True,
             hsn_code=item.hsn_code or '',
@@ -1313,6 +1316,7 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
             tax_rate=line.tax_rate,
             discount=line.line_discount or 0,
             unit=line.unit or '',
+            packaging=line.packaging,
             vat_identifier=line.vat_identifier or 'GST',
             allow_invoice_discount=line.allow_invoice_discount if line.allow_invoice_discount is not None else True,
             hsn_code=line.hsn_code or '',
@@ -1625,7 +1629,7 @@ async def update_invoice(
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
             line_total=line_amount,
-            **_snapshot_item_metadata(item_obj, packaging=item.packaging),
+            **_snapshot_item_metadata(item_obj, packaging=item.packaging, unit=item.unit),
         )
         db.add(li)
         if item.item_id and not is_approval_held:
@@ -2013,7 +2017,7 @@ async def create_invoice(
             tax_rate=item.tax_rate,
             discount=_stored_line_discount_pct(item),
             line_total=line_amount,
-            **_snapshot_item_metadata(item_obj, packaging=item.packaging),
+            **_snapshot_item_metadata(item_obj, packaging=item.packaging, unit=item.unit),
         )
         db.add(li)
         invoice_lines.append((item, li))
@@ -2963,20 +2967,21 @@ async def approve_invoice(
                     qty=li.qty, strategy=strategy,
                     movement_type="sale", source_type="sale_invoice", source_ref=inv.id,
                 )
-                if consumed_ledger:
-                    li.batch_allocation = json.dumps([
-                        {"batch_id": e["batch_id"], "batch_number": e.get("batch_number"),
-                         "consumed": e["consumed"], "expiry_date": e.get("expiry_date")}
-                        for e in consumed_ledger
-                    ])
             except ValueError:
                 if not allow_oversell:
                     raise HTTPException(400, f"Insufficient batch stock for {li.name}")
-                await clamp_stock_to_zero_with_ledger(
+                consumed_ledger = await overdraw_stock_atomic(
                     db, item_id=li.item_id, branch_id=inv.branch_id,
+                    qty=li.qty, tracked=True, strategy=strategy,
                     movement_type="sale", source_type="sale_invoice", source_ref=inv.id,
-                    notes=f"Oversell clamp on approval of {inv.number}",
+                    notes=f"Oversell on approval of {inv.number}",
                 )
+            if consumed_ledger:
+                li.batch_allocation = json.dumps([
+                    {"batch_id": e["batch_id"], "batch_number": e.get("batch_number"),
+                     "consumed": e["consumed"], "expiry_date": e.get("expiry_date")}
+                    for e in consumed_ledger
+                ])
         else:
             try:
                 await adjust_stock_atomic(
@@ -2987,10 +2992,11 @@ async def approve_invoice(
             except ValueError:
                 if not allow_oversell:
                     raise HTTPException(400, f"Insufficient stock for {li.name}")
-                await clamp_stock_to_zero_with_ledger(
+                await overdraw_stock_atomic(
                     db, item_id=li.item_id, branch_id=inv.branch_id,
+                    qty=li.qty, tracked=False,
                     movement_type="sale", source_type="sale_invoice", source_ref=inv.id,
-                    notes=f"Oversell clamp on approval of {inv.number}",
+                    notes=f"Oversell on approval of {inv.number}",
                 )
 
     total = float(inv.total or 0)
@@ -4296,6 +4302,24 @@ async def _consume_sale_line_stock(
                     consumed_ok = True
                 except ValueError:
                     pass
+        if not consumed_ok:
+            if not allow_oversell:
+                raise HTTPException(
+                    400,
+                    f"Insufficient batch stock for {item.name}",
+                )
+            consumed_ledger = await overdraw_stock_atomic(
+                db,
+                item_id=item.item_id,
+                branch_id=branch_id,
+                qty=item.qty,
+                tracked=True,
+                strategy=strategy,
+                movement_type=movement_type,
+                source_type=source_type,
+                source_ref=invoice_id,
+                notes=f"Oversell on {invoice_number}",
+            )
         if consumed_ledger:
             li.batch_allocation = json.dumps([
                 {
@@ -4306,28 +4330,6 @@ async def _consume_sale_line_stock(
                 }
                 for e in consumed_ledger
             ])
-        if not consumed_ok:
-            if not allow_oversell:
-                raise HTTPException(
-                    400,
-                    f"Insufficient batch stock for {item.name}",
-                )
-            await db.execute(
-                text(
-                    "UPDATE item_batches SET quantity = 0 "
-                    "WHERE item_id = :i AND branch_id = :b"
-                ),
-                {"i": item.item_id, "b": branch_id},
-            )
-            await clamp_stock_to_zero_with_ledger(
-                db,
-                item_id=item.item_id,
-                branch_id=branch_id,
-                movement_type=movement_type,
-                source_type=source_type,
-                source_ref=invoice_id,
-                notes=f"Oversell clamp on {invoice_number}",
-            )
     else:
         try:
             await adjust_stock_atomic(
@@ -4345,14 +4347,16 @@ async def _consume_sale_line_stock(
                     400,
                     f"Insufficient stock for {item.name}",
                 )
-            await clamp_stock_to_zero_with_ledger(
+            await overdraw_stock_atomic(
                 db,
                 item_id=item.item_id,
                 branch_id=branch_id,
+                qty=item.qty,
+                tracked=False,
                 movement_type=movement_type,
                 source_type=source_type,
                 source_ref=invoice_id,
-                notes=f"Oversell clamp on {invoice_number}",
+                notes=f"Oversell on {invoice_number}",
             )
 
 
@@ -4753,7 +4757,7 @@ def _quote_dict(quote, items=None, *, converted_order_number=None, converted_inv
             "itemId": i.item_id,
             "sku": getattr(_loaded_rel(i, "item"), "sku", None),
             "packing": getattr(_loaded_rel(i, "item"), "packaging", None) or getattr(_loaded_rel(i, "item"), "packaging_quantity", None),
-            "packaging": getattr(_loaded_rel(i, "item"), "packaging", None),
+            "packaging": i.packaging if i.packaging is not None else getattr(_loaded_rel(i, "item"), "packaging", None),
             "name": i.name,
             "qty": i.qty,
             "price": i.price,
@@ -4991,6 +4995,8 @@ class SalesOrderLineIn(BaseModel):
     price: float
     tax_rate: float = 0
     discount: float = 0
+    unit: Optional[str] = None
+    packaging: Optional[str] = None
 
     @field_validator("qty", mode="before")
     @classmethod
@@ -5144,7 +5150,8 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
             "id": i.id, "itemId": i.item_id, "name": i.name,
             "qty": i.qty, "price": i.price, "taxRate": i.tax_rate,
             "discount": i.discount, "lineTotal": i.line_total,
-            "unit": i.item.unit if i.item else "",
+            "unit": i.unit if i.unit is not None else (i.item.unit if i.item else ""),
+            "packaging": i.packaging if i.packaging is not None else (i.item.packaging if i.item else ""),
             "packing": i.item.packaging if i.item else "",
         } for i in items]
     return d
@@ -5902,14 +5909,17 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate, discount=line.discount or 0,
             line_total=line_net,
+            unit=line.unit,
+            packaging=line.packaging,
         )
         db.add(li)
         created_lines.append(li)
     # Stock reservation only for confirmed SOs; draft SOs reserve on approval.
-    if direct and not await get_allow_overselling(db, so.branch_id):
+    if direct:
         try:
             await reserve_for_sales_order(
                 db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
+                allow_oversell=await get_allow_overselling(db, so.branch_id),
             )
         except ValueError as e:
             raise HTTPException(400, str(e))
@@ -6045,14 +6055,17 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
             qty=line.qty, price=line.price,
             tax_rate=line.tax_rate, discount=line.discount or 0,
             line_total=line_net,
+            unit=line.unit,
+            packaging=line.packaging,
         )
         db.add(li)
         created_lines.append(li)
     await release_reservations(db, source_type="sales_order", source_ref=so.id)
-    if so.status == SalesOrderStatus.confirmed and not await get_allow_overselling(db, so.branch_id):
+    if so.status == SalesOrderStatus.confirmed:
         try:
             await reserve_for_sales_order(
                 db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
+                allow_oversell=await get_allow_overselling(db, so.branch_id),
             )
         except ValueError as e:
             raise HTTPException(400, str(e))
@@ -6104,13 +6117,13 @@ async def update_order_status(order_id: str, status: str, db: AsyncSession = Dep
     if target == SalesOrderStatus.cancelled:
         await release_reservations(db, source_type="sales_order", source_ref=so.id)
     elif target == SalesOrderStatus.confirmed and prev != SalesOrderStatus.confirmed:
-        if not await get_allow_overselling(db, so.branch_id):
-            try:
-                await reserve_for_sales_order(
-                    db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items,
-                )
-            except ValueError as e:
-                raise HTTPException(400, str(e))
+        try:
+            await reserve_for_sales_order(
+                db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items,
+                allow_oversell=await get_allow_overselling(db, so.branch_id),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     so.status = target
     next_status = target.value if hasattr(target, "value") else str(target)
     if target == SalesOrderStatus.confirmed and prev_status != next_status:
@@ -6209,11 +6222,13 @@ async def approve_sales_order(
     if so.created_by and so.created_by == user.name:
         raise HTTPException(403, "You cannot approve your own sales order")
     # Create stock reservation for confirmed SO
-    if not await get_allow_overselling(db, so.branch_id):
-        try:
-            await reserve_for_sales_order(db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+    try:
+        await reserve_for_sales_order(
+            db, order_id=so.id, branch_id=so.branch_id, lines=so.line_items,
+            allow_oversell=await get_allow_overselling(db, so.branch_id),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     so.status = SalesOrderStatus.confirmed
     if body.notes:
         so.notes = (so.notes or "") + f"\n[Approved by {user.name}] {body.notes}"
@@ -6433,7 +6448,7 @@ async def convert_order_to_invoice(
             tax_rate=0 if internal_customer else line_rates[so_line.id],
             discount=so_line.discount or 0,
             line_total=after,
-            **_snapshot_item_metadata(item_obj),
+            **_snapshot_item_metadata(item_obj, packaging=so_line.packaging, unit=so_line.unit),
         )
         db.add(li)
         if so_line.item_id:
@@ -6481,6 +6496,24 @@ async def convert_order_to_invoice(
                             consumed_ok = True
                         except ValueError:
                             pass
+                if not consumed_ok:
+                    if not allow_oversell:
+                        raise HTTPException(
+                            400,
+                            f"Insufficient batch stock for {so_line.name}",
+                        )
+                    consumed_ledger = await overdraw_stock_atomic(
+                        db,
+                        item_id=so_line.item_id,
+                        branch_id=so.branch_id,
+                        qty=convert_qty,
+                        tracked=True,
+                        strategy=strategy,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell on SO convert {inv.number}",
+                    )
                 if consumed_ledger:
                     li.batch_allocation = json.dumps([
                         {
@@ -6491,28 +6524,6 @@ async def convert_order_to_invoice(
                         }
                         for e in consumed_ledger
                     ])
-                if not consumed_ok:
-                    if not allow_oversell:
-                        raise HTTPException(
-                            400,
-                            f"Insufficient batch stock for {so_line.name}",
-                        )
-                    await db.execute(
-                        text(
-                            "UPDATE item_batches SET quantity = 0 "
-                            "WHERE item_id = :i AND branch_id = :b"
-                        ),
-                        {"i": so_line.item_id, "b": so.branch_id},
-                    )
-                    await clamp_stock_to_zero_with_ledger(
-                        db,
-                        item_id=so_line.item_id,
-                        branch_id=so.branch_id,
-                        movement_type="sale",
-                        source_type="sale_invoice",
-                        source_ref=inv.id,
-                        notes=f"Oversell clamp on SO convert {inv.number}",
-                    )
             else:
                 try:
                     await adjust_stock_atomic(
@@ -6528,14 +6539,16 @@ async def convert_order_to_invoice(
                             400,
                             f"Insufficient stock for {so_line.name}",
                         )
-                    await clamp_stock_to_zero_with_ledger(
+                    await overdraw_stock_atomic(
                         db,
                         item_id=so_line.item_id,
                         branch_id=so.branch_id,
+                        qty=convert_qty,
+                        tracked=False,
                         movement_type="sale",
                         source_type="sale_invoice",
                         source_ref=inv.id,
-                        notes=f"Oversell clamp on SO convert {inv.number}",
+                        notes=f"Oversell on SO convert {inv.number}",
                     )
 
         remaining_qty = as_qty(so_line.qty) - convert_qty
@@ -6714,6 +6727,8 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
             qty=ql.qty, price=ql.price,
             tax_rate=line_rates[ql.id], discount=ql.discount or 0,
             line_total=ql.line_total,
+            unit=ql.unit,
+            packaging=ql.packaging,
         )
         db.add(li)
         created_lines.append(li)
@@ -6721,13 +6736,13 @@ async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_d
     # Flush inserts for SO + lines so quotation FK back-pointer passes immediately.
     await db.flush()
     # The order is created as confirmed, so it must hold stock like any other confirmed SO.
-    if not await get_allow_overselling(db, so.branch_id):
-        try:
-            await reserve_for_sales_order(
-                db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
-            )
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+    try:
+        await reserve_for_sales_order(
+            db, order_id=so.id, branch_id=so.branch_id, lines=created_lines,
+            allow_oversell=await get_allow_overselling(db, so.branch_id),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     quote.status = QuotationStatus.converted
     quote.converted_order_id = so.id
     _log_quotation_history(db, user=user,
@@ -6864,6 +6879,7 @@ async def convert_quote_to_invoice(
 
     item_ids = {line.item_id for line in quote.line_items if line.item_id}
     item_map = await _load_items_by_id(db, item_ids)
+    allow_oversell = await get_allow_overselling(db, quote.branch_id)
     alloc_by_item = {}
     if data.line_allocations:
         for a in data.line_allocations:
@@ -6887,7 +6903,7 @@ async def convert_quote_to_invoice(
             tax_rate=tax_rate,
             discount=line.discount or 0,
             line_total=line_total,
-            **_snapshot_item_metadata(item_obj),
+            **_snapshot_item_metadata(item_obj, packaging=line.packaging, unit=line.unit),
         )
         db.add(li)
         if line.item_id:
@@ -6921,6 +6937,16 @@ async def convert_quote_to_invoice(
                             consumed_ok = True
                         except ValueError:
                             pass
+                if not consumed_ok and allow_oversell:
+                    consumed_ledger = await overdraw_stock_atomic(
+                        db, item_id=line.item_id, branch_id=quote.branch_id,
+                        qty=line.qty, tracked=True, strategy=strategy,
+                        movement_type="sale",
+                        source_type="sale_invoice",
+                        source_ref=inv.id,
+                        notes=f"Oversell on quote convert {inv.number}",
+                    )
+                    consumed_ok = True
                 if consumed_ledger:
                     li.batch_allocation = json.dumps([
                         {
@@ -6946,23 +6972,33 @@ async def convert_quote_to_invoice(
                         notes=f"Oversell clamp on quote convert {inv.number}",
                     )
             else:
-                try:
-                    await adjust_stock_atomic(
-                        db, item_id=line.item_id, branch_id=quote.branch_id, delta=-line.qty,
+                if allow_oversell:
+                    await overdraw_stock_atomic(
+                        db, item_id=line.item_id, branch_id=quote.branch_id,
+                        qty=line.qty, tracked=False,
                         movement_type="sale",
                         source_type="sale_invoice",
                         source_ref=inv.id,
+                        notes=f"Oversell on quote convert {inv.number}",
                     )
-                except ValueError:
-                    await clamp_stock_to_zero_with_ledger(
-                        db,
-                        item_id=line.item_id,
-                        branch_id=quote.branch_id,
-                        movement_type="sale",
-                        source_type="sale_invoice",
-                        source_ref=inv.id,
-                        notes=f"Oversell clamp on quote convert {inv.number}",
-                    )
+                else:
+                    try:
+                        await adjust_stock_atomic(
+                            db, item_id=line.item_id, branch_id=quote.branch_id, delta=-line.qty,
+                            movement_type="sale",
+                            source_type="sale_invoice",
+                            source_ref=inv.id,
+                        )
+                    except ValueError:
+                        await clamp_stock_to_zero_with_ledger(
+                            db,
+                            item_id=line.item_id,
+                            branch_id=quote.branch_id,
+                            movement_type="sale",
+                            source_type="sale_invoice",
+                            source_ref=inv.id,
+                            notes=f"Oversell clamp on quote convert {inv.number}",
+                        )
 
     if data.payment_received and paid > 0:
         conv_pay = CustomerPayment(
@@ -8329,6 +8365,8 @@ async def _restore_sales_order_from_invoice(
                 tax_rate=float(inv_li.tax_rate or 0),
                 discount=float(inv_li.discount or 0),
                 line_total=0,
+                unit=inv_li.unit,
+                packaging=inv_li.packaging,
             )
             _, _, so_line.line_total = _line_amounts(
                 qty,

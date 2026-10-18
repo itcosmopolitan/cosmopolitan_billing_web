@@ -129,6 +129,8 @@ export default function OrderFormModal({
       ...next[i],
       item_id: inv.id,
       name: inv.name,
+      unit: inv.unit || '',
+      packaging: inv.packaging || '',
       retailPrice,
       costPrice,
       ...pattern,
@@ -143,7 +145,7 @@ export default function OrderFormModal({
     const next = [...orderForm.items]
     // Wipe identity + name only; keep qty so the operator doesn't have to
     // retype if they just want to swap to a different SKU at the same qty.
-    next[i] = { ...next[i], item_id: null, name: '', costPrice: 0 }
+    next[i] = { ...next[i], item_id: null, name: '', unit: '', packaging: '', costPrice: 0 }
     pof('items', next)
   }
 
@@ -196,6 +198,11 @@ export default function OrderFormModal({
             editingNumber={editingNumber}
             readOnly={readOnly}
           />
+          <FormGroup label="Order Date" required>
+            <DatePicker disabled={readOnly}
+              value={orderForm.date}
+              onChange={(v) => pof('date', v)} />
+          </FormGroup>
           <FormGroup label="Customer" required>
             <AutocompleteDropdown
               disabled={readOnly}
@@ -275,6 +282,8 @@ export default function OrderFormModal({
           <thead>
             <tr>
               <th>Item</th>
+              <th style={{ width: 120 }}>Packaging</th>
+              <th style={{ width: 80 }}>UOM</th>
               <th style={{ width: 95, textAlign: 'right' }}>Qty</th>
               <th style={{ width: 110, textAlign: 'right' }}>Rate (Excl.) (MVR)</th>
               <th style={{ width: 130, textAlign: 'right' }}>Discount</th>
@@ -310,6 +319,16 @@ export default function OrderFormModal({
                       disabled={readOnly}
                       excludeIds={otherPickedIds}
                     />
+                  </td>
+                  <td>
+                    <input className="form-input" type="text" disabled={readOnly}
+                      value={it.packaging ?? ''}
+                      onChange={(e) => pof('items', orderForm.items.map((x, j) => (j === i ? { ...x, packaging: e.target.value } : x)))} />
+                  </td>
+                  <td>
+                    <input className="form-input" type="text" disabled={readOnly}
+                      value={it.unit ?? ''}
+                      onChange={(e) => pof('items', orderForm.items.map((x, j) => (j === i ? { ...x, unit: e.target.value } : x)))} />
                   </td>
                   <td>
                     <input className="form-input" type="number" disabled={readOnly}

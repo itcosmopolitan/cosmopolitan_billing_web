@@ -6,6 +6,7 @@ import { useAppStore, usePOSStore } from '@/store'
 import { useCan } from '@/auth/permissions'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import { formatLabel } from '@/utils/helpers'
+import { todayISO } from '@/utils/batchDates'
 import { unwrapPaged } from '@/utils/pagination'
 import DocumentFormShell from '@/components/DocumentFormShell'
 import OrderFormModal from './OrderFormModal'
@@ -120,7 +121,7 @@ export default function OrderFormPage({ mode = 'create' }) {
           const base = quoteFromRow(q, activeBranchIdRef.current)
           const items = await enrichSaleLinesWithCosts(base.items, base.branchId)
           if (cancelled) return
-          setForm({ ...emptyOrderForm(base.branchId || activeBranchIdRef.current), ...base, items, number: '' })
+          setForm({ ...emptyOrderForm(base.branchId || activeBranchIdRef.current), ...base, items, number: '', date: todayISO() })
           setConversionLabel(q.number)
         } catch {
           toast.error('Quotation not found')
@@ -136,6 +137,10 @@ export default function OrderFormPage({ mode = 'create' }) {
 
   const save = async () => {
     if (saving || readOnly) return
+    if (!form.date) {
+      toast.error('Order date is required')
+      return
+    }
     if (form.items.length === 0) {
       toast.error('Add at least one item')
       return
@@ -158,6 +163,7 @@ export default function OrderFormPage({ mode = 'create' }) {
         branch_name: branches.find((b) => b.id === form.branchId)?.name || '',
         child_counter_id: selectedCounter?.id || null,
         child_counter_name: selectedCounter?.name || null,
+        date: form.date,
         expected_date: form.expectedDate || null,
         items: persistItems.map((i) => ({
           item_id: i.item_id || null,
@@ -166,6 +172,8 @@ export default function OrderFormPage({ mode = 'create' }) {
           price: i.price,
           tax_rate: Number(i.taxRate || 0),
           discount: lineDiscountToPercent(i),
+          unit: i.unit ?? '',
+          packaging: i.packaging ?? '',
         })),
         discount: entityDiscountToPayload(persistItems, form.discount, form.discountType, {
           lineGross: saleLineGross,
