@@ -12,6 +12,7 @@ from src.models import (
     AdjustmentStatus,
     ComplimentaryEntry,
     Role,
+    StockAdjustment,
     StockTransfer,
     TransferStatus,
     User,
@@ -70,6 +71,7 @@ async def _transfer_summary(
 async def _adjustment_summary(
     db: AsyncSession,
     *,
+    user: User,
     branch_id: Optional[str] = None,
     child_counter_id: Optional[str] = None,
 ) -> dict[str, int]:
@@ -88,6 +90,21 @@ async def _adjustment_summary(
     pending = await _count(AdjustmentStatus.pending)
     approved = await _count(AdjustmentStatus.approved)
     rejected = await _count(AdjustmentStatus.rejected)
+
+    legacy_count = 0
+    legacy_stmt = select(func.count(StockAdjustment.id)).where(StockAdjustment.request_id.is_(None))
+    if branch_id:
+        legacy_stmt = legacy_stmt.where(StockAdjustment.branch_id == branch_id)
+    elif not getattr(user, "all_branches", False):
+        branch_ids = await get_allowed_branch_ids(user, db)
+        if branch_ids:
+            legacy_stmt = legacy_stmt.where(StockAdjustment.branch_id.in_(branch_ids))
+        else:
+            legacy_stmt = None
+    if legacy_stmt is not None:
+        legacy_count = int((await db.execute(legacy_stmt)).scalar() or 0)
+
+    approved += legacy_count
     return {
         "pending": pending,
         "approved": approved,
@@ -157,7 +174,7 @@ async def get_module_summary(
         )
     if key == "adjustments":
         return await _adjustment_summary(
-            db, branch_id=branch_id, child_counter_id=child_counter_id,
+            db, user=user, branch_id=branch_id, child_counter_id=child_counter_id,
         )
     if key == "complimentary":
         return await _complimentary_summary(
