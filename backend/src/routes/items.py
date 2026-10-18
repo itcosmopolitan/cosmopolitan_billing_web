@@ -3201,10 +3201,12 @@ async def _collect_item_history(
             conds = [StockMovement.item_id == item_id, StockMovement.movement_type.in_(adj_types)]
             if allowed_branches:
                 conds.append(StockMovement.branch_id.in_(allowed_branches))
+            # created_at is a DateTime column; Postgres rejects comparing it with a
+            # string, so the YYYY-MM-DD bounds are converted to datetimes here.
             if from_date:
-                conds.append(StockMovement.created_at >= from_date)
+                conds.append(StockMovement.created_at >= datetime.fromisoformat(from_date))
             if to_date:
-                conds.append(StockMovement.created_at < to_date + "T23:59:59.999999")
+                conds.append(StockMovement.created_at < datetime.fromisoformat(to_date) + timedelta(days=1))
             for m in (await db.execute(select(StockMovement).where(and_(*conds)))).scalars().all():
                 rows.append({"id": m.id, "category": "adjustment",
                              "docKind": "Opening Stock" if m.movement_type == "opening" else "Adjustment",

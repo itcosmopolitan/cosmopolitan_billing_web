@@ -38,7 +38,8 @@ import {
   WALK_IN_CUSTOMER_NAME,
 } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, ENTRY_DECIMALS, entryInputStep } from '@/utils/decimalPrecision'
+import { handleGridArrowKeyDown } from '@/utils/gridArrowNav'
+import { ENTRY_DECIMALS } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import {
   computeDocumentTotals,
@@ -277,7 +278,7 @@ export default function QuoteFormModal({
         {/* 2026-05-24: same column changes as OrderFormModal — Tax % out,
             per-line Discount in, 95px right-aligned numeric columns
             (native number spinner hidden globally; see globals.css). */}
-        <table className="data-table" style={{ marginBottom: 12 }}>
+        <table className="data-table" style={{ marginBottom: 12 }} onKeyDown={handleGridArrowKeyDown}>
           <thead>
             <tr>
               <th>Item</th>
@@ -325,7 +326,7 @@ export default function QuoteFormModal({
                       value={it.unit ?? ''}
                       onChange={(e) => pqf('items', quoteForm.items.map((x, j) => (j === i ? { ...x, unit: e.target.value } : x)))} />
                   </td>
-                  <td><input className="form-input" type="number" disabled={readOnly} min={entryInputStep()} step={entryInputStep()} style={numInputStyle}
+                  <td><input className="form-input" type="text" inputMode="decimal" disabled={readOnly} style={numInputStyle}
                     title="Type any decimals; rounded to settings on blur"
                     value={qtyInputValue(it.qty)}
                     onChange={e => { const n = [...quoteForm.items]; n[i].qty = e.target.value; pqf('items', n) }}
@@ -334,7 +335,7 @@ export default function QuoteFormModal({
                       n[i].qty = commitSaleQty(e.target.value, it.qty)
                       pqf('items', n)
                     }} /></td>
-                  <td><input className="form-input" type="number" disabled={readOnly} min="0" step={entryInputStep()} style={numInputStyle}
+                  <td><input className="form-input" type="text" inputMode="decimal" disabled={readOnly} style={numInputStyle}
                     value={it._rateText ?? exclRateInputValue(it.price, it.taxRate)}
                     title="Rate excl. GST — type any decimals; rounded to settings on blur"
                     onChange={e => {
@@ -356,10 +357,7 @@ export default function QuoteFormModal({
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
-                      <input className="form-input" type="number" disabled={readOnly || disableLineDiscount}
-                        min="0"
-                        max={type === '%' ? 100 : undefined}
-                        step={type === 'MVR' ? amountInputStep() : '0.01'}
+                      <input className="form-input" type="text" inputMode="decimal" disabled={readOnly || disableLineDiscount}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={e => { const n = [...quoteForm.items]; n[i].lineDiscount = e.target.value; pqf('items', n) }} />

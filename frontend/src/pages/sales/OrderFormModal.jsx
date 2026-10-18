@@ -41,7 +41,8 @@ import {
   WALK_IN_CUSTOMER_NAME,
 } from './salesFormShared'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, ENTRY_DECIMALS, entryInputStep } from '@/utils/decimalPrecision'
+import { handleGridArrowKeyDown } from '@/utils/gridArrowNav'
+import { ENTRY_DECIMALS } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import {
   computeDocumentTotals,
@@ -278,7 +279,7 @@ export default function OrderFormModal({
             figures. Native number-input spinner buttons hidden globally
             in globals.css so the full 95px is text room. */}
         <div className="order-form-table-wrap">
-        <table className="data-table order-form-table" style={{ marginBottom: 12 }}>
+        <table className="data-table order-form-table" style={{ marginBottom: 12 }} onKeyDown={handleGridArrowKeyDown}>
           <thead>
             <tr>
               <th>Item</th>
@@ -331,9 +332,7 @@ export default function OrderFormModal({
                       onChange={(e) => pof('items', orderForm.items.map((x, j) => (j === i ? { ...x, unit: e.target.value } : x)))} />
                   </td>
                   <td>
-                    <input className="form-input" type="number" disabled={readOnly}
-                      min={entryInputStep()}
-                      step={entryInputStep()}
+                    <input className="form-input" type="text" inputMode="decimal" disabled={readOnly}
                       style={numInputStyle}
                       value={qtyInputValue(it.qty)}
                       title="Type any decimals; rounded to settings on blur"
@@ -345,9 +344,7 @@ export default function OrderFormModal({
                       }} />
                   </td>
                   <td>
-                    <input className="form-input" type="number" disabled={readOnly}
-                      min="0"
-                      step={entryInputStep()}
+                    <input className="form-input" type="text" inputMode="decimal" disabled={readOnly}
                       style={numInputStyle}
                       value={it._rateText ?? exclRateInputValue(it.price, it.taxRate)}
                       title="Rate excl. GST — type any decimals; rounded to settings on blur"
@@ -375,10 +372,7 @@ export default function OrderFormModal({
                         Backend only stores percent — saveOrder converts
                         before POST. */}
                     <div style={{ display: 'flex', gap: 4, opacity: disableLineDiscount ? 0.6 : 1 }}>
-                      <input className="form-input" type="number" disabled={readOnly || disableLineDiscount}
-                        min="0"
-                        max={type === '%' ? 100 : undefined}
-                        step={type === 'MVR' ? amountInputStep() : '0.01'}
+                      <input className="form-input" type="text" inputMode="decimal" disabled={readOnly || disableLineDiscount}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={e => { const n = [...orderForm.items]; n[i].lineDiscount = e.target.value; pof('items', n) }} />

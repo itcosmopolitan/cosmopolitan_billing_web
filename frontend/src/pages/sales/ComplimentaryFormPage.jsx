@@ -18,8 +18,8 @@ import { WALK_IN_CUSTOMER_NAME, WALK_IN_CUSTOMER_OPTION } from './salesFormShare
 import { toApiPayload } from '@/utils/batchAllocation'
 import { todayISO } from '@/utils/batchDates'
 import { commitSaleQty, qtyInputValue } from '@/utils/documentFormTotals'
-import { entryInputStep } from '@/utils/decimalPrecision'
 import { fmt } from '@/utils/helpers'
+import { handleGridArrowKeyDown } from '@/utils/gridArrowNav'
 import { COMPLIMENTARY_REASONS } from './complimentaryOptions'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import { NOT_APPLICABLE } from '@/utils/emptyValue'
@@ -338,7 +338,7 @@ export default function ComplimentaryFormPage() {
             Stock is issued at cost. Tax, discount and margin do not apply.
           </div>
           <div className="invoice-form-table-wrap">
-            <table className="data-table invoice-form-table" style={{ marginBottom: 12 }}>
+            <table className="data-table invoice-form-table" style={{ marginBottom: 12 }} onKeyDown={handleGridArrowKeyDown}>
               <thead>
                 <tr>
                   <th>Item</th>
@@ -388,9 +388,8 @@ export default function ComplimentaryFormPage() {
                       <td>
                         <input
                           className="form-input"
-                          type="number"
-                          min={entryInputStep()}
-                          step={entryInputStep()}
+                          type="text"
+                          inputMode="decimal"
                           style={numInputStyle}
                           value={qtyInputValue(it.qty)}
                           title="Type any decimals; rounded to settings on blur"

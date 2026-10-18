@@ -28,7 +28,8 @@ import {
 import { PAYMENT_METHOD_OPTIONS } from '@/utils/dropdownOptions'
 import CashTenderFields from '@/components/CashTenderFields'
 import { fmt } from '@/utils/helpers'
-import { amountInputStep, ENTRY_DECIMALS, entryInputStep } from '@/utils/decimalPrecision'
+import { handleGridArrowKeyDown } from '@/utils/gridArrowNav'
+import { ENTRY_DECIMALS } from '@/utils/decimalPrecision'
 import MarginBadge from '@/components/MarginBadge'
 import {
   computeDocumentTotals,
@@ -394,7 +395,7 @@ export default function InvoiceFormModal({
         <div className="invoice-form-panel__head">Line items</div>
         <div className="invoice-form-panel__sub">Add inventory lines, then adjust discount and lot split where needed.</div>
         <div className="invoice-form-table-wrap">
-        <table className="data-table invoice-form-table" style={{ marginBottom: 12 }}>
+        <table className="data-table invoice-form-table" style={{ marginBottom: 12 }} onKeyDown={handleGridArrowKeyDown}>
           <thead>
             <tr>
               <th>Item</th>
@@ -442,9 +443,7 @@ export default function InvoiceFormModal({
                       onChange={(e) => patchLine(i, { unit: e.target.value })} />
                   </td>
                   <td>
-                    <input className="form-input" type="number"
-                      min={entryInputStep()}
-                      step={entryInputStep()}
+                    <input className="form-input" type="text" inputMode="decimal"
                       style={numInputStyle}
                       value={qtyInputValue(it.qty)}
                       title="Type any decimals; rounded to settings on blur"
@@ -462,9 +461,7 @@ export default function InvoiceFormModal({
                       }} />
                   </td>
                   <td>
-                    <input className="form-input" type="number"
-                      min="0"
-                      step={entryInputStep()}
+                    <input className="form-input" type="text" inputMode="decimal"
                       style={numInputStyle}
                       value={it._rateText ?? exclRateInputValue(it.price, it.taxRate)}
                       title="Rate excl. GST — type any decimals; rounded to settings on blur"
@@ -487,10 +484,7 @@ export default function InvoiceFormModal({
                   </td>
                   <td>
                     <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>
-                      <input className="form-input" type="number" disabled={disableLineDiscount}
-                        min="0"
-                        max={type === '%' ? 100 : undefined}
-                        step={type === 'MVR' ? amountInputStep() : '0.01'}
+                      <input className="form-input" type="text" inputMode="decimal" disabled={disableLineDiscount}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={(e) => { const n = [...invoiceForm.items]; n[i].lineDiscount = e.target.value; pif('items', n) }} />
