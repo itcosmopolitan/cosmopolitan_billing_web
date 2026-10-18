@@ -198,6 +198,11 @@ export default function OrderFormModal({
             editingNumber={editingNumber}
             readOnly={readOnly}
           />
+          <FormGroup label="Order Date" required>
+            <DatePicker disabled={readOnly}
+              value={orderForm.date}
+              onChange={(v) => pof('date', v)} />
+          </FormGroup>
           <FormGroup label="Customer" required>
             <AutocompleteDropdown
               disabled={readOnly}

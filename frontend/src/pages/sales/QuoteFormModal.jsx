@@ -170,7 +170,7 @@ export default function QuoteFormModal({
 
   const formBody = (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
         <DocumentNumberField
           label="Quotation #"
           docType="quotation"
@@ -181,6 +181,10 @@ export default function QuoteFormModal({
           editingNumber={editingNumber}
           readOnly={readOnly}
         />
+        <FormGroup label="Quotation Date" required>
+          <DatePicker disabled={readOnly}
+            value={quoteForm.date} onChange={(v) => pqf('date', v)} />
+        </FormGroup>
         <FormGroup label="Customer" required>
           <AutocompleteDropdown
             disabled={readOnly}

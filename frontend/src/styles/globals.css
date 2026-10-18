@@ -1247,6 +1247,7 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .order-form-shell {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1277,7 +1278,7 @@ h4 { font-size: 14px; font-weight: 600; }
 
 .order-form-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 
