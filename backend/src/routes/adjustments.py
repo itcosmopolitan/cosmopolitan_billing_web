@@ -115,6 +115,72 @@ def _serialize(ar: AdjustmentRequest) -> dict:
     }
 
 
+def _serialize_legacy_stock_adjustment(sa: StockAdjustment) -> dict:
+    created = sa.created_at
+    ref = sa.request_id or f"ADJ-LEGACY-{(sa.id or 'unknown')[:8]}"
+    after_qty = sa.after_qty if sa.after_qty is not None else sa.before_qty
+    return {
+        "id": sa.id,
+        "ref_number": ref,
+        "number": ref,
+        "branch_id": sa.branch_id,
+        "branch_name": None,
+        "child_counter_id": None,
+        "child_counter_name": None,
+        "item_id": sa.item_id,
+        "item_name": None,
+        "before_qty": sa.before_qty,
+        "new_qty": after_qty,
+        "delta": (after_qty or 0) - (sa.before_qty or 0),
+        "reason": sa.reason,
+        "notes": sa.notes,
+        "batch_id": None,
+        "status": "approved",
+        "requested_by": None,
+        "requested_at": created.isoformat() if created else None,
+        "approved_by": sa.adjusted_by,
+        "rejected_by": None,
+        "resolved_by": sa.adjusted_by,
+        "resolved_at": created.isoformat() if created else None,
+        "rejection_notes": None,
+        "created_at": created.isoformat() if created else None,
+        "date": created.strftime("%Y-%m-%d") if created else None,
+    }
+
+
+def _merge_adjustment_rows(request_rows, stock_rows, *, status: Optional[str] = None, sort_by: Optional[str] = None, sort_order: str = "desc"):
+    rows = [_serialize(ar) for ar in request_rows]
+    for sa in stock_rows:
+        row = _serialize_legacy_stock_adjustment(sa)
+        if status and row["status"] != status:
+            continue
+        rows.append(row)
+
+    if status and status not in {"all", None}:
+        rows = [row for row in rows if row["status"] == status]
+    elif status is None:
+        rows = rows
+
+    if sort_by:
+        sort_key = sort_by
+    else:
+        sort_key = "created_at"
+
+    def _sort_value(row):
+        val = row.get(sort_key)
+        if sort_key == "created_at":
+            return val or ""
+        if sort_key in {"before_qty", "new_qty", "delta"}:
+            try:
+                return float(val or 0)
+            except (TypeError, ValueError):
+                return 0.0
+        return str(val or "")
+
+    rows.sort(key=_sort_value, reverse=(sort_order.lower() == "desc"))
+    return rows
+
+
 def _log_adjustment_history(
     db: AsyncSession,
     *,
@@ -372,9 +438,23 @@ async def list_adjustments(
             return paged([], 0, sk, lim)
         q = q.where(AdjustmentRequest.branch_id.in_(branch_ids))
         cq = cq.where(AdjustmentRequest.branch_id.in_(branch_ids))
-    total = int((await db.execute(cq)).scalar() or 0)
-    rows = (await db.execute(q.offset(sk).limit(lim))).scalars().all()
-    return paged([_serialize(ar) for ar in rows], total, sk, lim)
+    request_rows = (await db.execute(q)).scalars().all()
+    legacy_rows = []
+    if status in (None, "approved"):
+        legacy_query = select(StockAdjustment).where(StockAdjustment.request_id.is_(None))
+        if branch_id:
+            legacy_query = legacy_query.where(StockAdjustment.branch_id == branch_id)
+        elif not getattr(user, "all_branches", False):
+            branch_ids = await get_allowed_branch_ids(user, db)
+            if not branch_ids:
+                return paged([], 0, sk, lim)
+            legacy_query = legacy_query.where(StockAdjustment.branch_id.in_(branch_ids))
+        legacy_rows = (await db.execute(legacy_query)).scalars().all()
+
+    rows = _merge_adjustment_rows(request_rows, legacy_rows, status=status, sort_by=sort_by, sort_order=sort_order)
+    total = len(rows)
+    page_rows = rows[sk:sk + lim]
+    return paged(page_rows, total, sk, lim)
 
 
 async def _approve_adjustment_record(

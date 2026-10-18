@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from src.routes.adjustments import _merge_adjustment_rows
 from src.routes.dashboard import _resolve_branch_scope as resolve_dashboard_branch_scope
 from src.routes.reports import _resolve_branch_scope as resolve_reports_branch_scope
 from src.routes.cash import _resolve_branch_scope as resolve_cash_branch_scope
@@ -127,3 +128,48 @@ def test_transfers_branch_scope_and_visibility(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(_ensure_user_can_view_transfer(user, object(), t))
     assert exc.value.status_code == 403
+
+
+def test_merge_adjustment_rows_includes_legacy_approved_stock_adjustments():
+    request_row = SimpleNamespace(
+        id="req-1",
+        ref_number="ADJ-1001",
+        branch_id="br-001",
+        branch_name="Downtown",
+        child_counter_id=None,
+        child_counter_name=None,
+        item_id="item-1",
+        item_name="Rice",
+        before_qty=10,
+        new_qty=12,
+        reason="Physical count",
+        notes="Counted",
+        batch_id=None,
+        status="approved",
+        requested_by="John",
+        approved_by="Manager",
+        rejected_by=None,
+        rejection_notes=None,
+        resolved_by="Manager",
+        resolved_at=None,
+        created_at=None,
+    )
+    legacy_row = SimpleNamespace(
+        id="sa-legacy-1",
+        item_id="item-1",
+        branch_id="br-001",
+        before_qty=12,
+        after_qty=15,
+        reason="Physical count",
+        notes="Manual fix",
+        adjusted_by="Manager",
+        request_id=None,
+        created_at=None,
+    )
+
+    rows = _merge_adjustment_rows([request_row], [legacy_row], status=None, sort_order='desc')
+
+    assert len(rows) == 2
+    assert rows[0]["ref_number"] == "ADJ-1001"
+    assert rows[1]["status"] == "approved"
+    assert rows[1]["ref_number"].startswith("ADJ-LEGACY")
