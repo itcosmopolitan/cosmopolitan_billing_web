@@ -992,6 +992,99 @@ async def list_invoices(
         out.append(d)
     return paged(out, total, sk, lim)
 
+
+async def list_invoice_pdf_export_rows(
+    branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
+    status: Optional[str] = None,
+    payment_mode: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    category_id: Optional[str] = None,
+    discount: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = 0,
+    limit: int = 500,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Fetch only the invoice fields used by list PDF exports."""
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
+    conditions = _sale_invoice_filters(branch_id, status, customer_id, search, date_from, date_to)
+    if child_counter_id:
+        conditions.append(SaleInvoice.child_counter_id == child_counter_id)
+    if payment_mode:
+        conditions.append(SaleInvoice.payment_mode == payment_mode)
+    if category_id:
+        category_invoice_ids = (
+            select(SaleLineItem.invoice_id)
+            .join(Item, SaleLineItem.item_id == Item.id)
+            .where(Item.category_id == category_id)
+        )
+        conditions.append(SaleInvoice.id.in_(category_invoice_ids))
+    if discount == "with":
+        discounted_invoice_ids = select(SaleLineItem.invoice_id).where(SaleLineItem.discount > 0)
+        conditions.append(or_(SaleInvoice.discount > 0, SaleInvoice.id.in_(discounted_invoice_ids)))
+    elif discount == "without":
+        discounted_invoice_ids = select(SaleLineItem.invoice_id).where(SaleLineItem.discount > 0)
+        conditions.extend((SaleInvoice.discount <= 0, SaleInvoice.id.notin_(discounted_invoice_ids)))
+
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    if branch_id is None and branch_scope is not None:
+        if not branch_scope:
+            return paged([], 0, sk, lim)
+        conditions.append(SaleInvoice.branch_id.in_(branch_scope))
+
+    sort_expr = resolve_sort(
+        sort_by,
+        sort_order,
+        {
+            "number": SaleInvoice.number,
+            "customer_name": SaleInvoice.customer_name,
+            "date": SaleInvoice.date,
+            "total": SaleInvoice.total,
+            "paid_amount": SaleInvoice.paid_amount,
+            "balance_due": SaleInvoice.total - SaleInvoice.paid_amount,
+            "status": SaleInvoice.status,
+            "created_at": SaleInvoice.created_at,
+        },
+        default_key="created_at",
+        default_order="desc",
+    )
+    count_query = select(func.count(SaleInvoice.id))
+    rows_query = select(
+        SaleInvoice.id,
+        SaleInvoice.number,
+        SaleInvoice.customer_name,
+        SaleInvoice.date,
+        SaleInvoice.total,
+        SaleInvoice.paid_amount,
+        SaleInvoice.status,
+    )
+    if conditions:
+        count_query = count_query.where(and_(*conditions))
+        rows_query = rows_query.where(and_(*conditions))
+    total = int((await db.execute(count_query)).scalar() or 0)
+    result = await db.execute(rows_query.order_by(sort_expr, SaleInvoice.id).offset(sk).limit(lim))
+    items = [
+        {
+            "number": row.number,
+            "customerName": row.customer_name or "Walk-in",
+            "date": row.date,
+            "total": row.total or 0,
+            "paidAmount": row.paid_amount or 0,
+            "balanceDue": (row.total or 0) - (row.paid_amount or 0),
+            "status": row.status.value if hasattr(row.status, "value") else str(row.status),
+        }
+        for row in result.all()
+    ]
+    return paged(items, total, sk, lim)
+
+
 # Legacy SAMPLE_RETURNS-backed /returns endpoint removed 2026-05-23 (PR 2).
 # The real persisted version lives at "Sales Returns: LIST" below.
 

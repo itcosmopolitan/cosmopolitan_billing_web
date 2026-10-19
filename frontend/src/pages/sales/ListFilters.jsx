@@ -156,7 +156,7 @@ function buildChips(filters, fieldSet, {
 export default function ListFilters({
   search = '',
   onSearchChange,
-  searchPlaceholder = 'Search…',
+  searchPlaceholder = 'Search records…',
   filters,
   onApply,
   onClear,
@@ -225,7 +225,7 @@ export default function ListFilters({
             value={search}
             onChange={onSearchChange}
             placeholder={searchPlaceholder}
-            style={{ flex: 1, minWidth: 200, maxWidth: 420 }}
+            style={{ flex: 1, minWidth: 200 }}
           />
           <div className="filter-toolbar__actions">
             {toolbarActions}

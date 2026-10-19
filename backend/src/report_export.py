@@ -13,7 +13,7 @@ import json
 import math
 import re
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
@@ -128,10 +128,13 @@ class ReportExportColumn(BaseModel):
 
 
 class ReportExportRequest(BaseModel):
-    report_api: str = Field(min_length=1, max_length=100)
+    report_api: Optional[str] = Field(default=None, max_length=100)
+    format: Literal["xlsx", "pdf"] = "xlsx"
+    pdf_html: Optional[str] = Field(default=None, max_length=5 * 1024 * 1024)
+    total_rows: int = Field(default=0, ge=0, le=100_000)
     params: dict[str, Optional[Union[str, int, float, bool]]] = Field(default_factory=dict)
     search: Optional[str] = Field(default=None, max_length=200)
-    columns: list[ReportExportColumn] = Field(min_length=1, max_length=80)
+    columns: list[ReportExportColumn] = Field(default_factory=list, max_length=80)
     title: str = Field(default="Report", max_length=200)
     subtitle: Optional[str] = Field(default=None, max_length=300)
     filename: str = Field(default="report.xlsx", max_length=200)
@@ -399,11 +402,12 @@ def build_workbook(
     return buffer.getvalue()
 
 
-def safe_export_filename(name: str) -> str:
+def safe_export_filename(name: str, file_format: Literal["xlsx", "pdf"] = "xlsx") -> str:
     base = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "", name or "").strip()
     base = base[:120].rstrip(". ") or "report"
-    if not base.lower().endswith(".xlsx"):
-        base = f"{base}.xlsx"
+    extension = f".{file_format}"
+    if not base.lower().endswith(extension):
+        base = f"{base}{extension}"
     return base
 
 

@@ -152,6 +152,9 @@ async def list_transfers(
     status: Optional[str] = None,
     branch_id: Optional[str] = Query(None),
     child_counter_id: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     from_branch: Optional[str] = Query(None, alias="from_branch_id"),
     to_branch: Optional[str] = Query(None, alias="to_branch_id"),
     sort_by: Optional[str] = None,
@@ -186,6 +189,32 @@ async def list_transfers(
         selectinload(StockTransfer.items).selectinload(TransferLineItem.item)
     ).order_by(sort_expr)
     cq = select(func.count(StockTransfer.id))
+    if search:
+        search_term = f"%{search.strip()}%"
+        matching_item = select(TransferLineItem.id).where(
+            TransferLineItem.transfer_id == StockTransfer.id,
+            TransferLineItem.item_name.ilike(search_term),
+        ).exists()
+        search_filter = or_(
+            StockTransfer.ref_number.ilike(search_term),
+            StockTransfer.notes.ilike(search_term),
+            StockTransfer.requested_by.ilike(search_term),
+            StockTransfer.from_branch_name.ilike(search_term),
+            StockTransfer.to_branch_name.ilike(search_term),
+            matching_item,
+        )
+        q = q.where(search_filter)
+        cq = cq.where(search_filter)
+    transfer_date = func.coalesce(
+        StockTransfer.recorded_date,
+        func.date(StockTransfer.created_at),
+    )
+    if date_from:
+        q = q.where(transfer_date >= date_from)
+        cq = cq.where(transfer_date >= date_from)
+    if date_to:
+        q = q.where(transfer_date <= date_to)
+        cq = cq.where(transfer_date <= date_to)
     if status:
         q = q.where(StockTransfer.status == status)
         cq = cq.where(StockTransfer.status == status)

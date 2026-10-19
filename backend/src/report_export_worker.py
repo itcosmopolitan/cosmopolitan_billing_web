@@ -8,9 +8,11 @@ workbook is stored on the job row and kept for EXPORT_RETENTION.
 from __future__ import annotations
 
 import asyncio
+import html
 import inspect
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -19,14 +21,18 @@ from sqlalchemy import and_, case, delete, or_, select
 
 from src.database import get_async_session, init_schema
 from src.models import ReportExportJob, User
+from src.pdf_renderer import PdfMode, PdfRenderError, render_pdf, sanitize_html
 from src.report_export import (
     EXPORT_RETENTION,
+    REPORT_EXPORT_PATHS,
     ReportExportError,
     ReportExportRequest,
     apply_search,
     build_export_table,
     build_handler_kwargs,
     build_workbook,
+    format_date,
+    format_status,
     resolve_report_handler,
 )
 
@@ -36,6 +42,7 @@ PAGE_SIZE = 500
 MAX_ATTEMPTS = 3
 STALE_AFTER = timedelta(minutes=15)
 CLEANUP_INTERVAL_SECONDS = 600
+SALES_INVOICE_PDF_EXPORT_API = "sales_invoices_pdf"
 
 
 def _max_export_rows() -> int:
@@ -139,6 +146,47 @@ async def _fetch_all_rows(db, endpoint, params: dict[str, Any], user: User, job_
     return rows
 
 
+def _render_invoice_pdf_rows(template: str, rows: list[dict[str, Any]], columns) -> str:
+    def cell_value(row: dict[str, Any], column) -> str:
+        value = row.get(column.key)
+        if value is None:
+            value = ""
+        elif column.format == "date":
+            value = format_date(value)
+        elif column.format == "status":
+            value = format_status(value)
+        elif column.format == "currency" or column.label.endswith("(MVR)"):
+            try:
+                value = f"{float(value):,.2f}"
+            except (TypeError, ValueError):
+                value = ""
+        return html.escape(str(value), quote=True)
+
+    body_rows = "".join(
+        "<tr>" + "".join(f"<td>{cell_value(row, column)}</td>" for column in columns) + "</tr>"
+        for row in rows
+    )
+    rendered, tbody_count = re.subn(
+        r'(<tbody\b[^>]*\bdata-list-export-rows(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+))?[^>]*>).*?(</tbody>)',
+        lambda match: f"{match.group(1)}{body_rows}{match.group(2)}",
+        template,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    rendered, count_count = re.subn(
+        r'(<div\b[^>]*\bdata-list-export-count(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+))?[^>]*>).*?(</div>)',
+        lambda match: (
+            f"{match.group(1)}{len(rows)} record{'s' if len(rows) != 1 else ''}{match.group(2)}"
+        ),
+        rendered,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if tbody_count != 1 or count_count != 1:
+        raise ReportExportError("The invoice PDF template is missing its list export placeholders.")
+    return rendered
+
+
 async def run_job(job_id: str) -> None:
     session_factory = get_async_session()
     async with session_factory() as db:
@@ -150,12 +198,59 @@ async def run_job(job_id: str) -> None:
         if not user:
             raise ReportExportError("The user who requested this export no longer exists.")
 
-        endpoint = resolve_report_handler(request.report_api)
-        params = {k: v for k, v in request.params.items() if k not in {"skip", "limit"}}
-        rows = await asyncio.wait_for(
-            _fetch_all_rows(db, endpoint, params, user, job_id),
-            timeout=_export_timeout_seconds(),
+        if request.format == "pdf":
+            if not request.pdf_html:
+                raise ReportExportError("The PDF export content is missing.")
+            if request.report_api == SALES_INVOICE_PDF_EXPORT_API:
+                from src.routes.sales import list_invoice_pdf_export_rows
+
+                params = {k: v for k, v in request.params.items() if k not in {"skip", "limit"}}
+                rows = await asyncio.wait_for(
+                    _fetch_all_rows(db, list_invoice_pdf_export_rows, params, user, job_id),
+                    timeout=_export_timeout_seconds(),
+                )
+                if not rows:
+                    raise ReportExportError("No invoices found for the selected filters.")
+                pdf_html = _render_invoice_pdf_rows(request.pdf_html, rows, request.columns)
+            else:
+                pdf_html = request.pdf_html
+        else:
+            if request.report_api not in REPORT_EXPORT_PATHS or not request.columns:
+                raise ReportExportError("The report export request is invalid.")
+            endpoint = resolve_report_handler(request.report_api)
+            params = {k: v for k, v in request.params.items() if k not in {"skip", "limit"}}
+            rows = await asyncio.wait_for(
+                _fetch_all_rows(db, endpoint, params, user, job_id),
+                timeout=_export_timeout_seconds(),
+            )
+
+    if request.format == "pdf":
+        try:
+            payload = await asyncio.wait_for(
+                render_pdf(
+                    sanitize_html(pdf_html),
+                    PdfMode.EXPORT,
+                    timeout_seconds=min(_export_timeout_seconds(), 900),
+                ),
+                timeout=_export_timeout_seconds(),
+            )
+        except PdfRenderError as exc:
+            raise ReportExportError(exc.detail) from exc
+        completed_at = datetime.utcnow()
+        stored_request = request.model_dump(mode="json")
+        stored_request["pdf_html"] = None
+        await update_progress(
+            job_id,
+            status="completed",
+            total_rows=len(rows) if request.report_api == SALES_INVOICE_PDF_EXPORT_API else request.total_rows,
+            processed_rows=len(rows) if request.report_api == SALES_INVOICE_PDF_EXPORT_API else request.total_rows,
+            file_data=payload,
+            request_json=stored_request,
+            error_message=None,
+            completed_at=completed_at,
+            expires_at=completed_at + EXPORT_RETENTION,
         )
+        return
 
     matched = apply_search(rows, request.search)
     if not matched:

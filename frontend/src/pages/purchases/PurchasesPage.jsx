@@ -35,6 +35,8 @@ import {
   EXPORT_PAGE_SIZE_SAFE,
   PURCHASE_EXPORT_FILENAMES,
   PURCHASE_EXPORT_MAPPERS,
+  PURCHASE_PDF_COLUMNS,
+  mapListPdfRows,
 } from '@/utils/listExport'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 // In-flight cache to deduplicate identical purchases requests across remounts
@@ -43,7 +45,7 @@ import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
 import PurchaseTxnDetailPanel from './PurchaseTxnDetailPanel'
 import { prepareInvoicePayload } from '@/utils/printInvoice'
-import { downloadDocumentPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
+import { downloadDocumentPdf, downloadListPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
 import PaymentDetailPanel from '@/components/detail/PaymentDetailPanel'
 import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
 import {
@@ -190,6 +192,7 @@ export default function PurchasesPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
+  const [pdfExportBusy, setPdfExportBusy] = useState(false)
   const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
@@ -926,9 +929,89 @@ export default function PurchasesPage() {
     }
   }
 
+  const exportCurrentTabPdf = async () => {
+    const mapper = PURCHASE_EXPORT_MAPPERS[tab]
+    const columns = PURCHASE_PDF_COLUMNS[tab]
+    if (!mapper || !columns || pdfExportBusy) return
+
+    setPdfExportBusy(true)
+    try {
+      const common = {
+        search: search || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        vendor_id: vendorF || undefined,
+      }
+      let rows = []
+      if (tab === 'bills') {
+        rows = await fetchAllList((params) => purchasesAPI.list({
+          ...params,
+          ...common,
+          status: billStatusF || undefined,
+          payment_mode: paymentModeF || undefined,
+          sort_by: billSortBy,
+          sort_order: billSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'orders') {
+        rows = await fetchAllList((params) => purchasesAPI.orders.list({
+          ...params,
+          ...common,
+          status: orderStatusF || undefined,
+          sort_by: orderSortBy,
+          sort_order: orderSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'grns') {
+        rows = await fetchAllList((params) => purchasesAPI.grns.list({
+          ...params,
+          ...common,
+          status: grnStatusF || undefined,
+          sort_by: grnSortBy,
+          sort_order: grnSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'returns') {
+        rows = await fetchAllList((params) => purchasesAPI.returns.list({
+          ...params,
+          ...common,
+          status: retStatusF || undefined,
+          sort_by: retSortBy,
+          sort_order: retSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'payments') {
+        rows = await fetchAllList((params) => purchasesAPI.payments.list({
+          ...params,
+          ...common,
+          status: payStatusF || undefined,
+          payment_mode: paymentModeF || undefined,
+          sort_by: paySortBy,
+          sort_order: paySortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      }
+
+      if (rows.length === 0) {
+        toast.error('No entries found for the selected filters')
+        return
+      }
+
+      await downloadListPdf(
+        tab === 'payments' ? 'Payments Made' : pageTitle,
+        columns,
+        mapListPdfRows(rows, mapper, columns),
+        activeBranch,
+      )
+    } catch (err) {
+      console.error('Failed to export purchases list PDF:', err)
+      toast.error(err?.response?.data?.detail || err?.message || 'PDF export failed')
+    } finally {
+      setPdfExportBusy(false)
+    }
+  }
+
   const listMenuActions = buildListPageMenuActions({
     onExport: openExportModal,
+    onExportPdf: exportCurrentTabPdf,
     onRefresh: refreshCurrentTab,
+    exportPdfLabel: pdfExportBusy ? 'Generating PDF…' : 'Export PDF',
+    exportPdfDisabled: pdfExportBusy,
   })
 
   const listToolbarActions = (
@@ -983,7 +1066,7 @@ export default function PurchasesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search bill #, vendor…"
+            searchPlaceholder="Search by bill number or vendor name…"
             toolbarActions={listToolbarActions}
             fields={BILL_FILTER_FIELDS}
             statusOptions={BILL_STATUS_FILTER_OPTIONS}
@@ -1195,7 +1278,7 @@ export default function PurchasesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search PO #, vendor…"
+            searchPlaceholder="Search by purchase order number or vendor name…"
             toolbarActions={listToolbarActions}
             fields={PURCHASE_FILTER_FIELDS}
             statusOptions={ORDER_STATUS_FILTER_OPTIONS}
@@ -1418,7 +1501,7 @@ export default function PurchasesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search GRN #, vendor, PO…"
+            searchPlaceholder="Search by goods receipt number, vendor, or purchase order…"
             toolbarActions={listToolbarActions}
             fields={PURCHASE_FILTER_FIELDS}
             statusOptions={GRN_STATUS_FILTER_OPTIONS}
@@ -1580,7 +1663,7 @@ export default function PurchasesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search return #, vendor…"
+            searchPlaceholder="Search by return number or vendor name…"
             toolbarActions={listToolbarActions}
             fields={PURCHASE_FILTER_FIELDS}
             statusOptions={RETURN_STATUS_FILTER_OPTIONS}
@@ -1726,7 +1809,7 @@ export default function PurchasesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search payment #, vendor…"
+            searchPlaceholder="Search by payment number or vendor name…"
             toolbarActions={listToolbarActions}
             fields={PAYMENT_FILTER_FIELDS}
             statusOptions={PAYMENT_STATUS_FILTER_OPTIONS}

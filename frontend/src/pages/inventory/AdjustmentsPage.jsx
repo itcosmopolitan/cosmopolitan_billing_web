@@ -10,12 +10,15 @@ import {
   PageActionsMenu, buildListPageMenuActions,
   CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer,
 } from '@/components/ui'
-import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
+import { DEFAULT_PAGE_SIZE, fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { EXPORT_PAGE_SIZE_SAFE } from '@/utils/listExport'
+import { downloadListPdf } from '@/utils/documentPdf'
 import { tabsWithCounts } from '@/utils/moduleSummary'
-import { fmtDate, fmtDateTime, fmtQty, formatLabel } from '@/utils/helpers'
+import { exportToExcel, fmtDate, fmtDateTime, fmtQty, formatLabel } from '@/utils/helpers'
 import { qtyInputStep } from '@/utils/decimalPrecision'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
+import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
 import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/childCounters'
 import RowActionsMenu from './RowActionsMenu'
 import AdjustmentDetailPanel from './AdjustmentDetailPanel'
@@ -41,6 +44,10 @@ const REASONS = [
   'Expiry removal',
   'Other',
 ]
+const STATUS_FILTER_OPTIONS = TAB_DEFS
+  .filter((tab) => tab.id !== 'all')
+  .map(({ id, label }) => ({ id, label }))
+const REASON_FILTER_OPTIONS = REASONS.map((reason) => ({ id: reason, label: reason }))
 
 function trackingLabel(item) {
   if (!item?.batch_tracking) return 'Untracked'
@@ -75,6 +82,10 @@ export default function AdjustmentsPage() {
   const [activityTarget, setActivityTarget] = useState(null)
   const [tab, setTab] = useState('all')
   const [requests, setRequests] = useState([])
+  const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [reasonFilter, setReasonFilter] = useState('')
   const [listTotal, setListTotal] = useState(0)
   const [summary, setSummary] = useState(null)
   const [listVersion, setListVersion] = useState(0)
@@ -102,6 +113,8 @@ export default function AdjustmentsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
+  const [pdfExportBusy, setPdfExportBusy] = useState(false)
+  const [excelExportBusy, setExcelExportBusy] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [deleteTargets, setDeleteTargets] = useState(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -113,7 +126,7 @@ export default function AdjustmentsPage() {
   const bumpList = useCallback(() => setListVersion((v) => v + 1), [])
 
   useEffect(() => {
-    const key = `${tab}|${activeBranch?.id || ''}|${childCounterId}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
+    const key = `${tab}|${activeBranch?.id || ''}|${childCounterId}|${search}|${dateFrom}|${dateTo}|${reasonFilter}|${skip}|${limit}|${sortBy}|${sortOrder}|${listVersion}`
     let cancelled = false
     const run = async () => {
       try {
@@ -127,9 +140,15 @@ export default function AdjustmentsPage() {
               sort_by: sortBy,
               sort_order: sortOrder,
               status: tab === 'all' ? undefined : tab,
+              branch_id: activeBranch?.id || undefined,
               child_counter_id: childCounterId || undefined,
+              search: search.trim() || undefined,
+              date_from: dateFrom || undefined,
+              date_to: dateTo || undefined,
+              reason: reasonFilter || undefined,
             }),
             summariesAPI.get('adjustments', {
+              branch_id: activeBranch?.id || undefined,
               child_counter_id: childCounterId || undefined,
             }),
           ])
@@ -157,7 +176,7 @@ export default function AdjustmentsPage() {
     }
     run()
     return () => { cancelled = true }
-  }, [tab, activeBranch?.id, childCounterId, skip, limit, sortBy, sortOrder, listVersion])
+  }, [tab, activeBranch?.id, childCounterId, search, dateFrom, dateTo, reasonFilter, skip, limit, sortBy, sortOrder, listVersion])
 
   // Re-fetch list when active branch changes; also update newForm.branch_id
   useEffect(() => {
@@ -440,6 +459,103 @@ export default function AdjustmentsPage() {
 
   const isRowBusy = (id) => actionBusy === id || (deleteBusy && deleteTargets?.some((r) => r.id === id))
 
+  const exportAdjustmentsExcel = async () => {
+    if (pdfExportBusy || excelExportBusy) return
+    setExcelExportBusy(true)
+    try {
+      const rows = await fetchAllList((params) => adjustmentsAPI.list({
+        ...params,
+        branch_id: activeBranch?.id || undefined,
+        child_counter_id: childCounterId || undefined,
+        status: tab === 'all' ? undefined : tab,
+        search: search.trim() || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        reason: reasonFilter || undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      }), {}, EXPORT_PAGE_SIZE_SAFE)
+      if (!rows.length) {
+        toast.error('No adjustments found for the selected status')
+        return
+      }
+      const columns = [
+        'Adjustment #', 'Branch', 'Counter', 'Item', 'Reason', 'Before quantity',
+        'New quantity', 'Change', 'Status', 'Requested by', 'Requested date',
+        'Resolved by', 'Resolved date', 'Notes',
+      ]
+      const exportRows = rows.map((request) => ({
+        'Adjustment #': request.ref_number || '',
+        Branch: request.branch_name || request.branch_id || '',
+        Counter: request.child_counter_name || NOT_SET,
+        Item: request.item_name || '',
+        Reason: request.reason || '',
+        'Before quantity': Number(request.before_qty ?? 0),
+        'New quantity': Number(request.new_qty ?? 0),
+        Change: Number(request.delta ?? (Number(request.new_qty || 0) - Number(request.before_qty || 0))),
+        Status: formatLabel(request.status),
+        'Requested by': request.requested_by || '',
+        'Requested date': request.requested_at || request.created_at || '',
+        'Resolved by': request.resolved_by || request.approved_by || request.rejected_by || '',
+        'Resolved date': request.resolved_at || '',
+        Notes: request.notes || request.rejection_notes || '',
+      }))
+      exportToExcel(
+        exportRows,
+        `Stock_Adjustments_${new Date().toISOString().split('T')[0]}.xlsx`,
+        columns,
+      )
+      toast.success(`Exported ${rows.length} adjustment${rows.length === 1 ? '' : 's'}`)
+    } catch (error) {
+      console.error('Failed to export adjustments Excel:', error)
+      toast.error(error?.response?.data?.detail || error?.message || 'Excel export failed')
+    } finally {
+      setExcelExportBusy(false)
+    }
+  }
+
+  const exportAdjustmentsPdf = async () => {
+    if (pdfExportBusy || excelExportBusy) return
+    setPdfExportBusy(true)
+    try {
+      const rows = await fetchAllList((params) => adjustmentsAPI.list({
+        ...params,
+        branch_id: activeBranch?.id || undefined,
+        child_counter_id: childCounterId || undefined,
+        status: tab === 'all' ? undefined : tab,
+        search: search.trim() || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        reason: reasonFilter || undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      }), {}, EXPORT_PAGE_SIZE_SAFE)
+      if (!rows.length) {
+        toast.error('No adjustments found for the selected status')
+        return
+      }
+      const columns = ['Adjustment #', 'Branch', 'Item', 'Reason', 'Before quantity', 'New quantity', 'Change', 'Status', 'Requested by', 'Date']
+      const pdfRows = rows.map((request) => [
+        request.ref_number || '',
+        request.branch_name || request.branch_id || '',
+        request.item_name || '',
+        request.reason || '',
+        fmtQty(request.before_qty),
+        fmtQty(request.new_qty),
+        fmtQty(request.delta ?? (Number(request.new_qty || 0) - Number(request.before_qty || 0))),
+        formatLabel(request.status),
+        request.requested_by || '',
+        request.created_at || '',
+      ])
+      await downloadListPdf('Stock Adjustments', columns, pdfRows, activeBranch)
+    } catch (error) {
+      console.error('Failed to export adjustments PDF:', error)
+      toast.error(error?.response?.data?.detail || error?.message || 'PDF export failed')
+    } finally {
+      setPdfExportBusy(false)
+    }
+  }
+
   return (
     <div className="page-container">
       <SectionHeader
@@ -449,15 +565,57 @@ export default function AdjustmentsPage() {
         {can('adjustments.create') && (
           <button className="btn btn-primary btn-sm" onClick={() => setShowNew(true)}>+ Request Adjustment</button>
         )}
-        <PageActionsMenu actions={buildListPageMenuActions({
-          hideExport: true,
-          onRefresh: () => {
-            setListVersion((v) => v + 1)
-            toast.success('List refreshed')
-          },
-        })} />
       </SectionHeader>
 
+      <ListFilters
+        search={search}
+        onSearchChange={(value) => {
+          setSearch(value)
+          setSkip(0)
+        }}
+        searchPlaceholder="Search adjustment number, item, branch, or requester…"
+        toolbarActions={<PageActionsMenu actions={buildListPageMenuActions({
+          onExport: exportAdjustmentsExcel,
+          exportLabel: excelExportBusy ? 'Preparing Excel…' : 'Export Excel',
+          exportDisabled: excelExportBusy || pdfExportBusy,
+          onExportPdf: exportAdjustmentsPdf,
+          exportPdfLabel: pdfExportBusy ? 'Generating PDF…' : 'Export PDF',
+          exportPdfDisabled: pdfExportBusy || excelExportBusy,
+        })} />}
+        fields={['status', 'date', 'reason']}
+        statusOptions={STATUS_FILTER_OPTIONS}
+        reasonOptions={REASON_FILTER_OPTIONS}
+        filters={{
+          ...EMPTY_LIST_FILTERS,
+          status: tab === 'all' ? '' : tab,
+          dateFrom,
+          dateTo,
+          reason: reasonFilter,
+        }}
+        onApply={(next) => {
+          setTab(next.status || 'all')
+          setDateFrom(next.dateFrom || '')
+          setDateTo(next.dateTo || '')
+          setReasonFilter(next.reason || '')
+          setSkip(0)
+        }}
+        onClear={() => {
+          setTab('all')
+          setDateFrom('')
+          setDateTo('')
+          setReasonFilter('')
+          setSkip(0)
+        }}
+        onRemoveChip={(key) => {
+          if (key === 'status') setTab('all')
+          if (key === 'date') {
+            setDateFrom('')
+            setDateTo('')
+          }
+          if (key === 'reason') setReasonFilter('')
+          setSkip(0)
+        }}
+      />
 
       <div className="" style={{ alignItems: 'start' }}>
         <div>

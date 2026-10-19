@@ -14,6 +14,7 @@ import ListFilters from '@/pages/sales/ListFilters'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { useAppStore } from '@/store'
 import { fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { runExportJob } from '@/utils/exportJob'
 import { searchReportRows } from './reportSearch'
 import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
@@ -80,9 +81,6 @@ const MARGIN_PCT_TOTAL_SOURCES = {
 
 /** Reports that already encode their own totals / structure. */
 const NO_FOOTER_TOTALS_REPORTS = new Set(['profit-loss'])
-
-const EXPORT_POLL_INTERVAL_MS = 1500
-const EXPORT_POLL_TIMEOUT_MS = 20 * 60 * 1000
 
 /** When set, footer only sums these keys (taxable is duplicated across CGST/SGST). */
 const FOOTER_SUM_KEYS_BY_REPORT = {
@@ -1515,41 +1513,15 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     }
 
     setExporting(true)
-    const toastId = toast.loading('Preparing Excel export…')
     try {
-      const job = await reportsAPI.createExport(body)
-      const deadline = Date.now() + EXPORT_POLL_TIMEOUT_MS
-      let status = job
-      while (status.status !== 'completed' && status.status !== 'failed') {
-        if (Date.now() > deadline) {
-          throw new Error('The export is taking longer than expected. Please try again later.')
-        }
-        await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_INTERVAL_MS))
-        status = await reportsAPI.getExport(job.job_id)
-        if (status.status === 'processing' && status.total_rows) {
-          toast.loading(`Preparing Excel export… ${status.processed_rows} of ${status.total_rows} rows`, { id: toastId })
-        }
-      }
-      if (status.status !== 'completed') {
-        throw new Error(status.error_message || 'Excel export failed.')
-      }
-      const blob = await reportsAPI.downloadExport(job.job_id)
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = status.filename || filename
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-      toast.success('Excel export ready', { id: toastId })
-    } catch (error) {
-      // HTTP failures are already reported by the API interceptor.
-      if (error?.response) {
-        toast.dismiss(toastId)
-      } else {
-        toast.error(error?.message || 'Excel export failed.', { id: toastId })
-      }
+      await runExportJob({
+        createJob: () => reportsAPI.createExport(body),
+        getJob: reportsAPI.getExport,
+        downloadJob: reportsAPI.downloadExport,
+        filename,
+        preparingLabel: 'Preparing Excel export…',
+        readyMessage: 'Excel export ready',
+      })
     } finally {
       setExporting(false)
     }
@@ -1769,7 +1741,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           setSearchQuery(value)
           setSkip(0)
         }}
-        searchPlaceholder="Invoice, order, customer, item..."
+        searchPlaceholder="Search invoices, orders, customers, or items…"
         filters={appliedFilters}
         onApply={handleFiltersApply}
         onClear={handleFiltersClear}

@@ -158,8 +158,8 @@ def _run_wkhtmltopdf(command: list[str], html: bytes, timeout: float) -> subproc
     )
 
 
-async def render_pdf(html: str, mode: PdfMode) -> bytes:
-    timeout = config.get().pdf_timeout_seconds
+async def render_pdf(html: str, mode: PdfMode, timeout_seconds: int | None = None) -> bytes:
+    timeout = timeout_seconds if timeout_seconds is not None else config.get().pdf_timeout_seconds
     command = build_command(mode)
 
     async with _render_slots():

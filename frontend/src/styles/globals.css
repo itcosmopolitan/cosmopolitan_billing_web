@@ -2816,7 +2816,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   flex-shrink: 0;
   margin-left: auto;
 }
-.filter-toolbar__actions > .btn,
+.filter-toolbar__actions .btn,
 .filter-toolbar__actions .page-actions-menu__trigger {
   height: 36px;
   min-height: 36px;

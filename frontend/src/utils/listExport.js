@@ -302,3 +302,41 @@ export const PURCHASE_EXPORT_FILENAMES = {
   returns: 'VendorReturns',
   payments: 'VendorPayments',
 }
+
+export const SALES_PDF_COLUMNS = {
+  invoices: [
+    { key: 'number', label: 'Invoice Number' },
+    { key: 'customerName', label: 'Customer' },
+    { key: 'date', label: 'Date', format: 'date' },
+    { key: 'total', label: 'Amount (MVR)', format: 'currency' },
+    { key: 'paidAmount', label: 'Paid (MVR)', format: 'currency' },
+    { key: 'balanceDue', label: 'Outstanding (MVR)', format: 'currency' },
+    { key: 'status', label: 'Status', format: 'status' },
+  ],
+  orders: ['Order Number', 'Customer', 'Date', 'Expected Date', 'Amount (MVR)', 'Status'],
+  quotes: ['Quote Number', 'Customer', 'Date', 'Valid Until', 'Amount (MVR)', 'Status'],
+  returns: ['Credit Note Number', 'Invoice Number', 'Customer', 'Date', 'Amount (MVR)', 'Credited (MVR)', 'Status'],
+  payments: ['Payment Number', 'Customer', 'Date', 'Method', 'Invoice Numbers', 'Amount (MVR)', 'Status'],
+}
+
+export const PURCHASE_PDF_COLUMNS = {
+  bills: ['Bill Number', 'Vendor', 'Bill Date', 'Due Date', 'Amount (MVR)', 'Paid (MVR)', 'Outstanding (MVR)', 'Status'],
+  orders: ['PO Number', 'Vendor', 'Date', 'Expected Date', 'Amount (MVR)', 'Status'],
+  grns: ['GRN Number', 'PO Number', 'Vendor', 'Date', 'Amount (MVR)', 'Status'],
+  returns: ['Return Number', 'Bill Number', 'Vendor', 'Date', 'Amount (MVR)', 'Credited (MVR)', 'Status'],
+  payments: ['Payment Number', 'Vendor', 'Date', 'Method', 'Bill Numbers', 'Amount (MVR)', 'Status'],
+}
+
+export function mapListPdfRows(rows, mapper, columns) {
+  return rows.map((row) => {
+    const mapped = mapper(row)
+    return columns.map((column) => {
+      const value = mapped[column]
+      if (value == null || value === '') return ''
+      if (column.endsWith('(MVR)') && typeof value === 'number') {
+        return value.toLocaleString('en-MV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      }
+      return String(value)
+    })
+  })
+}

@@ -45,6 +45,7 @@ async def _build_session() -> AsyncSession:
             id=f"id-{ref}", ref_number=ref, status=status,
             from_branch_id=src, to_branch_id=dst,
             child_counter_id=counter, child_counter_name=counter,
+            recorded_date="2025-01-01",
             request_date="2025-01-01", created_at=datetime.utcnow(),
         ))
     await db.commit()
@@ -104,6 +105,34 @@ async def _run_summary_matches_list() -> None:
 
 def test_summary_counts_for_selected_counter_and_branch(passthrough_branch_access):
     asyncio.run(_run_expected_counts())
+
+
+def test_transfer_list_applies_search_and_recorded_date_filters(passthrough_branch_access):
+    async def _run():
+        db = await _build_session()
+        try:
+            result = await transfers_routes.list_transfers(
+                status="draft",
+                branch_id=None,
+                child_counter_id=None,
+                search="tr-12",
+                date_from="2025-01-01",
+                date_to="2025-01-01",
+                from_branch=None,
+                to_branch=None,
+                sort_by=None,
+                sort_order="desc",
+                skip=0,
+                limit=500,
+                db=db,
+                user=SimpleNamespace(all_branches=True),
+            )
+            assert result["total"] == 1
+            assert result["items"][0]["ref_number"] == "TR-12"
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
 
 
 async def _run_expected_counts() -> None:

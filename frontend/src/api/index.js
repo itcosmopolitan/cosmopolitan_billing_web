@@ -644,8 +644,11 @@ export const reportsAPI = {
   marginAnalysis:        (params) => api.get('/reports/margin-analysis',  { params }),
   documentTrail:   (params) => api.get('/reports/document-trail',   { params }),
   createExport:    (data) => api.post('/reports/exports', data),
+  createPdfExport: (data) => api.post('/reports/exports/pdf', data),
   getExport:       (jobId) => api.get(`/reports/exports/${jobId}`),
+  getPdfExport:    (jobId) => api.get(`/reports/exports/pdf/${jobId}`),
   downloadExport:  (jobId) => api.get(`/reports/exports/${jobId}/download`, { responseType: 'blob' }),
+  downloadPdfExport: (jobId) => api.get(`/reports/exports/pdf/${jobId}/download`, { responseType: 'blob' }),
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────

@@ -395,6 +395,10 @@ async def list_adjustments(
     status: Optional[str] = None,
     child_counter_id: Optional[str] = None,
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
+    search: Optional[str] = None,
+    reason: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
@@ -452,6 +456,22 @@ async def list_adjustments(
         legacy_rows = (await db.execute(legacy_query)).scalars().all()
 
     rows = _merge_adjustment_rows(request_rows, legacy_rows, status=status, sort_by=sort_by, sort_order=sort_order)
+    if reason:
+        rows = [row for row in rows if row.get("reason") == reason]
+    if date_from:
+        rows = [row for row in rows if (row.get("date") or "") >= date_from]
+    if date_to:
+        rows = [row for row in rows if (row.get("date") or "") <= date_to]
+    if search and search.strip():
+        search_term = search.strip().casefold()
+        searchable_fields = (
+            "ref_number", "branch_name", "branch_id", "item_name", "reason",
+            "notes", "requested_by", "approved_by", "rejected_by",
+        )
+        rows = [
+            row for row in rows
+            if any(search_term in str(row.get(field) or "").casefold() for field in searchable_fields)
+        ]
     total = len(rows)
     page_rows = rows[sk:sk + lim]
     return paged(page_rows, total, sk, lim)

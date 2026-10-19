@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import report_export, report_export_worker  # noqa: E402
+from src import config, report_export, report_export_worker  # noqa: E402
 from src.database import Base  # noqa: E402
 from src.models import Branch, ReportExportJob, User  # noqa: E402
 from src.report_export import (  # noqa: E402
@@ -123,6 +123,7 @@ def test_safe_export_filename():
     assert safe_export_filename('Sales/Report: "Q1"') == "SalesReport Q1.xlsx"
     assert safe_export_filename("sales.xlsx") == "sales.xlsx"
     assert safe_export_filename("") == "report.xlsx"
+    assert safe_export_filename("Stock Transfers.pdf", "pdf") == "Stock Transfers.pdf"
 
 
 def test_every_export_path_resolves_to_a_get_route():
@@ -253,6 +254,121 @@ def test_worker_exports_every_row_not_just_one_page(tmp_path, monkeypatch):
         assert sheet.max_row == 4 + 1234 + 1
         assert sheet.cell(row=sheet.max_row, column=1).value == "Total"
         assert sheet.cell(row=sheet.max_row, column=3).value == sum(range(1234))
+
+    asyncio.run(scenario())
+
+
+def test_worker_renders_list_pdf_in_background_and_discards_html(tmp_path, monkeypatch):
+    async def scenario():
+        factory = await _build_session(tmp_path)
+        monkeypatch.setattr(report_export_worker, "get_async_session", lambda: factory)
+        rendered = {}
+
+        async def fake_render_pdf(html, mode, timeout_seconds=None):
+            rendered["html"] = html
+            rendered["mode"] = mode
+            return b"%PDF-1.4 async"
+
+        monkeypatch.setattr(report_export_worker, "render_pdf", fake_render_pdf)
+        request = ReportExportRequest(
+            report_api="list_pdf",
+            format="pdf",
+            pdf_html="<html><body><h1>Transfers</h1><script>alert(1)</script></body></html>",
+            total_rows=12,
+            title="Transfers",
+            filename="Stock Transfers.pdf",
+        )
+        job_id = await _create_job(factory, request=request)
+
+        await report_export_worker.run_job(job_id)
+
+        job = await _load_job(factory, job_id)
+        assert job.status == "completed"
+        assert job.file_data == b"%PDF-1.4 async"
+        assert job.total_rows == 12
+        assert job.processed_rows == 12
+        assert job.request_json["pdf_html"] is None
+        assert "<script>" not in rendered["html"]
+        assert "Transfers" in rendered["html"]
+        assert rendered["mode"].value == "export"
+
+    asyncio.run(scenario())
+
+
+def test_invoice_pdf_worker_pages_twenty_thousand_rows_and_renders_escaped_values(tmp_path, monkeypatch):
+    async def scenario():
+        factory = await _build_session(tmp_path)
+        monkeypatch.setattr(report_export_worker, "get_async_session", lambda: factory)
+        calls = []
+
+        async def invoice_rows(
+            branch_id=None, search=None, skip=0, limit=500, db=None, user=None,
+        ):
+            calls.append((skip, limit, branch_id, search, user.id))
+            end = min(skip + limit, 20_000)
+            return {
+                "items": [
+                    {
+                        "number": f"INV-{index}",
+                        "customerName": "<script>alert(1)</script>" if index == 0 else f"Customer {index}",
+                        "date": "2026-03-31",
+                        "total": 125.5,
+                        "paidAmount": 25,
+                        "balanceDue": 100.5,
+                        "status": "paid",
+                    }
+                    for index in range(skip, end)
+                ],
+                "total": 20_000,
+                "skip": skip,
+                "limit": limit,
+            }
+
+        from src.routes import sales as sales_routes
+
+        monkeypatch.setattr(sales_routes, "list_invoice_pdf_export_rows", invoice_rows)
+        rendered = {}
+
+        async def fake_render_pdf(html, mode, timeout_seconds=None):
+            rendered["html"] = html
+            rendered["timeout_seconds"] = timeout_seconds
+            return b"%PDF-1.4 invoice export"
+
+        monkeypatch.setattr(report_export_worker, "render_pdf", fake_render_pdf)
+        request = ReportExportRequest(
+            report_api="sales_invoices_pdf",
+            format="pdf",
+            pdf_html=(
+                '<html><body><table><tbody data-list-export-rows=""></tbody></table>'
+                '<div class="list-export-count" data-list-export-count="">0 records</div></body></html>'
+            ),
+            params={"branch_id": "b1", "search": "INV"},
+            columns=[
+                _col("number", "Invoice Number"),
+                _col("customerName", "Customer"),
+                _col("date", "Date", "date"),
+                _col("total", "Amount (MVR)", "currency"),
+                _col("status", "Status", "status"),
+            ],
+            title="Invoices",
+            filename="Invoices.pdf",
+        )
+        job_id = await _create_job(factory, request=request)
+
+        await report_export_worker.run_job(job_id)
+
+        job = await _load_job(factory, job_id)
+        assert job.status == "completed"
+        assert job.total_rows == 20_000
+        assert job.processed_rows == 20_000
+        assert len(calls) == 40
+        assert calls[0] == (0, 500, "b1", "INV", "u-export")
+        assert calls[-1][:2] == (19_500, 500)
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered["html"]
+        assert "<script>alert(1)</script>" not in rendered["html"]
+        assert "20000 records" in rendered["html"]
+        assert "125.50" in rendered["html"]
+        assert rendered["timeout_seconds"] == 900
 
     asyncio.run(scenario())
 
@@ -399,5 +515,84 @@ def test_create_export_rejects_unknown_report(tmp_path):
                     body=_request(report_api="notAReport"), db=db, user=owner
                 )
             assert rejected.value.status_code == 400
+
+    asyncio.run(scenario())
+
+
+def test_list_pdf_export_uses_report_job_download_endpoints(tmp_path, monkeypatch):
+    async def scenario():
+        factory = await _build_session(tmp_path)
+        monkeypatch.setattr(
+            config,
+            "get",
+            lambda: type("Settings", (), {"pdf_max_payload_bytes": 5 * 1024 * 1024})(),
+        )
+        async with factory() as db:
+            owner = await db.get(User, "u-export")
+            created = await reports_routes.create_list_pdf_export(
+                body=ReportExportRequest(
+                    report_api="list_pdf",
+                    format="pdf",
+                    pdf_html="<html><body>List report</body></html>",
+                    total_rows=4,
+                    title="Transfers",
+                    filename="Stock Transfers.pdf",
+                ),
+                db=db,
+                user=owner,
+            )
+            assert created["status"] == "queued"
+            assert created["filename"] == "Stock Transfers.pdf"
+            assert (await reports_routes.get_list_pdf_export(
+                job_id=created["job_id"],
+                db=db,
+                user=owner,
+            ))["status"] == "queued"
+
+            job = await db.get(ReportExportJob, created["job_id"])
+            job.status = "completed"
+            job.file_data = b"%PDF-1.4 fake"
+            await db.commit()
+            response = await reports_routes.download_list_pdf_export(
+                job_id=created["job_id"],
+                db=db,
+                user=owner,
+            )
+            assert response.body == b"%PDF-1.4 fake"
+            assert response.media_type == "application/pdf"
+            assert "Stock Transfers.pdf" in response.headers["content-disposition"]
+
+    asyncio.run(scenario())
+
+
+def test_invoice_pdf_job_accepts_filters_for_worker_side_fetch(tmp_path, monkeypatch):
+    async def scenario():
+        factory = await _build_session(tmp_path)
+        monkeypatch.setattr(
+            config,
+            "get",
+            lambda: type("Settings", (), {"pdf_max_payload_bytes": 5 * 1024 * 1024})(),
+        )
+        async with factory() as db:
+            owner = await db.get(User, "u-export")
+            created = await reports_routes.create_list_pdf_export(
+                body=ReportExportRequest(
+                    report_api="sales_invoices_pdf",
+                    format="pdf",
+                    pdf_html="<html><tbody data-list-export-rows></tbody></html>",
+                    params={},
+                    columns=[_col("number", "Invoice Number")],
+                    title="Invoices",
+                    filename="Invoices.pdf",
+                ),
+                db=db,
+                user=owner,
+            )
+
+            assert created["status"] == "queued"
+            status = await reports_routes.get_list_pdf_export(
+                job_id=created["job_id"], db=db, user=owner,
+            )
+            assert status["total_rows"] == 0
 
     asyncio.run(scenario())

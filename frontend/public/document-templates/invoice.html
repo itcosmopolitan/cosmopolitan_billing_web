@@ -87,6 +87,15 @@
   table.items tr { page-break-inside: avoid; }
   table.items tbody tr { border-bottom: 1px solid #eee; }
   table.items th.num, table.items td.num { text-align: right; }
+  .list-export-title { margin: 10px 0 3px; font-size: 14px; color: #111; }
+  .list-export-meta { margin-bottom: 8px; color: #555; font-size: 7px; }
+  table.list-export { table-layout: auto; margin-top: 8px; font-size: 7px; }
+  table.list-export thead { display: table-header-group; }
+  table.list-export thead tr { border-top: 1.5px solid #1b3e6f; border-bottom: 1.5px solid #1b3e6f; }
+  table.list-export th { text-align: left; padding: 5px 3px; font-weight: bold; color: #1b3e6f; }
+  table.list-export td { padding: 4px 3px; vertical-align: top; overflow-wrap: anywhere; }
+  table.list-export tbody tr { border-bottom: 1px solid #eee; page-break-inside: avoid; }
+  .list-export-count { margin-top: 8px; text-align: right; font-weight: bold; font-size: 7px; }
   
   /* Totals and footer */
   table.totals { margin-top: 4px; }
@@ -247,6 +256,24 @@
           <td class="badge-cell" style="width:26%;">${badgeHtml}</td>
         </tr>
       </table>`
+  }
+
+  function renderListExport(listExport, branch) {
+    const columns = Array.isArray(listExport?.columns) ? listExport.columns : []
+    const rows = Array.isArray(listExport?.rows) ? listExport.rows : []
+    const title = listExport?.title || 'List Export'
+    const generatedAt = listExport?.generatedAt
+      ? new Date(listExport.generatedAt).toLocaleString('en-GB')
+      : ''
+    return `
+      ${brandHeader(branch)}
+      <h1 class="list-export-title">${escapeHtml(title)}</h1>
+      <div class="list-export-meta">Generated ${escapeHtml(generatedAt)}</div>
+      <table class="list-export">
+        <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead>
+        <tbody data-list-export-rows>${rows.map((row) => `<tr>${columns.map((_, index) => `<td>${escapeHtml(row[index] == null ? '' : String(row[index]))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+      <div class="list-export-count" data-list-export-count>${rows.length} record${rows.length === 1 ? '' : 's'}</div>`
   }
 
   function renderItemRows(items, lineAmounts) {
@@ -569,6 +596,13 @@
 
   function renderInvoicePayload(payload) {
     brandAssets = { ...DEFAULT_ASSETS, ...(payload?.assets || {}) }
+    if (payload?.listExport) {
+      const branch = normalizeInvoicePayload({ branch: payload.branch }).branch
+      document.title = payload.listExport.title || 'List Export'
+      document.getElementById('document').innerHTML = renderListExport(payload.listExport, branch)
+      notifyRendered('invoiceRendered')
+      return
+    }
     const sale = payload?.sale || {}
     sale.documentType = payload?.documentType || 'Tax Invoice'
     const branch = payload?.branch || {}

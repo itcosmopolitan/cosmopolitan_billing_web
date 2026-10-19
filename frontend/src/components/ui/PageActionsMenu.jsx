@@ -23,29 +23,50 @@ export function ListPageActionButtons({ onExport, onRefresh, hideExport = false 
   )
 }
 
-/** Standard Export + Refresh actions for list page headers. */
-export function buildListPageMenuActions({ onExport, onRefresh, hideExport = false }) {
+/** Standard list export actions for page headers. */
+export function buildListPageMenuActions({
+  onExport,
+  onExportPdf,
+  onRefresh,
+  hideExport = false,
+  hideExportPdf = false,
+  exportLabel = 'Export Excel',
+  exportDisabled = false,
+  exportPdfLabel = 'Export PDF',
+  exportPdfDisabled = false,
+}) {
   const actions = []
   if (!hideExport && onExport) {
     actions.push({
-      label: 'Export',
+      label: exportLabel,
       icon: <Icon.Download size={16} />,
+      disabled: exportDisabled,
+      placement: 'header',
       onClick: onExport,
     })
   }
-  if (onRefresh) {
+  if (!hideExportPdf && onExportPdf) {
     actions.push({
-      label: 'Refresh List',
-      icon: <Icon.RefreshCw size={16} />,
-      onClick: onRefresh,
+      label: exportPdfLabel,
+      icon: <Icon.Download size={16} />,
+      disabled: exportPdfDisabled,
+      placement: 'header',
+      onClick: onExportPdf,
     })
   }
+  // if (onRefresh) {
+  //   actions.push({
+  //     label: 'Refresh List',
+  //     icon: <Icon.RefreshCw size={16} />,
+  //     onClick: onRefresh,
+  //   })
+  // }
   return actions
 }
 
 /**
- * Header three-dot menu for page-level actions (Export, Refresh, etc.).
- * actions: [{ label, icon: ReactNode, onClick, hidden?, disabled? }]
+ * Renders header actions as buttons and keeps other page actions in the menu.
+ * actions: [{ label, icon: ReactNode, onClick, placement?, hidden?, disabled? }]
  */
 export default function PageActionsMenu({ actions, ariaLabel = 'More actions' }) {
   const triggerRef = useRef(null)
@@ -53,8 +74,9 @@ export default function PageActionsMenu({ actions, ariaLabel = 'More actions' })
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ top: 0, left: 0 })
 
-  const visible = (actions || []).filter((a) => !a.hidden)
-  if (visible.length === 0) return null
+  const available = (actions || []).filter((a) => !a.hidden)
+  const headerActions = available.filter((action) => action.placement === 'header')
+  const visible = available.filter((action) => action.placement !== 'header')
 
   const updatePosition = () => {
     const el = triggerRef.current
@@ -88,13 +110,15 @@ export default function PageActionsMenu({ actions, ariaLabel = 'More actions' })
     }
   }, [open])
 
+  if (visible.length === 0 && headerActions.length === 0) return null
+
   const runAction = (action) => {
     if (action.disabled) return
     setOpen(false)
     action.onClick?.()
   }
 
-  const menu = open ? createPortal(
+  const menu = open && visible.length > 0 ? createPortal(
     <div
       ref={menuRef}
       role="menu"
@@ -123,19 +147,33 @@ export default function PageActionsMenu({ actions, ariaLabel = 'More actions' })
   ) : null
 
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="btn btn-secondary btn-sm page-actions-menu__trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Icon.MoreVertical size={16} />
-      </button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {headerActions.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          className="btn btn-secondary btn-sm"
+          disabled={action.disabled}
+          onClick={action.onClick}
+        >
+          {action.icon}
+          {action.label}
+        </button>
+      ))}
+      {visible.length > 0 && (
+        <button
+          ref={triggerRef}
+          type="button"
+          className="btn btn-secondary btn-sm page-actions-menu__trigger"
+          aria-label={ariaLabel}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon.MoreVertical size={16} />
+        </button>
+      )}
       {menu}
-    </>
+    </div>
   )
 }

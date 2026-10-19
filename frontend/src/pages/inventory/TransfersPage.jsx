@@ -7,9 +7,13 @@ import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
 import { SectionHeader, Card, Tabs, Chip, Modal, EmptyState, AlertBar, PaginationBar, SortableHeader, TableLoadingPanel, PageActionsMenu, buildListPageMenuActions, CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer } from '@/components/ui'
 import { DEFAULT_PAGE_SIZE, unwrapPaged } from '@/utils/pagination'
+import { EXPORT_PAGE_SIZE_SAFE } from '@/utils/listExport'
+import { fetchAllList } from '@/utils/pagination'
+import { downloadListPdf } from '@/utils/documentPdf'
 import { tabsWithCounts } from '@/utils/moduleSummary'
 import { tableRowClickProps } from '@/utils/tableRowClick'
-import { formatLabel } from '@/utils/helpers'
+import { exportToExcel, formatLabel } from '@/utils/helpers'
+import ListFilters, { EMPTY_LIST_FILTERS } from '@/pages/sales/ListFilters'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import RowActionsMenu from './RowActionsMenu'
 import TransferDetailPanel from './TransferDetailPanel'
@@ -29,6 +33,9 @@ const TAB_DEFS = [
 ]
 
 const TAB_IDS = new Set(TAB_DEFS.map((t) => t.id))
+const STATUS_FILTER_OPTIONS = TAB_DEFS
+  .filter((tab) => tab.id !== 'all')
+  .map(({ id, label }) => ({ id, label }))
 
 /** Read the active section from ?status= (defaults to all). */
 function tabFromSearchParams(searchParams) {
@@ -56,6 +63,9 @@ export default function TransfersPage() {
   const [showDetail, setShowDetail] = useState(null)
   const [activityTarget, setActivityTarget] = useState(null)
   const [transfers, setTransfers] = useState([])
+  const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [listTotal, setListTotal] = useState(0)
   const [summary, setSummary] = useState(null)
   const [listVersion, setListVersion] = useState(0)
@@ -67,6 +77,8 @@ export default function TransfersPage() {
   const [listLoading, setListLoading] = useState(true)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
+  const [pdfExportBusy, setPdfExportBusy] = useState(false)
+  const [excelExportBusy, setExcelExportBusy] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [deleteTargets, setDeleteTargets] = useState(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -111,7 +123,7 @@ export default function TransfersPage() {
   }, [searchParams, setSearchParams])
 
   useEffect(() => {
-      const key = `${activeBranch?.id || ''}|${childCounterId}|${tab}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
+      const key = `${activeBranch?.id || ''}|${childCounterId}|${tab}|${search}|${dateFrom}|${dateTo}|${trSkip}|${trLimit}|${trSortBy}|${trSortOrder}|${listVersion}`
       let cancelled = false
       const run = async () => {
         try {
@@ -138,6 +150,9 @@ export default function TransfersPage() {
                 sort_by: trSortBy,
                 sort_order: trSortOrder,
                 status: tab === 'all' ? undefined : tab,
+                search: search.trim() || undefined,
+                date_from: dateFrom || undefined,
+                date_to: dateTo || undefined,
               }),
               summariesAPI.get('transfers', {
                 branch_id: activeBranch?.id,
@@ -168,7 +183,7 @@ export default function TransfersPage() {
       }
       run()
       return () => { cancelled = true }
-  }, [activeBranch?.id, childCounterId, tab, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
+  }, [activeBranch?.id, childCounterId, tab, search, dateFrom, dateTo, trSkip, trLimit, trSortBy, trSortOrder, listVersion])
 
   useEffect(() => {
     setSelectedIds(new Set())
@@ -381,20 +396,143 @@ export default function TransfersPage() {
   const deleteSelected = () => openDeleteConfirm(selectedPending)
 
   const tabs = useMemo(() => tabsWithCounts(TAB_DEFS, summary), [summary])
+  const exportTransfersExcel = async () => {
+    if (pdfExportBusy || excelExportBusy) return
+    setExcelExportBusy(true)
+    try {
+      const rows = await fetchAllList((params) => transfersAPI.list({
+        ...params,
+        branch_id: activeBranch?.id || undefined,
+        child_counter_id: childCounterId || undefined,
+        status: tab === 'all' ? undefined : tab,
+        search: search.trim() || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        sort_by: trSortBy,
+        sort_order: trSortOrder,
+      }), {}, EXPORT_PAGE_SIZE_SAFE)
+      if (!rows.length) {
+        toast.error('No transfers found for the selected status')
+        return
+      }
+      const columns = [
+        'Transfer #', 'From branch', 'To branch', 'Counter', 'Items', 'Status',
+        'Requested by', 'Approved by', 'Priority', 'Recorded date', 'Transfer date', 'Notes',
+      ]
+      const exportRows = rows.map((transfer) => ({
+        'Transfer #': transfer.ref_number || '',
+        'From branch': transfer.from_branch_name || transfer.from_branch_id || '',
+        'To branch': transfer.to_branch_name || transfer.to_branch_id || '',
+        Counter: transfer.child_counter_name || NOT_SET,
+        Items: (transfer.items || []).map((item) => `${item.name || ''} (${item.qty ?? 0})`).join(', '),
+        Status: formatLabel(transfer.status),
+        'Requested by': transfer.requested_by || '',
+        'Approved by': transfer.approved_by || '',
+        Priority: transfer.priority || '',
+        'Recorded date': transfer.date || transfer.created_at || '',
+        'Transfer date': transfer.request_date || '',
+        Notes: transfer.notes || '',
+      }))
+      exportToExcel(
+        exportRows,
+        `Stock_Transfers_${new Date().toISOString().split('T')[0]}.xlsx`,
+        columns,
+      )
+      toast.success(`Exported ${rows.length} transfer${rows.length === 1 ? '' : 's'}`)
+    } catch (error) {
+      console.error('Failed to export transfers Excel:', error)
+      toast.error(error?.response?.data?.detail || error?.message || 'Excel export failed')
+    } finally {
+      setExcelExportBusy(false)
+    }
+  }
+
+  const exportTransfersPdf = async () => {
+    if (pdfExportBusy || excelExportBusy) return
+    setPdfExportBusy(true)
+    try {
+      const rows = await fetchAllList((params) => transfersAPI.list({
+        ...params,
+        branch_id: activeBranch?.id || undefined,
+        child_counter_id: childCounterId || undefined,
+        status: tab === 'all' ? undefined : tab,
+        search: search.trim() || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        sort_by: trSortBy,
+        sort_order: trSortOrder,
+      }), {}, EXPORT_PAGE_SIZE_SAFE)
+      if (!rows.length) {
+        toast.error('No transfers found for the selected status')
+        return
+      }
+      const columns = ['Transfer #', 'From branch', 'To branch', 'Counter', 'Items', 'Status', 'Recorded date', 'Transfer date']
+      const pdfRows = rows.map((transfer) => [
+        transfer.ref_number || '',
+        transfer.from_branch_name || transfer.from_branch_id || '',
+        transfer.to_branch_name || transfer.to_branch_id || '',
+        transfer.child_counter_name || '',
+        String(transfer.items?.length || 0),
+        formatLabel(transfer.status),
+        transfer.recorded_date || transfer.created_at || '',
+        transfer.request_date || '',
+      ])
+      await downloadListPdf('Stock Transfers', columns, pdfRows, activeBranch)
+    } catch (error) {
+      console.error('Failed to export transfers PDF:', error)
+      toast.error(error?.response?.data?.detail || error?.message || 'PDF export failed')
+    } finally {
+      setPdfExportBusy(false)
+    }
+  }
+
   return (
     <div className="page-container">
       <SectionHeader title="Stock Transfers" subtitle="Move stock between branches with approval workflow">
         {canCreate && (
           <button className="btn btn-primary btn-sm" onClick={() => navigate('/transfers/new')}>+ New Transfer</button>
         )}
-        <PageActionsMenu actions={buildListPageMenuActions({
-          hideExport: true,
-          onRefresh: () => {
-            setListVersion((v) => v + 1)
-            toast.success('List refreshed')
-          },
-        })} />
       </SectionHeader>
+
+      <ListFilters
+        search={search}
+        onSearchChange={(value) => {
+          setSearch(value)
+          setTrSkip(0)
+        }}
+        searchPlaceholder="Search transfer number, item, branch, or requester…"
+        toolbarActions={<PageActionsMenu actions={buildListPageMenuActions({
+          onExport: exportTransfersExcel,
+          exportLabel: excelExportBusy ? 'Preparing Excel…' : 'Export Excel',
+          exportDisabled: excelExportBusy || pdfExportBusy,
+          onExportPdf: exportTransfersPdf,
+          exportPdfLabel: pdfExportBusy ? 'Generating PDF…' : 'Export PDF',
+          exportPdfDisabled: pdfExportBusy || excelExportBusy,
+        })} />}
+        fields={['status', 'date']}
+        statusOptions={STATUS_FILTER_OPTIONS}
+        filters={{ ...EMPTY_LIST_FILTERS, status: tab === 'all' ? '' : tab, dateFrom, dateTo }}
+        onApply={(next) => {
+          onTabChange(next.status || 'all')
+          setDateFrom(next.dateFrom || '')
+          setDateTo(next.dateTo || '')
+          setTrSkip(0)
+        }}
+        onClear={() => {
+          onTabChange('all')
+          setDateFrom('')
+          setDateTo('')
+          setTrSkip(0)
+        }}
+        onRemoveChip={(key) => {
+          if (key === 'status') onTabChange('all')
+          if (key === 'date') {
+            setDateFrom('')
+            setDateTo('')
+            setTrSkip(0)
+          }
+        }}
+      />
 
 
       <div style={{ alignItems: 'start' }}>

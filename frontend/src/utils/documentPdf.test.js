@@ -1,14 +1,25 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { reportsAPI } from '@/api'
 import {
   PAGE_PRESETS,
   buildFileName,
   downloadDocumentPdf,
+  downloadInvoiceListPdf,
+  downloadListPdf,
   printDocumentPdf,
   requestDocumentPdf,
   safePdfName,
   warmDocumentPdf,
 } from './documentPdf'
+
+vi.mock('@/api', () => ({
+  reportsAPI: {
+    createPdfExport: vi.fn(),
+    getPdfExport: vi.fn(),
+    downloadPdfExport: vi.fn(),
+  },
+}))
 
 const pdfBlob = () => new Blob(['%PDF-1.4 test'], { type: 'application/pdf' })
 
@@ -189,6 +200,97 @@ describe('downloadDocumentPdf', () => {
 
     await expect(job).rejects.toThrow('PDF generation timed out.')
     expect(clicks).toEqual([])
+  })
+})
+
+describe('downloadListPdf', () => {
+  let fetchMock
+  let clicks
+
+  beforeEach(() => {
+    clicks = []
+    reportsAPI.createPdfExport.mockReset()
+    reportsAPI.getPdfExport.mockReset()
+    reportsAPI.downloadPdfExport.mockReset()
+    vi.stubGlobal('URL', Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:async-export'),
+      revokeObjectURL: vi.fn(),
+    }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click() {
+      clicks.push(this.download)
+    })
+    fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('renders branded HTML and submits it as a PDF export job', async () => {
+    reportsAPI.createPdfExport.mockResolvedValue({
+      job_id: 'pdf-job-1',
+      status: 'completed',
+      filename: 'Stock_Transfers_2026-10-19.pdf',
+    })
+    reportsAPI.downloadPdfExport.mockResolvedValue(pdfBlob())
+    const job = downloadListPdf('Stock Transfers', ['Transfer #', 'Status'], [['TR-001', 'Received']], {})
+    await vi.waitFor(() => {
+      if (!document.querySelector('iframe[aria-hidden="true"]')) throw new Error('render frame not attached')
+    })
+    const frame = document.querySelector('iframe[aria-hidden="true"]')
+    const post = vi.spyOn(frame.contentWindow, 'postMessage')
+    await completeRender('invoiceRendered', '<table><tr><td>TR-001</td><td>Received</td></tr></table>')
+    await job
+
+    const renderMessage = post.mock.calls.find(([message]) => message?.type)?.[0]
+    expect(renderMessage.payload.listExport).toMatchObject({
+      title: 'Stock Transfers',
+      columns: ['Transfer #', 'Status'],
+      rows: [['TR-001', 'Received']],
+    })
+    const [request] = reportsAPI.createPdfExport.mock.calls[0]
+    expect(request).toMatchObject({
+      format: 'pdf',
+      report_api: 'list_pdf',
+      total_rows: 1,
+      title: 'Stock Transfers',
+      filename: expect.stringMatching(/^Stock_Transfers_\d{4}-\d{2}-\d{2}\.pdf$/),
+      pdf_html: expect.stringContaining('TR-001'),
+    })
+    expect(reportsAPI.getPdfExport).not.toHaveBeenCalled()
+    expect(reportsAPI.downloadPdfExport).toHaveBeenCalledWith('pdf-job-1')
+    expect(clicks).toEqual(['Stock_Transfers_2026-10-19.pdf'])
+  })
+
+  it('submits invoice filters and column metadata without preloading invoice rows', async () => {
+    reportsAPI.createPdfExport.mockResolvedValue({
+      job_id: 'invoice-pdf-job',
+      status: 'completed',
+      filename: 'Invoices_2026-10-19.pdf',
+    })
+    reportsAPI.downloadPdfExport.mockResolvedValue(pdfBlob())
+    const columns = [
+      { key: 'number', label: 'Invoice Number' },
+      { key: 'total', label: 'Amount (MVR)', format: 'currency' },
+    ]
+    const params = { branch_id: 'b1', search: 'INV', status: 'paid' }
+    const job = downloadInvoiceListPdf('Invoices', columns, params, {})
+    await completeRender('invoiceRendered', '<table><tbody data-list-export-rows></tbody></table>')
+    await job
+
+    const [request] = reportsAPI.createPdfExport.mock.calls[0]
+    expect(request).toMatchObject({
+      report_api: 'sales_invoices_pdf',
+      format: 'pdf',
+      params,
+      columns,
+      filename: expect.stringMatching(/^Invoices_\d{4}-\d{2}-\d{2}\.pdf$/),
+    })
+    expect(request.pdf_html).not.toContain('INV-')
+    expect(request).not.toHaveProperty('total_rows')
   })
 })
 

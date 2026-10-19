@@ -1,3 +1,6 @@
+import { reportsAPI } from '@/api'
+import { runExportJob } from '@/utils/exportJob'
+
 export const PDF_ENDPOINT = '/api/v1/documents/invoice-pdf'
 
 // Mirrors PAGE_PRESETS in backend/src/pdf_renderer.py. The server owns paper size and margins;
@@ -16,6 +19,8 @@ export const DOCUMENT_TYPES = {
   GRN_RECEIPT: 'GRN Receipt',
   STOCK_TRANSFER: 'Stock Transfer',
 }
+
+const LIST_EXPORT_DOCUMENT_TYPE = 'List Export'
 
 const TEMPLATES = {
   invoice: {
@@ -279,9 +284,11 @@ export async function renderDocumentHtml(documentType, data) {
       }
       window.addEventListener('message', onMessage)
     })
-    const payload = templateKey === 'quotation'
-      ? { quote: data.quote, branch, assets }
-      : { sale: data.sale, branch, documentType, assets }
+    const payload = data.listExport
+      ? { listExport: data.listExport, branch, assets }
+      : templateKey === 'quotation'
+        ? { quote: data.quote, branch, assets }
+        : { sale: data.sale, branch, documentType, assets }
     frameWindow.postMessage({ type: template.renderMessage, payload }, window.location.origin)
     await withTimeout(rendered, RENDER_TIMEOUT_MS, `${documentType} template did not finish rendering.`)
 
@@ -354,6 +361,58 @@ export function downloadDocumentPdf(documentType, data) {
     const html = await renderDocumentHtml(documentType, data)
     const blob = await requestDocumentPdf({ html, fileName, mode: 'export' })
     downloadBlob(blob, fileName)
+  })
+}
+
+export function downloadListPdf(title, columns, rows, branch) {
+  const generatedAt = new Date().toISOString()
+  const branchName = branch?.name || branch?.branch_name
+  const fileName = safePdfName(`${title}${branchName ? `_${branchName}` : ''}_${generatedAt.slice(0, 10)}`)
+  const listExport = { title, columns, rows, generatedAt }
+  return (async () => {
+    const html = await renderDocumentHtml(LIST_EXPORT_DOCUMENT_TYPE, { listExport, branch })
+    return runExportJob({
+      createJob: () => reportsAPI.createPdfExport({
+        report_api: 'list_pdf',
+        format: 'pdf',
+        pdf_html: html,
+        total_rows: rows.length,
+        title,
+        filename: fileName,
+      }),
+      getJob: reportsAPI.getPdfExport,
+      downloadJob: reportsAPI.downloadPdfExport,
+      filename: fileName,
+      preparingLabel: 'Preparing PDF export…',
+      readyMessage: 'PDF export ready',
+    })
+  })()
+}
+
+export function downloadInvoiceListPdf(title, columns, params, branch) {
+  const generatedAt = new Date().toISOString()
+  const branchName = branch?.name || branch?.branch_name
+  const fileName = safePdfName(`${title}${branchName ? `_${branchName}` : ''}_${generatedAt.slice(0, 10)}`)
+  const listExport = { title, columns: columns.map((column) => column.label), rows: [], generatedAt }
+  const exportColumns = columns.map(({ key, label, format }) => ({ key, label, format }))
+  return runOnce(`export:${fileName}`, async () => {
+    const html = await renderDocumentHtml(LIST_EXPORT_DOCUMENT_TYPE, { listExport, branch })
+    return runExportJob({
+      createJob: () => reportsAPI.createPdfExport({
+        report_api: 'sales_invoices_pdf',
+        format: 'pdf',
+        pdf_html: html,
+        params,
+        columns: exportColumns,
+        title,
+        filename: fileName,
+      }),
+      getJob: reportsAPI.getPdfExport,
+      downloadJob: reportsAPI.downloadPdfExport,
+      filename: fileName,
+      preparingLabel: 'Preparing PDF export…',
+      readyMessage: 'PDF export ready',
+    })
   })
 }
 

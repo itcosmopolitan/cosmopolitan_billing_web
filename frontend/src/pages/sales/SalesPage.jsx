@@ -24,9 +24,11 @@ import {
   EXPORT_PAGE_SIZE_SAFE,
   SALES_EXPORT_FILENAMES,
   SALES_EXPORT_MAPPERS,
+  SALES_PDF_COLUMNS,
+  mapListPdfRows,
 } from '@/utils/listExport'
 import { prepareDocumentPayload } from '@/utils/printInvoice'
-import { downloadDocumentPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
+import { downloadDocumentPdf, downloadInvoiceListPdf, downloadListPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
 import { tableRowClickProps } from '@/utils/tableRowClick'
 import BulkDeleteConfirmModal from '@/components/BulkDeleteConfirmModal'
 import ExportListModal from '@/components/ExportListModal'
@@ -193,6 +195,7 @@ export default function SalesPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
+  const [pdfExportBusy, setPdfExportBusy] = useState(false)
   const [deleteOneTarget, setDeleteOneTarget] = useState(null)
   const [deleteBlocked, setDeleteBlocked] = useState([])
   const [deleting, setDeleting] = useState(false)
@@ -1107,10 +1110,104 @@ export default function SalesPage() {
     }
   }
 
+  const exportCurrentTabPdf = async () => {
+    const mapper = SALES_EXPORT_MAPPERS[tab]
+    const columns = SALES_PDF_COLUMNS[tab]
+    if (!mapper || !columns || pdfExportBusy) return
+
+    setPdfExportBusy(true)
+    try {
+      const common = {
+        search: search || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        customer_id: customerF || undefined,
+      }
+      if (tab === 'invoices') {
+        await downloadInvoiceListPdf(
+          pageTitle,
+          columns,
+          {
+            ...common,
+            branch_id: activeBranch?.id || undefined,
+            status: invStatusF || undefined,
+            payment_mode: paymentModeF || undefined,
+            category_id: categoryF || undefined,
+            discount: discountF || undefined,
+            child_counter_id: childCounterId || undefined,
+            sort_by: invSortBy,
+            sort_order: invSortOrder,
+          },
+          activeBranch,
+        )
+        return
+      }
+      let rows = []
+      if (tab === 'orders') {
+        rows = await fetchAllList((params) => salesAPI.orders.list({
+          ...params,
+          ...common,
+          status: orderStatusF || undefined,
+          child_counter_id: childCounterId || undefined,
+          sort_by: orderSortBy,
+          sort_order: orderSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'quotes') {
+        rows = await fetchAllList((params) => salesAPI.quotations.list({
+          ...params,
+          ...common,
+          status: quoteStatusF || undefined,
+          child_counter_id: childCounterId || undefined,
+          sort_by: quoteSortBy,
+          sort_order: quoteSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'returns') {
+        rows = await fetchAllList((params) => salesAPI.returns.list({
+          ...params,
+          ...common,
+          status: retStatusF || undefined,
+          sort_by: retSortBy,
+          sort_order: retSortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      } else if (tab === 'payments') {
+        rows = await fetchAllList((params) => salesAPI.payments.list({
+          ...params,
+          ...common,
+          branch_id: activeBranch?.id || undefined,
+          status: payStatusF || undefined,
+          payment_mode: paymentModeF || undefined,
+          sort_by: paySortBy,
+          sort_order: paySortOrder,
+        }), {}, EXPORT_PAGE_SIZE_SAFE)
+      }
+
+      if (rows.length === 0) {
+        toast.error('No entries found for the selected filters')
+        return
+      }
+
+      await downloadListPdf(
+        tab === 'payments' ? 'Payments Received' : pageTitle,
+        columns,
+        mapListPdfRows(rows, mapper, columns),
+        activeBranch,
+      )
+    } catch (err) {
+      console.error('Failed to export sales list PDF:', err)
+      toast.error(err?.response?.data?.detail || err?.message || 'PDF export failed')
+    } finally {
+      setPdfExportBusy(false)
+    }
+  }
+
   const listMenuActions = buildListPageMenuActions({
     onExport: openExportModal,
+    onExportPdf: exportCurrentTabPdf,
     onRefresh: refreshCurrentTab,
     hideExport: tab === 'complimentary',
+    hideExportPdf: tab === 'complimentary',
+    exportPdfLabel: pdfExportBusy ? 'Generating PDF…' : 'Export PDF',
+    exportPdfDisabled: pdfExportBusy,
   })
 
   const listToolbarActions = (
@@ -1167,7 +1264,7 @@ export default function SalesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search invoice #, customer…"
+            searchPlaceholder="Search by invoice number or customer name…"
             toolbarActions={listToolbarActions}
             fields={INVOICE_FILTER_FIELDS}
             statusOptions={INVOICE_STATUS_FILTER_OPTIONS}
@@ -1426,7 +1523,7 @@ export default function SalesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search quote #, customer…"
+            searchPlaceholder="Search by quote number or customer name…"
             toolbarActions={listToolbarActions}
             fields={DOC_FILTER_FIELDS}
             statusOptions={QUOTE_STATUS_FILTER_OPTIONS}
@@ -1714,7 +1811,7 @@ export default function SalesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search return #, customer…"
+            searchPlaceholder="Search by return number or customer name…"
             toolbarActions={listToolbarActions}
             fields={DOC_FILTER_FIELDS}
             statusOptions={RETURN_STATUS_FILTER_OPTIONS}
@@ -1887,7 +1984,7 @@ export default function SalesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search payment #, customer…"
+            searchPlaceholder="Search by payment number or customer name…"
             toolbarActions={listToolbarActions}
             fields={PAYMENT_FILTER_FIELDS}
             statusOptions={PAYMENT_STATUS_FILTER_OPTIONS}
@@ -2061,7 +2158,7 @@ export default function SalesPage() {
           <ListFilters
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Search SO #, customer…"
+            searchPlaceholder="Search by order number or customer name…"
             toolbarActions={listToolbarActions}
             fields={DOC_FILTER_FIELDS}
             statusOptions={ORDER_STATUS_FILTER_OPTIONS}

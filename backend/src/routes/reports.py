@@ -5141,6 +5141,16 @@ async def margin_analysis(
 
 MAX_EXPORT_PARAMS = 40
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PDF_MEDIA_TYPE = "application/pdf"
+LIST_PDF_EXPORT_API = "list_pdf"
+SALES_INVOICE_PDF_EXPORT_API = "sales_invoices_pdf"
+LIST_PDF_EXPORT_PERMISSIONS = (
+    "reports.view",
+    "sales.view",
+    "purchases.view",
+    "transfers.view",
+    "adjustments.view",
+)
 
 
 def _export_status_response(job: ReportExportJob) -> dict:
@@ -5178,18 +5188,31 @@ async def create_report_export(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    if body.format != "xlsx" or body.pdf_html is not None:
+        raise HTTPException(400, detail="This endpoint only accepts Excel exports")
     if body.report_api not in REPORT_EXPORT_PATHS:
         raise HTTPException(400, detail="This report cannot be exported")
+    if not body.columns:
+        raise HTTPException(400, detail="At least one report column is required")
     if len(body.params) > MAX_EXPORT_PARAMS:
         raise HTTPException(400, detail="Too many report filters")
+    return await _create_export_job(db, user, body)
+
+
+async def _create_export_job(
+    db: AsyncSession,
+    user: User,
+    body: ReportExportRequest,
+):
     now = datetime.utcnow()
     job = ReportExportJob(
         id=str(uuid.uuid4()),
         status="queued",
-        report_api=body.report_api,
-        filename=safe_export_filename(body.filename),
+        report_api=body.report_api or LIST_PDF_EXPORT_API,
+        filename=safe_export_filename(body.filename, body.format),
         request_json=body.model_dump(mode="json"),
         user_id=user.id,
+        total_rows=body.total_rows if body.format == "pdf" else 0,
         created_at=now,
         expires_at=now + EXPORT_RETENTION,
     )
@@ -5198,14 +5221,80 @@ async def create_report_export(
     return _export_status_response(job)
 
 
-@router.get("/exports/{job_id}", dependencies=[Depends(require_perm("reports.view"))])
+@router.post(
+    "/exports/pdf",
+    status_code=202,
+    dependencies=[Depends(require_perm(*LIST_PDF_EXPORT_PERMISSIONS))],
+)
+async def create_list_pdf_export(
+    body: ReportExportRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    if body.format != "pdf" or not body.pdf_html:
+        raise HTTPException(400, detail="A rendered PDF document is required")
+    max_payload_bytes = config.get().pdf_max_payload_bytes
+    if len(body.pdf_html.encode("utf-8")) > max_payload_bytes:
+        raise HTTPException(
+            413,
+            detail=f"PDF export exceeds the {max_payload_bytes // (1024 * 1024)} MB limit.",
+        )
+    if body.report_api == SALES_INVOICE_PDF_EXPORT_API:
+        if not body.columns or len(body.params) > MAX_EXPORT_PARAMS:
+            raise HTTPException(400, detail="Invoice PDF export filters and columns are required")
+        allowed_invoice_columns = {
+            "number", "customerName", "date", "total", "paidAmount", "balanceDue", "status",
+        }
+        if any(column.key not in allowed_invoice_columns for column in body.columns):
+            raise HTTPException(400, detail="Invoice PDF export contains an unsupported column")
+    elif body.report_api not in (None, LIST_PDF_EXPORT_API):
+        raise HTTPException(400, detail="This endpoint only accepts list PDF exports")
+    return await _create_export_job(db, user, body)
+
+
+@router.get(
+    "/exports/{job_id}",
+    dependencies=[Depends(require_perm("reports.view"))],
+)
 async def get_report_export(
     job_id: str,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
     job = await _get_owned_export_job(db, job_id, user)
+    if job.report_api in (LIST_PDF_EXPORT_API, SALES_INVOICE_PDF_EXPORT_API):
+        raise HTTPException(404, detail="Report export job not found")
     return _export_status_response(job)
+
+
+@router.get(
+    "/exports/pdf/{job_id}",
+    dependencies=[Depends(require_perm(*LIST_PDF_EXPORT_PERMISSIONS))],
+)
+async def get_list_pdf_export(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    job = await _get_owned_export_job(db, job_id, user)
+    if job.report_api not in (LIST_PDF_EXPORT_API, SALES_INVOICE_PDF_EXPORT_API):
+        raise HTTPException(404, detail="PDF export job not found")
+    return _export_status_response(job)
+
+
+async def _download_export_job(job: ReportExportJob) -> Response:
+    if job.status != "completed":
+        raise HTTPException(409, detail="The export is not ready yet")
+    if job.file_data is None or (job.expires_at and job.expires_at < datetime.utcnow()):
+        raise HTTPException(410, detail="This export has expired. Please export again.")
+    is_pdf = job.filename.lower().endswith(".pdf")
+    media_type = PDF_MEDIA_TYPE if is_pdf else XLSX_MEDIA_TYPE
+    disposition = f"attachment; filename=\"{job.filename}\"; filename*=UTF-8''{quote(job.filename)}"
+    return Response(
+        content=bytes(job.file_data),
+        media_type=media_type,
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @router.get("/exports/{job_id}/download", dependencies=[Depends(require_perm("reports.view"))])
@@ -5215,13 +5304,21 @@ async def download_report_export(
     user: User = Depends(current_user),
 ):
     job = await _get_owned_export_job(db, job_id, user)
-    if job.status != "completed":
-        raise HTTPException(409, detail="The export is not ready yet")
-    if job.file_data is None or (job.expires_at and job.expires_at < datetime.utcnow()):
-        raise HTTPException(410, detail="This export has expired. Please export again.")
-    disposition = f"attachment; filename=\"report.xlsx\"; filename*=UTF-8''{quote(job.filename)}"
-    return Response(
-        content=bytes(job.file_data),
-        media_type=XLSX_MEDIA_TYPE,
-        headers={"Content-Disposition": disposition},
-    )
+    if job.report_api in (LIST_PDF_EXPORT_API, SALES_INVOICE_PDF_EXPORT_API):
+        raise HTTPException(404, detail="Report export job not found")
+    return await _download_export_job(job)
+
+
+@router.get(
+    "/exports/pdf/{job_id}/download",
+    dependencies=[Depends(require_perm(*LIST_PDF_EXPORT_PERMISSIONS))],
+)
+async def download_list_pdf_export(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    job = await _get_owned_export_job(db, job_id, user)
+    if job.report_api not in (LIST_PDF_EXPORT_API, SALES_INVOICE_PDF_EXPORT_API):
+        raise HTTPException(404, detail="PDF export job not found")
+    return await _download_export_job(job)

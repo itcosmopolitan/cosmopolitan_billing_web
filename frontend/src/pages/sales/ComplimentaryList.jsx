@@ -254,7 +254,7 @@ export default function ComplimentaryList({ toolbarActions, refreshKey = 0, bran
           setSkip(0)
           setSearch(v)
         }}
-        searchPlaceholder="Search complimentary #, customer…"
+        searchPlaceholder="Search by complimentary number or customer name…"
         toolbarActions={toolbarActions}
         fields={FILTER_FIELDS}
         reasonOptions={reasonOptions}
