@@ -48,6 +48,8 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
     base.homePage = base.homePage || base.homepage || base.website || org.website || org.homePage || ''
     base.email = base.email || base.emailAddress || base.email_address || org.email || ''
     base.phone = base.phone || base.tel || base.phoneNo || base.phone_no || org.phone || ''
+    base.organizationEmail = org.email || ''
+    base.organizationPhone = org.phone || ''
 
     return base
   }, [branch, orgProfile])

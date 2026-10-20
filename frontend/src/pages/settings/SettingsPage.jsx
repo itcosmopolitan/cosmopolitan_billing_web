@@ -404,6 +404,10 @@ export default function SettingsPage() {
               <FormGroup label="Child Counter Name" required>
                 <input className="form-input" value={counter.name || ''} onChange={e => onChange(index, 'name', e.target.value)} placeholder="e.g. Shop 01 Male'" />
               </FormGroup>
+              <FormRow>
+                <FormGroup label="Phone"><input className="form-input" value={counter.phone || ''} onChange={e => onChange(index, 'phone', e.target.value)} placeholder="Counter phone number"/></FormGroup>
+                <FormGroup label="Email"><input className="form-input" type="email" value={counter.email || ''} onChange={e => onChange(index, 'email', e.target.value)} placeholder="Counter email"/></FormGroup>
+              </FormRow>
               {renderBranchAddressFields(counter, (key, value) => onChange(index, key, value))}
             </div>
           ))}
@@ -1140,13 +1144,13 @@ export default function SettingsPage() {
               onToggle: e => setBranchForm(form => ({
                 ...form,
                 hasChildCounters: e.target.checked,
-                childCounters: e.target.checked && !form.childCounters.length ? [{ name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] : form.childCounters,
+                childCounters: e.target.checked && !form.childCounters.length ? [{ name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] : form.childCounters,
               })),
               onChange: (index, key, value) => setBranchForm(form => ({
                 ...form,
                 childCounters: form.childCounters.map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
               })),
-              onAdd: () => setBranchForm(form => ({ ...form, childCounters: [...form.childCounters, { name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
+              onAdd: () => setBranchForm(form => ({ ...form, childCounters: [...form.childCounters, { name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
               onRemove: index => setBranchForm(form => ({ ...form, childCounters: form.childCounters.filter((_, i) => i !== index) })),
             })}
             <FormGroup label="Inventory">
@@ -1178,14 +1182,14 @@ export default function SettingsPage() {
                   ...form,
                   has_child_counters: e.target.checked,
                   child_counters: e.target.checked && !(form.child_counters || []).length
-                    ? [{ name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }]
+                    ? [{ name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }]
                     : (form.child_counters || []),
                 })),
                 onChange: (index, key, value) => setEditBranchForm(form => ({
                   ...form,
                   child_counters: (form.child_counters || []).map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
                 })),
-                onAdd: () => setEditBranchForm(form => ({ ...form, child_counters: [...(form.child_counters || []), { name:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
+                onAdd: () => setEditBranchForm(form => ({ ...form, child_counters: [...(form.child_counters || []), { name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
                 onRemove: index => setEditBranchForm(form => ({ ...form, child_counters: (form.child_counters || []).filter((_, i) => i !== index) })),
               })}
               <FormGroup label="Inventory">

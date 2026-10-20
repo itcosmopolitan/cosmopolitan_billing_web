@@ -65,6 +65,8 @@ def _build_branch_code(name: str, existing_codes: Optional[list[str]] = None, ex
 class ChildCounterIn(BaseModel):
     id: Optional[str] = None
     name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
     street1: Optional[str] = None
     street2: Optional[str] = None
     street3: Optional[str] = None

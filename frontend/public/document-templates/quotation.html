@@ -212,6 +212,9 @@
     const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
     const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
     const branchCountry = branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'
+    const addressLines = branch.invoiceAddressUsesCounter
+      ? (Array.isArray(branch.invoiceAddressLines) ? branch.invoiceAddressLines : [])
+      : [`${branchStreet2}, ${branchStreet3}, ${branchCountry}`]
     const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
     const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
     const branchTel = phoneParts?.[1] || branchPhone
@@ -237,7 +240,7 @@
           </td>
           <td class="company-info" style="width:44%;">
             <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
-            <div class="company-line">${escapeHtml(`${branchStreet2}, ${branchStreet3}, ${branchCountry}`)}</div>
+            ${addressLines.map((line) => `<div class="company-line">${escapeHtml(line)}</div>`).join('')}
             <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
             <div class="company-line">${escapeHtml(`E : ${branchEmail}, TIN : ${branchTin}`)}</div>
           </td>

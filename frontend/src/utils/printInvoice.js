@@ -1,6 +1,6 @@
 import amountToWords from '@/utils/amountToWords'
 import { calcInvoiceSummary } from '@/utils/taxCalc'
-import { childCounterInvoiceAddress } from '@/utils/address'
+import { childCounterForDocument, childCounterInvoiceAddress } from '@/utils/address'
 
 function withCashTender(sale) {
   if (!sale) return sale
@@ -127,7 +127,8 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
 
   const branchMerged = { ...(branch || {}) }
   const counterAddress = childCounterInvoiceAddress(branchMerged, fullSale)
-  if (documentType === 'Tax Invoice' && counterAddress !== null) {
+  const counter = childCounterForDocument(branchMerged, fullSale)
+  if (counterAddress !== null) {
     branchMerged.invoiceAddressUsesCounter = true
     branchMerged.invoiceAddressLines = counterAddress
   }
@@ -135,8 +136,15 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
     branchMerged.gstin = branchMerged.gstin || org.gstin || org.gstin
     branchMerged.website = branchMerged.website || org.website
     branchMerged.homePage = branchMerged.homePage || org.website || org.homePage
-    branchMerged.email = branchMerged.email || org.email
-    branchMerged.phone = branchMerged.phone || org.phone || ''
+    branchMerged.email = counter
+      ? counter.email || org.email || ''
+      : branchMerged.email || org.email || ''
+    branchMerged.phone = counter
+      ? counter.phone || org.phone || ''
+      : branchMerged.phone || org.phone || ''
+  } else if (counter) {
+    branchMerged.email = counter.email || ''
+    branchMerged.phone = counter.phone || ''
   }
 
   const totalInWords = Array.isArray(fullSale?.items) && fullSale.items.length > 0
@@ -223,8 +231,18 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
 
   const org = await orgPromise
   const branchMerged = { ...(branch || {}) }
-  branchMerged.email = branchMerged.email || branchMerged.emailAddress || branchMerged.email_address || org?.email || ''
-  branchMerged.phone = branchMerged.phone || org?.phone || ''
+  const counter = childCounterForDocument(branchMerged, sale)
+  const counterAddress = childCounterInvoiceAddress(branchMerged, sale)
+  if (counterAddress !== null) {
+    branchMerged.invoiceAddressUsesCounter = true
+    branchMerged.invoiceAddressLines = counterAddress
+  }
+  branchMerged.email = counter
+    ? counter.email || org?.email || ''
+    : branchMerged.email || branchMerged.emailAddress || branchMerged.email_address || org?.email || ''
+  branchMerged.phone = counter
+    ? counter.phone || org?.phone || ''
+    : branchMerged.phone || org?.phone || ''
   branchMerged.website = branchMerged.website || org?.website || ''
   branchMerged.gstin = branchMerged.gstin || org?.gstin || ''
 
@@ -258,12 +276,25 @@ export async function prepareQuotePayload(quote, branch) {
   const org = await orgPromise
 
   const branchMerged = { ...(branch || {}) }
+  const counterAddress = childCounterInvoiceAddress(branchMerged, fullQuote)
+  const counter = childCounterForDocument(branchMerged, fullQuote)
+  if (counterAddress !== null) {
+    branchMerged.invoiceAddressUsesCounter = true
+    branchMerged.invoiceAddressLines = counterAddress
+  }
   if (org) {
     branchMerged.gstin = branchMerged.gstin || org.gstin || org.gstin
     branchMerged.website = branchMerged.website || org.website
     branchMerged.homePage = branchMerged.homePage || org.website || org.homePage
-    branchMerged.email = branchMerged.email || org.email
-    branchMerged.phone = branchMerged.phone || org.phone || ''
+    branchMerged.email = counter
+      ? counter.email || org.email || ''
+      : branchMerged.email || org.email || ''
+    branchMerged.phone = counter
+      ? counter.phone || org.phone || ''
+      : branchMerged.phone || org.phone || ''
+  } else if (counter) {
+    branchMerged.email = counter.email || ''
+    branchMerged.phone = counter.phone || ''
   }
 
   const quoteToSend = {

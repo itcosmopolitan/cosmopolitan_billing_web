@@ -29,7 +29,11 @@ def test_branch_create_and_serializer_keep_child_counter_addresses():
         code="SM",
         email="male@example.com",
         has_child_counters=True,
-        child_counters=child_counters,
+        child_counters=[{
+            **child_counters[0],
+            "phone": "+960 1234567",
+            "email": "counter@example.com",
+        }],
     )
     branch = SimpleNamespace(
         id="branch-1",
@@ -55,7 +59,8 @@ def test_branch_create_and_serializer_keep_child_counter_addresses():
 
     assert serialized["has_child_counters"] is True
     assert serialized["email"] == "male@example.com"
-    assert serialized["child_counters"][0] | {"id": None} == child_counters[0] | {"id": None}
+    assert serialized["child_counters"][0]["phone"] == "+960 1234567"
+    assert serialized["child_counters"][0]["email"] == "counter@example.com"
     assert serialized["child_counters"][0]["id"]
 
 

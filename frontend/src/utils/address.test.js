@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { childCounterInvoiceAddress } from './address'
+import { childCounterForDocument, childCounterInvoiceAddress } from './address'
 
 describe('childCounterInvoiceAddress', () => {
   const branch = {
@@ -28,5 +28,20 @@ describe('childCounterInvoiceAddress', () => {
 
   it('does not fall back to a branch address when the saved counter is missing', () => {
     expect(childCounterInvoiceAddress(branch, { child_counter_id: 'removed-counter' })).toEqual([])
+  })
+
+  it('resolves the selected counter contact details', () => {
+    const branchWithContacts = {
+      child_counters: [{
+        id: 'counter-1',
+        name: 'Shop 01 Male',
+        phone: '+960 1234567',
+        email: 'counter@example.com',
+      }],
+    }
+    expect(childCounterForDocument(branchWithContacts, { child_counter_id: 'counter-1' })).toMatchObject({
+      phone: '+960 1234567',
+      email: 'counter@example.com',
+    })
   })
 })

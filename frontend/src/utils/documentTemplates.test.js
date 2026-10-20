@@ -160,14 +160,20 @@ describe('quotation template', () => {
         quote: {
           id: 'quote-2',
           number: 'QT-0002',
+          child_counter_id: 'counter-1',
           items: [{ name: 'Sugar', qty: 1, price: 10 }],
         },
-        branch: { email: 'quotes.south@example.com' },
+        branch: {
+          email: 'quotes.south@example.com',
+          invoiceAddressUsesCounter: true,
+          invoiceAddressLines: ['Counter street', 'Male, Maldives'],
+        },
       },
     })
     await settle()
 
     expect(window.document.querySelector('.company-info').textContent).toContain('quotes.south@example.com')
+    expect(window.document.querySelector('.company-info').textContent).toContain('Counter street')
   })
 
   it('ignores render messages from other origins', async () => {

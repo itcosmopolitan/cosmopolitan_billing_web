@@ -148,6 +148,52 @@ describe('document email fallback', () => {
     expect(fallbackInvoice.branch.email).toBe('org@example.com')
     expect(quote.branch.email).toBe('org@example.com')
   })
+
+  it('uses selected counter contacts and address ahead of branch contacts', async () => {
+    vi.stubGlobal('window', { localStorage: { getItem: () => null } })
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ email: 'org@example.com', phone: 'org-phone' }),
+    })))
+
+    const payload = await prepareInvoicePayload({
+      number: 'INV-COUNTER',
+      child_counter_id: 'counter-1',
+      items: [{ name: 'Item', qty: 1, price: 10 }],
+    }, {
+      email: 'branch@example.com',
+      phone: 'branch-phone',
+      child_counters: [{
+        id: 'counter-1',
+        email: 'counter@example.com',
+        phone: 'counter-phone',
+        street1: 'Counter street',
+        city: 'Male',
+        country: 'Maldives',
+      }],
+    }, { fetchSale: false })
+
+    expect(payload.branch).toMatchObject({
+      email: 'counter@example.com',
+      phone: 'counter-phone',
+      invoiceAddressUsesCounter: true,
+      invoiceAddressLines: ['Counter street', 'Male, Maldives'],
+    })
+
+    const fallbackPayload = await prepareInvoicePayload({
+      number: 'INV-COUNTER-FALLBACK',
+      child_counter_id: 'counter-1',
+      items: [{ name: 'Item', qty: 1, price: 10 }],
+    }, {
+      email: 'branch@example.com',
+      phone: 'branch-phone',
+      child_counters: [{ id: 'counter-1' }],
+    }, { fetchSale: false })
+    expect(fallbackPayload.branch).toMatchObject({
+      email: 'org@example.com',
+      phone: 'org-phone',
+    })
+  })
 })
 
 describe('prepareInvoicePayload for Purchase Orders', () => {

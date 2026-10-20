@@ -2,7 +2,7 @@ import { useRef, forwardRef, useImperativeHandle, useEffect } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { useInvoiceConfig } from '@/utils/invoiceConfig'
 import { formatSettlementLabel } from '@/utils/storeCredit'
-import { childCounterInvoiceAddress } from '@/utils/address'
+import { childCounterForDocument, childCounterInvoiceAddress } from '@/utils/address'
 import {
   calcInvoiceSummary,
   displayExclusiveUnitRate,
@@ -25,12 +25,17 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
   const shopName = branch?.name || 'C.Shop'
   const branchLabel = branch?.branchLabel || branch?.name || 'Shop 1 / Male\''
   const counterAddress = childCounterInvoiceAddress(branch, sale)
+  const counter = childCounterForDocument(branch, sale)
   const address = counterAddress === null
     ? branch?.address || 'Boduthakurufanu Magu, Male'
     : counterAddress.join(', ')
-  const phone = branch?.phone || '304 3313'
-  const mobile = branch?.mobile || '738 4977'
-  const email = branch?.email || 'shop-male@cosmopolitan.com.mv'
+  const phone = counter
+    ? counter.phone || branch?.organizationPhone || ''
+    : branch?.phone || '304 3313'
+  const mobile = counter ? '' : branch?.mobile || '738 4977'
+  const email = counter
+    ? counter.email || branch?.organizationEmail || ''
+    : branch?.email || 'shop-male@cosmopolitan.com.mv'
   const gstNo = branch?.gst || '1017548GST501'
   const logoUrl = branch?.logo || branch?.logo_url
 

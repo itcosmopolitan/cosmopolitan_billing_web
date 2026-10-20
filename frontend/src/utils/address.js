@@ -5,16 +5,24 @@ export function composeAddress({ street1, street2, street3, city, stateProvince,
   return parts.join(', ')
 }
 
-export function childCounterInvoiceAddress(branch, sale) {
+export function childCounterForDocument(branch, sale) {
   const counterId = sale?.childCounterId || sale?.child_counter_id
   const counterName = sale?.childCounterName || sale?.child_counter_name
   if (!counterId && !counterName) return null
 
   const counters = branch?.child_counters || branch?.childCounters
-  const counter = (Array.isArray(counters) ? counters : []).find((candidate) => (
+  return (Array.isArray(counters) ? counters : []).find((candidate) => (
     (counterId && candidate.id === counterId) ||
     (!counterId && counterName && candidate.name === counterName)
-  ))
+  )) || null
+}
+
+export function childCounterInvoiceAddress(branch, sale) {
+  const counterId = sale?.childCounterId || sale?.child_counter_id
+  const counterName = sale?.childCounterName || sale?.child_counter_name
+  if (!counterId && !counterName) return null
+
+  const counter = childCounterForDocument(branch, sale)
   if (!counter) return []
 
   const street = [
