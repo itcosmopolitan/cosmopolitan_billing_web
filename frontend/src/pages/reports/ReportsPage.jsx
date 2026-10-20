@@ -13,7 +13,7 @@ import * as Icon from '@/components/ui/Icons'
 import ListFilters from '@/pages/sales/ListFilters'
 import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { useAppStore } from '@/store'
-import { fetchAllList, unwrapPaged } from '@/utils/pagination'
+import { unwrapPaged } from '@/utils/pagination'
 import { runExportJob } from '@/utils/exportJob'
 import { searchReportRows } from './reportSearch'
 import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
@@ -129,6 +129,26 @@ function computeColumnTotals(rows, columns, reportId) {
     hasAny = true
   }
   return hasAny ? totals : null
+}
+
+async function fetchAllReportRows(reportApi, params) {
+  const pageSize = 500
+  const concurrency = 4
+  const firstResponse = await reportApi({ ...params, skip: 0, limit: pageSize })
+  const firstPage = unwrapPaged(firstResponse?.data ?? firstResponse)
+  const pages = [firstPage.items]
+  const offsets = []
+  for (let skip = pageSize; skip < firstPage.total; skip += pageSize) {
+    offsets.push(skip)
+  }
+  for (let index = 0; index < offsets.length; index += concurrency) {
+    const batch = offsets.slice(index, index + concurrency)
+    const responses = await Promise.all(batch.map((skip) => reportApi({ ...params, skip, limit: pageSize })))
+    responses.forEach((response) => {
+      pages.push(unwrapPaged(response?.data ?? response).items)
+    })
+  }
+  return pages.flat()
 }
 
 const DRILLDOWN_PARAM_KEYS = [
@@ -1105,6 +1125,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const [limit, setLimit] = useState(() => (report.id === 'current-stock' ? 500 : 200))
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
+  const [footerRows, setFooterRows] = useState(null)
   const [loading, setLoading] = useState(false)
   const [runKey, setRunKey] = useState(Date.now())
   const [searchQuery, setSearchQuery] = useState('')
@@ -1167,11 +1188,12 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 
   const columnTotals = useMemo(() => {
-    if (NO_FOOTER_TOTALS_REPORTS.has(report.id) || loading || rows.length === 0) return null
-    return computeColumnTotals(rows, visibleColumns, report.id)
-  }, [report.id, loading, rows, visibleColumns])
+    const rowsForTotals = appliedSearchQuery ? searchRows : footerRows
+    if (NO_FOOTER_TOTALS_REPORTS.has(report.id) || loading || rowsForTotals === null || rowsForTotals.length === 0) return null
+    return computeColumnTotals(rowsForTotals, visibleColumns, report.id)
+  }, [report.id, loading, appliedSearchQuery, searchRows, footerRows, visibleColumns])
 
-  const totalsLabel = rows.length < total ? 'Page total' : 'Total'
+  const totalsLabel = 'Total'
   const totalsLabelColumnKey = useMemo(() => {
     if (!columnTotals) return null
     const firstNonSummable = visibleColumns.find((col) => !Object.prototype.hasOwnProperty.call(columnTotals, col.key))
@@ -1215,6 +1237,34 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     () => labelsForBranchIds(appliedFilters.branchIds, storeBranches) || urlFilters.branch_label || '',
     [appliedFilters.branchIds, storeBranches, urlFilters.branch_label],
   )
+
+  const reportFilterParams = useMemo(() => {
+    const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
+    const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
+    return {
+      branch_id: appliedBranchId || null,
+      date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
+      date_to: appliedFilters.dateTo,
+      ...drillFilters,
+      ...gstParamForApi(gstMode),
+      ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
+      ...(supportsChildCounterFilter && appliedFilters.childCounterId
+        ? { child_counter_id: appliedFilters.childCounterId }
+        : {}),
+    }
+  }, [
+    appliedBranchIdParam,
+    appliedFilters.dateFrom,
+    appliedFilters.dateTo,
+    appliedFilters.transactionTypes,
+    appliedFilters.childCounterId,
+    drillFilters,
+    gstMode,
+    isAsOfDate,
+    supportsChildCounterFilter,
+    txnTypeOptions,
+    urlFilters.branch_id,
+  ])
 
   // Default: all branches selected when URL has no branch filter.
   useEffect(() => {
@@ -1265,24 +1315,12 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       if (appliedSearchQuery) return
       setLoading(true)
       try {
-        // Prefer applied branch selection; fall back to URL for drill-down
-        // before draft/applied sync completes.
-        const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
-        const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
         const params = {
-          branch_id: appliedBranchId ? appliedBranchId : null,
-          date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
-          date_to: appliedFilters.dateTo,
+          ...reportFilterParams,
           sort_by: sortBy,
           sort_order: sortOrder,
           skip,
           limit: report.id === 'profit-loss' ? Math.max(limit, 100) : limit,
-          ...drillFilters,
-          ...gstParamForApi(gstMode),
-          ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
-          ...(supportsChildCounterFilter && appliedFilters.childCounterId
-            ? { child_counter_id: appliedFilters.childCounterId }
-            : {}),
         }
         const response = await reportsAPI[report.api](params)
         const payload = response?.data ?? response
@@ -1305,22 +1343,33 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   }, [
     appliedSearchQuery,
     report,
-    appliedBranchIdParam,
-    appliedFilters.dateFrom,
-    appliedFilters.dateTo,
-    appliedFilters.transactionTypes,
-    appliedFilters.childCounterId,
+    reportFilterParams,
     sortBy,
     sortOrder,
     skip,
     limit,
     runKey,
-    drillFilters,
-    gstMode,
-    urlFilters.branch_id,
-    txnTypeOptions,
-    supportsChildCounterFilter,
   ])
+
+  useEffect(() => {
+    if (appliedSearchQuery || NO_FOOTER_TOTALS_REPORTS.has(report.id)) {
+      setFooterRows(null)
+      return undefined
+    }
+    let cancelled = false
+    setFooterRows(null)
+    const fetchFooterRows = async () => {
+      try {
+        const allRows = await fetchAllReportRows(reportsAPI[report.api], reportFilterParams)
+        if (!cancelled) setFooterRows(allRows)
+      } catch (error) {
+        console.error(error)
+        if (!cancelled) setFooterRows(null)
+      }
+    }
+    fetchFooterRows()
+    return () => { cancelled = true }
+  }, [appliedSearchQuery, report, reportFilterParams, runKey])
 
   useEffect(() => {
     if (!appliedSearchQuery) {
@@ -1334,28 +1383,12 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setSearchRows(null)
     const fetchSearchRows = async () => {
       try {
-        const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
-        const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
         const params = {
-          branch_id: appliedBranchId || null,
-          date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
-          date_to: appliedFilters.dateTo,
+          ...reportFilterParams,
           sort_by: sortBy,
           sort_order: sortOrder,
-          ...drillFilters,
-          ...gstParamForApi(gstMode),
-          ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
-          ...(supportsChildCounterFilter && appliedFilters.childCounterId
-            ? { child_counter_id: appliedFilters.childCounterId }
-            : {}),
         }
-        const allRows = await fetchAllList(
-          async (pageParams) => {
-            const response = await reportsAPI[report.api](pageParams)
-            return unwrapPaged(response?.data ?? response)
-          },
-          params,
-        )
+        const allRows = await fetchAllReportRows(reportsAPI[report.api], params)
         if (!cancelled) setSearchRows(searchReportRows(allRows, appliedSearchQuery))
       } catch (error) {
         console.error(error)
@@ -1369,20 +1402,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   }, [
     appliedSearchQuery,
     report,
-    appliedBranchIdParam,
-    appliedFilters.dateFrom,
-    appliedFilters.dateTo,
-    appliedFilters.transactionTypes,
-    appliedFilters.childCounterId,
+    reportFilterParams,
     sortBy,
     sortOrder,
     runKey,
-    drillFilters,
-    urlFilters.branch_id,
-    txnTypeOptions,
-    isAsOfDate,
-    supportsChildCounterFilter,
-    gstMode,
   ])
 
   useEffect(() => {
