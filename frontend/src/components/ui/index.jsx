@@ -553,7 +553,7 @@ export { default as CustomizeColumnsModal, ColumnPrefsTrigger, ColumnPrefsSpacer
 //     onChange={setSubTab}
 //     options={[{id:'users', label:'Users'}, {id:'roles', label:'Roles'}]}
 //   />
-export function SegmentedToggle({ value, onChange, options, ariaLabel }) {
+export function SegmentedToggle({ value, onChange, options, ariaLabel, disabled = false }) {
   const opts = options.map((o) => (typeof o === 'string' ? { id: o, label: o } : o))
   return (
     <div
@@ -566,6 +566,7 @@ export function SegmentedToggle({ value, onChange, options, ariaLabel }) {
         background: 'var(--bg-raised)',
         border: '1px solid var(--border-default)',
         borderRadius: 999,
+        opacity: disabled ? 0.7 : 1,
       }}
     >
       {opts.map((o) => {
@@ -576,18 +577,22 @@ export function SegmentedToggle({ value, onChange, options, ariaLabel }) {
             type="button"
             role="tab"
             aria-selected={active}
-            onClick={() => onChange(o.id)}
+            disabled={disabled}
+            onClick={() => {
+              if (!disabled) onChange(o.id)
+            }}
             style={{
               padding: '6px 18px',
               border: 'none',
               borderRadius: 999,
-              cursor: 'pointer',
+              cursor: disabled ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit',
               fontSize: 13,
               fontWeight: 500,
               background: active ? 'var(--accent)' : 'transparent',
-              color: active ? '#fff' : 'var(--text-muted)',
+              color: active ? '#fff' : disabled ? 'var(--text-muted)' : 'var(--text-muted)',
               transition: 'background 0.15s, color 0.15s',
+              opacity: disabled && !active ? 0.65 : 1,
             }}
           >
             {o.label}

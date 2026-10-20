@@ -137,12 +137,6 @@ function buildChips(filters, fieldSet, {
   if (fieldSet.has('transactionType') && txnOpts.length && txnIds.length !== txnOpts.length) {
     chips.push({ key: 'transactionType', label: `Transaction type is ${namesForIds(txnIds, txnOpts)}` })
   }
-  if (fieldSet.has('gst') && filters.gstMode !== defaultGstMode) {
-    chips.push({
-      key: 'gst',
-      label: filters.gstMode === 'exclusive' ? 'Amounts excl. GST' : 'Amounts incl. GST',
-    })
-  }
   return chips
 }
 
@@ -177,7 +171,7 @@ export default function ListFilters({
   const [draft, setDraft] = useState(filters)
 
   const openDrawer = () => {
-    setDraft(filters)
+    setDraft({ ...filters, gstMode: defaultGstMode || 'exclusive' })
     setOpen(true)
   }
 
@@ -496,16 +490,6 @@ export default function ListFilters({
             </FormGroup>
           )}
 
-          {fieldSet.has('gst') && (
-            <FormGroup label="GST">
-              <SegmentedToggle
-                ariaLabel="Show amounts with or without GST"
-                value={draft.gstMode}
-                onChange={(mode) => setDraftField('gstMode', mode)}
-                options={gstOptions}
-              />
-            </FormGroup>
-          )}
 
         </div>
       </Drawer>

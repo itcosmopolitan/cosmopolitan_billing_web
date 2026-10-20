@@ -197,9 +197,41 @@ const GST_MODE_OPTIONS = [
 ]
 const DEFAULT_GST_MODE = 'exclusive'
 
-/** Sales-amount columns whose header changes when the GST toggle is Excl. GST. */
-const GST_EXCL_SALES_LABEL_KEYS = new Set(['sales_value', 'sales_amount'])
-const GST_EXCL_SALES_LABEL = 'Sales Amount(MVR)\n(Excl. GST)'
+/** Sales-related columns whose header changes when the GST toggle is Excl. GST. */
+const GST_EXCL_SALES_LABEL_KEYS = new Set([
+  'gross_sales',
+  'discounts',
+  'net_sales',
+  'gross_returns',
+  'credited_amount',
+  'net_returns',
+  'taxable_amount',
+  'discount',
+  'net_amount',
+  'paid_amount',
+  'remaining_amount',
+  'sales_value',
+  'sales_amount',
+  'discount_amount',
+  'outstanding_amount',
+])
+const GST_EXCL_SALES_LABELS = {
+  gross_sales: 'Gross Sales (Excl. GST)',
+  discounts: 'Discounts (Excl. GST)',
+  net_sales: 'Net Sales (Excl. GST)',
+  gross_returns: 'Gross Returns (Excl. GST)',
+  credited_amount: 'Credited Amount (Excl. GST)',
+  net_returns: 'Net Returns (Excl. GST)',
+  taxable_amount: 'Taxable Amount (Excl. GST)',
+  discount: 'Discount (Excl. GST)',
+  net_amount: 'Net Amount (Excl. GST)',
+  paid_amount: 'Payment Paid (Excl. GST)',
+  remaining_amount: 'Balance Due (Excl. GST)',
+  sales_value: 'Sales Value (Excl. GST)',
+  sales_amount: 'Sales Amount (Excl. GST)',
+  discount_amount: 'Discount Amount (Excl. GST)',
+  outstanding_amount: 'Outstanding Amount (Excl. GST)',
+}
 
 /** Reports where the GST toggle is hidden. */
 const GST_TOGGLE_HIDDEN_REPORTS = new Set([
@@ -651,7 +683,7 @@ function readLegacyFavoriteIds(user) {
 }
 
 function clearLegacyFavoriteIds(user) {
-  ;[
+  [
     `${LEGACY_FAVORITES_PREFIX}${user?.id || ''}`,
     `${LEGACY_FAVORITES_PREFIX}${user?.email || ''}`,
     `${LEGACY_FAVORITES_PREFIX}anon`,
@@ -1056,7 +1088,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const storeBranches = useAppStore((s) => s.branches)
   const [searchParams] = useSearchParams()
   const urlFilterKey = searchParams.toString()
-  const urlFilters = useMemo(() => readDrilldownFilters(searchParams), [searchParams, urlFilterKey])
+  const urlFilters = useMemo(() => readDrilldownFilters(searchParams), [searchParams])
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const defaultFrom = useMemo(() => {
     const from = new Date()
@@ -1179,11 +1211,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       .filter(Boolean)
   }, [columnPrefs.ready, columnPrefs.prefs, columnByKey, report.columns])
 
-  const headerColumns = useMemo(() => visibleColumns.map((col) => (
-    gstMode === 'exclusive' && GST_EXCL_SALES_LABEL_KEYS.has(col.key)
-      ? { ...col, label: GST_EXCL_SALES_LABEL }
-      : col
-  )), [gstMode, visibleColumns])
+  const headerColumns = useMemo(() => visibleColumns.map((col) => {
+    if (gstMode !== 'exclusive' || !GST_EXCL_SALES_LABEL_KEYS.has(col.key)) return col
+    return { ...col, label: GST_EXCL_SALES_LABELS[col.key] || col.label }
+  }), [gstMode, visibleColumns])
 
   const tableColSpan = visibleColumns.length + (columnPrefs.ready ? 1 : 0)
 

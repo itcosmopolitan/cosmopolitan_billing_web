@@ -40,8 +40,9 @@ export function SortableHeader({
           padding: 0,
         }}
       >
-        <span style={{ whiteSpace: 'pre-line' }}>{label}</span>
-        {active && <span aria-hidden="true">{arrow}</span>}
+        {active && align === 'right' && <span aria-hidden="true">{arrow}</span>}
+        <span style={{ whiteSpace: 'pre-line', textAlign: align === 'right' ? 'right' : 'left' }}>{label}</span>
+        {active && align !== 'right' && <span aria-hidden="true">{arrow}</span>}
       </button>
     </th>
   )
