@@ -226,6 +226,7 @@
     const branchTel = phoneParts?.[1] || branchPhone
     const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
     const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
+    const branchEmail = branch.email || branch.emailAddress || branch.email_address || 'info@cosmopolitan.com.mv'
     const defaultAddress = `${branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'}, ${branch.street3 || branch.street_3 || "Hulhumale'"}, ${branch.country || branch.country_name || branch.countryName || 'Republic of Maldives'}`
     const addressLines = useCounterAddress && branch.invoiceAddressUsesCounter
       ? (Array.isArray(branch.invoiceAddressLines) ? branch.invoiceAddressLines : [])
@@ -251,7 +252,7 @@
             <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
             ${addressLines.map((line) => `<div class="company-line">${escapeHtml(line)}</div>`).join('')}
             <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
-            <div class="company-line">${escapeHtml(`E : info@cosmopolitan.com.mv, TIN : ${branchTin}`)}</div>
+            <div class="company-line">${escapeHtml(`E : ${branchEmail}, TIN : ${branchTin}`)}</div>
           </td>
           <td class="badge-cell" style="width:26%;">${badgeHtml}</td>
         </tr>
@@ -545,8 +546,8 @@
     const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no ||
       organisation.phone || ''
     const salePhone = sale.phoneNo || sale.phone_no || ''
-    const email = sale.email ||
-      branch.email || branch.emailAddress || branch.email_address ||
+    const email = sale.email || ''
+    const branchEmail = branch.email || branch.emailAddress || branch.email_address ||
       organisation.email || ''
     const website = sale.website || sale.homePage || sale.homepage ||
       branch.website || branch.homePage || branch.homepage || branch.url ||
@@ -568,7 +569,7 @@
       gst: branchGst,
       gstNo: branchGst,
       gst_no: branchGst,
-      email,
+      email: branchEmail,
     })
 
     Object.assign(sale, {

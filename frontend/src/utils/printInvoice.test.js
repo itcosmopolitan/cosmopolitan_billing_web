@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearOrganisationCache, loadOrganisation, prepareInvoicePayload, prepareStockTransferPayload } from './printInvoice'
+import { clearOrganisationCache, loadOrganisation, prepareInvoicePayload, prepareQuotePayload, prepareStockTransferPayload } from './printInvoice'
 
 afterEach(() => {
   clearOrganisationCache()
@@ -113,6 +113,43 @@ describe('prepareInvoicePayload detail loading', () => {
   })
 })
 
+describe('document email fallback', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('prefers branch email and falls back to the organisation email', async () => {
+    vi.stubGlobal('window', { localStorage: { getItem: () => null } })
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ email: 'org@example.com' }),
+    })))
+
+    const invoice = await prepareInvoicePayload(
+      { number: 'INV-1', items: [{ name: 'Item', qty: 1, price: 10 }] },
+      { email: 'branch@example.com' },
+      { fetchSale: false },
+    )
+    const fallbackInvoice = await prepareInvoicePayload(
+      { number: 'INV-2', items: [{ name: 'Item', qty: 1, price: 10 }] },
+      {},
+      { fetchSale: false },
+    )
+    const quote = await prepareQuotePayload({
+      number: 'QT-1',
+      customerAddress: 'Customer address',
+      customerName: 'Customer',
+      customerPhone: '123',
+      total: 10,
+      items: [{ name: 'Item', qty: 1, price: 10 }],
+    }, {})
+
+    expect(invoice.branch.email).toBe('branch@example.com')
+    expect(fallbackInvoice.branch.email).toBe('org@example.com')
+    expect(quote.branch.email).toBe('org@example.com')
+  })
+})
+
 describe('prepareInvoicePayload for Purchase Orders', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -187,6 +224,9 @@ describe('prepareInvoicePayload for Purchase Orders', () => {
         if (url === '/api/v1/transfers/transfer-1') {
           return { ok: true, json: async () => fullTransfer }
         }
+        if (url === '/api/v1/settings/organisation') {
+          return { ok: true, json: async () => ({ email: 'org@example.com' }) }
+        }
         throw new Error(`Unexpected fetch URL: ${url}`)
       })
       vi.stubGlobal('window', { localStorage: { getItem: () => null } })
@@ -197,7 +237,7 @@ describe('prepareInvoicePayload for Purchase Orders', () => {
 
       expect(fetch).toHaveBeenCalledWith('/api/v1/transfers/transfer-1', expect.any(Object))
       expect(payload.documentType).toBe('Stock Transfer')
-      expect(payload.branch).toBe(branch)
+      expect(payload.branch).toMatchObject({ ...branch, email: 'org@example.com' })
       expect(payload.sale).toMatchObject({
         number: 'TR-0001',
         from_branch_name: 'North',

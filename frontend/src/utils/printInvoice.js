@@ -201,6 +201,7 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
   const authToken = window.localStorage.getItem('retailos_token')
   const headers = { Accept: 'application/json' }
   if (authToken) headers.Authorization = `Bearer ${authToken}`
+  const orgPromise = loadOrganisation(headers)
   const response = await fetch(`/api/v1/transfers/${encodeURIComponent(transfer.id)}`, { headers })
   if (!response.ok) {
     throw new Error(`Failed to load stock transfer (${response.status}).`)
@@ -220,7 +221,14 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
     })),
   }
 
-  return { sale, branch: branch || {}, documentType: 'Stock Transfer' }
+  const org = await orgPromise
+  const branchMerged = { ...(branch || {}) }
+  branchMerged.email = branchMerged.email || branchMerged.emailAddress || branchMerged.email_address || org?.email || ''
+  branchMerged.phone = branchMerged.phone || org?.phone || ''
+  branchMerged.website = branchMerged.website || org?.website || ''
+  branchMerged.gstin = branchMerged.gstin || org?.gstin || ''
+
+  return { sale, branch: branchMerged, documentType: 'Stock Transfer' }
 }
 
 export async function prepareQuotePayload(quote, branch) {

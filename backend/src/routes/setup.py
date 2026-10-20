@@ -74,6 +74,7 @@ class SetupRequest(BaseModel):
     organizationWebsite: Optional[str] = Field(None, max_length=200)
     branchName: str = Field(..., min_length=1, max_length=200)
     branchPhone: Optional[str] = Field(None, max_length=32)
+    branchEmail: Optional[str] = Field(None, max_length=120)
     branchAddress: Optional[str] = None
     adminName: str = Field(..., min_length=1, max_length=200)
     adminEmail: EmailStr
@@ -134,6 +135,7 @@ async def initialize_setup(data: SetupRequest, db: AsyncSession = Depends(get_db
         name=branch_name,
         code=branch_code,
         phone=(data.branchPhone or "").strip() or None,
+        email=(data.branchEmail or "").strip() or None,
         address=(data.branchAddress or "").strip() or None,
         active=True,
     )

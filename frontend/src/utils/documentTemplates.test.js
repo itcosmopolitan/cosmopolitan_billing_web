@@ -101,6 +101,25 @@ describe('invoice template', () => {
     expect(output.textContent).toContain('Transfer item')
   })
 
+  it('renders the branch email in the company header', async () => {
+    const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
+    postMessage(window, {
+      type: 'renderInvoice',
+      payload: {
+        documentType: 'Purchase Bill',
+        branch: { email: 'billing.north@example.com' },
+        sale: {
+          id: 'purchase-1',
+          number: 'PB-0001',
+          items: [{ name: 'Rice', qty: 1, rate: 100 }],
+        },
+      },
+    })
+    await settle()
+
+    expect(window.document.querySelector('.company-info').textContent).toContain('billing.north@example.com')
+  })
+
   it('ignores render messages from other origins', async () => {
     const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
     postMessage(window, {
@@ -131,6 +150,24 @@ describe('quotation template', () => {
 
     expect(window.document.title).toBe('Quote QT-0001')
     expect(window.document.getElementById('document').textContent).toContain('Sugar 1kg')
+  })
+
+  it('renders the branch email in the company header', async () => {
+    const window = loadTemplate(quoteHtml, '/document-templates/quotation.html')
+    postMessage(window, {
+      type: 'renderQuote',
+      payload: {
+        quote: {
+          id: 'quote-2',
+          number: 'QT-0002',
+          items: [{ name: 'Sugar', qty: 1, price: 10 }],
+        },
+        branch: { email: 'quotes.south@example.com' },
+      },
+    })
+    await settle()
+
+    expect(window.document.querySelector('.company-info').textContent).toContain('quotes.south@example.com')
   })
 
   it('ignores render messages from other origins', async () => {

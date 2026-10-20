@@ -79,6 +79,7 @@ class BranchCreate(BaseModel):
     name: str
     code: str
     phone: Optional[str] = None
+    email: Optional[str] = None
     address: Optional[str] = None
     street1: Optional[str] = None
     street2: Optional[str] = None
@@ -99,6 +100,7 @@ class BranchUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
     phone: Optional[str] = None
+    email: Optional[str] = None
     address: Optional[str] = None
     street1: Optional[str] = None
     street2: Optional[str] = None
@@ -180,7 +182,7 @@ async def create_branch(
     code = _build_branch_code(data.name, existing_codes=existing_codes)
     branch_id = str(uuid.uuid4())
     b = Branch(id=branch_id, name=data.name, code=code,
-               phone=data.phone, address=data.address,
+               phone=data.phone, email=data.email, address=data.address,
                street1=data.street1, street2=data.street2, street3=data.street3,
                city=data.city, state_province=data.state_province,
                country=data.country, postal_code=data.postal_code,
@@ -224,6 +226,7 @@ async def create_branch(
             "name": b.name,
             "code": b.code,
             "phone": b.phone,
+            "email": b.email,
             "address": b.address,
             "street1": b.street1,
             "street2": b.street2,

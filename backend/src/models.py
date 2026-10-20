@@ -255,6 +255,7 @@ class Branch(Base):
     name       = Column(String, nullable=False)
     code       = Column(String, nullable=False, unique=True)
     phone      = Column(String)
+    email      = Column(String)
     address    = Column(Text)
     street1         = Column(String(255))
     street2         = Column(String(255))

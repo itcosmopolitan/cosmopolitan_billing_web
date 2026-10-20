@@ -98,6 +98,7 @@ def serialize_branch(b) -> dict:
         "name": b.name,
         "code": b.code,
         "phone": b.phone,
+        "email": getattr(b, "email", None),
         "address": b.address,
         "street1": b.street1,
         "street2": b.street2,

@@ -237,6 +237,11 @@ export default function SetupPage() {
                     </div>
 
                     <div className="form-group" style={{ marginTop: 12 }}>
+                      <label className="form-label">Branch email</label>
+                      <input className="form-input" type="email" name="branchEmail" value={form.branchEmail} onChange={handleChange} placeholder="branch@company.com" />
+                    </div>
+
+                    <div className="form-group" style={{ marginTop: 12 }}>
                       <label className="form-label">Branch address</label>
                       <input className="form-input" name="branchAddress" value={form.branchAddress} onChange={handleChange} placeholder="Street, city" />
                     </div>

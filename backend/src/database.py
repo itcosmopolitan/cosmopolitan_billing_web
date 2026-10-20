@@ -275,6 +275,7 @@ async def get_db():
 
 # (table, column, ddl_type) — ddl_type is what SQLite ALTER TABLE expects.
 _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
+    ("branches", "email", "VARCHAR"),
     ("users", "role_id", "VARCHAR"),
     # Force-password-change-on-first-login flag (added 2026-05-18 with the
     # admin Add User redesign). Existing users default to 0 (false) so the

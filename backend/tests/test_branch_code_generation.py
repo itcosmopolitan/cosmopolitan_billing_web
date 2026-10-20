@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from src.routes._serializers import serialize_branch
 from src.routes.branches import BranchCreate, _build_branch_code
+from src.routes.setup import SetupRequest
 
 
 def test_build_branch_code_uses_two_letters_from_branch_name():
@@ -26,6 +27,7 @@ def test_branch_create_and_serializer_keep_child_counter_addresses():
     payload = BranchCreate(
         name="Shop Male'",
         code="SM",
+        email="male@example.com",
         has_child_counters=True,
         child_counters=child_counters,
     )
@@ -34,6 +36,7 @@ def test_branch_create_and_serializer_keep_child_counter_addresses():
         name=payload.name,
         code=payload.code,
         phone=None,
+        email=payload.email,
         address="Main branch address",
         street1=None,
         street2=None,
@@ -51,6 +54,7 @@ def test_branch_create_and_serializer_keep_child_counter_addresses():
     serialized = serialize_branch(branch)
 
     assert serialized["has_child_counters"] is True
+    assert serialized["email"] == "male@example.com"
     assert serialized["child_counters"][0] | {"id": None} == child_counters[0] | {"id": None}
     assert serialized["child_counters"][0]["id"]
 
@@ -64,3 +68,15 @@ def test_legacy_child_counter_address_is_still_accepted():
     )
 
     assert payload.child_counters[0].address == "First street, Male'"
+
+
+def test_setup_request_accepts_branch_email():
+    payload = SetupRequest(
+        organizationName="Organization",
+        branchName="Male",
+        branchEmail="male@example.com",
+        adminName="Admin",
+        adminEmail="admin@example.com",
+    )
+
+    assert payload.branchEmail == "male@example.com"

@@ -95,7 +95,7 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [credentialsAcknowledged, setCredentialsAcknowledged] = useState(false)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', email:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -736,6 +736,7 @@ export default function SettingsPage() {
         name: branchForm.name,
         code: branchForm.code,
         phone: branchForm.phone,
+        email: branchForm.email,
         address: buildAddressString(branchForm),
         street1: branchForm.street1,
         street2: branchForm.street2,
@@ -782,6 +783,7 @@ export default function SettingsPage() {
         name: editBranchForm.name,
         code: editBranchForm.code,
         phone: editBranchForm.phone,
+        email: editBranchForm.email,
         address: buildAddressString(addressForm),
         street1: editBranchForm.street1,
         street2: editBranchForm.street2,
@@ -1122,6 +1124,7 @@ export default function SettingsPage() {
               <FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)} placeholder="Branch name"/></FormGroup>
               <FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)} placeholder="Phone number"/></FormGroup>
             </FormRow>
+            <FormGroup label="Email"><input className="form-input" type="email" value={branchForm.email} onChange={e=>pbf('email',e.target.value)} placeholder="Branch email"/></FormGroup>
             {!branchForm.hasChildCounters && renderBranchAddressFields(branchForm, pbf, {
               street1: 'street1',
               street2: 'street2',
@@ -1166,6 +1169,7 @@ export default function SettingsPage() {
                 <FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)} placeholder="Branch name"/></FormGroup>
                 <FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)} placeholder="Phone number"/></FormGroup>
               </FormRow>
+              <FormGroup label="Email"><input className="form-input" type="email" value={editBranchForm.email || ""} onChange={e => pbfEdit('email', e.target.value)} placeholder="Branch email"/></FormGroup>
               {!editBranchForm.has_child_counters && renderBranchAddressFields(editBranchForm, pbfEdit)}
               {renderChildCounterFields({
                 enabled: Boolean(editBranchForm.has_child_counters),
