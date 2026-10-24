@@ -1090,16 +1090,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const urlFilterKey = searchParams.toString()
   const urlFilters = useMemo(() => readDrilldownFilters(searchParams), [searchParams])
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const defaultFrom = useMemo(() => {
-    const from = new Date()
-    from.setDate(from.getDate() - 30)
-    return from.toISOString().slice(0, 10)
-  }, [])
   const isAsOfDate = Boolean(report.asOfDate)
-  const initialAsOf = searchParams.get('date_to') || today
-  const initialFrom = isAsOfDate
-    ? initialAsOf
-    : (searchParams.get('date_from') || defaultFrom)
+  const reportDateMode = report.dateFilter || (isAsOfDate ? 'asOf' : 'range')
+  const hasDateFilter = reportDateMode !== 'none'
+  const defaultFrom = useMemo(() => (hasDateFilter ? today : ''), [hasDateFilter, today])
+  const initialAsOf = hasDateFilter ? (searchParams.get('date_to') || today) : ''
+  const initialFrom = !hasDateFilter
+    ? ''
+    : (isAsOfDate ? initialAsOf : (searchParams.get('date_from') || today))
 
   const branchOptions = useMemo(
     () => (storeBranches || []).map((b) => ({ id: b.id, label: b.name || b.code || b.id })),
@@ -1272,16 +1270,20 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const reportFilterParams = useMemo(() => {
     const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
     const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
-    return {
+    const params = {
       branch_id: appliedBranchId || null,
-      date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
-      date_to: appliedFilters.dateTo,
       ...drillFilters,
       ...gstParamForApi(gstMode),
       ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
       ...(supportsChildCounterFilter && appliedFilters.childCounterId
         ? { child_counter_id: appliedFilters.childCounterId }
         : {}),
+    }
+    if (!hasDateFilter) return params
+    return {
+      ...params,
+      date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
+      date_to: appliedFilters.dateTo,
     }
   }, [
     appliedBranchIdParam,
@@ -1291,6 +1293,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     appliedFilters.childCounterId,
     drillFilters,
     gstMode,
+    hasDateFilter,
     isAsOfDate,
     supportsChildCounterFilter,
     txnTypeOptions,
@@ -1311,8 +1314,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     // Child URLs carry drill row filters in date_from/date_to/branch_*.
     // Parent URLs (including Back from child) carry only that report's own filters —
     // never inherit child-only drill dims like item_id / payment_mode.
-    const nextTo = urlFilters.date_to || today
-    const nextFrom = isAsOfDate ? nextTo : (urlFilters.date_from || defaultFrom)
+    const nextTo = hasDateFilter ? (urlFilters.date_to || today) : ''
+    const nextFrom = !hasDateFilter ? '' : (isAsOfDate ? nextTo : (urlFilters.date_from || defaultFrom))
     const urlBranchIds = parseBranchIds(urlFilters.branch_id)
     const nextBranches = urlBranchIds.length
       ? urlBranchIds
@@ -1338,7 +1341,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     // allBranchIds intentionally omitted: late branch hydration is handled below
     // so we don't wipe in-progress draft filter edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync from URL/report only
-  }, [report.id, report.defaultSort, report.asOfDate, urlFilterKey, defaultFrom, today])
+  }, [report.id, report.defaultSort, report.asOfDate, report.dateFilter, urlFilterKey, defaultFrom, hasDateFilter, today])
 
   useEffect(() => {
     let cancelled = false
@@ -1447,8 +1450,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
 
   const handleFiltersApply = (next) => {
     setSkip(0)
-    const nextTo = next.dateTo
-    const nextFrom = isAsOfDate ? nextTo : next.dateFrom
+    const nextTo = hasDateFilter ? next.dateTo : ''
+    const nextFrom = !hasDateFilter ? '' : (isAsOfDate ? nextTo : next.dateFrom)
     setAppliedFilters({
       dateFrom: nextFrom,
       dateTo: nextTo,
@@ -1470,8 +1473,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       return
     }
     setAppliedFilters({
-      dateFrom: isAsOfDate ? today : defaultFrom,
-      dateTo: today,
+      dateFrom: hasDateFilter ? (isAsOfDate ? today : today) : '',
+      dateTo: hasDateFilter ? today : '',
       branchIds: allBranchIds,
       transactionTypes: parseTxnTypeIds(null, txnTypeOptions),
       childCounterId: '',
@@ -1483,7 +1486,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setSkip(0)
     setAppliedFilters((prev) => {
       if (key === 'date' || key === 'asOf') {
-        return { ...prev, dateFrom: isAsOfDate ? today : defaultFrom, dateTo: today }
+        if (!hasDateFilter) return prev
+        return { ...prev, dateFrom: isAsOfDate ? today : today, dateTo: today }
       }
       if (key === 'branch') return { ...prev, branchIds: allBranchIds }
       if (key === 'childCounter') return { ...prev, childCounterId: '' }
@@ -1496,17 +1500,18 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const reportFilterFields = useMemo(() => {
     const fields = []
     if (!isDrilldown) {
-      fields.push(isAsOfDate ? 'asOf' : 'date', 'branch')
+      if (hasDateFilter) fields.push(isAsOfDate ? 'asOf' : 'date')
+      fields.push('branch')
       if (supportsChildCounterFilter) fields.push('childCounter')
     }
     if (txnTypeOptions.length) fields.push('transactionType')
     if (gstToggleVisible) fields.push('gst')
     return fields
-  }, [isDrilldown, isAsOfDate, supportsChildCounterFilter, txnTypeOptions, gstToggleVisible])
+  }, [isDrilldown, hasDateFilter, isAsOfDate, supportsChildCounterFilter, txnTypeOptions, gstToggleVisible])
 
   const defaultDateRange = useMemo(
-    () => ({ from: isAsOfDate ? today : defaultFrom, to: today }),
-    [isAsOfDate, today, defaultFrom],
+    () => (hasDateFilter ? { from: today, to: today } : null),
+    [hasDateFilter, today],
   )
 
   const handleSort = (key) => {
@@ -1525,23 +1530,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       toast.error('No data available to export.')
       return
     }
-    const fromLabel = formatDate(appliedFilters.dateFrom)
-    const toLabel = formatDate(appliedFilters.dateTo)
-    const dateRangeLabel = isAsOfDate
-      ? toLabel
-      : (fromLabel === toLabel ? fromLabel : `${fromLabel} – ${toLabel}`)
     const safeName = String(report.label || 'Report').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Report'
-    const stampFrom = isAsOfDate ? (appliedFilters.dateTo || 'as_of') : (appliedFilters.dateFrom || 'start')
-    const stampTo = appliedFilters.dateTo || 'end'
-    const filename = isAsOfDate
-      ? `${safeName.replace(/\s+/g, '_')}_as_of_${stampTo}.xlsx`
-      : `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`
     const appliedBranchId = appliedBranchIdParam || urlFilters.branch_id || ''
     const appliedTxnParam = txnParamForApi(appliedFilters.transactionTypes, txnTypeOptions)
     const params = {
       branch_id: appliedBranchId || null,
-      date_from: isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom,
-      date_to: appliedFilters.dateTo,
       sort_by: sortBy,
       sort_order: sortOrder,
       ...drillFilters,
@@ -1551,6 +1544,22 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         ? { child_counter_id: appliedFilters.childCounterId }
         : {}),
     }
+    if (hasDateFilter) {
+      params.date_from = isAsOfDate ? appliedFilters.dateTo : appliedFilters.dateFrom
+      params.date_to = appliedFilters.dateTo
+    }
+    const fromLabel = hasDateFilter ? formatDate(appliedFilters.dateFrom) : ''
+    const toLabel = hasDateFilter ? formatDate(appliedFilters.dateTo) : ''
+    const dateRangeLabel = !hasDateFilter
+      ? 'Current snapshot'
+      : (isAsOfDate ? toLabel : (fromLabel === toLabel ? fromLabel : `${fromLabel} – ${toLabel}`))
+    const stampFrom = hasDateFilter ? (isAsOfDate ? (appliedFilters.dateTo || 'as_of') : (appliedFilters.dateFrom || 'start')) : 'snapshot'
+    const stampTo = hasDateFilter ? (appliedFilters.dateTo || 'end') : 'snapshot'
+    const filename = !hasDateFilter
+      ? `${safeName.replace(/\s+/g, '_')}_snapshot.xlsx`
+      : (isAsOfDate
+        ? `${safeName.replace(/\s+/g, '_')}_as_of_${stampTo}.xlsx`
+        : `${safeName.replace(/\s+/g, '_')}_${stampFrom}_to_${stampTo}.xlsx`)
     const body = {
       report_api: report.api,
       params,
@@ -1562,7 +1571,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         summable: isSummableColumn(col, report.id),
       })),
       title: report.label || 'Report',
-      subtitle: isAsOfDate ? `As of: ${dateRangeLabel}` : `Date range: ${dateRangeLabel}`,
+      subtitle: !hasDateFilter ? 'Current snapshot' : (isAsOfDate ? `As of: ${dateRangeLabel}` : `Date range: ${dateRangeLabel}`),
       filename,
     }
 

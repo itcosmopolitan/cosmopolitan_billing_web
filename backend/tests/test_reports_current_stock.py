@@ -71,6 +71,19 @@ def _current_stock_column_keys() -> list[str]:
     raise AssertionError("current-stock report not found in catalog")
 
 
+def test_inventory_snapshot_reports_hide_date_range_filter():
+    report_ids = {
+        report["id"]
+        for category in REPORT_CATEGORIES
+        for report in category["reports"]
+    }
+    no_date_reports = {"current-stock", "low-stock", "out-of-stock", "expiry-batches"}
+    for report_id in sorted(no_date_reports):
+        report = next(report for category in REPORT_CATEGORIES for report in category["reports"] if report["id"] == report_id)
+        assert report.get("dateFilter") == "none", f"{report_id} should not show a date range"
+    assert report_ids.issuperset(no_date_reports)
+
+
 def test_current_stock_splits_stock_reserved_available():
     async def scenario():
         db = await _build_session()

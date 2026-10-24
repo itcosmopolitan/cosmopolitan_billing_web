@@ -34,6 +34,7 @@ def _report(
     detail_type: str | None = None,
     list_hidden: bool = False,
     as_of_date: bool = False,
+    date_filter: str = "range",
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": id,
@@ -48,6 +49,9 @@ def _report(
         out["listHidden"] = True
     if as_of_date:
         out["asOfDate"] = True
+        out["dateFilter"] = "asOf"
+    elif date_filter != "range":
+        out["dateFilter"] = date_filter
     return out
 
 
@@ -358,6 +362,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 "Current Stock",
                 api="currentStock",
                 default_sort="product_code",
+                date_filter="none",
                 columns=[
                     _col("product_code", "Product Code"),
                     _col("product_name", "Product Name"),
@@ -406,6 +411,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 "Low Stock",
                 api="lowStock",
                 default_sort="product_name",
+                date_filter="none",
                 columns=[
                     _col("product", "Product"),
                     _col("available_quantity", "Available Quantity", align="right", format="qty"),
@@ -418,6 +424,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 "Out of Stock",
                 api="outOfStock",
                 default_sort="product",
+                date_filter="none",
                 columns=[
                     _col("product", "Product"),
                     _col("category", "Category"),
@@ -483,6 +490,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 "Expired / Near Expiry",
                 api="expiryBatches",
                 default_sort="expiry_date",
+                date_filter="none",
                 columns=[
                     _col("product_code", "Product Code"),
                     _col("product", "Product"),
