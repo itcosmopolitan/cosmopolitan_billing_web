@@ -63,9 +63,9 @@ export default function QuoteFormPage({ mode = 'create' }) {
   })
 
   useEffect(() => {
-    if (isEdit && !can('invoices.edit') && !readOnly) {
+    if (isEdit && !can('quotations.edit', 'invoices.edit') && !readOnly) {
       navigate('/sales?tab=quotes', { replace: true })
-    } else if (!isEdit && !can('invoices.create')) {
+    } else if (!isEdit && !can('quotations.create', 'invoices.create')) {
       navigate('/sales?tab=quotes', { replace: true })
     }
   }, [can, navigate, isEdit, readOnly])

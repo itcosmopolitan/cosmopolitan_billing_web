@@ -123,7 +123,7 @@ export default function PurchaseTxnDetailPanel({
           <button type="button" className="btn btn-secondary" onClick={() => { onExportBill?.(detail); onClose?.() }}>
             Export Bill
           </button>
-          {detail?.status !== 'paid' && detail?.status !== 'cancelled' && (
+          {detail?.status !== 'paid' && detail?.status !== 'cancelled' && can('bills.edit', 'purchases.edit') && (
             <button type="button" className="btn btn-primary" onClick={() => { onRecordPayment?.(detail); onClose?.() }}>
               Record payment
             </button>
@@ -174,7 +174,7 @@ export default function PurchaseTxnDetailPanel({
               Edit
             </button>
           )}
-          {['confirmed', 'approved', 'partially_received'].includes(detail?.status) && can('purchases.create') && (
+          {['confirmed', 'approved', 'partially_received'].includes(detail?.status) && can('grns.create', 'purchases.create') && (
             <>
               <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/purchases/grns/new?fromPo=${detail.id}`) }}>
                 Receive stock
@@ -195,7 +195,7 @@ export default function PurchaseTxnDetailPanel({
           <button type="button" className="btn btn-secondary" onClick={() => { onExportGrn?.(detail); onClose?.() }}>
             Export GRN Receipt
           </button>
-          {detail?.status === 'received' && !detail?.convertedBillId && can('purchases.create') && (
+          {detail?.status === 'received' && !detail?.convertedBillId && can('bills.create', 'purchases.create') && (
             <button type="button" className="btn btn-primary" onClick={() => { onBillFromGrn?.(detail); onClose?.() }}>
               Create bill
             </button>
@@ -239,7 +239,7 @@ export default function PurchaseTxnDetailPanel({
         }
         : { description: 'No further action is needed for this bill.' }
     : kind === 'order'
-      ? ['confirmed', 'approved', 'partially_received'].includes(detail?.status) && can('purchases.create')
+      ? ['confirmed', 'approved', 'partially_received'].includes(detail?.status) && can('bills.create', 'purchases.create')
         ? {
           description: 'Convert this purchase order into a bill.',
           label: 'Convert to bill',
@@ -254,7 +254,7 @@ export default function PurchaseTxnDetailPanel({
           }
           : { description: 'No further action is available for this purchase order.' }
       : kind === 'grn'
-        ? detail?.status === 'received' && !detail?.convertedBillId && can('purchases.create')
+        ? detail?.status === 'received' && !detail?.convertedBillId && can('bills.create', 'purchases.create')
           ? {
             description: 'Create a purchase bill from the received goods.',
             label: 'Create bill',

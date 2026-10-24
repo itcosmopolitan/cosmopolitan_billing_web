@@ -23,7 +23,7 @@ export default function BillEditPage() {
   const pbf = (k, v) => setForm((b) => ({ ...b, [k]: v }))
 
   useEffect(() => {
-    if (!can('purchases.edit', 'purchases.create')) {
+    if (!can('bills.edit', 'bills.create', 'purchases.edit', 'purchases.create')) {
       navigate('/purchases', { replace: true })
     }
   }, [can, navigate])
@@ -50,8 +50,8 @@ export default function BillEditPage() {
           navigate('/purchases?tab=bills', { replace: true })
           return
         }
-        if (bill.status !== 'draft' && !can('purchases.edit')) {
-          toast.error('Editing this bill requires purchases.edit')
+        if (bill.status !== 'draft' && !can('bills.edit', 'purchases.edit')) {
+          toast.error('Editing this bill requires bills.edit')
           navigate('/purchases?tab=bills', { replace: true })
           return
         }

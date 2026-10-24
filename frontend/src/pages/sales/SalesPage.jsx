@@ -112,7 +112,17 @@ export default function SalesPage() {
   const returnColumnPrefs = useColumnPrefs('sales.returns')
   const paymentColumnPrefs = useColumnPrefs('sales.payments')
   const tabParam = searchParams.get('tab')
-  const tab = VALID_TABS.has(tabParam) ? tabParam : 'quotes'
+  const canViewTab = {
+    quotes: can('quotations.view', 'invoices.view'),
+    orders: can('sales_orders.view', 'invoices.view'),
+    invoices: can('invoices.view'),
+    returns: can('invoices.view'),
+    payments: can('invoices.view'),
+    complimentary: can('invoices.view'),
+  }
+  const availableTabs = TABS.filter((t) => canViewTab[t.id])
+  const requestedTab = VALID_TABS.has(tabParam) && canViewTab[tabParam] ? tabParam : null
+  const tab = requestedTab || availableTabs[0]?.id || 'quotes'
   const pageTitle = TABS.find((t) => t.id === tab)?.label || 'Invoices'
   const viewId = searchParams.get('view')
   const [search, setSearch]       = useState('')
@@ -987,10 +997,10 @@ export default function SalesPage() {
     if (tab === 'invoices' && can('invoices.create')) {
       return { label: '+ New Invoice', onClick: () => navigate('/sales/invoices/new') }
     }
-    if (tab === 'orders' && can('invoices.create')) {
+    if (tab === 'orders' && can('sales_orders.create', 'invoices.create')) {
       return { label: '+ New Sales Order', onClick: () => navigate('/sales/orders/new') }
     }
-    if (tab === 'quotes' && can('invoices.create')) {
+    if (tab === 'quotes' && can('quotations.create', 'invoices.create')) {
       return { label: '+ Create Quotation', onClick: () => navigate('/sales/quotations/new') }
     }
     if (tab === 'returns' && can('invoices.create')) {
@@ -1247,7 +1257,7 @@ export default function SalesPage() {
         {/* 2026-05-25: Delete N selected — appears only when the operator
             has ticked rows in the active tab. Single button serves all
             5 tabs; submitBulkDelete picks the right API based on `tab`. */}
-        {selectedIds.size > 0 && can('invoices.delete') && (
+        {selectedIds.size > 0 && can(tab === 'quotes' ? 'quotations.delete' : tab === 'orders' ? 'sales_orders.delete' : 'invoices.delete', 'invoices.delete') && (
           <>
             <button className="btn btn-danger btn-sm" onClick={() => setDeleteOpen(true)}>
               🗑 Delete {selectedIds.size} selected
@@ -1628,32 +1638,32 @@ export default function SalesPage() {
                             actions={[
                               {
                                 label: 'Edit',
-                                hidden: ['converted', 'accepted', 'rejected'].includes(q.status) || !can('invoices.edit'),
+                                hidden: ['converted', 'accepted', 'rejected'].includes(q.status) || !can('quotations.edit', 'invoices.edit'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => navigate(`/sales/quotations/${q.id}/edit`),
                               },
                               {
                                 label: actionKind === 'quote-sent' && isRowBusy(q.id) ? 'Updating…' : 'Mark sent',
-                                hidden: q.status !== 'draft' || !can('invoices.edit'),
+                                hidden: q.status !== 'draft' || !can('quotations.edit', 'invoices.edit'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => updateQuoteStatus(q, 'sent'),
                               },
                               {
                                 label: actionKind === 'quote-accepted' && isRowBusy(q.id) ? 'Updating…' : 'Accept',
-                                hidden: q.status !== 'sent' || !can('invoices.edit'),
+                                hidden: q.status !== 'sent' || !can('quotations.edit', 'invoices.edit'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => updateQuoteStatus(q, 'accepted'),
                               },
                               {
                                 label: actionKind === 'quote-rejected' && isRowBusy(q.id) ? 'Updating…' : 'Reject',
                                 danger: true,
-                                hidden: q.status !== 'sent' || !can('invoices.edit'),
+                                hidden: q.status !== 'sent' || !can('quotations.edit', 'invoices.edit'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => updateQuoteStatus(q, 'rejected'),
                               },
                               {
                                 label: 'Convert to order',
-                                hidden: ['converted', 'rejected'].includes(q.status) || !can('invoices.create'),
+                                hidden: ['converted', 'rejected'].includes(q.status) || !can('sales_orders.create', 'invoices.create'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => navigate(`/sales/orders/new?fromQuote=${q.id}`),
                               },
@@ -1689,7 +1699,7 @@ export default function SalesPage() {
                               {
                                 label: 'Delete',
                                 danger: true,
-                                hidden: !can('invoices.delete'),
+                                hidden: !can('quotations.delete', 'invoices.delete'),
                                 disabled: isRowBusy(q.id),
                                 onClick: () => requestDeleteOne(q, 'quotation', 'quotes'),
                               },
@@ -2270,28 +2280,28 @@ export default function SalesPage() {
                                 {
                                   label: 'Edit',
                                   hidden: !(
-                                    (isDraft && can('invoices.create', 'invoices.edit'))
-                                    || (isConfirmed && can('invoices.edit'))
+                                    (isDraft && can('sales_orders.create', 'sales_orders.edit', 'invoices.create', 'invoices.edit'))
+                                    || (isConfirmed && can('sales_orders.edit', 'invoices.edit'))
                                   ),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/orders/${o.id}/edit`),
                                 },
                                 {
                                   label: 'Submit for approval',
-                                  hidden: !isDraft || !can('invoices.create'),
+                                  hidden: !isDraft || !can('sales_orders.create', 'invoices.create'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => submitSalesOrder(o),
                                 },
                                 {
                                   label: 'Approve',
-                                  hidden: !(isPendingApproval || isDraft) || !can('invoices.approve'),
+                                  hidden: !(isPendingApproval || isDraft) || !can('sales_orders.approve', 'invoices.approve'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => approveSalesOrder(o),
                                 },
                                 {
                                   label: 'Reject',
                                   danger: true,
-                                  hidden: !(isPendingApproval || isDraft) || !can('invoices.approve'),
+                                  hidden: !(isPendingApproval || isDraft) || !can('sales_orders.approve', 'invoices.approve'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => rejectSalesOrder(o),
                                 },
@@ -2303,7 +2313,7 @@ export default function SalesPage() {
                                 },
                                 {
                                   label: 'Convert to invoice',
-                                  hidden: !(isConfirmed || isPartial) || !can('invoices.create'),
+                                  hidden: !(isConfirmed || isPartial) || !can('sales_orders.create', 'invoices.create'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => navigate(`/sales/invoices/new?fromOrder=${o.id}`),
                                 },
@@ -2329,7 +2339,7 @@ export default function SalesPage() {
                                 {
                                   label: 'Delete',
                                   danger: true,
-                                  hidden: !can('invoices.delete'),
+                                  hidden: !can('sales_orders.delete', 'invoices.delete'),
                                   disabled: isRowBusy(o.id),
                                   onClick: () => requestDeleteOne(o, 'sales order', 'orders'),
                                 },

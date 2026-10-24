@@ -67,8 +67,8 @@ from src.routes._atomic import (
     set_batch_quantity_atomic,
 )
 from src.routes._serializers import get_user_branch_ids
-from src.routes._approval import assert_may_edit_document, can_direct_commit, user_can
-from src.permissions import PURCHASE_DOCUMENT_READ
+from src.routes._approval import assert_may_edit_document, can_direct_commit, user_can, user_can_any
+from src.permissions import BILL_DOCUMENT_READ, GRN_DOCUMENT_READ, PURCHASE_DOCUMENT_READ
 from src.security import (
     current_user,
     enforce_branch_access,
@@ -670,7 +670,7 @@ def _purchase_bill_filters(
 
 
 # ─── LIST ─────────────────────────────────────────────────────────────────────
-@router.get("/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
+@router.get("/", dependencies=[Depends(require_perm(*BILL_DOCUMENT_READ))])
 async def list_bills(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     vendor_id: Optional[str] = None,
@@ -739,7 +739,7 @@ async def list_bills(
     return paged(out, total, sk, lim)
 
 # ─── GET ONE ──────────────────────────────────────────────────────────────────
-@router.get("/{bill_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
+@router.get("/{bill_id}", dependencies=[Depends(require_perm(*BILL_DOCUMENT_READ))])
 async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
     b = result.scalar_one_or_none()
@@ -757,7 +757,7 @@ async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User 
     )
 
 # ─── CREATE ───────────────────────────────────────────────────────────────────
-@router.post("/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+@router.post("/", status_code=201, dependencies=[Depends(require_perm("bills.create", "purchases.create"))])
 async def create_bill(
     data: PurchaseCreate,
     request: Request = None,
@@ -775,7 +775,7 @@ async def create_bill(
         if data.grn_id or data.purchase_order_id
         else (data.date or today)
     )
-    direct = await can_direct_commit(user, db, "purchases.approve")
+    direct = await can_direct_commit(user, db, ("bills.approve", "purchases.approve"))
 
     # Per-line net = gross × (1 − pct/100). Document discount is applied
     # next, then GST is extracted from the remaining inclusive amount.
@@ -1160,7 +1160,7 @@ async def create_bill(
     return {"id": bill.id, "number": bill_num, "total": round(total, 2)}
 
 # ─── PAYMENT ──────────────────────────────────────────────────────────────────
-@router.post("/{bill_id}/payment", dependencies=[Depends(require_perm("purchases.edit"))])
+@router.post("/{bill_id}/payment", dependencies=[Depends(require_perm("bills.edit", "purchases.edit"))])
 async def record_payment(
     bill_id: str,
     data: PaymentIn,
@@ -1338,7 +1338,7 @@ class BillApproveReject(BaseModel):
     notes: Optional[str] = None
 
 
-@router.post("/{bill_id}/submit", dependencies=[Depends(require_perm("purchases.create"))])
+@router.post("/{bill_id}/submit", dependencies=[Depends(require_perm("bills.create", "purchases.create"))])
 async def submit_bill(
     bill_id: str,
     request: Request = None,
@@ -1356,7 +1356,7 @@ async def submit_bill(
         return {"status": "pending_approval", "number": bill.number, "already_processed": True}
     if b_status != InvoiceStatus.draft.value:
         raise HTTPException(400, f"Only draft bills can be submitted (status={b_status})")
-    if bill.created_by and bill.created_by != user.name and not await can_direct_commit(user, db, "purchases.approve"):
+    if bill.created_by and bill.created_by != user.name and not await can_direct_commit(user, db, ("bills.approve", "purchases.approve")):
         raise HTTPException(403, "Only the creator can submit this draft for approval")
     bill.status = InvoiceStatus.pending_approval
     _log_purchase_bill_history(
@@ -1382,7 +1382,7 @@ async def submit_bill(
     return {"status": "pending_approval", "number": bill.number}
 
 
-@router.post("/{bill_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
+@router.post("/{bill_id}/approve", dependencies=[Depends(require_perm("bills.approve", "purchases.approve"))])
 async def approve_bill(
     bill_id: str,
     body: BillApproveReject,
@@ -1549,7 +1549,7 @@ async def approve_bill(
     return {"status": new_status, "number": bill.number}
 
 
-@router.post("/{bill_id}/reject", dependencies=[Depends(require_perm("purchases.approve"))])
+@router.post("/{bill_id}/reject", dependencies=[Depends(require_perm("bills.approve", "purchases.approve"))])
 async def reject_bill(
     bill_id: str,
     body: BillApproveReject,
@@ -1605,7 +1605,7 @@ async def reject_bill(
 
 
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
-@router.post("/{bill_id}/cancel", dependencies=[Depends(require_perm("purchases.edit"))])
+@router.post("/{bill_id}/cancel", dependencies=[Depends(require_perm("bills.edit", "purchases.edit"))])
 async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Cancel a purchase bill. Idempotent — already-cancelled bills return
     the same 200 shape.
@@ -1667,7 +1667,7 @@ async def cancel_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: Us
 
 
 # ─── UPDATE (EDIT) ────────────────────────────────────────────────────────────
-@router.put("/{bill_id}", dependencies=[Depends(require_perm("purchases.edit", "purchases.create"))])
+@router.put("/{bill_id}", dependencies=[Depends(require_perm("bills.edit", "bills.create", "purchases.edit", "purchases.create"))])
 async def update_bill(
     bill_id: str,
     data: BillUpdate,
@@ -1698,7 +1698,8 @@ async def update_bill(
         )
     await assert_may_edit_document(
         user, db, status=bill_status,
-        create_perm="purchases.create", edit_perm="purchases.edit",
+        create_perm=("bills.create", "purchases.create"),
+        edit_perm=("bills.edit", "purchases.edit"),
     )
     if (bill.paid_amount or 0) > 0:
         raise HTTPException(
@@ -1829,7 +1830,7 @@ async def update_bill(
     )
 
 
-@router.post("/{bill_id}/delete-payments", dependencies=[Depends(require_perm("purchases.edit", "purchases.delete", "purchases.create"))])
+@router.post("/{bill_id}/delete-payments", dependencies=[Depends(require_perm("bills.edit", "bills.delete", "bills.create", "purchases.edit", "purchases.delete", "purchases.create"))])
 async def delete_bill_payments(
     bill_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1843,9 +1844,8 @@ async def delete_bill_payments(
     await enforce_branch_access(bill.branch_id, user=user, db=db)
 
     allowed = (
-        await user_can(user, db, "purchases.edit")
-        or await user_can(user, db, "purchases.delete")
-        or await user_can(user, db, "purchases.create")
+        await user_can_any(user, db, "bills.edit", "bills.delete", "bills.create",
+                           "purchases.edit", "purchases.delete", "purchases.create")
     )
     if not allowed:
         raise HTTPException(403, "Missing permission: purchases.edit or purchases.delete")
@@ -1881,7 +1881,7 @@ async def delete_bill_payments(
     return {**result, "number": bill.number if bill is not None else None}
 
 
-@router.post("/{bill_id}/delete-returns", dependencies=[Depends(require_perm("purchases.edit", "purchases.delete", "purchases.create"))])
+@router.post("/{bill_id}/delete-returns", dependencies=[Depends(require_perm("bills.edit", "bills.delete", "bills.create", "purchases.edit", "purchases.delete", "purchases.create"))])
 async def delete_bill_returns(
     bill_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1895,9 +1895,8 @@ async def delete_bill_returns(
     await enforce_branch_access(bill.branch_id, user=user, db=db)
 
     allowed = (
-        await user_can(user, db, "purchases.edit")
-        or await user_can(user, db, "purchases.delete")
-        or await user_can(user, db, "purchases.create")
+        await user_can_any(user, db, "bills.edit", "bills.delete", "bills.create",
+                           "purchases.edit", "purchases.delete", "purchases.create")
     )
     if not allowed:
         raise HTTPException(403, "Missing permission: purchases.edit or purchases.delete")
@@ -4619,7 +4618,7 @@ class BillFromGRNIn(BaseModel):
         return _coerce_payment_mode_value(v)
 
 
-@router.get("/grns/", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
+@router.get("/grns/", dependencies=[Depends(require_perm(*GRN_DOCUMENT_READ))])
 async def list_grns(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -4688,7 +4687,7 @@ async def list_grns(
     ], total, sk, lim)
 
 
-@router.get("/grns/{grn_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
+@router.get("/grns/{grn_id}", dependencies=[Depends(require_perm(*GRN_DOCUMENT_READ))])
 async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(select(GoodsReceiptNote).where(GoodsReceiptNote.id == grn_id))
     grn = res.scalar_one_or_none()
@@ -4708,14 +4707,14 @@ async def get_grn(grn_id: str, db: AsyncSession = Depends(get_db), user: User = 
     )
 
 
-@router.post("/grns/", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+@router.post("/grns/", status_code=201, dependencies=[Depends(require_perm("grns.create", "purchases.create"))])
 async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Direct goods receipt. Stock moves immediately if user has purchases.approve; otherwise lands as draft."""
     if not data.items:
         raise HTTPException(400, "GRN must have at least one line")
     await enforce_branch_access(data.branch_id, user=user, db=db)
     today = datetime.now().strftime("%Y-%m-%d")
-    direct = await can_direct_commit(user, db, "purchases.approve")
+    direct = await can_direct_commit(user, db, ("grns.approve", "purchases.approve"))
 
     po = None
     if data.purchase_order_id:
@@ -4831,7 +4830,7 @@ class GRNApproveReject(BaseModel):
     notes: Optional[str] = None
 
 
-@router.post("/grns/{grn_id}/submit", dependencies=[Depends(require_perm("purchases.create"))])
+@router.post("/grns/{grn_id}/submit", dependencies=[Depends(require_perm("grns.create", "purchases.create"))])
 async def submit_grn(
     grn_id: str,
     db: AsyncSession = Depends(get_db),
@@ -4848,7 +4847,7 @@ async def submit_grn(
         return {"status": "pending_approval", "number": grn.number, "already_processed": True}
     if grn_status != GRNStatus.draft.value:
         raise HTTPException(400, f"Only draft GRNs can be submitted (status={grn_status})")
-    if grn.created_by and grn.created_by != user.name and not await can_direct_commit(user, db, "purchases.approve"):
+    if grn.created_by and grn.created_by != user.name and not await can_direct_commit(user, db, ("grns.approve", "purchases.approve")):
         raise HTTPException(403, "Only the creator can submit this draft for approval")
     grn.status = GRNStatus.pending_approval
     from src.notifications.store import emit_grn_pending, notify_refresh
@@ -4864,7 +4863,7 @@ async def submit_grn(
     return {"status": "pending_approval", "number": grn.number}
 
 
-@router.post("/grns/{grn_id}/approve", dependencies=[Depends(require_perm("purchases.approve"))])
+@router.post("/grns/{grn_id}/approve", dependencies=[Depends(require_perm("grns.approve", "purchases.approve"))])
 async def approve_grn(
     grn_id: str,
     body: GRNApproveReject,
@@ -4944,7 +4943,7 @@ async def approve_grn(
     return {"status": "received", "number": grn.number}
 
 
-@router.post("/grns/{grn_id}/reject", dependencies=[Depends(require_perm("purchases.approve"))])
+@router.post("/grns/{grn_id}/reject", dependencies=[Depends(require_perm("grns.approve", "purchases.approve"))])
 async def reject_grn(
     grn_id: str,
     body: GRNApproveReject,
@@ -4978,7 +4977,7 @@ async def reject_grn(
     return {"status": "cancelled", "number": grn.number}
 
 
-@router.post("/grns/from-po/{order_id}", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+@router.post("/grns/from-po/{order_id}", status_code=201, dependencies=[Depends(require_perm("grns.create", "purchases.create"))])
 async def receive_from_po(
     order_id: str,
     data: GRNFromPOIn,
@@ -5006,7 +5005,7 @@ async def receive_from_po(
         )
 
     await enforce_branch_access(po.branch_id, user=user, db=db)
-    direct = await can_direct_commit(user, db, "purchases.approve")
+    direct = await can_direct_commit(user, db, ("grns.approve", "purchases.approve"))
     today = datetime.now().strftime("%Y-%m-%d")
     tax_mode = await _get_org_tax_mode(db)
     receipts_by_item = {}
@@ -5106,7 +5105,7 @@ async def receive_from_po(
     return {"id": grn.id, "number": grn.number, "total": grn.total, "status": grn.status.value}
 
 
-@router.post("/grns/{grn_id}/bill", status_code=201, dependencies=[Depends(require_perm("purchases.create"))])
+@router.post("/grns/{grn_id}/bill", status_code=201, dependencies=[Depends(require_perm("bills.create", "purchases.create"))])
 async def create_bill_from_grn(
     grn_id: str,
     data: BillFromGRNIn,
@@ -5128,7 +5127,7 @@ async def create_bill_from_grn(
         raise HTTPException(400, "GRN already has a linked bill")
 
     await enforce_branch_access(grn.branch_id, user=user, db=db)
-    direct = await can_direct_commit(user, db, "purchases.approve")
+    direct = await can_direct_commit(user, db, ("bills.approve", "purchases.approve"))
     today = datetime.now().strftime("%Y-%m-%d")
 
     if data.payment_received and not (data.payment_mode or "").strip():
@@ -5278,7 +5277,7 @@ async def create_bill_from_grn(
     }
 
 
-@router.post("/grns/{grn_id}/cancel", dependencies=[Depends(require_perm("purchases.edit"))])
+@router.post("/grns/{grn_id}/cancel", dependencies=[Depends(require_perm("grns.edit", "purchases.edit"))])
 async def cancel_grn(
     grn_id: str,
     request: Request = None,
@@ -5335,7 +5334,7 @@ async def cancel_grn(
 
 
 # ─── GET ONE BILL (after /orders/, /returns/, /payments/ static paths) ───────
-@router.get("/{bill_id}", dependencies=[Depends(require_perm(*PURCHASE_DOCUMENT_READ))])
+@router.get("/{bill_id}", dependencies=[Depends(require_perm(*BILL_DOCUMENT_READ))])
 async def get_bill(bill_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
 
     result = await db.execute(select(PurchaseBill).where(PurchaseBill.id == bill_id))
@@ -5459,7 +5458,7 @@ async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_
 
 
 # ─── BULK DELETE: BILLS ──────────────────────────────────────────────────────
-@router.post("/bulk-delete", dependencies=[Depends(require_perm("purchases.delete"))])
+@router.post("/bulk-delete", dependencies=[Depends(require_perm("bills.delete", "purchases.delete"))])
 async def bulk_delete_bills(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(PurchaseBill)

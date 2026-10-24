@@ -80,11 +80,11 @@ function AppShell() {
             <Route path="/transfers/new" element={<RequirePerm perm="transfers.create"><NewTransferPage /></RequirePerm>} />
             <Route path="/transfers/:transferId/edit" element={<RequirePerm perm="transfers.create"><EditTransferPage /></RequirePerm>} />
             <Route path="/adjustments" element={<RequirePerm perm="adjustments.view"><AdjustmentsPage /></RequirePerm>} />
-            <Route path="/sales"      element={<RequirePerm perm="invoices.view"><SalesPage /></RequirePerm>} />
-            <Route path="/sales/quotations/new" element={<RequirePerm perm="invoices.create"><QuoteFormPage mode="create" /></RequirePerm>} />
-            <Route path="/sales/quotations/:quoteId/edit" element={<RequirePerm perm="invoices.edit"><QuoteFormPage mode="edit" /></RequirePerm>} />
-            <Route path="/sales/orders/new" element={<RequirePerm perm="invoices.create"><OrderFormPage mode="create" /></RequirePerm>} />
-            <Route path="/sales/orders/:orderId/edit" element={<RequirePerm perm="invoices.edit"><OrderFormPage mode="edit" /></RequirePerm>} />
+            <Route path="/sales"      element={<RequirePerm perms={['invoices.view', 'quotations.view', 'sales_orders.view']}><SalesPage /></RequirePerm>} />
+            <Route path="/sales/quotations/new" element={<RequirePerm perms={['quotations.create', 'invoices.create']}><QuoteFormPage mode="create" /></RequirePerm>} />
+            <Route path="/sales/quotations/:quoteId/edit" element={<RequirePerm perms={['quotations.edit', 'invoices.edit']}><QuoteFormPage mode="edit" /></RequirePerm>} />
+            <Route path="/sales/orders/new" element={<RequirePerm perms={['sales_orders.create', 'invoices.create']}><OrderFormPage mode="create" /></RequirePerm>} />
+            <Route path="/sales/orders/:orderId/edit" element={<RequirePerm perms={['sales_orders.edit', 'sales_orders.create', 'invoices.edit', 'invoices.create']}><OrderFormPage mode="edit" /></RequirePerm>} />
             <Route path="/sales/invoices/new" element={<RequirePerm perm="invoices.create"><InvoiceFormPage /></RequirePerm>} />
             <Route path="/sales/invoices/:invoiceId/edit" element={<RequirePerm perm="invoices.edit"><InvoiceEditPage /></RequirePerm>} />
             <Route path="/sales/complimentary/new" element={<RequirePerm perm="invoices.create"><ComplimentaryFormPage /></RequirePerm>} />
@@ -92,12 +92,12 @@ function AppShell() {
             <Route path="/sales/payments/:paymentId/edit" element={<RequirePerm perm="invoices.edit"><PaymentFormPage /></RequirePerm>} />
             <Route path="/sales/returns/new" element={<RequirePerm perm="invoices.create"><ReturnFormPage /></RequirePerm>} />
             <Route path="/sales/returns/:returnId/edit" element={<RequirePerm perm="invoices.create"><ReturnFormPage /></RequirePerm>} />
-            <Route path="/purchases"  element={<RequirePerm perm="purchases.view"><PurchasesPage /></RequirePerm>} />
+            <Route path="/purchases"  element={<RequirePerm perms={['purchases.view', 'bills.view', 'grns.view']}><PurchasesPage /></RequirePerm>} />
             <Route path="/purchases/orders/new" element={<RequirePerm perm="purchases.create"><PurchaseOrderFormPage mode="create" /></RequirePerm>} />
             <Route path="/purchases/orders/:orderId/edit" element={<RequirePerm perm="purchases.edit"><PurchaseOrderFormPage mode="edit" /></RequirePerm>} />
-            <Route path="/purchases/bills/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="bill" /></RequirePerm>} />
-            <Route path="/purchases/bills/:billId/edit" element={<RequirePerm perm="purchases.edit"><BillEditPage /></RequirePerm>} />
-            <Route path="/purchases/grns/new" element={<RequirePerm perm="purchases.create"><BillFormPage mode="grn" /></RequirePerm>} />
+            <Route path="/purchases/bills/new" element={<RequirePerm perms={['bills.create', 'purchases.create']}><BillFormPage mode="bill" /></RequirePerm>} />
+            <Route path="/purchases/bills/:billId/edit" element={<RequirePerm perms={['bills.edit', 'bills.create', 'purchases.edit', 'purchases.create']}><BillEditPage /></RequirePerm>} />
+            <Route path="/purchases/grns/new" element={<RequirePerm perms={['grns.create', 'purchases.create']}><BillFormPage mode="grn" /></RequirePerm>} />
             <Route path="/purchases/payments/new" element={<RequirePerm perm="purchases.edit"><VendorPaymentFormPage /></RequirePerm>} />
             <Route path="/purchases/payments/:paymentId/edit" element={<RequirePerm perm="purchases.edit"><VendorPaymentFormPage /></RequirePerm>} />
             <Route path="/purchases/returns/new" element={<RequirePerm perm="purchases.create"><VendorReturnFormPage /></RequirePerm>} />

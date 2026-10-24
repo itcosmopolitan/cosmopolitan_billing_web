@@ -29,7 +29,7 @@ const navItems = [
     path: '/sales',
     Icon: Icon.ShoppingBag,
     label: 'Sales',
-    perm: 'invoices.view',
+    perms: ['invoices.view', 'quotations.view', 'sales_orders.view'],
     defaultTab: 'quotes',
     defaultChild: '/sales?tab=invoices',
     formRoutes: [
@@ -41,12 +41,12 @@ const navItems = [
       { prefix: '/sales/complimentary', tab: 'complimentary' },
     ],
     children: [
-      { path: '/sales?tab=quotes', label: 'Quotations', tab: 'quotes' },
-      { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders' },
-      { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices' },
-      { path: '/sales?tab=complimentary', label: 'Complimentary', tab: 'complimentary' },
-      { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments' },
-      { path: '/sales?tab=returns', label: 'Credit Notes', tab: 'returns' },
+      { path: '/sales?tab=quotes', label: 'Quotations', tab: 'quotes', perms: ['quotations.view', 'invoices.view'] },
+      { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders', perms: ['sales_orders.view', 'invoices.view'] },
+      { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices', perm: 'invoices.view' },
+      { path: '/sales?tab=complimentary', label: 'Complimentary', tab: 'complimentary', perm: 'invoices.view' },
+      { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments', perm: 'invoices.view' },
+      { path: '/sales?tab=returns', label: 'Credit Notes', tab: 'returns', perm: 'invoices.view' },
     ],
   },
   {
@@ -54,7 +54,7 @@ const navItems = [
     path: '/purchases',
     Icon: Icon.Clipboard,
     label: 'Purchases',
-    perm: 'purchases.view',
+    perms: ['purchases.view', 'bills.view', 'grns.view'],
     defaultTab: 'bills',
     defaultChild: '/purchases?tab=bills',
     formRoutes: [
@@ -65,11 +65,11 @@ const navItems = [
       { prefix: '/purchases/payments', tab: 'payments' }
     ],
     children: [
-      { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders' },
-      { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns' },
-      { path: '/purchases?tab=bills', label: 'Bills', tab: 'bills' },
-      { path: '/purchases?tab=payments', label: 'Payments Made', tab: 'payments' },
-      { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns' }
+      { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders', perm: 'purchases.view' },
+      { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns', perms: ['grns.view', 'purchases.view'] },
+      { path: '/purchases?tab=bills', label: 'Bills', tab: 'bills', perms: ['bills.view', 'purchases.view'] },
+      { path: '/purchases?tab=payments', label: 'Payments Made', tab: 'payments', perm: 'purchases.view' },
+      { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns', perm: 'purchases.view' }
     ],
   },
   { section: null,        path: '/customers',  Icon: Icon.Users,       label: 'Customers',       perm: 'customers.view' },
@@ -177,7 +177,7 @@ export default function Sidebar() {
   // Phase 2: hide nav items the current user can't access. Items without a
   // `perm` are always visible.
   const visibleNav = useMemo(
-    () => navItems.filter((item) => !item.perm || can(item.perm)),
+    () => navItems.filter((item) => !item.perm || can(item.perm) || can(...(item.perms || []))),
     [can],
   )
 
@@ -275,7 +275,9 @@ export default function Sidebar() {
         {visibleNav.map((item) => {
           const showSection = item.section && item.section !== lastSection
           if (item.section) lastSection = item.section
-          const children = item.children || []
+          const children = (item.children || []).filter(
+            (child) => !child.perm || can(child.perm) || can(...(child.perms || [])),
+          )
           const hasChildren = children.length > 0
           const groupActive = hasChildren && isGroupActive(item, location)
           const groupOpen = Boolean(openGroups[item.path])
@@ -309,7 +311,10 @@ export default function Sidebar() {
                     aria-expanded={groupOpen}
                     onClick={() => {
                       if (sidebarCollapsed) {
-                        navigate(item.defaultChild || item.children[0].path)
+                        const defaultPath = children.some((child) => child.path === item.defaultChild)
+                          ? item.defaultChild
+                          : children[0]?.path
+                        if (defaultPath) navigate(defaultPath)
                         return
                       }
                       toggleGroup(item.path)

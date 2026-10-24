@@ -70,9 +70,9 @@ export default function OrderFormPage({ mode = 'create' }) {
   })
 
   useEffect(() => {
-    if (isEdit && !can('invoices.edit', 'invoices.create') && !readOnly) {
+    if (isEdit && !can('sales_orders.edit', 'invoices.edit', 'invoices.create') && !readOnly) {
       navigate('/sales?tab=orders', { replace: true })
-    } else if (!isEdit && !can('invoices.create')) {
+    } else if (!isEdit && !can('sales_orders.create', 'invoices.create')) {
       navigate('/sales?tab=orders', { replace: true })
     }
   }, [can, navigate, isEdit, readOnly])
@@ -91,8 +91,8 @@ export default function OrderFormPage({ mode = 'create' }) {
               navigate('/sales?tab=orders', { replace: true })
               return
             }
-            if (so.status !== 'draft' && !can('invoices.edit')) {
-              toast.error('Editing this sales order requires invoices.edit')
+            if (so.status !== 'draft' && !can('sales_orders.edit', 'invoices.edit')) {
+              toast.error('Editing this sales order requires sales_orders.edit')
               navigate('/sales?tab=orders', { replace: true })
               return
             }

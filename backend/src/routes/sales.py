@@ -104,7 +104,7 @@ from src.routes._approval import (
     can_direct_pos_bill,
     user_can,
 )
-from src.permissions import SALES_DOCUMENT_READ
+from src.permissions import QUOTATION_DOCUMENT_READ, SALES_DOCUMENT_READ, SALES_ORDER_DOCUMENT_READ
 from src.security import (
     current_user,
     enforce_branch_access,
@@ -1089,7 +1089,7 @@ async def list_invoice_pdf_export_rows(
 # The real persisted version lives at "Sales Returns: LIST" below.
 
 # ─── QUOTATIONS ───────────────────────────────────────────────────────────────
-@router.get("/quotations/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+@router.get("/quotations/", dependencies=[Depends(require_perm(*QUOTATION_DOCUMENT_READ))])
 async def list_quotations(
     branch_id: Optional[str] = Depends(enforce_branch_access_optional),
     child_counter_id: Optional[str] = None,
@@ -1179,7 +1179,7 @@ async def list_quotations(
     ]
     return paged(items_out, total, sk, lim)
 
-@router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+@router.get("/quotations/{quote_id}", dependencies=[Depends(require_perm(*QUOTATION_DOCUMENT_READ))])
 async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Get a specific quotation"""
     result = await db.execute(
@@ -1205,7 +1205,7 @@ async def get_quotation(quote_id: str, db: AsyncSession = Depends(get_db), user:
         converted_invoice_number=inv_nums.get(inv_id),
     )
 
-@router.post("/quotations/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
+@router.post("/quotations/", status_code=201, dependencies=[Depends(require_perm("quotations.create", "invoices.create"))])
 async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Create a new quotation"""
     # Validate items
@@ -1322,7 +1322,7 @@ async def create_quotation(data: QuotationCreate, db: AsyncSession = Depends(get
     await db.refresh(quote)
     return {"id": quote.id, "number": quote.number, "total": round(total, 2), "status": "draft"}
 
-@router.put("/quotations/{quote_id}", dependencies=[Depends(require_perm("invoices.edit"))])
+@router.put("/quotations/{quote_id}", dependencies=[Depends(require_perm("quotations.edit", "invoices.edit"))])
 async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full replace of an editable quotation. Editable iff status ∈
     {draft, sent}. Converted / accepted / rejected quotes are locked —
@@ -1431,7 +1431,7 @@ async def update_quotation(quote_id: str, data: QuotationCreate, db: AsyncSessio
     return {"id": quote.id, "number": quote.number, "total": total, "status": quote.status.value}
 
 
-@router.patch("/quotations/{quote_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
+@router.patch("/quotations/{quote_id}/status", dependencies=[Depends(require_perm("quotations.edit", "invoices.edit"))])
 async def update_quotation_status(quote_id: str, status: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Update quotation status — `status` must be a valid QuotationStatus value."""
     try:
@@ -5834,7 +5834,7 @@ async def _link_sales_order_to_invoice(
 
 
 # ─── Sales Order: LIST ───────────────────────────────────────────────────────
-@router.get("/orders/", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+@router.get("/orders/", dependencies=[Depends(require_perm(*SALES_ORDER_DOCUMENT_READ))])
 async def list_orders(
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -5911,7 +5911,7 @@ async def list_orders(
 
 
 # ─── Sales Order: GET ONE ────────────────────────────────────────────────────
-@router.get("/orders/{order_id}", dependencies=[Depends(require_perm(*SALES_DOCUMENT_READ))])
+@router.get("/orders/{order_id}", dependencies=[Depends(require_perm(*SALES_ORDER_DOCUMENT_READ))])
 async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
 
     res = await db.execute(
@@ -5946,12 +5946,12 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
 
 
 # ─── Sales Order: CREATE ─────────────────────────────────────────────────────
-@router.post("/orders/", status_code=201, dependencies=[Depends(require_perm("invoices.create"))])
+@router.post("/orders/", status_code=201, dependencies=[Depends(require_perm("sales_orders.create", "invoices.create"))])
 async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
 
-    direct = await can_direct_commit(user, db, "invoices.approve")
+    direct = await can_direct_commit(user, db, ("sales_orders.approve", "invoices.approve"))
     await _resolve_branch_scope(user, db, data.branch_id)
     child_counter_id, child_counter_name = await validate_child_counter(
         db, data.branch_id, data.child_counter_id, data.child_counter_name,
@@ -6063,7 +6063,7 @@ async def create_order(data: SalesOrderCreate, db: AsyncSession = Depends(get_db
 
 
 # ─── Sales Order: UPDATE (full replace of editable fields + items) ──────────
-@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("invoices.edit", "invoices.create"))])
+@router.put("/orders/{order_id}", dependencies=[Depends(require_perm("sales_orders.edit", "sales_orders.create", "invoices.edit", "invoices.create"))])
 async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Full replace of an SO's editable fields. Status is NOT changed here
     (the convert flow + the dedicated `/status` PATCH handle that). Items
@@ -6093,7 +6093,8 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
         raise HTTPException(400, f"Cannot edit a {so.status.value} sales order")
     await assert_may_edit_document(
         user, db, status=so.status,
-        create_perm="invoices.create", edit_perm="invoices.edit",
+        create_perm=("sales_orders.create", "invoices.create"),
+        edit_perm=("sales_orders.edit", "invoices.edit"),
     )
     if not data.items:
         raise HTTPException(400, "Sales order must have at least one line item")
@@ -6180,7 +6181,7 @@ async def update_order(order_id: str, data: SalesOrderCreate, db: AsyncSession =
 
 
 # ─── Sales Order: UPDATE STATUS ──────────────────────────────────────────────
-@router.patch("/orders/{order_id}/status", dependencies=[Depends(require_perm("invoices.edit"))])
+@router.patch("/orders/{order_id}/status", dependencies=[Depends(require_perm("sales_orders.edit", "invoices.edit"))])
 async def update_order_status(order_id: str, status: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesOrder)
@@ -6247,7 +6248,7 @@ class SOApproveReject(BaseModel):
     notes: Optional[str] = None
 
 
-@router.post("/orders/{order_id}/submit", dependencies=[Depends(require_perm("invoices.create"))])
+@router.post("/orders/{order_id}/submit", dependencies=[Depends(require_perm("sales_orders.create", "invoices.create"))])
 async def submit_sales_order(
     order_id: str,
     db: AsyncSession = Depends(get_db),
@@ -6264,7 +6265,7 @@ async def submit_sales_order(
         return {"status": "pending_approval", "number": so.number, "already_processed": True}
     if so_status != SalesOrderStatus.draft.value:
         raise HTTPException(400, f"Only draft sales orders can be submitted (status={so_status})")
-    if so.created_by and so.created_by != user.name and not await can_direct_commit(user, db, "invoices.approve"):
+    if so.created_by and so.created_by != user.name and not await can_direct_commit(user, db, ("sales_orders.approve", "invoices.approve")):
         creator_event = await db.execute(
             select(AuditLog.id).where(
                 AuditLog.record_type == "sales_order",
@@ -6290,7 +6291,7 @@ async def submit_sales_order(
     return {"status": "pending_approval", "number": so.number}
 
 
-@router.post("/orders/{order_id}/approve", dependencies=[Depends(require_perm("invoices.approve"))])
+@router.post("/orders/{order_id}/approve", dependencies=[Depends(require_perm("sales_orders.approve", "invoices.approve"))])
 async def approve_sales_order(
     order_id: str,
     body: SOApproveReject,
@@ -6338,7 +6339,7 @@ async def approve_sales_order(
     return {"status": "confirmed", "number": so.number}
 
 
-@router.post("/orders/{order_id}/reject", dependencies=[Depends(require_perm("invoices.approve"))])
+@router.post("/orders/{order_id}/reject", dependencies=[Depends(require_perm("sales_orders.approve", "invoices.approve"))])
 async def reject_sales_order(
     order_id: str,
     body: SOApproveReject,
@@ -6373,7 +6374,7 @@ async def reject_sales_order(
 
 
 # ─── Sales Order: CONVERT TO INVOICE ─────────────────────────────────────────
-@router.post("/orders/{order_id}/convert", dependencies=[Depends(require_perm("invoices.create"))])
+@router.post("/orders/{order_id}/convert", dependencies=[Depends(require_perm("sales_orders.create", "invoices.create"))])
 async def convert_order_to_invoice(
     order_id: str,
     data: ConvertToInvoiceIn,
@@ -6409,7 +6410,7 @@ async def convert_order_to_invoice(
 
     await _resolve_branch_scope(user, db, so.branch_id)
     # Convert posts stock + AR immediately — create-only users create a draft invoice instead.
-    if not await can_direct_commit(user, db, "invoices.approve"):
+    if not await can_direct_commit(user, db, ("sales_orders.approve", "invoices.approve")):
         raise HTTPException(
             403,
             "Converting a sales order requires invoices.approve (stock and AR post immediately). "
@@ -6753,7 +6754,7 @@ async def convert_order_to_invoice(
 
 
 # ─── Quotation → Sales Order convert ─────────────────────────────────────────
-@router.post("/quotations/{quote_id}/convert-to-order", dependencies=[Depends(require_perm("invoices.create"))])
+@router.post("/quotations/{quote_id}/convert-to-order", dependencies=[Depends(require_perm("sales_orders.create", "invoices.create"))])
 async def convert_quote_to_order(quote_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     """Create a SalesOrder from a Quotation. Prices, taxes, discount, and
     line items are copied verbatim (the quote's commercial terms are the
@@ -8527,7 +8528,7 @@ async def _restore_sales_order_from_invoice(
 
 
 # ─── BULK DELETE: QUOTATIONS ─────────────────────────────────────────────────
-@router.post("/quotations/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+@router.post("/quotations/bulk-delete", dependencies=[Depends(require_perm("quotations.delete", "invoices.delete"))])
 async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(Quotation)
@@ -8598,7 +8599,7 @@ async def bulk_delete_quotations(data: BulkDeleteIn, db: AsyncSession = Depends(
 
 
 # ─── BULK DELETE: SALES ORDERS ───────────────────────────────────────────────
-@router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("invoices.delete"))])
+@router.post("/orders/bulk-delete", dependencies=[Depends(require_perm("sales_orders.delete", "invoices.delete"))])
 async def bulk_delete_orders(data: BulkDeleteIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
     res = await db.execute(
         select(SalesOrder)

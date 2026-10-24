@@ -93,10 +93,19 @@ export default function PurchasesPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
-  const tab = VALID_TAB_IDS.has(tabParam) ? tabParam : 'bills'
+  const can = useCan()
+  const canViewTab = {
+    bills: can('bills.view', 'purchases.view'),
+    orders: can('purchases.view'),
+    grns: can('grns.view', 'purchases.view'),
+    returns: can('purchases.view'),
+    payments: can('purchases.view'),
+  }
+  const availableTabs = TABS.filter((t) => canViewTab[t.id])
+  const requestedTab = VALID_TAB_IDS.has(tabParam) && canViewTab[tabParam] ? tabParam : null
+  const tab = requestedTab || availableTabs[0]?.id || 'bills'
   const pageTitle = TABS.find((t) => t.id === tab)?.label || 'Bills'
   const viewId = searchParams.get('view')
-  const can = useCan()
   const billColumnPrefs = useColumnPrefs('purchases.bills')
   const orderColumnPrefs = useColumnPrefs('purchases.orders')
   const grnColumnPrefs = useColumnPrefs('purchases.grns')
@@ -300,13 +309,13 @@ export default function PurchasesPage() {
   }
 
   const tabCreateAction = () => {
-    if (tab === 'bills' && can('purchases.create')) {
+    if (tab === 'bills' && can('bills.create', 'purchases.create')) {
       return { label: '+ New Bill', onClick: () => navigate('/purchases/bills/new') }
     }
     if (tab === 'orders' && can('purchases.create')) {
       return { label: '+ New PO', onClick: () => navigate('/purchases/orders/new') }
     }
-    if (tab === 'grns' && can('purchases.create')) {
+    if (tab === 'grns' && can('grns.create', 'purchases.create')) {
       return { label: '+ New GRN', onClick: () => navigate('/purchases/grns/new') }
     }
     if (tab === 'returns' && can('purchases.create')) {
@@ -1048,7 +1057,7 @@ export default function PurchasesPage() {
   return (
     <div className="page-container">
       <SectionHeader title={pageTitle}>
-        {selectedIds.size > 0 && can('purchases.delete') && tab !== 'grns' && (
+        {selectedIds.size > 0 && can(tab === 'bills' ? 'bills.delete' : 'purchases.delete', 'purchases.delete') && tab !== 'grns' && (
           <>
             <button className="btn btn-danger btn-sm" onClick={() => setDeleteOpen(true)}>
               🗑 Delete {selectedIds.size} selected
@@ -1214,40 +1223,40 @@ export default function PurchasesPage() {
                               },
                               {
                                 label: 'Submit for approval',
-                                hidden: !isDraft || !can('purchases.create'),
+                                hidden: !isDraft || !can('bills.create', 'purchases.create'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => submitBill(b),
                               },
                               {
                                 label: 'Approve',
-                                hidden: !(isPendingApproval || isDraft) || !can('purchases.approve'),
+                                hidden: !(isPendingApproval || isDraft) || !can('bills.approve', 'purchases.approve'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => approveBill(b),
                               },
                               {
                                 label: 'Reject',
                                 danger: true,
-                                hidden: !(isPendingApproval || isDraft) || !can('purchases.approve'),
+                                hidden: !(isPendingApproval || isDraft) || !can('bills.approve', 'purchases.approve'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => rejectBill(b),
                               },
                               {
                                 label: 'Record payment',
-                                hidden: !canPay || !can('purchases.edit'),
+                                hidden: !canPay || !can('bills.edit', 'purchases.edit'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => setShowPay(b),
                               },
                               {
                                 label: 'Cancel bill',
                                 danger: true,
-                                hidden: !canCancel || !can('purchases.edit'),
+                                hidden: !canCancel || !can('bills.edit', 'purchases.edit'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => setShowCancel(b),
                               },
                               {
                                 label: 'Delete',
                                 danger: true,
-                                hidden: !can('purchases.delete'),
+                                hidden: !can('bills.delete', 'purchases.delete'),
                                 disabled: isRowBusy(b.id),
                                 onClick: () => setDeleteOneTarget(b),
                               },
@@ -1341,9 +1350,9 @@ export default function PurchasesPage() {
                     const isPendingApproval = o.status === 'pending_approval'
                     const isDraft = o.status === 'draft'
                     const canReceiveOrConvert = !isConverted && !isCancelled && !isPartiallyReceived && !isPendingApproval && !isDraft
-                    const canCreateGrn = canReceiveOrConvert && can('purchases.create')
+                    const canCreateGrn = canReceiveOrConvert && can('grns.create', 'purchases.create')
                     // Bill form creates a draft bill (no stock) for create-only; approvers post stock on bill approve.
-                    const canConvertToBill = canReceiveOrConvert && can('purchases.create')
+                    const canConvertToBill = canReceiveOrConvert && can('bills.create', 'purchases.create')
                     const conv = conversionStatusDisplay('po', o)
                     const linked = linkedDocNumber(o)
                     return (
@@ -1606,33 +1615,33 @@ export default function PurchasesPage() {
                               },
                               {
                                 label: actionKind === 'submit-grn' && isRowBusy(g.id) ? 'Submitting…' : 'Submit for approval',
-                                hidden: !isDraft || !can('purchases.create'),
+                                hidden: !isDraft || !can('grns.create', 'purchases.create'),
                                 disabled: isRowBusy(g.id),
                                 onClick: () => submitGrn(g),
                               },
                               {
                                 label: actionKind === 'approve-grn' && isRowBusy(g.id) ? 'Approving…' : 'Approve',
-                                hidden: !isPendingApproval || !can('purchases.approve'),
+                                hidden: !isPendingApproval || !can('grns.approve', 'purchases.approve'),
                                 disabled: isRowBusy(g.id),
                                 onClick: () => approveGrn(g),
                               },
                               {
                                 label: actionKind === 'reject-grn' && isRowBusy(g.id) ? 'Rejecting…' : 'Reject',
                                 danger: true,
-                                hidden: !isPendingApproval || !can('purchases.approve'),
+                                hidden: !isPendingApproval || !can('grns.approve', 'purchases.approve'),
                                 disabled: isRowBusy(g.id),
                                 onClick: () => rejectGrn(g),
                               },
                               {
                                 label: 'Create bill',
-                                hidden: !isReceived || hasBill || !can('purchases.create'),
+                                hidden: !isReceived || hasBill || !can('bills.create', 'purchases.create'),
                                 disabled: isRowBusy(g.id),
                                 onClick: () => billFromGrn(g),
                               },
                               {
                                 label: actionKind === 'cancel-grn' && isRowBusy(g.id) ? 'Cancelling…' : 'Cancel GRN',
                                 danger: true,
-                                hidden: !isReceived || hasBill || !can('purchases.edit'),
+                                hidden: !isReceived || hasBill || !can('grns.edit', 'purchases.edit'),
                                 disabled: isRowBusy(g.id),
                                 onClick: () => cancelGrn(g),
                               },

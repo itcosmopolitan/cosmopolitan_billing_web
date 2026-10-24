@@ -265,19 +265,23 @@ export default function SalesTxnDetailPanel({
           >
             Export Quote
           </button>
-          {!['converted', 'accepted', 'rejected'].includes(detail?.status) && can('invoices.edit') && (
+          {!['converted', 'accepted', 'rejected'].includes(detail?.status) && can('quotations.edit', 'invoices.edit') && (
             <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/sales/quotations/${detail.id}/edit`) }}>
               Edit
             </button>
           )}
-          {!['converted', 'rejected'].includes(detail?.status) && can('invoices.create') && (
+          {!['converted', 'rejected'].includes(detail?.status) && (
             <>
+              {can('sales_orders.create', 'invoices.create') && (
               <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/sales/orders/new?fromQuote=${detail.id}`) }}>
                 Convert to order
               </button>
+              )}
+              {can('invoices.create') && (
               <button type="button" className="btn btn-primary" onClick={() => { onClose?.(); navigate(`/sales/invoices/new?fromQuote=${detail.id}`) }}>
                 Convert to invoice
               </button>
+              )}
             </>
           )}
         </>
@@ -305,13 +309,13 @@ export default function SalesTxnDetailPanel({
           >
             Download PDF
           </button>
-          {((detail?.status === 'draft' && can('invoices.create', 'invoices.edit'))
-            || (detail?.status === 'confirmed' && can('invoices.edit'))) && (
+          {((detail?.status === 'draft' && can('sales_orders.create', 'sales_orders.edit', 'invoices.create', 'invoices.edit'))
+            || (detail?.status === 'confirmed' && can('sales_orders.edit', 'invoices.edit'))) && (
             <button type="button" className="btn btn-secondary" onClick={() => { onClose?.(); navigate(`/sales/orders/${detail.id}/edit`) }}>
               Edit
             </button>
           )}
-          {['confirmed', 'partially_invoiced'].includes(detail?.status) && can('invoices.create') && (
+          {['confirmed', 'partially_invoiced'].includes(detail?.status) && can('sales_orders.create', 'invoices.create') && (
             <button type="button" className="btn btn-primary" onClick={() => { onClose?.(); navigate(`/sales/invoices/new?fromOrder=${detail.id}`) }}>
               Convert to invoice
             </button>
@@ -367,7 +371,13 @@ export default function SalesTxnDetailPanel({
           label: 'Convert to invoice',
           onClick: () => { onClose?.(); navigate(`/sales/invoices/new?fromQuote=${detail.id}`) },
         }
-        : !['converted', 'accepted', 'rejected'].includes(detail?.status) && can('invoices.edit')
+        : !['converted', 'rejected'].includes(detail?.status) && can('sales_orders.create')
+          ? {
+            description: 'Turn this quotation into a sales order.',
+            label: 'Convert to sales order',
+            onClick: () => { onClose?.(); navigate(`/sales/orders/new?fromQuote=${detail.id}`) },
+          }
+        : !['converted', 'accepted', 'rejected'].includes(detail?.status) && can('quotations.edit', 'invoices.edit')
           ? {
             description: 'Update the quotation details.',
             label: 'Edit quotation',
@@ -375,14 +385,14 @@ export default function SalesTxnDetailPanel({
           }
           : { description: 'No further action is available for this quotation.' }
       : kind === 'order'
-        ? ['confirmed', 'partially_invoiced'].includes(detail?.status) && can('invoices.create')
+        ? ['confirmed', 'partially_invoiced'].includes(detail?.status) && can('sales_orders.create', 'invoices.create')
           ? {
             description: 'Create an invoice from this sales order.',
             label: 'Convert to invoice',
             onClick: () => { onClose?.(); navigate(`/sales/invoices/new?fromOrder=${detail.id}`) },
           }
-          : ((detail?.status === 'draft' && can('invoices.create', 'invoices.edit'))
-            || (detail?.status === 'confirmed' && can('invoices.edit')))
+          : ((detail?.status === 'draft' && can('sales_orders.create', 'sales_orders.edit', 'invoices.create', 'invoices.edit'))
+            || (detail?.status === 'confirmed' && can('sales_orders.edit', 'invoices.edit')))
             ? {
               description: 'Update the sales order details.',
               label: 'Edit sales order',

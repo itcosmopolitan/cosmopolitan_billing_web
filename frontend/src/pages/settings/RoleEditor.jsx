@@ -16,6 +16,12 @@ import { Modal, FormGroup, FormRow, AlertBar, AutocompleteDropdown } from '@/com
 import { rolesAPI } from '@/api'
 
 const COLOR_OPTIONS = ['blue', 'teal', 'amber', 'green', 'coral', 'purple', 'gray']
+const MODULE_LABELS = {
+  quotations: 'Quotations',
+  sales_orders: 'Sales Orders',
+  grns: 'GRN',
+  bills: 'Bills',
+}
 
 // UI-only hierarchy: render `users` as a nested child under `settings` (users
 // management IS conceptually part of the Settings module). Permission strings
@@ -394,7 +400,7 @@ function ModuleRow({ mod, actions, idx, headerState, onToggleHeader, onToggleAct
           onChange={onToggleHeader}
           disabled={disabled}
         />
-        <span style={{ fontSize: 13, fontWeight: 500, textTransform: 'capitalize' }}>{mod}</span>
+        <span style={{ fontSize: 13, fontWeight: 500, textTransform: 'capitalize' }}>{MODULE_LABELS[mod] || mod.replaceAll('_', ' ')}</span>
       </label>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {actions.map((act) => {

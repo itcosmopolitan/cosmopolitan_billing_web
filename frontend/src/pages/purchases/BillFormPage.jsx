@@ -83,10 +83,10 @@ export default function BillFormPage({ mode = 'bill' }) {
   }
 
   useEffect(() => {
-    if (!can('purchases.create')) {
+    if (!(isGrn ? can('grns.create', 'purchases.create') : can('bills.create', 'purchases.create'))) {
       navigate('/purchases', { replace: true })
     }
-  }, [can, navigate])
+  }, [can, isGrn, navigate])
 
   useEffect(() => {
     if (!fromPoId && !fromGrnId) return

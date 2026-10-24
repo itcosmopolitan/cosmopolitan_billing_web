@@ -149,18 +149,18 @@ export function billLockedForEdit(bill) {
 
 export function canShowBillEdit(bill, can) {
   if (!bill || billLockedForEdit(bill)) return false
-  if (bill.status === 'draft') return can('purchases.create', 'purchases.edit')
-  return can('purchases.edit')
+  if (bill.status === 'draft') return can('bills.create', 'bills.edit', 'purchases.create', 'purchases.edit')
+  return can('bills.edit', 'purchases.edit')
 }
 
 export function canShowDeleteBillPayment(bill, can) {
   if (!bill || !billHasPayment(bill)) return false
   if (['cancelled', 'draft', 'pending_approval'].includes(String(bill.status || ''))) return false
-  return can('purchases.edit', 'purchases.delete', 'purchases.create')
+  return can('bills.edit', 'bills.delete', 'bills.create', 'purchases.edit', 'purchases.delete', 'purchases.create')
 }
 
 export function canShowDeleteBillReturn(bill, can) {
   if (!bill || !billHasReturn(bill)) return false
   if (['cancelled', 'draft', 'pending_approval'].includes(String(bill.status || ''))) return false
-  return can('purchases.edit', 'purchases.delete', 'purchases.create')
+  return can('bills.edit', 'bills.delete', 'bills.create', 'purchases.edit', 'purchases.delete', 'purchases.create')
 }

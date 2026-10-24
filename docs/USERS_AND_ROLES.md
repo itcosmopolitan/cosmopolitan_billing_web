@@ -48,9 +48,13 @@ PERMISSIONS = {
     "dashboard": ["view", "export"],
     "items":     ["view", "create", "edit", "delete", "export", "adjust"],
     "invoices":  ["view", "create", "edit", "delete", "cancel", "export"],
+    "quotations": ["view", "create", "edit", "delete", "export", "approve"],
+    "sales_orders": ["view", "create", "edit", "delete", "export", "approve"],
     "pos":       ["use", "discount", "override_price", "refund",
                   "hold_bill", "split_payment", "open_till", "close_till"],
     "purchases": ["view", "create", "edit", "delete", "export"],
+    "bills": ["view", "create", "edit", "delete", "export", "approve"],
+    "grns": ["view", "create", "edit", "delete", "export", "approve"],
     "transfers": ["view", "create", "approve", "receive"],
     "customers": ["view", "create", "edit", "delete"],
     "vendors":   ["view", "create", "edit", "delete"],
@@ -61,6 +65,11 @@ PERMISSIONS = {
     "audit":     ["view"],
 }
 ```
+
+Quotation, Sales Order, Bill, and GRN permissions provide document-specific
+access control. Existing `invoices.*` and `purchases.*` grants continue to
+cover their related documents for backward compatibility; use the new
+document-specific modules when a role needs narrower access.
 
 **Wildcards:** `"*"` = all permissions; `"module.*"` = all actions in that module. Both expanded at check time by `permissions.expand()`.
 

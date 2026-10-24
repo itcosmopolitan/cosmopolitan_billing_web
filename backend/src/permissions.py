@@ -26,9 +26,13 @@ PERMISSIONS: dict[str, list[str]] = {
     # Branch Items & Stock — view stock, batches; qty changes go via adjustments.*
     "items":       ["view", "export", "adjust"],
     "invoices":  ["view", "create", "edit", "delete", "cancel", "export", "approve"],
+    "quotations": ["view", "create", "edit", "delete", "export", "approve"],
+    "sales_orders": ["view", "create", "edit", "delete", "export", "approve"],
     "pos":       ["use", "use_pool_stock", "discount", "override_price", "refund", "approve_refund",
                   "hold_bill", "split_payment", "open_till", "close_till"],
     "purchases": ["view", "create", "edit", "delete", "export", "approve"],
+    "bills": ["view", "create", "edit", "delete", "export", "approve"],
+    "grns": ["view", "create", "edit", "delete", "export", "approve"],
     "transfers":   ["view", "create", "approve", "receive", "delete"],
     "stock_pools": ["view", "manage"],
     "adjustments": ["view", "create", "approve", "delete"],
@@ -56,8 +60,18 @@ ITEM_CATALOG_READ: tuple[str, ...] = (
     "invoices.create",
     "invoices.edit",
     "invoices.view",
+    "quotations.create",
+    "quotations.edit",
+    "quotations.view",
+    "sales_orders.create",
+    "sales_orders.edit",
+    "sales_orders.view",
     "purchases.create",
     "purchases.edit",
+    "bills.create",
+    "bills.edit",
+    "grns.create",
+    "grns.edit",
     "transfers.create",
     "transfers.receive",
     "adjustments.create",
@@ -69,6 +83,12 @@ CUSTOMER_PICKER_READ: tuple[str, ...] = (
     "pos.use",
     "invoices.create",
     "invoices.edit",
+    "quotations.create",
+    "quotations.edit",
+    "quotations.view",
+    "sales_orders.create",
+    "sales_orders.edit",
+    "sales_orders.view",
 )
 
 # Vendor picker in purchase order / bill forms.
@@ -76,6 +96,12 @@ VENDOR_PICKER_READ: tuple[str, ...] = (
     "vendors.view",
     "purchases.create",
     "purchases.edit",
+    "bills.view",
+    "bills.create",
+    "bills.edit",
+    "grns.view",
+    "grns.create",
+    "grns.edit",
 )
 
 # Branch picker in customer, stock, cash, transfer, and report forms.
@@ -103,9 +129,21 @@ BRANCH_PICKER_READ: tuple[str, ...] = (
     "invoices.view",
     "invoices.create",
     "invoices.edit",
+    "quotations.view",
+    "quotations.create",
+    "quotations.edit",
+    "sales_orders.view",
+    "sales_orders.create",
+    "sales_orders.edit",
+    "bills.view",
     "purchases.view",
     "purchases.create",
     "purchases.edit",
+    "bills.create",
+    "bills.edit",
+    "grns.view",
+    "grns.create",
+    "grns.edit",
 )
 
 # Organisation profile and invoice print template (POS, receipts, billing).
@@ -114,6 +152,18 @@ BILLING_SETTINGS_READ: tuple[str, ...] = (
     "pos.use",
     "invoices.create",
     "invoices.view",
+    "quotations.create",
+    "quotations.view",
+    "quotations.edit",
+    "sales_orders.create",
+    "sales_orders.view",
+    "sales_orders.edit",
+    "bills.create",
+    "bills.view",
+    "bills.edit",
+    "grns.create",
+    "grns.view",
+    "grns.edit",
 )
 
 # Cash entry category list (configured under Settings, used on Cash page).
@@ -164,8 +214,48 @@ SALES_DOCUMENT_READ: tuple[str, ...] = (
     "pos.approve_refund",
 )
 
+QUOTATION_DOCUMENT_READ: tuple[str, ...] = (
+    "quotations.view",
+    "quotations.create",
+    "quotations.edit",
+    "sales_orders.create",
+    "invoices.view",
+    "invoices.create",
+    "invoices.edit",
+)
+
+SALES_ORDER_DOCUMENT_READ: tuple[str, ...] = (
+    "sales_orders.view",
+    "sales_orders.create",
+    "sales_orders.edit",
+    "invoices.view",
+    "invoices.create",
+    "invoices.edit",
+)
+
 # Read purchase documents for bill/GRN/PO create and conversion flows.
 PURCHASE_DOCUMENT_READ: tuple[str, ...] = (
+    "purchases.view",
+    "purchases.create",
+    "purchases.edit",
+    "bills.create",
+    "grns.create",
+)
+
+BILL_DOCUMENT_READ: tuple[str, ...] = (
+    "bills.view",
+    "bills.create",
+    "bills.edit",
+    "purchases.view",
+    "purchases.create",
+    "purchases.edit",
+)
+
+GRN_DOCUMENT_READ: tuple[str, ...] = (
+    "grns.view",
+    "grns.create",
+    "grns.edit",
+    "bills.create",
     "purchases.view",
     "purchases.create",
     "purchases.edit",

@@ -38,12 +38,19 @@ async def user_can(user: User, db: AsyncSession, perm: str) -> bool:
     return "*" in grants or perm in grants
 
 
-async def can_direct_commit(user: User, db: AsyncSession, approve_perm: str) -> bool:
+async def user_can_any(user: User, db: AsyncSession, *perms: str) -> bool:
+    grants = await user_grants(user, db)
+    return "*" in grants or any(perm in grants for perm in perms)
+
+
+async def can_direct_commit(user: User, db: AsyncSession, approve_perm: str | tuple[str, ...]) -> bool:
     """True when the caller may skip the pending-approval queue for this action."""
     # Test seed users often set `all_branches=True` to indicate an admin
     # operator; treat that as an implicit allow for direct commits.
     if getattr(user, "all_branches", False):
         return True
+    if isinstance(approve_perm, tuple):
+        return await user_can_any(user, db, *approve_perm)
     return await user_can(user, db, approve_perm)
 
 
@@ -62,21 +69,25 @@ async def assert_may_edit_document(
     db: AsyncSession,
     *,
     status,
-    create_perm: str,
-    edit_perm: str,
+    create_perm: str | tuple[str, ...],
+    edit_perm: str | tuple[str, ...],
     draft_statuses: tuple[str, ...] = ("draft",),
 ) -> None:
     """Create-only users may edit private drafts; posted docs need *.edit."""
     raw = status.value if hasattr(status, "value") else str(status)
-    has_edit = await user_can(user, db, edit_perm)
-    has_create = await user_can(user, db, create_perm)
+    edit_perms = (edit_perm,) if isinstance(edit_perm, str) else edit_perm
+    create_perms = (create_perm,) if isinstance(create_perm, str) else create_perm
+    has_edit = await user_can_any(user, db, *edit_perms)
+    has_create = await user_can_any(user, db, *create_perms)
+    edit_label = " or ".join(edit_perms)
+    create_label = " or ".join(create_perms)
     if raw in draft_statuses:
         if has_edit or has_create:
             return
-        raise HTTPException(403, f"Missing permission: {create_perm} or {edit_perm}")
+        raise HTTPException(403, f"Missing permission: {create_label} or {edit_label}")
     if has_edit:
         return
     raise HTTPException(
         403,
-        f"Editing this document requires {edit_perm} (create-only users may edit drafts only)",
+        f"Editing this document requires {edit_label} (create-only users may edit drafts only)",
     )
