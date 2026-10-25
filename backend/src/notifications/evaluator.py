@@ -14,6 +14,8 @@ from src.models import (
     ComplimentaryEntry,
     AdjustmentStatus,
     Branch,
+    GoodsReceiptNote,
+    GRNStatus,
     InvoiceStatus,
     Item,
     ItemApprovalStatus,
@@ -24,6 +26,8 @@ from src.models import (
     PurchaseOrder,
     PurchaseOrderStatus,
     SaleInvoice,
+    SalesOrder,
+    SalesOrderStatus,
     StockTransfer,
     TransferStatus,
     User,
@@ -440,6 +444,72 @@ async def _scan_transfers_in_transit(
     return out
 
 
+async def _scan_pending_invoices(
+    db: AsyncSession,
+    branch_ids: list[str],
+    branch_names: dict[str, str],
+) -> list[NotificationCandidate]:
+    q = (
+        select(SaleInvoice)
+        .where(SaleInvoice.status == InvoiceStatus.pending_approval)
+        .order_by(SaleInvoice.created_at.desc())
+        .limit(_MAX_PER_KIND)
+    )
+    if branch_ids:
+        q = q.where(SaleInvoice.branch_id.in_(branch_ids))
+    out: list[NotificationCandidate] = []
+    for inv in (await db.execute(q)).scalars().all():
+        bname = branch_names.get(inv.branch_id, inv.branch_name or "")
+        out.append(
+            NotificationCandidate(
+                id=f"approval.invoice_pending:{inv.id}",
+                kind="approval.invoice_pending",
+                severity="info",
+                title=f"Invoice {inv.number} awaiting approval",
+                body=inv.customer_name or "Walk-in",
+                branch_id=inv.branch_id,
+                branch_name=bname or None,
+                href="/sales",
+                created_at=inv.created_at or datetime.utcnow(),
+                exclude_user_name=inv.created_by,
+            )
+        )
+    return out
+
+
+async def _scan_pending_sales_orders(
+    db: AsyncSession,
+    branch_ids: list[str],
+    branch_names: dict[str, str],
+) -> list[NotificationCandidate]:
+    q = (
+        select(SalesOrder)
+        .where(SalesOrder.status == SalesOrderStatus.pending_approval)
+        .order_by(SalesOrder.created_at.desc())
+        .limit(_MAX_PER_KIND)
+    )
+    if branch_ids:
+        q = q.where(SalesOrder.branch_id.in_(branch_ids))
+    out: list[NotificationCandidate] = []
+    for so in (await db.execute(q)).scalars().all():
+        bname = branch_names.get(so.branch_id, so.branch_name or "")
+        out.append(
+            NotificationCandidate(
+                id=f"approval.sales_order_pending:{so.id}",
+                kind="approval.sales_order_pending",
+                severity="info",
+                title=f"Sales order {so.number} awaiting approval",
+                body=so.customer_name or "Walk-in",
+                branch_id=so.branch_id,
+                branch_name=bname or None,
+                href="/sales",
+                created_at=so.created_at or datetime.utcnow(),
+                exclude_user_name=so.created_by,
+            )
+        )
+    return out
+
+
 async def _scan_pending_purchase_orders(
     db: AsyncSession,
     branch_ids: list[str],
@@ -468,6 +538,72 @@ async def _scan_pending_purchase_orders(
                 href="/purchases",
                 created_at=po.created_at or datetime.utcnow(),
                 exclude_user_name=po.created_by,
+            )
+        )
+    return out
+
+
+async def _scan_pending_bills(
+    db: AsyncSession,
+    branch_ids: list[str],
+    branch_names: dict[str, str],
+) -> list[NotificationCandidate]:
+    q = (
+        select(PurchaseBill)
+        .where(PurchaseBill.status == InvoiceStatus.pending_approval)
+        .order_by(PurchaseBill.created_at.desc())
+        .limit(_MAX_PER_KIND)
+    )
+    if branch_ids:
+        q = q.where(PurchaseBill.branch_id.in_(branch_ids))
+    out: list[NotificationCandidate] = []
+    for bill in (await db.execute(q)).scalars().all():
+        bname = branch_names.get(bill.branch_id, bill.branch_name or "")
+        out.append(
+            NotificationCandidate(
+                id=f"approval.bill_pending:{bill.id}",
+                kind="approval.bill_pending",
+                severity="info",
+                title=f"Purchase bill {bill.number} awaiting approval",
+                body=bill.vendor_name,
+                branch_id=bill.branch_id,
+                branch_name=bname or None,
+                href="/purchases",
+                created_at=bill.created_at or datetime.utcnow(),
+                exclude_user_name=bill.created_by,
+            )
+        )
+    return out
+
+
+async def _scan_pending_grns(
+    db: AsyncSession,
+    branch_ids: list[str],
+    branch_names: dict[str, str],
+) -> list[NotificationCandidate]:
+    q = (
+        select(GoodsReceiptNote)
+        .where(GoodsReceiptNote.status == GRNStatus.pending_approval)
+        .order_by(GoodsReceiptNote.created_at.desc())
+        .limit(_MAX_PER_KIND)
+    )
+    if branch_ids:
+        q = q.where(GoodsReceiptNote.branch_id.in_(branch_ids))
+    out: list[NotificationCandidate] = []
+    for grn in (await db.execute(q)).scalars().all():
+        bname = branch_names.get(grn.branch_id, grn.branch_name or "")
+        out.append(
+            NotificationCandidate(
+                id=f"approval.grn_pending:{grn.id}",
+                kind="approval.grn_pending",
+                severity="info",
+                title=f"GRN {grn.number} awaiting approval",
+                body=grn.vendor_name,
+                branch_id=grn.branch_id,
+                branch_name=bname or None,
+                href="/purchases",
+                created_at=grn.created_at or datetime.utcnow(),
+                exclude_user_name=grn.created_by,
             )
         )
     return out
@@ -644,6 +780,10 @@ async def _compute_notifications(
             "approval.complimentary_pending",
             "approval.transfer_pending",
             "approval.purchase_order_pending",
+            "approval.invoice_pending",
+            "approval.sales_order_pending",
+            "approval.bill_pending",
+            "approval.grn_pending",
             "finance.invoice_overdue",
             "finance.bill_overdue",
             "ops.transfer_in_transit",
@@ -667,6 +807,14 @@ async def _compute_notifications(
         candidates.extend(await _scan_pending_complimentary(db, branch_ids, branch_names))
     if _can_see_kind(grants, "approval.transfer_pending"):
         candidates.extend(await _scan_pending_transfers(db, branch_ids, branch_names))
+    if _can_see_kind(grants, "approval.invoice_pending"):
+        candidates.extend(await _scan_pending_invoices(db, branch_ids, branch_names))
+    if _can_see_kind(grants, "approval.sales_order_pending"):
+        candidates.extend(await _scan_pending_sales_orders(db, branch_ids, branch_names))
+    if _can_see_kind(grants, "approval.bill_pending"):
+        candidates.extend(await _scan_pending_bills(db, branch_ids, branch_names))
+    if _can_see_kind(grants, "approval.grn_pending"):
+        candidates.extend(await _scan_pending_grns(db, branch_ids, branch_names))
     if branch_ids and _can_see_any(grants, "ops.transfer_in_transit"):
         candidates.extend(await _scan_transfers_in_transit(db, branch_ids, branch_names))
     if _can_see_kind(grants, "approval.purchase_order_pending"):
@@ -699,6 +847,10 @@ async def gather_scan_candidates(
     candidates.extend(await _scan_pending_adjustments(db, branch_ids, branch_names))
     candidates.extend(await _scan_pending_complimentary(db, branch_ids, branch_names))
     candidates.extend(await _scan_pending_transfers(db, branch_ids, branch_names))
+    candidates.extend(await _scan_pending_invoices(db, branch_ids, branch_names))
+    candidates.extend(await _scan_pending_sales_orders(db, branch_ids, branch_names))
+    candidates.extend(await _scan_pending_bills(db, branch_ids, branch_names))
+    candidates.extend(await _scan_pending_grns(db, branch_ids, branch_names))
     candidates.extend(await _scan_transfers_in_transit(db, branch_ids, branch_names))
     candidates.extend(await _scan_pending_purchase_orders(db, branch_ids, branch_names))
     candidates.extend(await _scan_pending_items(db))

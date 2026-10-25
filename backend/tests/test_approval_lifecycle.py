@@ -19,6 +19,7 @@ from src.models import (  # noqa: E402
     InvoiceStatus,
     Item,
     ItemStock,
+    Notification,
     PurchaseBill,
     PurchaseOrder,
     PurchaseOrderStatus,
@@ -28,6 +29,7 @@ from src.models import (  # noqa: E402
     User,
     Vendor,
 )
+from src.notifications.scanner import run_notification_scan  # noqa: E402
 from src.routes.sales import (  # noqa: E402
     InvoiceApproveReject,
     InvoiceUpdate,
@@ -184,6 +186,39 @@ async def test_sales_draft_submit_approve_lifecycle() -> None:
 
     cust = (await db.execute(select(Customer).where(Customer.id == "c1"))).scalar_one()
     assert float(cust.outstanding or 0) > 0
+
+
+async def test_pending_approval_scan_creates_branch_notifications() -> None:
+    db = await _session()
+    users = await _seed(db)
+    creator = users["creator"]
+
+    created = await create_invoice(
+        SaleCreate(
+            customer_id="c1",
+            customer_name="Acme",
+            branch_id="b1",
+            branch_name="Main",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+            discount=0,
+            payment_mode=None,
+            origin="invoice",
+        ),
+        user=creator,
+        db=db,
+    )
+    assert created["status"] == "draft"
+
+    inv = (await db.execute(select(SaleInvoice).where(SaleInvoice.id == created["id"]))).scalar_one()
+    await submit_invoice(inv.id, db=db, user=creator)
+    await run_notification_scan(db)
+
+    row = (await db.execute(
+        select(Notification).where(Notification.dedupe_key == f"approval.invoice_pending:{inv.id}")
+    )).scalar_one_or_none()
+    assert row is not None, "pending invoice approval notification was not generated"
+    assert row.branch_id == "b1"
+    assert row.resolved_at is None
 
 
 async def test_pos_direct_with_pos_use() -> None:
