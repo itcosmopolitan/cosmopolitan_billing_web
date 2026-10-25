@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 
 def test_transfer_line_serializer_includes_inventory_packing_and_unit():
-    item = Item(id='item-1', name='Transfer item', packaging='1x15KG', unit='KG')
+    item = Item(id='item-1', name='Transfer item', packaging='1x15KG', unit='KG', sku='SKU-TR-1')
     line = TransferLineItem(
         item_id='item-1',
         item_name='Transfer item',
@@ -30,6 +30,7 @@ def test_transfer_line_serializer_includes_inventory_packing_and_unit():
         'name': 'Transfer item',
         'packing': '1x15KG',
         'unit': 'KG',
+        'sku': 'SKU-TR-1',
         'qty': 4,
         'cost_price': 0,
         'preferred_batch_id': None,

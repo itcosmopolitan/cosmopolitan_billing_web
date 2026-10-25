@@ -167,7 +167,7 @@ def test_purchase_order_response_includes_inventory_packing_and_unit() -> None:
         db = await _build_session()
         try:
             await _seed_vendor_branch(db)
-            db.add(Item(id="item-1", name="Almond Flakes", unit="KG", packaging="1x15KG"))
+            db.add(Item(id="item-1", name="Almond Flakes", unit="KG", packaging="1x15KG", sku="SKU-PO-42"))
             order = PurchaseOrder(
                 id="po-1",
                 number="PO-2026-1000",
@@ -200,6 +200,7 @@ def test_purchase_order_response_includes_inventory_packing_and_unit() -> None:
             result = _po_dict(loaded_order, loaded_order.line_items)
             assert result["items"][0]["packing"] == "1x15KG"
             assert result["items"][0]["unit"] == "KG"
+            assert result["items"][0]["sku"] == "SKU-PO-42"
         finally:
             await db.close()
 
