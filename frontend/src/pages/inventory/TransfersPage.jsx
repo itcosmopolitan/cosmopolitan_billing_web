@@ -649,7 +649,6 @@ export default function TransfersPage() {
                           return (
                             <td key={id}>
                               <div style={{ fontSize: 13 }}>{t.items?.length || 0} item{t.items?.length !== 1 ? 's' : ''}</div>
-                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.items?.map((i) => i.name?.split(' ')[0]).join(', ')}</div>
                             </td>
                           )
                         }
