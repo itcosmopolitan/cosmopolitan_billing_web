@@ -495,6 +495,14 @@ const DRILLDOWN_HANDLERS = {
     },
     label: row.product_name || row.product_code,
   } : null),
+  'current-stock': (row, ctx) => (row.item_id ? {
+    reportId: 'current-stock-reservations',
+    filters: {
+      item_id: row.item_id,
+      branch_id: ctx.branchId || row.branch_id || '',
+    },
+    label: row.product_name || row.product_code,
+  } : null),
   'payment-sales': (row, ctx) => ({
     reportId: 'payment-sales-detail',
     filters: {
@@ -1867,7 +1875,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                         branchId: appliedBranchIdParam,
                       }))
                       : false
-                    const clickable = Boolean(detailPath || canDrill)
+                    const clickable = Boolean(detailPath || canDrill) && !(report.id === 'current-stock')
                     const rowStyle = isPnL
                       ? {
                           fontWeight: emphasis ? 700 : 400,
@@ -1880,8 +1888,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                       <tr
                         key={index}
                         style={rowStyle}
-                        title={canDrill ? 'Click to view detail register' : undefined}
+                        title={canDrill && !(report.id === 'current-stock') ? 'Click to view detail register' : undefined}
                         onClick={() => {
+                          if (report.id === 'current-stock') return
                           if (detailPath) navigate(detailPath)
                           else if (canDrill) openDrilldown(row)
                         }}
@@ -1895,6 +1904,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                           const alignClass =
                             column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
                           const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+                          const isReservedDrillCell = report.id === 'current-stock'
+                            && column.key === 'reserved_stock'
+                            && row.item_id
+                            && Number(row.reserved_stock ?? 0) > 0
                           const numeric = typeof value === 'number' ? value : Number(value)
                           const isNegativeAmount = (
                             column.format === 'currency'
@@ -1908,8 +1921,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                               className={alignClass}
                               style={{
                                 ...(isPnL && column.key === 'account' && row.row_type === 'detail' ? { paddingLeft: 28 } : {}),
-                                ...(clickable && isNameCol ? { color: 'var(--blue)', fontWeight: 500 } : {}),
+                                ...(isReservedDrillCell ? { color: 'var(--blue)', fontWeight: 600, cursor: 'pointer' } : {}),
+                                ...(clickable && isNameCol && !isReservedDrillCell ? { color: 'var(--blue)', fontWeight: 500 } : {}),
                                 ...(isNegativeAmount ? { color: 'var(--red)' } : {}),
+                              }}
+                              title={isReservedDrillCell ? 'Click to view reserved sales orders' : undefined}
+                              onClick={() => {
+                                if (!isReservedDrillCell) return
+                                if (report.id === 'current-stock') openDrilldown(row)
                               }}
                             >
                               {rendered !== null && rendered !== undefined && rendered !== ''

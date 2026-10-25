@@ -3433,9 +3433,11 @@ async def current_stock(
     lim = normalize_limit(limit)
     base = (
         select(
+            Item.id.label("item_id"),
             Item.sku.label("product_code"),
             Item.name.label("product_name"),
             Category.name.label("category"),
+            Branch.id.label("branch_id"),
             Branch.name.label("branch"),
             ItemStock.quantity.label("stock"),
             reserved_expr.label("reserved_stock"),
@@ -3455,6 +3457,77 @@ async def current_stock(
         )
         .where(and_(*conds) if conds else True)
     )
+    total_q = select(func.count()).select_from(base.subquery())
+    total = int((await db.execute(total_q)).scalar() or 0)
+    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
+    rows = [dict(r._mapping) for r in result.fetchall()]
+    return paged(rows, total, sk, lim)
+
+
+@router.get("/current-stock-reservations", dependencies=[Depends(require_perm("reports.view"))])
+async def current_stock_reservations(
+    branch_id: Optional[str] = None,
+    item_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
+):
+    """Return active sales-order reservations for a single item / branch.
+
+    Used as the drilldown target when a user clicks the reserved-stock value in
+    the Current Stock report.
+    """
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    conds = [
+        StockReservation.status == StockReservationStatus.active,
+        StockReservation.source_type == "sales_order",
+    ]
+    branch_cond = _branch_condition(StockReservation.branch_id, branch_id, branch_scope)
+    if branch_cond is not None:
+        conds.append(branch_cond)
+    if item_id:
+        conds.append(StockReservation.item_id == item_id)
+    if search:
+        conds.append(
+            SalesOrder.number.ilike(f"%{search}%")
+            | Item.name.ilike(f"%{search}%")
+            | Item.sku.ilike(f"%{search}%")
+            | SalesOrder.customer_name.ilike(f"%{search}%")
+        )
+
+    base = (
+        select(
+            SalesOrder.number.label("sales_order_number"),
+            SalesOrder.customer_name.label("customer"),
+            Branch.name.label("branch"),
+            SalesOrder.date.label("date"),
+            StockReservation.qty.label("reserved_qty"),
+            cast(StockReservation.status, String).label("status"),
+            Item.sku.label("product_code"),
+            Item.name.label("product_name"),
+        )
+        .join(SalesOrder, SalesOrder.id == StockReservation.source_ref)
+        .join(Item, Item.id == StockReservation.item_id)
+        .join(Branch, Branch.id == StockReservation.branch_id)
+        .where(and_(*conds))
+    )
+    sort_map = {
+        "sales_order_number": SalesOrder.number,
+        "customer": SalesOrder.customer_name,
+        "branch": Branch.name,
+        "date": SalesOrder.date,
+        "reserved_qty": StockReservation.qty,
+        "status": cast(StockReservation.status, String),
+        "product_code": Item.sku,
+        "product_name": Item.name,
+    }
+    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
+    sk = normalize_skip(skip)
+    lim = normalize_limit(limit)
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))

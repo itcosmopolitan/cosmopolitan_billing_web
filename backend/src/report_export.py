@@ -49,6 +49,7 @@ REPORT_EXPORT_PATHS: dict[str, str] = {
     "vendorPurchases": "vendor-purchases",
     "productPurchases": "product-purchases",
     "currentStock": "current-stock",
+    "currentStockReservations": "current-stock-reservations",
     "lowStock": "low-stock",
     "outOfStock": "out-of-stock",
     "stockTransfers": "stock-transfers",
