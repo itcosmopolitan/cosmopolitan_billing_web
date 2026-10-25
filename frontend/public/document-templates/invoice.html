@@ -280,9 +280,11 @@
   function renderItemRows(items, lineAmounts) {
     return items.map((it, index) => {
       const amounts = lineAmounts[index]
+      const itemName = it.name || it.description || ''
+      const itemSku = it.sku || it.item_sku || it.itemSku || it.product_code || it.code || ''
       return `<tr>
           <td>${index + 1}</td>
-          <td class="wrap">${escapeHtml(it.name || it.description || '')}</td>
+          <td class="wrap">${escapeHtml(itemName)}${itemSku ? `<div class="mono" style="font-size:10px; color:#666; margin-top:2px;">${escapeHtml(itemSku)}</div>` : ''}</td>
           <td class="wrap">${escapeHtml(it.packaging || it.packing || it.package || '')}</td>
           <td class="wrap">${escapeHtml(it.units || it.unit || '')}</td>
           <td class="num">${formatNumber(amounts.qty, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
@@ -466,16 +468,20 @@
       const costPrice = Number(item.cost_price ?? item.unit_cost ?? 0)
       return sum + qty * costPrice
     }, 0)
-    const itemRows = items.map((item, index) => `
+    const itemRows = items.map((item, index) => {
+      const itemName = item.name || item.item_name || ''
+      const itemSku = item.sku || item.item_sku || item.itemSku || item.product_code || item.code || ''
+      return `
         <tr>
           <td>${index + 1}</td>
-          <td class="wrap">${escapeHtml(item.name || item.item_name || '')}</td>
+          <td class="wrap">${escapeHtml(itemName)}${itemSku ? `<div class="mono" style="font-size:10px; color:#666; margin-top:2px;">${escapeHtml(itemSku)}</div>` : ''}</td>
           <td class="wrap">${escapeHtml(item.packing || item.packaging || '')}</td>
           <td class="wrap">${escapeHtml(item.unit || item.units || '')}</td>
           <td class="num">${formatNumber(item.qty ?? item.quantity ?? 0, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
           <td class="num">${formatNumber(item.cost_price ?? item.unit_cost ?? 0)}</td>
           <td class="num">${formatNumber(Number(item.qty ?? item.quantity ?? 0) * Number(item.cost_price ?? item.unit_cost ?? 0))}</td>
-        </tr>`).join('')
+        </tr>`
+    }).join('')
 
     return `
       ${brandHeader(branch, false)}

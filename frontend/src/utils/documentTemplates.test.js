@@ -87,7 +87,7 @@ describe('invoice template', () => {
           from_branch_name: 'North Branch',
           to_branch_name: 'South Branch',
           status: 'transit',
-          items: [{ name: 'Transfer item', packing: '1x15KG', unit: 'KG', qty: 4 }],
+          items: [{ sku: 'SKU-TR-1', name: 'Transfer item', packing: '1x15KG', unit: 'KG', qty: 4 }],
         },
       },
     })
@@ -99,6 +99,29 @@ describe('invoice template', () => {
     expect(output.textContent).toContain('North Branch')
     expect(output.textContent).toContain('South Branch')
     expect(output.textContent).toContain('Transfer item')
+    expect(output.textContent).toContain('SKU-TR-1')
+  })
+
+  it('renders purchase order item SKUs in the item table', async () => {
+    const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
+    postMessage(window, {
+      type: 'renderInvoice',
+      payload: {
+        documentType: 'Purchase Order',
+        branch: {},
+        sale: {
+          id: 'po-1',
+          number: 'PO-0001',
+          customerName: 'North Trading Co',
+          items: [{ sku: 'SKU-PO-42', name: 'Rice 25kg', qty: 2, unit: 'BAG', price: 105 }],
+        },
+      },
+    })
+    await settle()
+
+    const output = window.document.getElementById('document')
+    expect(output.textContent).toContain('SKU-PO-42')
+    expect(output.textContent).toContain('Rice 25kg')
   })
 
   it('renders the branch email in the company header', async () => {

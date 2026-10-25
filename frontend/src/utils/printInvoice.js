@@ -115,6 +115,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
       salesperson: fullSale?.createdBy || '',
       items: (fullSale?.items || []).map((item) => ({
         ...item,
+        sku: item.sku ?? item.item_sku ?? item.itemSku ?? item.product_code ?? item.code ?? '',
         qty: documentType === 'GRN Receipt' ? item.receivedQty ?? item.qty ?? item.orderedQty ?? 0 : item.qty,
         price: item.cost ?? item.price,
         taxRate: item.taxRate ?? item.tax_rate ?? 0,
@@ -222,6 +223,7 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
     date: fullTransfer.request_date || fullTransfer.created_at || '',
     items: (fullTransfer.items || []).map((item) => ({
       ...item,
+      sku: item.sku ?? item.item_sku ?? item.itemSku ?? item.product_code ?? item.code ?? '',
       name: item.name || item.item_name || '',
       packing: item.packing || item.packaging || '',
       unit: item.unit || item.units || '',
