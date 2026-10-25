@@ -3502,6 +3502,7 @@ def _po_dict(po, items=None, *, converted_bill_number=None):
             "discount": i.discount, "lineTotal": i.line_total,
             "unit": i.item.unit if i.item else "",
             "packing": i.item.packaging if i.item else "",
+            "sku": i.item.sku if i.item else "",
         } for i in items]
     return d
 

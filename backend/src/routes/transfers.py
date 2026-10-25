@@ -288,6 +288,7 @@ def _line_dict(ln: TransferLineItem, cost_price: Optional[float] = None) -> dict
         "name":                 ln.item_name,
         "packing":              ln.item.packaging if ln.item else "",
         "unit":                 ln.item.unit if ln.item else "",
+        "sku":                  ln.item.sku if ln.item else "",
         "qty":                  ln.qty,
         "cost_price":           ln.cost_price if ln.cost_price is not None else cost_price,
         "preferred_batch_id":   ln.preferred_batch_id,

@@ -124,6 +124,43 @@ describe('invoice template', () => {
     expect(output.textContent).toContain('Rice 25kg')
   })
 
+  it('renders nested item SKUs for saved stock transfers and purchase orders', async () => {
+    const transferWindow = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
+    postMessage(transferWindow, {
+      type: 'renderInvoice',
+      payload: {
+        documentType: 'Stock Transfer',
+        branch: {},
+        sale: {
+          id: 'tr-1',
+          ref_number: 'TR-0009',
+          from_branch_name: 'North Branch',
+          to_branch_name: 'South Branch',
+          items: [{ item: { sku: 'SKU-NESTED-TR' }, name: 'Transfer item', qty: 3, unit: 'KG' }],
+        },
+      },
+    })
+    await settle()
+    expect(transferWindow.document.getElementById('document').textContent).toContain('SKU-NESTED-TR')
+
+    const poWindow = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
+    postMessage(poWindow, {
+      type: 'renderInvoice',
+      payload: {
+        documentType: 'Purchase Order',
+        branch: {},
+        sale: {
+          id: 'po-2',
+          number: 'PO-0009',
+          customerName: 'North Trading Co',
+          items: [{ item: { sku: 'SKU-NESTED-PO' }, name: 'Rice 25kg', qty: 2, unit: 'BAG', price: 105 }],
+        },
+      },
+    })
+    await settle()
+    expect(poWindow.document.getElementById('document').textContent).toContain('SKU-NESTED-PO')
+  })
+
   it('renders the branch email in the company header', async () => {
     const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
     postMessage(window, {

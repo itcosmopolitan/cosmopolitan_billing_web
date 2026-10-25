@@ -277,11 +277,18 @@
       <div class="list-export-count" data-list-export-count>${rows.length} record${rows.length === 1 ? '' : 's'}</div>`
   }
 
+  function getItemSku(item) {
+    if (!item || typeof item !== 'object') return ''
+    const nestedItem = item.item || item.product || item.product_item || {}
+    return item.sku || item.item_sku || item.itemSku || item.product_code || item.code ||
+      nestedItem.sku || nestedItem.item_sku || nestedItem.itemSku || nestedItem.product_code || nestedItem.code || ''
+  }
+
   function renderItemRows(items, lineAmounts) {
     return items.map((it, index) => {
       const amounts = lineAmounts[index]
       const itemName = it.name || it.description || ''
-      const itemSku = it.sku || it.item_sku || it.itemSku || it.product_code || it.code || ''
+      const itemSku = getItemSku(it)
       return `<tr>
           <td>${index + 1}</td>
           <td class="wrap">${escapeHtml(itemName)}${itemSku ? `<div class="mono" style="font-size:10px; color:#666; margin-top:2px;">${escapeHtml(itemSku)}</div>` : ''}</td>
@@ -470,7 +477,7 @@
     }, 0)
     const itemRows = items.map((item, index) => {
       const itemName = item.name || item.item_name || ''
-      const itemSku = item.sku || item.item_sku || item.itemSku || item.product_code || item.code || ''
+      const itemSku = getItemSku(item)
       return `
         <tr>
           <td>${index + 1}</td>
