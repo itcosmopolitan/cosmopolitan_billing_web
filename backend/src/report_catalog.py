@@ -365,7 +365,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 "Current Stock",
                 api="currentStock",
                 default_sort="product_code",
-                date_filter="none",
+                as_of_date=True,
                 columns=[
                     _col("product_code", "Product Code"),
                     _col("product_name", "Product Name"),
