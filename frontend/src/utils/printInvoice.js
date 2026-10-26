@@ -27,6 +27,13 @@ function roundCurrency(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
 }
 
+function extractItemSku(item) {
+  if (!item || typeof item !== 'object') return ''
+  const nested = item.item || item.product || item.product_item || {}
+  return item.sku ?? item.item_sku ?? item.itemSku ?? item.product_code ?? item.code ??
+    nested.sku ?? nested.item_sku ?? nested.itemSku ?? nested.product_code ?? nested.code ?? ''
+}
+
 const ORG_CACHE_TTL_MS = 5 * 60 * 1000
 let orgCache = { promise: null, key: null, at: 0 }
 
@@ -115,7 +122,7 @@ export async function prepareInvoicePayload(sale, branch, { documentType = 'Tax 
       salesperson: fullSale?.createdBy || '',
       items: (fullSale?.items || []).map((item) => ({
         ...item,
-        sku: item.sku ?? item.item_sku ?? item.itemSku ?? item.product_code ?? item.code ?? '',
+        sku: extractItemSku(item),
         qty: documentType === 'GRN Receipt' ? item.receivedQty ?? item.qty ?? item.orderedQty ?? 0 : item.qty,
         price: item.cost ?? item.price,
         taxRate: item.taxRate ?? item.tax_rate ?? 0,
@@ -223,7 +230,7 @@ export async function prepareStockTransferPayload(transfer, branch = {}) {
     date: fullTransfer.request_date || fullTransfer.created_at || '',
     items: (fullTransfer.items || []).map((item) => ({
       ...item,
-      sku: item.sku ?? item.item_sku ?? item.itemSku ?? item.product_code ?? item.code ?? '',
+      sku: extractItemSku(item),
       name: item.name || item.item_name || '',
       packing: item.packing || item.packaging || '',
       unit: item.unit || item.units || '',

@@ -610,6 +610,16 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("available_qty", "Available"),
         _col("stock_value", "Stock Value"),
     ],
+    "reports.current-stock-reservations": [
+        _col("product_code", "Product Code", locked=True),
+        _col("product_name", "Product Name"),
+        _col("sales_order_number", "Sales Order"),
+        _col("customer", "Customer"),
+        _col("branch", "Branch"),
+        _col("date", "Order Date"),
+        _col("reserved_qty", "Reserved Qty"),
+        _col("status", "Status"),
+    ],
     "reports.stock-movement": [
         _col("date", "Date", locked=True),
         _col("product", "Product"),

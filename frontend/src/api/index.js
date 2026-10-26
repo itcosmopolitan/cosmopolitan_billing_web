@@ -620,6 +620,7 @@ export const reportsAPI = {
   vendorPurchases:       (params) => api.get('/reports/vendor-purchases',   { params }),
   productPurchases:      (params) => api.get('/reports/product-purchases',  { params }),
   currentStock:          (params) => api.get('/reports/current-stock',      { params }),
+  currentStockReservations:(params) => api.get('/reports/current-stock-reservations', { params }),
   lowStock:              (params) => api.get('/reports/low-stock',         { params }),
   outOfStock:            (params) => api.get('/reports/out-of-stock',       { params }),
   stockTransfers:        (params) => api.get('/reports/stock-transfers',    { params }),

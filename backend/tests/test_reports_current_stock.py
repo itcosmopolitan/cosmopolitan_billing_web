@@ -12,11 +12,13 @@ from src.models import (
     Category,
     Item,
     ItemStock,
+    SalesOrder,
+    SalesOrderStatus,
     StockReservation,
     StockReservationStatus,
 )
 from src.report_catalog import REPORT_CATEGORIES
-from src.routes.reports import current_stock
+from src.routes.reports import current_stock, current_stock_reservations
 
 
 async def _build_session() -> AsyncSession:
@@ -35,14 +37,32 @@ async def _build_session() -> AsyncSession:
         ItemStock(id="s2", item_id="i2", branch_id="b1", quantity=-18),
     ])
     db.add_all([
+        SalesOrder(
+            id="so-1",
+            number="SO-1",
+            branch_id="b1",
+            branch_name="Main",
+            customer_name="Walk-in",
+            date="2025-01-01",
+            status=SalesOrderStatus.confirmed,
+        ),
+        SalesOrder(
+            id="so-2",
+            number="SO-2",
+            branch_id="b1",
+            branch_name="Main",
+            customer_name="Walk-in",
+            date="2025-01-02",
+            status=SalesOrderStatus.confirmed,
+        ),
         StockReservation(
             id="r1", item_id="i1", branch_id="b1", qty=5,
-            source_type="sales_order", source_ref="SO-1",
+            source_type="sales_order", source_ref="so-1",
             status=StockReservationStatus.active,
         ),
         StockReservation(
             id="r2", item_id="i1", branch_id="b1", qty=7,
-            source_type="sales_order", source_ref="SO-2",
+            source_type="sales_order", source_ref="so-2",
             status=StockReservationStatus.released,
         ),
     ])
@@ -136,3 +156,37 @@ def test_current_stock_sorts_by_available():
 
     rows = asyncio.run(scenario())
     assert [row["product_code"] for row in rows] == ["SKU-B", "SKU-A"]
+
+
+def test_current_stock_reservations_lists_active_sales_orders_for_item():
+    async def scenario():
+        db = await _build_session()
+        try:
+            page = await current_stock_reservations(
+                branch_id="b1",
+                item_id="i1",
+                search=None,
+                sort_by="date",
+                sort_order="desc",
+                skip=0,
+                limit=50,
+                db=db,
+                user=None,
+            )
+            return page["items"]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(scenario())
+    assert rows == [
+        {
+            "sales_order_number": "SO-1",
+            "customer": "Walk-in",
+            "branch": "Main",
+            "date": "2025-01-01",
+            "reserved_qty": 5,
+            "status": "active",
+            "product_code": "SKU-A",
+            "product_name": "Alpha",
+        }
+    ]
