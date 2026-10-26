@@ -656,8 +656,11 @@ async def assert_activity_audit_schema() -> None:
 
 
 async def _bootstrap_system_roles(conn) -> None:
-    """Idempotently insert/update system roles. Lets demo databases that
-    weren't re-seeded after this PR still pick up the new RBAC tables."""
+    """Insert missing system roles and refresh their descriptive metadata.
+
+    Existing permissions are intentionally preserved because system roles are
+    editable through the Users & Roles UI.
+    """
     import json
 
     from src.system_roles import SYSTEM_ROLES
@@ -669,7 +672,7 @@ async def _bootstrap_system_roles(conn) -> None:
             await conn.execute(
                 text(
                     "UPDATE roles SET key = :key, label = :label, description = :desc, "
-                    "color = :color, permissions = :perms, is_system = :is_system, active = :active "
+                    "color = :color, is_system = :is_system, active = :active "
                     "WHERE id = :id"
                 ),
                 {
@@ -678,7 +681,6 @@ async def _bootstrap_system_roles(conn) -> None:
                     "label": label,
                     "desc": description,
                     "color": color,
-                    "perms": json.dumps(perms),
                     "is_system": True,
                     "active": True,
                 },

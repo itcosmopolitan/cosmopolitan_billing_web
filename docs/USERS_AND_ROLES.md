@@ -146,6 +146,8 @@ Backfill: `UPDATE users SET role_id = <mapped> WHERE role_id IS NULL AND role = 
 
 Seeded by `backend/src/seed.py`. Mirrors today's `frontend/src/utils/seedData.js → ROLES` but uses wildcards where the original list was effectively all-of-module, and adds `pos.*` per D5.
 
+System role permissions are editable in the Users & Roles UI. Startup bootstrapping inserts default permissions only when a system role is first created; subsequent starts preserve its saved permissions.
+
 | Role key | Permissions |
 |---|---|
 | `super_admin` | `["*"]` |
