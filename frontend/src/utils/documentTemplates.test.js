@@ -167,7 +167,7 @@ describe('invoice template', () => {
       type: 'renderInvoice',
       payload: {
         documentType: 'Purchase Bill',
-        branch: { email: 'billing.north@example.com' },
+        branch: { email: 'billing.north@example.com', phone: 'Tel: 3350000 M: 7381234' },
         sale: {
           id: 'purchase-1',
           number: 'PB-0001',
@@ -178,6 +178,28 @@ describe('invoice template', () => {
     await settle()
 
     expect(window.document.querySelector('.company-info').textContent).toContain('billing.north@example.com')
+    expect(window.document.querySelector('.company-info').textContent).toContain('M : 960 7381234')
+  })
+
+  it('uses the address mobile in bank details instead of a Viber number', async () => {
+    const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
+    postMessage(window, {
+      type: 'renderInvoice',
+      payload: {
+        documentType: 'Tax Invoice',
+        branch: { mobile: '738 1234' },
+        sale: {
+          id: 'sale-mobile',
+          number: 'INV-MOBILE',
+          items: [{ name: 'Rice', qty: 1, rate: 100 }],
+        },
+      },
+    })
+    await settle()
+
+    const bankDetails = window.document.querySelector('.bank-details').textContent
+    expect(bankDetails).toContain('MOBILE : 960 738 1234')
+    expect(bankDetails).not.toContain('VIBER')
   })
 
   it('ignores render messages from other origins', async () => {
@@ -234,6 +256,26 @@ describe('quotation template', () => {
 
     expect(window.document.querySelector('.company-info').textContent).toContain('quotes.south@example.com')
     expect(window.document.querySelector('.company-info').textContent).toContain('Counter street')
+  })
+
+  it('uses the address mobile in bank details instead of a Viber number', async () => {
+    const window = loadTemplate(quoteHtml, '/document-templates/quotation.html')
+    postMessage(window, {
+      type: 'renderQuote',
+      payload: {
+        quote: {
+          id: 'quote-mobile',
+          number: 'QT-MOBILE',
+          items: [{ name: 'Sugar', qty: 1, price: 10 }],
+        },
+        branch: { mobile: '+960 7381234' },
+      },
+    })
+    await settle()
+
+    const bankDetails = window.document.querySelector('.bank-details').textContent
+    expect(bankDetails).toContain('MOBILE : +960 7381234')
+    expect(bankDetails).not.toContain('VIBER')
   })
 
   it('ignores render messages from other origins', async () => {

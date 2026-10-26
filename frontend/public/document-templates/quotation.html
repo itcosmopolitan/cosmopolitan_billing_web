@@ -208,6 +208,15 @@
     return exclusiveFromInclusive(Number(line.price || 0), Number(line.taxRate || line.tax_rate || 0))
   }
 
+  function branchMobileNumber(branch) {
+    const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
+    const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
+    const rawMobile = branch.mobile || branch.mobileNo || branch.mobile_no || branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    if (!rawMobile) return ''
+    const mobile = String(rawMobile).trim()
+    return /^(?:\+?960)(?:\s|$)/.test(mobile) ? mobile : `960 ${mobile}`
+  }
+
   function brandHeader(branch) {
     const branchStreet2 = branch.street2 || branch.street_2 || 'LOT NO-10627, Haivakaru Magu'
     const branchStreet3 = branch.street3 || branch.street_3 || "Hulhumale'"
@@ -218,7 +227,7 @@
     const branchPhone = branch.phone || branch.tel || branch.phoneNo || branch.phone_no || ''
     const phoneParts = String(branchPhone).match(/tel\s*:\s*(.*?)\s*(?:m\s*:\s*(.*))?$/i)
     const branchTel = phoneParts?.[1] || branchPhone
-    const branchFax = branch.fax || branch.faxNo || branch.fax_no || phoneParts?.[2] || ''
+    const branchMobile = branchMobileNumber(branch)
     const branchTin = branch.gstRegNo || branch.gstin || branch.gst || branch.gstNo || branch.gst_no || ''
     const branchEmail = branch.email || branch.emailAddress || branch.email_address || 'info@cosmopolitan.com.mv'
     const badge = branch.badge || branch.badge_url || branch.badgeImage || branch.badgeUrl || ''
@@ -241,7 +250,7 @@
           <td class="company-info" style="width:44%;">
             <div class="company-name">${escapeHtml('C.Shop Champa Brothers Maldives Pvt Ltd')}</div>
             ${addressLines.map((line) => `<div class="company-line">${escapeHtml(line)}</div>`).join('')}
-            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : 960 ${branchFax}  W : www.cosmopolitan.com.mv`)}</div>
+            <div class="company-line">${escapeHtml(`T : 960 ${branchTel}, M : ${branchMobile}  W : www.cosmopolitan.com.mv`)}</div>
             <div class="company-line">${escapeHtml(`E : ${branchEmail}, TIN : ${branchTin}`)}</div>
           </td>
           <td class="badge-cell" style="width:26%;">${badgeHtml}</td>
@@ -252,6 +261,7 @@
   const ITEM_COLUMN_WIDTHS = ['5%', '27%', '10%', '7%', '7%', '11%', '7%', '11%', '15%']
 
   function renderQuoteDocument(quote, branch, totals) {
+    const branchMobile = branchMobileNumber(branch)
     const hasValue = (value) => value != null && String(value).trim() !== ''
     const customerPhone = quote.customerPhone || quote.customer_phone || ''
     const rawAddress = quote.customerAddress || quote.customer_address || quote.address || quote.shippingAddress || quote.address_lines || quote.addressLines || ''
@@ -353,7 +363,7 @@
       <div class="keep-together">
       <div class="payment-section">
         <div class="bank-details">
-          Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
+          Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : ${escapeHtml(branchMobile)}
         </div>
       </div>
       <div class="terms">

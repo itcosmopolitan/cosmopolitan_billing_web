@@ -165,6 +165,15 @@ function formatOptionalText(value?: string) {
   return value ?? ''
 }
 
+function getBranchMobile(branch?: any) {
+  const directMobile = branch?.mobile || branch?.mobileNo || branch?.mobile_no
+  if (directMobile) return String(directMobile).trim()
+
+  const address = Array.isArray(branch?.address) ? branch.address.join(' ') : String(branch?.address || '')
+  const contactDetails = `${branch?.phone || ''} ${address}`
+  return contactDetails.match(/\bm\s*:\s*((?:\+?\d[\d\s()-]*))/i)?.[1].trim() || ''
+}
+
 function renderBillToBlock(invoice: Invoice) {
   const hasMeta = Boolean(invoice.billTo.contactPerson || (invoice.billTo.addressLines || []).some(Boolean))
   if (!hasMeta) {
@@ -210,6 +219,7 @@ function SealWithFallback() {
 export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice, branch?: any }) {
   const logoSrc = branch?.logo || branch?.logo_url || LOGO_SRC
   const companyName = branch?.company || COMPANY_NAME
+  const branchMobile = getBranchMobile(branch)
   const customerName = invoice.billTo?.name || 'Walk-in'
   const customerNameLower = customerName.trim().toLowerCase()
   const isWalkin = customerNameLower === 'walk-in' || customerNameLower === 'walkin' || customerNameLower === 'walk in' || customerNameLower === 'walkin customer' || customerNameLower === 'cash customer'
@@ -374,7 +384,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                     <div>{invoice.paymentDueDate || ''}</div>
                   </div>
                   <div className="bank-details">
-                    Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : 7384977
+                    Bank Details : BMLMVR | Account Number : 7730000271249 | Account Name : COSMOPOLITAN CHAMPA BROTHERS PVT LTD | VIBER : {branchMobile}
                   </div>
                 </div>
 
