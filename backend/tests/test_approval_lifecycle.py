@@ -26,6 +26,9 @@ from src.models import (  # noqa: E402
     Role,
     SaleInvoice,
     SaleLineItem,
+    SalesOrder,
+    SalesOrderLineItem,
+    SalesOrderStatus,
     User,
     Vendor,
 )
@@ -186,6 +189,87 @@ async def test_sales_draft_submit_approve_lifecycle() -> None:
 
     cust = (await db.execute(select(Customer).where(Customer.id == "c1"))).scalar_one()
     assert float(cust.outstanding or 0) > 0
+
+
+async def test_sales_order_draft_invoice_approval_links_order_lines() -> None:
+    db = await _session()
+    users = await _seed(db)
+    creator, approver = users["creator"], users["approver"]
+    customer = (await db.execute(select(Customer).where(Customer.id == "c1"))).scalar_one()
+    customer.is_credit_eligible = True
+
+    invoices = []
+    for index in range(2):
+        order_id = f"so-{index}"
+        line_id = f"so-line-{index}"
+        order = SalesOrder(
+            id=order_id,
+            number=f"SO-{index}",
+            customer_id="c1",
+            customer_name="Acme",
+            branch_id="b1",
+            branch_name="Main",
+            date="2026-10-28",
+            subtotal=50,
+            tax_total=0,
+            discount=0,
+            total=50,
+            status=SalesOrderStatus.confirmed,
+        )
+        db.add(order)
+        db.add(SalesOrderLineItem(
+            id=line_id,
+            order_id=order_id,
+            item_id="i1",
+            name="Widget",
+            qty=2,
+            price=25,
+            tax_rate=0,
+            discount=0,
+            line_total=50,
+        ))
+        await db.flush()
+
+        created = await create_invoice(
+            SaleCreate(
+                customer_id="c1",
+                customer_name="Acme",
+                branch_id="b1",
+                branch_name="Main",
+                items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+                payment_mode=None,
+                sales_order_id=order_id,
+                source_order_lines=[{"order_line_id": line_id, "qty": 2}],
+            ),
+            user=creator,
+            db=db,
+        )
+        invoice = (
+            await db.execute(select(SaleInvoice).where(SaleInvoice.id == created["id"]))
+        ).scalar_one()
+        assert invoice.pending_order_lines == [{"order_line_id": line_id, "qty": 2.0}]
+        invoices.append((invoice, order))
+
+    # Older drafts have the sales-order link but not the line mapping column.
+    invoices[1][0].pending_order_lines = None
+    await db.commit()
+
+    for invoice, order in invoices:
+        await submit_invoice(invoice.id, db=db, user=creator)
+        approved = await approve_invoice(
+            invoice.id, InvoiceApproveReject(), db=db, user=approver,
+        )
+        assert approved["status"] == "pending"
+        await db.refresh(order)
+        assert order.status == SalesOrderStatus.converted
+        assert order.converted_invoice_id == invoice.id
+        assert invoice.pending_order_id is None
+        assert invoice.pending_order_lines is None
+    await db.close()
+
+
+def test_sales_order_draft_invoice_approval_links_order_lines_sync() -> None:
+    asyncio.run(test_sales_order_draft_invoice_approval_links_order_lines())
 
 
 async def test_pending_approval_scan_creates_branch_notifications() -> None:
@@ -593,6 +677,7 @@ async def test_self_approve_blocked() -> None:
 
 def test_run_all():
     asyncio.get_event_loop().run_until_complete(test_sales_draft_submit_approve_lifecycle())
+    asyncio.get_event_loop().run_until_complete(test_sales_order_draft_invoice_approval_links_order_lines())
     asyncio.get_event_loop().run_until_complete(test_pos_direct_with_pos_use())
     asyncio.get_event_loop().run_until_complete(test_pos_without_pos_use_rejected())
     asyncio.get_event_loop().run_until_complete(test_pos_invoice_edit_after_delete_payment())

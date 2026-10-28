@@ -700,6 +700,7 @@ class SaleInvoice(Base):
     created_by    = Column(String, nullable=True)
     # Pending links for draft invoices: applied (and cleared) on approval.
     pending_order_id = Column(String, nullable=True)
+    pending_order_lines = Column(JSON, nullable=True)
     pending_quote_id = Column(String, nullable=True)
     quotation_number_snapshot = Column(String, nullable=True)
     client_request_id = Column(String(64), nullable=True)

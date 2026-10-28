@@ -1890,6 +1890,8 @@ async def create_invoice(
         )
     elif data.sales_order_id:
         inv_origin_early = "sales_order"
+        if not data.source_order_lines:
+            raise HTTPException(400, "source_order_lines required when sales_order_id is set")
     invoice_date = (
         today
         if data.quotation_id or data.sales_order_id
@@ -2087,6 +2089,10 @@ async def create_invoice(
         notes=data.notes,
         # Draft invoices: remember SO/quotation link; applied on approval.
         pending_order_id=(data.sales_order_id if not direct else None),
+        pending_order_lines=(
+            [line.model_dump() for line in data.source_order_lines or []]
+            if data.sales_order_id and not direct else None
+        ),
         pending_quote_id=(data.quotation_id if not direct else None),
         quotation_number_snapshot=quotation_number_snapshot,
         client_request_id=data.client_request_id,
@@ -3142,8 +3148,18 @@ async def approve_invoice(
         )
         so = so_res.unique().scalar_one_or_none()
         if so and so.status not in (SalesOrderStatus.converted, SalesOrderStatus.cancelled):
-            await _link_sales_order_to_invoice(db, pending_order_id, inv, None, user=user)
+            source_order_lines = getattr(inv, "pending_order_lines", None)
+            if not source_order_lines:
+                source_order_lines = await _infer_pending_order_lines(db, inv, so)
+            await _link_sales_order_to_invoice(
+                db,
+                pending_order_id,
+                inv,
+                [SourceOrderLineIn.model_validate(line) for line in source_order_lines],
+                user=user,
+            )
         inv.pending_order_id = None
+        inv.pending_order_lines = None
     elif pending_quote_id:
         await _link_quotation_to_invoice(db, pending_quote_id, inv, user=user)
         inv.pending_quote_id = None
@@ -5831,6 +5847,49 @@ async def _link_sales_order_to_invoice(
     )
     if so.customer_id:
         await sync_customer_outstanding(db, so.customer_id)
+
+
+async def _infer_pending_order_lines(
+    db: AsyncSession,
+    inv: SaleInvoice,
+    so: SalesOrder,
+) -> list[dict]:
+    """Recover line mappings for draft invoices created before they were persisted."""
+    invoice_lines = (
+        await db.execute(select(SaleLineItem).where(SaleLineItem.invoice_id == inv.id))
+    ).scalars().all()
+    remaining_by_id = {line.id: as_qty(line.qty) for line in so.line_items}
+    entries: dict[str, float] = {}
+
+    for invoice_line in invoice_lines:
+        candidates = [
+            line for line in so.line_items
+            if remaining_by_id[line.id] > 0
+            and line.item_id == invoice_line.item_id
+            and (line.item_id is not None or (line.name or "").strip() == (invoice_line.name or "").strip())
+            and abs(float(line.price or 0) - float(invoice_line.price or 0)) <= 0.001
+            and abs(float(line.discount or 0) - float(invoice_line.discount or 0)) <= 0.001
+        ]
+        qty_to_match = as_qty(invoice_line.qty)
+        for line in candidates:
+            allocated = min(qty_to_match, remaining_by_id[line.id])
+            if allocated > 0:
+                entries[line.id] = entries.get(line.id, 0) + allocated
+                remaining_by_id[line.id] -= allocated
+                qty_to_match -= allocated
+            if qty_to_match <= 0.001:
+                break
+        if qty_to_match > 0.001:
+            raise HTTPException(
+                400,
+                "Could not safely match this draft invoice to its sales-order lines. "
+                "Cancel the draft and recreate the invoice from the sales order.",
+            )
+
+    return [
+        {"order_line_id": line_id, "qty": qty}
+        for line_id, qty in entries.items()
+    ]
 
 
 # ─── Sales Order: LIST ───────────────────────────────────────────────────────

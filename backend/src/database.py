@@ -529,6 +529,7 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("purchase_bills", "created_by",         "VARCHAR"),
     # Pending SO/quotation link for draft invoices — applied on approval.
     ("sale_invoices",  "pending_order_id",   "VARCHAR"),
+    ("sale_invoices",  "pending_order_lines", "JSON"),
     ("sale_invoices",  "pending_quote_id",   "VARCHAR"),
 ]
 
