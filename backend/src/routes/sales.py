@@ -1881,8 +1881,6 @@ async def create_invoice(
     for i in data.items:
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
-    if data.sales_order_id and not data.source_order_lines:
-        raise HTTPException(400, "source_order_lines required when sales_order_id is set")
     today = datetime.now().strftime("%Y-%m-%d")
     inv_origin_early = (data.origin or "invoice").strip().lower() or "invoice"
     if data.quotation_id:
@@ -2089,14 +2087,6 @@ async def create_invoice(
         notes=data.notes,
         # Draft invoices: remember SO/quotation link; applied on approval.
         pending_order_id=(data.sales_order_id if not direct else None),
-        pending_order_lines=(
-            [
-                {"order_line_id": line.order_line_id, "qty": line.qty}
-                for line in (data.source_order_lines or [])
-            ]
-            if not direct and data.sales_order_id
-            else None
-        ),
         pending_quote_id=(data.quotation_id if not direct else None),
         quotation_number_snapshot=quotation_number_snapshot,
         client_request_id=data.client_request_id,
@@ -3143,7 +3133,6 @@ async def approve_invoice(
 
     # Link to SO / quotation deferred from draft creation
     pending_order_id = getattr(inv, "pending_order_id", None)
-    pending_order_lines = getattr(inv, "pending_order_lines", None)
     pending_quote_id = getattr(inv, "pending_quote_id", None)
     if pending_order_id:
         so_res = await db.execute(
@@ -3153,12 +3142,8 @@ async def approve_invoice(
         )
         so = so_res.unique().scalar_one_or_none()
         if so and so.status not in (SalesOrderStatus.converted, SalesOrderStatus.cancelled):
-            source_order_lines = pending_order_lines or await _recover_source_order_lines(db, inv, so)
-            await _link_sales_order_to_invoice(
-                db, pending_order_id, inv, source_order_lines, user=user,
-            )
+            await _link_sales_order_to_invoice(db, pending_order_id, inv, None, user=user)
         inv.pending_order_id = None
-        inv.pending_order_lines = None
     elif pending_quote_id:
         await _link_quotation_to_invoice(db, pending_quote_id, inv, user=user)
         inv.pending_quote_id = None
@@ -5737,67 +5722,6 @@ async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleI
     )
 
 
-async def _recover_source_order_lines(
-    db: AsyncSession,
-    inv: SaleInvoice,
-    so: SalesOrder,
-) -> list[SourceOrderLineIn]:
-    """Rebuild the SO-line mapping for draft invoices created before it was persisted."""
-    invoice_lines = (
-        await db.execute(
-            select(SaleLineItem)
-            .where(SaleLineItem.invoice_id == inv.id)
-            .order_by(SaleLineItem.id)
-        )
-    ).scalars().all()
-    remaining_qty = {line.id: as_qty(line.qty) for line in so.line_items}
-    recovered: list[SourceOrderLineIn] = []
-
-    for invoice_line in invoice_lines:
-        if invoice_line.item_id:
-            candidates = [
-                line for line in so.line_items
-                if line.item_id == invoice_line.item_id
-            ]
-        else:
-            candidates = [
-                line for line in so.line_items
-                if line.item_id is None and line.name == invoice_line.name
-            ]
-        candidates.sort(key=lambda line: (
-            0 if line.name == invoice_line.name
-            and abs(float(line.price or 0) - float(invoice_line.price or 0)) <= 0.001 else 1,
-            0 if abs(float(line.price or 0) - float(invoice_line.price or 0)) <= 0.001 else 1,
-            line.id,
-        ))
-
-        qty_to_match = as_qty(invoice_line.qty)
-        for line in candidates:
-            available = remaining_qty[line.id]
-            matched = min(qty_to_match, available)
-            if matched > 0:
-                recovered.append(SourceOrderLineIn(order_line_id=line.id, qty=matched))
-                remaining_qty[line.id] = as_qty(available - matched)
-                qty_to_match = as_qty(qty_to_match - matched)
-            if qty_to_match <= 0:
-                break
-
-        if qty_to_match > 0:
-            raise HTTPException(
-                400,
-                f"Could not match invoice line {invoice_line.name} to the sales order; "
-                "review the draft invoice lines before approving.",
-            )
-
-    if not recovered:
-        raise HTTPException(
-            400,
-            "Could not recover sales-order line details for this draft invoice; "
-            "recreate the invoice from the sales order.",
-        )
-    return recovered
-
-
 async def _link_sales_order_to_invoice(
     db: AsyncSession,
     order_id: str,
@@ -5819,10 +5743,7 @@ async def _link_sales_order_to_invoice(
         raise HTTPException(400, "Cannot convert a cancelled sales order")
 
     line_by_id = {li.id: li for li in so.line_items}
-    entries = [
-        SourceOrderLineIn.model_validate(entry) if isinstance(entry, dict) else entry
-        for entry in (source_order_lines or [])
-    ]
+    entries = source_order_lines or []
     if not entries:
         raise HTTPException(400, "source_order_lines required when sales_order_id is set")
 
