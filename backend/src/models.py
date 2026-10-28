@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -310,6 +310,20 @@ class StockPoolBranch(Base):
 
     pool = relationship("StockPool", back_populates="branches")
     branch = relationship("Branch")
+
+
+class SalesTarget(Base):
+    __tablename__ = "sales_targets"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "target_month", name="uq_sales_targets_branch_month"),
+    )
+
+    id = Column(String, primary_key=True)
+    branch_id = Column(String, ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_month = Column(String(7), nullable=False)
+    amount = Column(Numeric(14, 2), nullable=False)
+    created_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 # ─── Tax Rate ─────────────────────────────────────────────────────────────────
@@ -700,6 +714,8 @@ class SaleInvoice(Base):
     created_by    = Column(String, nullable=True)
     # Pending links for draft invoices: applied (and cleared) on approval.
     pending_order_id = Column(String, nullable=True)
+    # SO line ids/quantities needed to apply the conversion when the invoice is approved.
+    pending_order_lines = Column(JSON, nullable=True)
     pending_quote_id = Column(String, nullable=True)
     quotation_number_snapshot = Column(String, nullable=True)
     client_request_id = Column(String(64), nullable=True)

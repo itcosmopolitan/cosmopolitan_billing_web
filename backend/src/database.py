@@ -527,8 +527,9 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # enforce the self-approval ban (same pattern as purchase_orders.created_by).
     ("sale_invoices",  "created_by",         "VARCHAR"),
     ("purchase_bills", "created_by",         "VARCHAR"),
-    # Pending SO/quotation link for draft invoices — applied on approval.
+    # Pending SO/quotation links and source lines for draft invoices — applied on approval.
     ("sale_invoices",  "pending_order_id",   "VARCHAR"),
+    ("sale_invoices",  "pending_order_lines", "JSON"),
     ("sale_invoices",  "pending_quote_id",   "VARCHAR"),
 ]
 

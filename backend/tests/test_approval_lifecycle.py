@@ -26,6 +26,9 @@ from src.models import (  # noqa: E402
     Role,
     SaleInvoice,
     SaleLineItem,
+    SalesOrder,
+    SalesOrderLineItem,
+    SalesOrderStatus,
     User,
     Vendor,
 )
@@ -34,6 +37,7 @@ from src.routes.sales import (  # noqa: E402
     InvoiceApproveReject,
     InvoiceUpdate,
     SaleCreate,
+    SourceOrderLineIn,
     SalesReturnCreate,
     SalesReturnLineIn,
     approve_invoice,
@@ -142,6 +146,82 @@ async def _seed(db: AsyncSession) -> dict:
     ])
     await db.commit()
     return {"creator": creator, "approver": approver, "cashier": cashier}
+
+
+async def _run_sales_order_draft_approval(*, legacy_mapping: bool) -> None:
+    db = await _session()
+    users = await _seed(db)
+    creator, approver = users["creator"], users["approver"]
+    customer = await db.get(Customer, "c1")
+    customer.is_credit_eligible = True
+    db.add(SalesOrder(
+        id="so-1",
+        number="SO-0001",
+        customer_id="c1",
+        customer_name="Acme",
+        branch_id="b1",
+        branch_name="Main",
+        date="2026-10-28",
+        subtotal=50,
+        total=50,
+        status=SalesOrderStatus.confirmed,
+    ))
+    db.add(SalesOrderLineItem(
+        id="so-line-1",
+        order_id="so-1",
+        item_id="i1",
+        name="Widget",
+        qty=2,
+        price=25,
+    ))
+    await db.commit()
+
+    created = await create_invoice(
+        SaleCreate(
+            customer_id="c1",
+            customer_name="Acme",
+            branch_id="b1",
+            branch_name="Main",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 2, "price": 25, "tax_rate": 0}],
+            payment_mode=None,
+            sales_order_id="so-1",
+            source_order_lines=[SourceOrderLineIn(order_line_id="so-line-1", qty=2)],
+        ),
+        user=creator,
+        db=db,
+    )
+    assert created["status"] == "draft"
+
+    inv = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id == created["id"])
+    )).scalar_one()
+    assert inv.pending_order_lines == [{"order_line_id": "so-line-1", "qty": 2}]
+    if legacy_mapping:
+        inv.pending_order_lines = None
+        await db.commit()
+
+    await submit_invoice(inv.id, db=db, user=creator)
+    approved = await approve_invoice(
+        inv.id, InvoiceApproveReject(), db=db, user=approver,
+    )
+    assert approved["status"] == "pending"
+
+    order = (await db.execute(
+        select(SalesOrder).where(SalesOrder.id == "so-1")
+    )).scalar_one()
+    assert order.status == SalesOrderStatus.converted
+    assert order.converted_invoice_id == inv.id
+    assert inv.pending_order_id is None
+    assert inv.pending_order_lines is None
+    await db.close()
+
+
+async def test_sales_order_draft_invoice_approval_uses_persisted_line_mapping() -> None:
+    await _run_sales_order_draft_approval(legacy_mapping=False)
+
+
+async def test_sales_order_draft_invoice_approval_recovers_legacy_line_mapping() -> None:
+    await _run_sales_order_draft_approval(legacy_mapping=True)
 
 
 async def test_sales_draft_submit_approve_lifecycle() -> None:
@@ -593,6 +673,12 @@ async def test_self_approve_blocked() -> None:
 
 def test_run_all():
     asyncio.get_event_loop().run_until_complete(test_sales_draft_submit_approve_lifecycle())
+    asyncio.get_event_loop().run_until_complete(
+        test_sales_order_draft_invoice_approval_uses_persisted_line_mapping()
+    )
+    asyncio.get_event_loop().run_until_complete(
+        test_sales_order_draft_invoice_approval_recovers_legacy_line_mapping()
+    )
     asyncio.get_event_loop().run_until_complete(test_pos_direct_with_pos_use())
     asyncio.get_event_loop().run_until_complete(test_pos_without_pos_use_rejected())
     asyncio.get_event_loop().run_until_complete(test_pos_invoice_edit_after_delete_payment())
