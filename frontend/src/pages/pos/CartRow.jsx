@@ -259,8 +259,8 @@ export default function CartRow({
                 `HSN ${hsn}`,
                 `UOM ${uom}`,
                 stockMode === 'clubbed'
-                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : NOT_SET} · Here ${fmtQty(branchStockQty)}`
-                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : NOT_SET}`,
+                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : NOT_SET} available · Here ${fmtQty(branchStockQty)} available`
+                  : `${stockQty != null ? fmtQty(stockQty) : NOT_SET} available`,
               ].filter(Boolean).join(' · ')}
               aria-label={`Details for ${item.name || 'item'}: HSN, unit, stock${tracked ? ', batches' : ''}`}
             >
@@ -280,8 +280,8 @@ export default function CartRow({
               <span aria-hidden style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
               <span title="Available stock" style={{ color: stockExceeded ? 'var(--amber)' : undefined, flexShrink: 0 }}>
                 {stockMode === 'clubbed'
-                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : NOT_SET} · Here ${fmtQty(branchStockQty)}`
-                  : `Stock: ${stockQty != null ? fmtQty(stockQty) : NOT_SET}`}
+                  ? `Pool ${stockQty != null ? fmtQty(stockQty) : NOT_SET} available · Here ${fmtQty(branchStockQty)} available`
+                  : `${stockQty != null ? fmtQty(stockQty) : NOT_SET} available`}
                 {stockExceeded ? ' ⚠' : ''}
               </span>
               {tracked && (

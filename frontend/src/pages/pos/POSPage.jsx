@@ -26,6 +26,7 @@ import { cashTenderError, cashTenderSummary } from '@/utils/cashTender'
 import BatchAllocationModal from '@/components/BatchAllocationModal'
 import { toApiPayload } from '@/utils/batchAllocation'
 import CartRow from './CartRow'
+import { getPosStockAvailability } from './stockAvailability'
 import POSRefundModal from './POSRefundModal'
 import PanelDragHandle from './PanelDragHandle'
 import {
@@ -517,7 +518,10 @@ export default function POSPage() {
           return {
             ...p,
             available_stock: fresh.available_stock,
+            reserved_stock: fresh.reserved_stock,
             pool_stock: fresh.pool_stock,
+            pool_reserved_stock: fresh.pool_reserved_stock,
+            pool_available_stock: fresh.pool_available_stock,
             batches_count: fresh.batches_count,
             nearest_expiry: fresh.nearest_expiry,
           }
@@ -551,13 +555,7 @@ export default function POSPage() {
     const lineStock = new Map(products.map((product) => [
       product.id,
       {
-        availableStock: Number(
-          stockMode === 'clubbed'
-            ? (product.pool_stock ?? product.available_stock)
-            : product.available_stock,
-        ) || 0,
-        branchStock: Number(product.available_stock) || 0,
-        poolStock: Number(product.pool_stock) || 0,
+        ...getPosStockAvailability(product, stockMode),
       },
     ]))
     const currentCart = usePOSStore.getState().cart
@@ -683,7 +681,7 @@ export default function POSPage() {
       return
     }
 
-    if (!allowOverselling && stockMode !== 'clubbed' && !editingInvoice) {
+    if (!allowOverselling && !editingInvoice) {
       for (const line of persistCart) {
         const stock = Number(line.availableStock ?? line.available_stock ?? 0)
         if (line.qty > stock) {
@@ -844,10 +842,7 @@ export default function POSPage() {
     if (!term) return
     const inMemory = products.find((p) => p.barcode === term || p.sku === term)
     if (inMemory) {
-      const stock = stockMode === 'clubbed'
-        ? (inMemory.pool_stock ?? inMemory.available_stock ?? 0)
-        : (inMemory.available_stock ?? 0)
-      const branchStock = inMemory.available_stock ?? 0
+      const { availableStock: stock, branchStock, poolStock } = getPosStockAvailability(inMemory, stockMode)
       const inCart = cart.find((i) => i.id === inMemory.id)?.qty ?? 0
       if (!allowOverselling && stock <= 0) {
         toast.error(`${inMemory.name} is out of stock`)
@@ -858,7 +853,7 @@ export default function POSPage() {
           id: inMemory.id, name: inMemory.name, price: inMemory.selling_price,
           taxRate: inMemory.tax_rate || 0, sku: inMemory.sku, emoji: inMemory.emoji,
           costPrice: inMemory.cost_price ?? 0, hsnCode: inMemory.hsn_code || '',
-          availableStock: stock, branchStock, poolStock: inMemory.pool_stock,
+          availableStock: stock, branchStock, poolStock,
           batchTracking: Boolean(inMemory.batch_tracking),
           expiryTracking: Boolean(inMemory.expiry_tracking),
           packaging: inMemory.packaging || '',
@@ -891,10 +886,7 @@ export default function POSPage() {
       const exact = rows.find((p) => p.barcode === term || p.sku === term)
       const hit = exact || (rows.length === 1 ? rows[0] : null)
       if (hit) {
-        const stock = stockMode === 'clubbed'
-          ? (hit.pool_stock ?? hit.available_stock ?? 0)
-          : (hit.available_stock ?? 0)
-        const branchStock = hit.available_stock ?? 0
+        const { availableStock: stock, branchStock, poolStock } = getPosStockAvailability(hit, stockMode)
         const inCart = cart.find((i) => i.id === hit.id)?.qty ?? 0
         if (!allowOverselling && stock <= 0) {
           toast.error(`${hit.name} is out of stock`)
@@ -905,7 +897,7 @@ export default function POSPage() {
             id: hit.id, name: hit.name, price: hit.selling_price,
             taxRate: hit.tax_rate || 0, sku: hit.sku, emoji: hit.emoji,
             costPrice: hit.cost_price ?? 0, hsnCode: hit.hsn_code || '',
-            availableStock: stock, branchStock, poolStock: hit.pool_stock,
+            availableStock: stock, branchStock, poolStock,
             batchTracking: Boolean(hit.batch_tracking),
             expiryTracking: Boolean(hit.expiry_tracking),
             packaging: hit.packaging || '',
@@ -1266,8 +1258,7 @@ export default function POSPage() {
             transition: 'opacity 0.15s ease',
           }}>
             {filtered.map((p) => {
-            const branchStock = p.available_stock ?? 0
-            const stock = stockMode === 'clubbed' ? (p.pool_stock ?? branchStock) : branchStock
+            const { availableStock: stock, branchStock, poolStock } = getPosStockAvailability(p, stockMode)
             const inCart = cart.find((i) => i.id === p.id)?.qty ?? 0
             const isOut = !allowOverselling && stock <= 0
             const wouldExceed = !allowOverselling && inCart + 1 > stock
@@ -1290,7 +1281,7 @@ export default function POSPage() {
                       hsnCode: p.hsn_code || '',
                       availableStock: stock,
                       branchStock,
-                      poolStock: p.pool_stock,
+                      poolStock,
                       packaging: p.packaging || '',
                       is_packaging: Boolean(p.is_packaging),
                       packaging_quantity: p.packaging_quantity ?? null,
@@ -1322,8 +1313,8 @@ export default function POSPage() {
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}>{fmt(p.selling_price)}</div>
                 <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>
                   {isOut ? 'Out of stock' : stockMode === 'clubbed'
-                    ? `${fmtQty(stock)} pool · ${fmtQty(branchStock)} here${inCart > 0 ? ` · ${fmtQty(inCart)} in cart` : ''}`
-                    : `${fmtQty(stock)} in stock${inCart > 0 ? ` (${fmtQty(inCart)} in cart)` : ''}`}
+                    ? `${fmtQty(stock)} pool available · ${fmtQty(branchStock)} available here${inCart > 0 ? ` · ${fmtQty(inCart)} in cart` : ''}`
+                    : `${fmtQty(stock)} available${inCart > 0 ? ` (${fmtQty(inCart)} in cart)` : ''}`}
                 </div>
               </div>
             )
@@ -1653,7 +1644,7 @@ export default function POSPage() {
                       stockMode={stockMode}
                       entityDiscountShare={lineEntityShares[cartIdx] || 0}
                       onQtyChange={(qty) => {
-                        if (!allowOverselling && stockMode !== 'clubbed') {
+                        if (!allowOverselling) {
                           const stock = Number(item.availableStock ?? item.available_stock ?? 0)
                           if (qty > stock) {
                             toast.error(`Only ${stock} available for ${item.name}`)

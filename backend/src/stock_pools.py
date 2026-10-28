@@ -7,7 +7,18 @@ from typing import Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Branch, Item, ItemBatch, ItemStock, Role, StockPool, StockPoolBranch, User
+from src.models import (
+    Branch,
+    Item,
+    ItemBatch,
+    ItemStock,
+    Role,
+    StockPool,
+    StockPoolBranch,
+    StockReservation,
+    StockReservationStatus,
+    User,
+)
 from src.permissions import expand
 
 
@@ -120,6 +131,33 @@ async def pooled_item_quantities(
         for item_id, qty in rows:
             totals[item_id] = max(0.0, float(qty or 0))
     return totals
+
+
+async def pooled_reserved_quantities(
+    db: AsyncSession,
+    *,
+    item_ids: list[str],
+    pool_id: str,
+) -> dict[str, float]:
+    """Sum active reservations for items across active branches in a pool."""
+    if not item_ids:
+        return {}
+    rows = (await db.execute(
+        select(
+            StockReservation.item_id,
+            func.sum(StockReservation.qty),
+        )
+        .join(Branch, Branch.id == StockReservation.branch_id)
+        .join(StockPoolBranch, StockPoolBranch.branch_id == Branch.id)
+        .where(
+            StockReservation.item_id.in_(item_ids),
+            StockReservation.status == StockReservationStatus.active,
+            StockPoolBranch.pool_id == pool_id,
+            Branch.active.is_(True),
+        )
+        .group_by(StockReservation.item_id)
+    )).all()
+    return {item_id: float(qty or 0) for item_id, qty in rows}
 
 
 async def pool_summary_for_branch(db: AsyncSession, branch_id: str) -> Optional[dict]:

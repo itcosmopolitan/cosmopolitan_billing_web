@@ -88,6 +88,7 @@ from src.stock_pools import (
     active_pool_for_branch,
     active_pool_members,
     pooled_item_quantities,
+    pooled_reserved_quantities,
     user_has_permission,
 )
 from src.services.audit_service import build_audit_entry
@@ -1093,6 +1094,11 @@ async def list_items(
         if stock_pool and ids
         else {}
     )
+    pool_reserved_by_item = (
+        await pooled_reserved_quantities(db, item_ids=ids, pool_id=stock_pool.id)
+        if stock_pool and ids
+        else {}
+    )
     stock_by_item = {}
     if ids and branch_id:
         sr = await db.execute(
@@ -1182,6 +1188,11 @@ async def list_items(
             "reserved_stock": reserved_by_item.get(item.id, 0),
             "pool_id": stock_pool.id if stock_pool else None,
             "pool_stock": pool_stock_by_item.get(item.id) if stock_pool else None,
+            "pool_reserved_stock": pool_reserved_by_item.get(item.id, 0) if stock_pool else None,
+            "pool_available_stock": (
+                max(0, pool_stock_by_item.get(item.id, 0) - pool_reserved_by_item.get(item.id, 0))
+                if stock_pool else None
+            ),
             "pool_sellable": (
                 pool_stock_by_item.get(item.id, 0) > 0 if stock_pool else None
             ),

@@ -16,6 +16,8 @@ from src.models import (
     PoolSaleAllocation,
     SaleInvoice,
     SaleLineItem,
+    StockReservation,
+    StockReservationStatus,
     StockMovement,
     StockPool,
     StockPoolBranch,
@@ -24,7 +26,7 @@ from src.pool_sales import consume_clubbed_sale_line, reverse_pool_allocations_f
 from src.routes._atomic import set_batch_quantity_atomic
 from src.routes.reports import stock_movement
 from src.routes.sales import _pool_draw_description
-from src.stock_pools import pooled_item_quantities
+from src.stock_pools import pooled_item_quantities, pooled_reserved_quantities
 
 
 async def _build_session() -> AsyncSession:
@@ -92,6 +94,69 @@ async def _verify_pooled_quantities_filter_expiry_only_when_tracked() -> None:
 
 def test_pooled_quantities_respect_expiry_tracking() -> None:
     asyncio.run(_verify_pooled_quantities_filter_expiry_only_when_tracked())
+
+
+async def _verify_pooled_reserved_quantities() -> None:
+    db = await _build_session()
+    try:
+        db.add_all([
+            Branch(id="branch-a", name="Branch A", code="A"),
+            Branch(id="branch-b", name="Branch B", code="B"),
+            Branch(id="branch-outside", name="Outside", code="OUT"),
+            StockPool(id="pool-1", name="Pool", active=True, allow_cross_branch_sales=True),
+            StockPool(id="pool-other", name="Other", active=True, allow_cross_branch_sales=True),
+            Item(id="item-a", name="Item A"),
+            StockPoolBranch(id="member-a", pool_id="pool-1", branch_id="branch-a"),
+            StockPoolBranch(id="member-b", pool_id="pool-1", branch_id="branch-b"),
+            StockPoolBranch(id="member-outside", pool_id="pool-other", branch_id="branch-outside"),
+            StockReservation(
+                id="reservation-a",
+                item_id="item-a",
+                branch_id="branch-a",
+                qty=4,
+                source_type="sales_order",
+                source_ref="SO-1",
+            ),
+            StockReservation(
+                id="reservation-b",
+                item_id="item-a",
+                branch_id="branch-b",
+                qty=3,
+                source_type="sales_order",
+                source_ref="SO-2",
+            ),
+            StockReservation(
+                id="reservation-outside",
+                item_id="item-a",
+                branch_id="branch-outside",
+                qty=20,
+                source_type="sales_order",
+                source_ref="SO-3",
+            ),
+            StockReservation(
+                id="reservation-released",
+                item_id="item-a",
+                branch_id="branch-a",
+                qty=50,
+                source_type="sales_order",
+                source_ref="SO-4",
+                status=StockReservationStatus.released,
+            ),
+        ])
+        await db.commit()
+
+        quantities = await pooled_reserved_quantities(
+            db,
+            item_ids=["item-a"],
+            pool_id="pool-1",
+        )
+        assert quantities == {"item-a": 7.0}
+    finally:
+        await db.close()
+
+
+def test_pooled_reserved_quantities_include_active_pool_members_only() -> None:
+    asyncio.run(_verify_pooled_reserved_quantities())
 
 
 def test_pool_draw_description_is_clear_and_reusable_for_audit_and_activity() -> None:
