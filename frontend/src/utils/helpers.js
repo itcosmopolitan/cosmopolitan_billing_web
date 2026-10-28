@@ -25,15 +25,21 @@ export const fmtDateShort = (d) => {
   catch { return d }
 }
 
+const parseDateTime = (value) => {
+  if (typeof value !== 'string') return value
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+  return parseISO(!hasTimezone && value.includes('T') ? `${value}Z` : value)
+}
+
 export const fmtDateTime = (d) => {
   if (!d) return NOT_SET
-  try { return format(typeof d === 'string' ? parseISO(d) : d, 'dd MMM yyyy, h:mm a') }
+  try { return format(parseDateTime(d), 'dd MMM yyyy, h:mm a') }
   catch { return d }
 }
 
 export const fmtRelative = (d) => {
   if (!d) return NOT_SET
-  try { return formatDistanceToNow(typeof d === 'string' ? parseISO(d) : d, { addSuffix: true }) }
+  try { return formatDistanceToNow(parseDateTime(d), { addSuffix: true }) }
   catch { return d }
 }
 

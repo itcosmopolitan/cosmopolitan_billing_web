@@ -66,6 +66,28 @@ class AdjustmentCreate(BaseModel):
         return coerce_qty_value(value, field_name="new_qty")
 
 
+class AdjustmentBatchLine(BaseModel):
+    item_id: str
+    item_name: str
+    new_qty: float = Field(..., ge=0)
+    batch_id: Optional[str] = None
+
+    @field_validator("new_qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, value):
+        return coerce_qty_value(value, field_name="new_qty")
+
+
+class AdjustmentBatchCreate(BaseModel):
+    branch_id: str
+    child_counter_id: Optional[str] = None
+    child_counter_name: Optional[str] = None
+    items: list[AdjustmentBatchLine] = Field(..., min_length=1, max_length=100)
+    reason: str
+    notes: Optional[str] = None
+    requested_by: str = "Staff"
+
+
 class AdjustmentReject(BaseModel):
     rejected_by: str = "Manager"
     rejection_notes: Optional[str] = None
@@ -527,6 +549,76 @@ async def _approve_adjustment_record(
     return {"status": "approved", "ref_number": ar.ref_number, "approved_by": approved_by}
 
 
+async def _create_adjustment_record(
+    db: AsyncSession,
+    *,
+    user: User,
+    branch_id: str,
+    branch_name: str,
+    child_counter_id: Optional[str],
+    child_counter_name: Optional[str],
+    item_id: str,
+    item_name: str,
+    new_qty: float,
+    reason: str,
+    notes: Optional[str],
+    batch_id: Optional[str],
+    requested_by: str,
+    direct_approval: bool,
+) -> dict:
+    before = await _snapshot_before_qty(
+        db,
+        item_id=item_id,
+        branch_id=branch_id,
+        batch_id=batch_id,
+    )
+    request_id = str(uuid.uuid4())
+    ref_number = await _allocate_adjustment_ref(db, branch_id)
+    adjustment = AdjustmentRequest(
+        id=request_id,
+        ref_number=ref_number,
+        branch_id=branch_id,
+        branch_name=branch_name,
+        child_counter_id=child_counter_id,
+        child_counter_name=child_counter_name,
+        item_id=item_id,
+        item_name=item_name,
+        before_qty=before,
+        new_qty=as_qty(new_qty),
+        reason=reason,
+        notes=notes,
+        batch_id=batch_id,
+        status=AdjustmentStatus.pending if direct_approval else AdjustmentStatus.draft,
+        requested_by=requested_by or user.name,
+    )
+    db.add(adjustment)
+    _log_adjustment_history(
+        db,
+        user=user,
+        adjustment_id=request_id,
+        adjustment_number=ref_number,
+        event_type="created",
+        action="Adjustment request created",
+        detail=f"Created adjustment request {ref_number} for {item_name} at branch {branch_name}",
+        branch_id=branch_id,
+        metadata={
+            "branch_id": branch_id,
+            "item_name": item_name,
+            "branch_name": branch_name,
+            "reason": reason,
+        },
+    )
+    await db.flush()
+    if direct_approval:
+        result = await _approve_adjustment_record(
+            db,
+            adjustment,
+            approved_by=user.name,
+        )
+        return {"id": request_id, **result}
+    return {"id": request_id, "ref_number": ref_number, "status": "draft"}
+
+
 @router.post("/", status_code=201, dependencies=[Depends(require_perm("adjustments.create"))])
 async def create_adjustment(
     data: AdjustmentCreate,
@@ -549,65 +641,30 @@ async def create_adjustment(
     if not branch_name:
         raise HTTPException(400, "Branch not found")
 
-    before = await _snapshot_before_qty(
-        db,
-        item_id=data.item_id,
-        branch_id=data.branch_id,
-        batch_id=data.batch_id,
-    )
-
     last_err: Exception | None = None
     for _attempt in range(5):
-        rid = str(uuid.uuid4())
         try:
-            ref = await _allocate_adjustment_ref(db, data.branch_id)
+            direct_approval = await can_direct_commit(user, db, "adjustments.approve")
+            result = await _create_adjustment_record(
+                db,
+                user=user,
+                branch_id=data.branch_id,
+                branch_name=branch_name,
+                child_counter_id=child_counter_id,
+                child_counter_name=child_counter_name,
+                item_id=data.item_id,
+                item_name=data.item_name,
+                new_qty=data.new_qty,
+                reason=data.reason,
+                notes=data.notes,
+                batch_id=data.batch_id,
+                requested_by=data.requested_by,
+                direct_approval=direct_approval,
+            )
+            await db.commit()
+            return result
         except HTTPException:
             raise
-        ar = AdjustmentRequest(
-            id=rid,
-            ref_number=ref,
-            branch_id=data.branch_id,
-            branch_name=branch_name,
-            child_counter_id=child_counter_id,
-            child_counter_name=child_counter_name,
-            item_id=data.item_id,
-            item_name=data.item_name,
-            before_qty=before,
-            new_qty=as_qty(data.new_qty),
-            reason=data.reason,
-            notes=data.notes,
-            batch_id=data.batch_id,
-            status=AdjustmentStatus.pending if await can_direct_commit(user, db, "adjustments.approve") else AdjustmentStatus.draft,
-            requested_by=data.requested_by or user.name,
-        )
-        db.add(ar)
-        _log_adjustment_history(
-            db,
-            user=user,
-            adjustment_id=rid,
-            adjustment_number=ref,
-            event_type="created",
-            action="Adjustment request created",
-            detail=f"Created adjustment request {ref} for {data.item_name} at branch {branch_name}",
-            branch_id=data.branch_id,
-            metadata={
-                "branch_id": data.branch_id,
-                "item_name": data.item_name,
-                "branch_name": branch_name,
-                "reason": data.reason,
-            },
-        )
-        try:
-            await db.flush()
-            if await can_direct_commit(user, db, "adjustments.approve"):
-                result = await _approve_adjustment_record(
-                    db, ar, approved_by=user.name,
-                )
-                await db.commit()
-                return {"id": rid, "ref_number": ref, **result}
-            # Draft stays private — notification fires on submit.
-            await db.commit()
-            return {"id": rid, "ref_number": ref, "status": "draft"}
         except IntegrityError as exc:
             await db.rollback()
             last_err = exc
@@ -622,6 +679,55 @@ async def create_adjustment(
         409,
         "Could not allocate a unique adjustment reference number. Please retry.",
     ) from last_err
+
+
+@router.post("/bulk", status_code=201, dependencies=[Depends(require_perm("adjustments.create"))])
+async def create_adjustment_batch(
+    data: AdjustmentBatchCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    await enforce_branch_access(data.branch_id, user=user, db=db)
+    child_counter_id, child_counter_name = await validate_child_counter(
+        db, data.branch_id, data.child_counter_id, data.child_counter_name,
+    )
+    branch_name = (
+        await db.execute(
+            select(Branch.name).where(Branch.id == data.branch_id)
+        )
+    ).scalar_one_or_none()
+    if not branch_name:
+        raise HTTPException(400, "Branch not found")
+    item_ids = [line.item_id for line in data.items]
+    if len(set(item_ids)) != len(item_ids):
+        raise HTTPException(400, "Each item may only appear once in an adjustment request")
+
+    direct_approval = await can_direct_commit(user, db, "adjustments.approve")
+    results = []
+    try:
+        for line in data.items:
+            results.append(await _create_adjustment_record(
+                db,
+                user=user,
+                branch_id=data.branch_id,
+                branch_name=branch_name,
+                child_counter_id=child_counter_id,
+                child_counter_name=child_counter_name,
+                item_id=line.item_id,
+                item_name=line.item_name,
+                new_qty=line.new_qty,
+                reason=data.reason,
+                notes=data.notes,
+                batch_id=line.batch_id,
+                requested_by=data.requested_by,
+                direct_approval=direct_approval,
+            ))
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        _raise_adjustment_integrity_error(exc)
+
+    return {"items": results}
 
 
 @router.post("/{request_id}/submit", dependencies=[Depends(require_perm("adjustments.create"))])

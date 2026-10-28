@@ -571,6 +571,7 @@ export const transfersAPI = {
 export const adjustmentsAPI = {
   list:    (params) => api.get('/adjustments/', { params }),
   create:  (data)   => api.post('/adjustments/', data),
+  createBulk: (data) => api.post('/adjustments/bulk', data),
   approve: (id, data) => api.post(`/adjustments/${id}/approve`, data),
   submit:  (id, params) => api.post(`/adjustments/${id}/submit`, null, { params }),
   reject:  (id, data) => api.post(`/adjustments/${id}/reject`, data),

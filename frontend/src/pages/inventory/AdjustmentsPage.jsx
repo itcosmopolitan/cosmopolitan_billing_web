@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
-import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_ITEM_URL, AUTOCOMPLETE_BRANCH_URL } from '@/api'
+import { adjustmentsAPI, itemsAPI, summariesAPI, AUTOCOMPLETE_BRANCH_URL } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { useAppStore, usePOSStore, subscribeToBranchChanged } from '@/store'
 import ActivityDrawer from '@/components/activity/ActivityDrawer'
@@ -23,6 +23,7 @@ import { getChildCounterBranch, getConfiguredChildCounters } from '@/utils/child
 import RowActionsMenu from './RowActionsMenu'
 import AdjustmentDetailPanel from './AdjustmentDetailPanel'
 import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
+import InventoryItemPicker from '@/pages/sales/InventoryItemPicker'
 
 // In-flight request cache to avoid duplicate identical fetches across
 // remounts (helps reduce dev StrictMode double-calls showing in Network).
@@ -49,11 +50,6 @@ const STATUS_FILTER_OPTIONS = TAB_DEFS
   .map(({ id, label }) => ({ id, label }))
 const REASON_FILTER_OPTIONS = REASONS.map((reason) => ({ id: reason, label: reason }))
 
-function trackingLabel(item) {
-  if (!item?.batch_tracking) return 'Untracked'
-  return item.expiry_tracking ? 'FEFO' : 'FIFO'
-}
-
 function resolvedColumnLabel(tab) {
   if (tab === 'approved') return 'Approved'
   if (tab === 'rejected') return 'Rejected'
@@ -79,6 +75,15 @@ export default function AdjustmentsPage() {
   const activeBranch = useAppStore((s) => s.activeBranch)
   const branches = useAppStore((s) => s.branches)
   const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
+  const adjustmentLineId = useRef(0)
+  const emptyAdjustmentLine = () => ({
+    key: ++adjustmentLineId.current,
+    item: null,
+    batch_id: '',
+    new_qty: '',
+    batches: [],
+    batch_loading: false,
+  })
   const [activityTarget, setActivityTarget] = useState(null)
   const [tab, setTab] = useState('all')
   const [requests, setRequests] = useState([])
@@ -89,7 +94,6 @@ export default function AdjustmentsPage() {
   const [listTotal, setListTotal] = useState(0)
   const [summary, setSummary] = useState(null)
   const [listVersion, setListVersion] = useState(0)
-  const [pickedItem, setPickedItem] = useState(null)
   const [listLoading, setListLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [showDetail, setShowDetail] = useState(null)
@@ -102,14 +106,10 @@ export default function AdjustmentsPage() {
     branch_id: activeBranch?.id || 'br-001',
     child_counter_id: '',
     child_counter_name: '',
-    item_id: '',
-    new_qty: '',
+    items: [emptyAdjustmentLine()],
     reason: 'Physical count',
     notes: '',
-    batch_id: '',
   })
-  const [adjBatches, setAdjBatches] = useState([])
-  const [adjLoading, setAdjLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [actionBusy, setActionBusy] = useState(null)
   const [actionKind, setActionKind] = useState(null)
@@ -298,28 +298,26 @@ export default function AdjustmentsPage() {
     setActionKind(null)
   }
 
-  const picked = pickedItem?.id === newForm.item_id ? pickedItem : null
+  const updateAdjustmentLine = (lineKey, update) => setNewForm((form) => ({
+    ...form,
+    items: form.items.map((line) => line.key === lineKey ? update(line) : line),
+  }))
 
-  const loadBatches = async (itemId, branchId) => {
-    if (!itemId) return
-    setAdjLoading(true)
+  const loadBatches = async (lineKey, itemId, branchId) => {
+    updateAdjustmentLine(lineKey, (line) => ({ ...line, batch_loading: true }))
     try {
       const data = await itemsAPI.batches.list(itemId, { branch_id: branchId })
-      setAdjBatches(data?.items || [])
-    } catch {
-      setAdjBatches([])
-    } finally {
-      setAdjLoading(false)
+      updateAdjustmentLine(lineKey, (line) => line.item?.id === itemId
+        ? { ...line, batches: data?.items || [], batch_loading: false }
+        : line)
+    } catch (err) {
+      console.error('Failed to load adjustment item batches:', err)
+      updateAdjustmentLine(lineKey, (line) => line.item?.id === itemId
+        ? { ...line, batches: [], batch_loading: false }
+        : line)
+      toast.error('Failed to load item batches')
     }
   }
-
-  useEffect(() => {
-    if (!showNew || !newForm.item_id || !picked?.batch_tracking) {
-      setAdjBatches([])
-      return
-    }
-    loadBatches(newForm.item_id, newForm.branch_id)
-  }, [showNew, newForm.item_id, newForm.branch_id, picked?.batch_tracking])
 
   const onSort = (key) => {
     setSkip(0)
@@ -331,11 +329,26 @@ export default function AdjustmentsPage() {
 
   const submitNew = async () => {
     if (submitting) return
-    if (!newForm.item_id) { toast.error('Select an item'); return }
-    if (newForm.new_qty === '' || newForm.new_qty === null) { toast.error('Enter new quantity'); return }
-    if (Number(newForm.new_qty) < 0) { toast.error('New quantity cannot be negative'); return }
-    const item = pickedItem
-    if (!item) return
+    const lines = newForm.items.filter((line) => line.item)
+    if (lines.length === 0) { toast.error('Add at least one item'); return }
+    const duplicateItem = lines.find((line, index) => (
+      lines.findIndex((other) => other.item.id === line.item.id) !== index
+    ))
+    if (duplicateItem) { toast.error(`${duplicateItem.item.name} is selected more than once`); return }
+    for (const line of lines) {
+      if (line.new_qty === '' || line.new_qty === null) {
+        toast.error(`Enter the new quantity for ${line.item.name}`)
+        return
+      }
+      if (!Number.isFinite(Number(line.new_qty)) || Number(line.new_qty) < 0) {
+        toast.error(`Enter a valid new quantity for ${line.item.name}`)
+        return
+      }
+      if (line.batch_loading) {
+        toast.error(`Wait for batches to load for ${line.item.name}`)
+        return
+      }
+    }
     const selectedBranch = getChildCounterBranch(branches, newForm.branch_id, activeBranch)
     const selectedCounter = getConfiguredChildCounters(selectedBranch).find(
       (counter) => String(counter.id) === String(selectedChildCounter),
@@ -346,34 +359,32 @@ export default function AdjustmentsPage() {
     }
     setSubmitting(true)
     try {
-      const res = await adjustmentsAPI.create({
+      const res = await adjustmentsAPI.createBulk({
         branch_id: newForm.branch_id,
         child_counter_id: selectedCounter?.id || null,
         child_counter_name: selectedCounter?.name || null,
-        item_id: newForm.item_id,
-        item_name: item.name,
-        new_qty: Number(newForm.new_qty),
+        items: lines.map((line) => ({
+          item_id: line.item.id,
+          item_name: line.item.name,
+          new_qty: Number(line.new_qty),
+          batch_id: line.batch_id || undefined,
+        })),
         reason: newForm.reason,
         notes: newForm.notes || undefined,
-        batch_id: newForm.batch_id || undefined,
         requested_by: user?.name || 'Staff',
       })
-      toast.success(
-        res.status === 'approved'
-          ? `Adjustment ${res.ref_number} applied`
-          : `Adjustment ${res.ref_number} submitted for approval`,
-      )
+      const approved = res.items.every((item) => item.status === 'approved')
+      toast.success(approved
+        ? `${res.items.length} adjustment${res.items.length === 1 ? '' : 's'} applied`
+        : `${res.items.length} adjustment${res.items.length === 1 ? '' : 's'} submitted for approval`)
       setShowNew(false)
-      setPickedItem(null)
       setNewForm({
         branch_id: activeBranch?.id || 'br-001',
         child_counter_id: '',
         child_counter_name: '',
-        item_id: '',
-        new_qty: '',
+        items: [emptyAdjustmentLine()],
         reason: 'Physical count',
         notes: '',
-        batch_id: '',
       })
       bumpList()
     } catch (err) {
@@ -840,11 +851,11 @@ export default function AdjustmentsPage() {
         onSave={columnPrefs.savePrefs}
       />
 
-      <Modal open={showNew} onClose={() => { if (!submitting) { setShowNew(false); setPickedItem(null) } }} title="New Stock Adjustment Request" icon="⚖" size="md" busy={submitting}
+      <Modal open={showNew} onClose={() => { if (!submitting) setShowNew(false) }} title="New Stock Adjustment Request" icon="⚖" size="xl" busy={submitting}
         footer={<>
           <button className="btn btn-secondary" onClick={() => setShowNew(false)} disabled={submitting}>Cancel</button>
           <button className="btn btn-primary" onClick={submitNew} disabled={submitting}>
-            {submitting ? 'Submitting…' : 'Submit for Approval'}
+            {submitting ? 'Submitting…' : 'Submit Request'}
           </button>
         </>}>
         <FormRow>
@@ -852,15 +863,12 @@ export default function AdjustmentsPage() {
             <AutocompleteDropdown
               value={newForm.branch_id}
               onChange={(v) => {
-                setPickedItem(null)
                 setNewForm((f) => ({
                   ...f,
                   branch_id: v,
                   child_counter_id: '',
                   child_counter_name: '',
-                  item_id: '',
-                  batch_id: '',
-                  new_qty: '',
+                  items: [emptyAdjustmentLine()],
                 }))
               }}
               fetchUrl={AUTOCOMPLETE_BRANCH_URL}
@@ -868,80 +876,132 @@ export default function AdjustmentsPage() {
               isSearchFieldRequired={false}
             />
           </FormGroup>
-          <FormGroup label="Item" required>
-            <AutocompleteDropdown
-              value={newForm.item_id}
-              fetchUrl={AUTOCOMPLETE_ITEM_URL}
-              fetchParams={{ branch_id: newForm.branch_id, listed_only: true }}
-              isSearchFieldRequired
-              placeholder="Select item…"
-              searchPlaceholder="Search by name, SKU, or barcode…"
-              emptyLabel="No items at this branch"
-              selectedLabel={picked?.name ? `${picked.name} — stock ${fmtQty(picked.available_stock ?? 0)}` : undefined}
-              onSelectOption={(opt) => {
-                const raw = opt?.raw
-                setPickedItem(raw ? {
-                  id: raw.id,
-                  name: raw.name,
-                  available_stock: raw.available_stock ?? 0,
-                  batch_tracking: raw.batch_tracking,
-                  expiry_tracking: raw.expiry_tracking,
-                } : null)
-                setNewForm((f) => ({
-                  ...f,
-                  item_id: opt?.id || '',
-                  batch_id: '',
-                  new_qty: raw ? String(Math.max(0, raw.available_stock ?? 0)) : '',
-                }))
-              }}
-              disabled={submitting || !newForm.branch_id}
-            />
-          </FormGroup>
         </FormRow>
-        {picked?.batch_tracking && (
-          <div style={{ marginBottom: 12 }}>
-            <div className="form-label" style={{ marginBottom: 6 }}>Target batch (optional)</div>
-            <div style={{ border: '1px solid var(--border)', borderRadius: 8, maxHeight: 200, overflowY: 'auto' }}>
-              <table className="data-table" style={{ marginBottom: 0 }}>
-                <tbody>
-                  <tr
-                    style={{ cursor: 'pointer', background: !newForm.batch_id ? 'rgba(79,142,247,.08)' : undefined }}
-                    onClick={() => setNewForm((f) => ({ ...f, batch_id: '', new_qty: String(Math.max(0, picked.available_stock ?? 0)) }))}
-                  >
-                    <td style={{ width: 30 }}><input type="radio" readOnly checked={!newForm.batch_id} /></td>
-                    <td colSpan={2} style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>Aggregate ({trackingLabel(picked)})</td>
-                    <td className="text-right mono">{fmtQty(picked.available_stock ?? 0)}</td>
-                  </tr>
-                  {adjLoading ? (
-                    <tr><td colSpan={4} style={{ textAlign: 'center', padding: 12 }}>Loading batches…</td></tr>
-                  ) : adjBatches.map((b) => (
-                    <tr
-                      key={b.id}
-                      style={{ cursor: 'pointer', background: newForm.batch_id === b.id ? 'rgba(79,142,247,.08)' : undefined }}
-                      onClick={() => setNewForm((f) => ({ ...f, batch_id: b.id, new_qty: String(Math.max(0, b.quantity)) }))}
-                    >
-                      <td><input type="radio" readOnly checked={newForm.batch_id === b.id} /></td>
-                      <td className="mono" style={{ fontSize: 12 }}>{b.batchNumber}</td>
-                      <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{b.expiryDate ? fmtDate(b.expiryDate) : NOT_SET}</td>
-                      <td className="text-right mono">{fmtQty(b.quantity)}</td>
+        <div style={{ margin: '4px 0 16px' }}>
+          <div className="form-label" style={{ marginBottom: 8 }}>Items to adjust</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ minWidth: 720, marginBottom: 8 }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 42 }}>#</th>
+                  <th>Item</th>
+                  <th style={{ width: 150 }}>New physical quantity</th>
+                  <th style={{ width: 260 }}>Target batch</th>
+                  <th style={{ width: 44 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {newForm.items.map((line, index) => {
+                  const excludeIds = newForm.items
+                    .filter((other) => other.key !== line.key && other.item)
+                    .map((other) => other.item.id)
+                  return (
+                    <tr key={line.key} style={{ verticalAlign: 'top' }}>
+                      <td className="mono">{String(index + 1).padStart(2, '0')}</td>
+                      <td style={{ minWidth: 250 }}>
+                        <InventoryItemPicker
+                          branchId={newForm.branch_id}
+                          value={line.item ? { id: line.item.id, name: line.item.name } : null}
+                          onPick={(item) => {
+                            updateAdjustmentLine(line.key, (current) => ({
+                              ...current,
+                              item,
+                              batch_id: '',
+                              new_qty: String(Math.max(0, item.available_stock ?? 0)),
+                              batches: [],
+                            }))
+                            if (item.batch_tracking) loadBatches(line.key, item.id, newForm.branch_id)
+                          }}
+                          onClear={() => updateAdjustmentLine(line.key, (current) => ({
+                            ...current,
+                            item: null,
+                            batch_id: '',
+                            new_qty: '',
+                            batches: [],
+                            batch_loading: false,
+                          }))}
+                          excludeIds={excludeIds}
+                          disabled={submitting || !newForm.branch_id}
+                          portalDropdown
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="form-input"
+                          type="number"
+                          min={0}
+                          step={qtyInputStep()}
+                          value={line.new_qty}
+                          onChange={(event) => updateAdjustmentLine(line.key, (current) => ({
+                            ...current,
+                            new_qty: event.target.value,
+                          }))}
+                          disabled={submitting || !line.item}
+                          aria-label={`New physical quantity for ${line.item?.name || `item ${index + 1}`}`}
+                        />
+                      </td>
+                      <td>
+                        {!line.item?.batch_tracking ? (
+                          <span style={{ color: 'var(--text-muted)' }}>Aggregate stock</span>
+                        ) : (
+                          <select
+                            className="form-input"
+                            value={line.batch_id}
+                            disabled={submitting || line.batch_loading}
+                            onChange={(event) => {
+                              const batch = line.batches.find((entry) => entry.id === event.target.value)
+                              updateAdjustmentLine(line.key, (current) => ({
+                                ...current,
+                                batch_id: event.target.value,
+                                new_qty: batch ? String(Math.max(0, batch.quantity)) : String(Math.max(0, current.item.available_stock ?? 0)),
+                              }))
+                            }}
+                          >
+                            <option value="">
+                              {line.batch_loading
+                                ? 'Loading batches…'
+                                : `Aggregate stock (${fmtQty(line.item.available_stock ?? 0)})`}
+                            </option>
+                            {line.batches.map((batch) => (
+                              <option key={batch.id} value={batch.id}>
+                                {batch.batchNumber} — {fmtQty(batch.quantity)}
+                                {batch.expiryDate ? ` — ${fmtDate(batch.expiryDate)}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => setNewForm((form) => ({
+                            ...form,
+                            items: form.items.length === 1
+                              ? [emptyAdjustmentLine()]
+                              : form.items.filter((entry) => entry.key !== line.key),
+                          }))}
+                          disabled={submitting}
+                          aria-label={`Remove adjustment item ${index + 1}`}
+                        >
+                          ×
+                        </button>
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
-        )}
-
-        <FormGroup label="New quantity (physical count)" required>
-          <input
-            className="form-input"
-            type="number"
-            min={0}
-            step={qtyInputStep()}
-            value={newForm.new_qty}
-            onChange={(e) => setNewForm((f) => ({ ...f, new_qty: e.target.value }))}
-          />
-        </FormGroup>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setNewForm((form) => ({ ...form, items: [...form.items, emptyAdjustmentLine()] }))}
+            disabled={submitting || newForm.items.length >= 100}
+          >
+            + Add item
+          </button>
+        </div>
         <FormGroup label="Reason">
           <AutocompleteDropdown
             value={newForm.reason}
