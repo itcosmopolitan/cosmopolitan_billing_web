@@ -426,6 +426,7 @@ export default function InvoiceFormModal({
                   <td style={{ minWidth: 220 }}>
                     <InventoryItemPicker
                       branchId={invoiceForm.branchId}
+                      showAvailableStock
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}

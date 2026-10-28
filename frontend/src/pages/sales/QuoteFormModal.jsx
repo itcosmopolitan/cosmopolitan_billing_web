@@ -309,6 +309,7 @@ export default function QuoteFormModal({
                     <InventoryItemPicker
                       branchId={quoteForm.branchId}
                       listedOnly={false}
+                      showAvailableStock
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}

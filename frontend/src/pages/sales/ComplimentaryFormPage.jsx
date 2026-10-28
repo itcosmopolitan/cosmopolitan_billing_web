@@ -362,6 +362,7 @@ export default function ComplimentaryFormPage() {
                       <td style={{ minWidth: 220 }}>
                         <InventoryItemPicker
                           branchId={form.branchId}
+                          showAvailableStock
                           value={pickerValue}
                           onPick={(inv) => handlePick(i, inv)}
                           onClear={() => handleClear(i)}

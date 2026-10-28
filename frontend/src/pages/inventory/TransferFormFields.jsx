@@ -170,6 +170,7 @@ export default function TransferFormFields({
                       <div style={{ maxWidth: 520 }}>
                         <InventoryItemPicker
                           branchId={form.from_branch_id}
+                          showAvailableStock
                           value={row.item_id
                             ? { id: row.item_id, name: picked?.name || `Item ${row.item_id}` }
                             : null}

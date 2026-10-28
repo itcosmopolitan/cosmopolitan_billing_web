@@ -11,6 +11,7 @@
  *
  * Props:
  *   • branchId, value, onPick(item), onClear(), disabled, excludeIds
+ *   • showAvailableStock — show on-hand stock minus reserved quantities
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -53,8 +54,9 @@ function StatusRow({ children }) {
   )
 }
 
-function ResultRow({ item, onPick }) {
-  const stock = item.available_stock ?? 0
+function ResultRow({ item, onPick, showAvailableStock }) {
+  const stock = (item.available_stock ?? 0)
+    - (showAvailableStock ? (item.reserved_stock ?? 0) : 0)
   const oos = stock <= 0
   return (
     <div
@@ -108,7 +110,7 @@ function ResultRow({ item, onPick }) {
           ? 'Not listed here'
           : oos
             ? 'Out of stock'
-            : `${fmtQty(stock)} in stock`}
+            : `${fmtQty(stock)} ${showAvailableStock ? 'available' : 'in stock'}`}
       </span>
     </div>
   )
@@ -123,6 +125,7 @@ export default function InventoryItemPicker({
   excludeIds = [],
   listedOnly = true,
   portalDropdown = false,
+  showAvailableStock = false,
 }) {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
@@ -299,7 +302,7 @@ export default function InventoryItemPicker({
       {loading && results.length === 0 && <StatusRow>Searching…</StatusRow>}
       {!loading && results.length === 0 && <StatusRow>{emptyMessage}</StatusRow>}
       {results.map((r) => (
-        <ResultRow key={r.id} item={r} onPick={pick} />
+        <ResultRow key={r.id} item={r} onPick={pick} showAvailableStock={showAvailableStock} />
       ))}
       {loadingMore && <StatusRow>Loading more…</StatusRow>}
     </div>

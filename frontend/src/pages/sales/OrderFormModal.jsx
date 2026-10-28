@@ -314,6 +314,7 @@ export default function OrderFormModal({
                   <td style={{ minWidth: 220 }}>
                     <InventoryItemPicker
                       branchId={orderForm.branchId}
+                      showAvailableStock
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}

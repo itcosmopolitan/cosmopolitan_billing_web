@@ -230,6 +230,7 @@ export default function PurchaseOrderFormModal({
                     <InventoryItemPicker
                       branchId={poForm.branchId}
                       listedOnly={false}
+                      showAvailableStock
                       value={pickerValue}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}
