@@ -305,6 +305,71 @@ async def test_pending_approval_scan_creates_branch_notifications() -> None:
     assert row.resolved_at is None
 
 
+async def test_invoice_due_date_uses_snapshotted_customer_credit_terms() -> None:
+    db = await _session()
+    users = await _seed(db)
+    creator = users["creator"]
+    customer = (await db.execute(select(Customer).where(Customer.id == "c1"))).scalar_one()
+    customer.credit_terms = "7"
+    await db.commit()
+
+    original = await create_invoice(
+        SaleCreate(
+            customer_id="c1",
+            customer_name="Acme",
+            branch_id="b1",
+            branch_name="Main",
+            date="2026-10-01",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+            payment_mode=None,
+        ),
+        user=creator,
+        db=db,
+    )
+    original_invoice = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id == original["id"])
+    )).scalar_one()
+    assert original_invoice.due_date == "2026-10-08"
+
+    customer.credit_terms = "45"
+    await db.commit()
+    existing = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id == original["id"])
+    )).scalar_one()
+    assert existing.due_date == "2026-10-08"
+
+    edited = await update_invoice(
+        original["id"],
+        InvoiceUpdate(
+            date="2026-10-10",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+        ),
+        db=db,
+        user=creator,
+    )
+    assert edited["dueDate"] == "2026-10-17"
+    assert edited["paymentTerms"] == "7"
+
+    newer = await create_invoice(
+        SaleCreate(
+            customer_id="c1",
+            customer_name="Acme",
+            branch_id="b1",
+            branch_name="Main",
+            date="2026-10-01",
+            items=[{"item_id": "i1", "name": "Widget", "qty": 1, "price": 25, "tax_rate": 0}],
+            payment_mode=None,
+        ),
+        user=creator,
+        db=db,
+    )
+    newer_invoice = (await db.execute(
+        select(SaleInvoice).where(SaleInvoice.id == newer["id"])
+    )).scalar_one()
+    assert newer_invoice.due_date == "2026-11-15"
+    await db.close()
+
+
 async def test_pos_direct_with_pos_use() -> None:
     db = await _session()
     users = await _seed(db)
@@ -678,6 +743,7 @@ async def test_self_approve_blocked() -> None:
 def test_run_all():
     asyncio.get_event_loop().run_until_complete(test_sales_draft_submit_approve_lifecycle())
     asyncio.get_event_loop().run_until_complete(test_sales_order_draft_invoice_approval_links_order_lines())
+    asyncio.get_event_loop().run_until_complete(test_invoice_due_date_uses_snapshotted_customer_credit_terms())
     asyncio.get_event_loop().run_until_complete(test_pos_direct_with_pos_use())
     asyncio.get_event_loop().run_until_complete(test_pos_without_pos_use_rejected())
     asyncio.get_event_loop().run_until_complete(test_pos_invoice_edit_after_delete_payment())

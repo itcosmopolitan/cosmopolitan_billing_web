@@ -441,7 +441,10 @@ def _sort_aging_rows(
     numeric_keys = {
         "balance",
         "original_amount",
+        "collected_amount",
+        "credited_amount",
         "aged_in_days",
+        "days_overdue",
         "invoice_count",
         "bill_count",
         *_AGING_BUCKET_KEYS,
@@ -4324,6 +4327,7 @@ async def _sales_aging_detail_rows(
     date_to: Optional[str],
     customer_id: Optional[str],
     gst_mode: Optional[str] = None,
+    external_only: bool = False,
     db: AsyncSession,
 ) -> tuple[list[dict[str, Any]], date]:
     # Aging uses a single as-of cutoff (date_to). date_from is ignored so older
@@ -4354,6 +4358,8 @@ async def _sales_aging_detail_rows(
             conds.append(SaleInvoice.customer_id.is_(None))
         else:
             conds.append(SaleInvoice.customer_id == raw_customer)
+    if external_only:
+        conds.append(_external_customer_condition())
     if search:
         like = f"%{search}%"
         conds.append(
@@ -4374,7 +4380,20 @@ async def _sales_aging_detail_rows(
             SalesOrder.number.label("order_number"),
             SaleInvoice.due_date.label("due_date"),
             original_out.label("original_amount"),
+            doc_amount_expr(
+                func.coalesce(SaleInvoice.paid_amount, 0),
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("collected_amount"),
+            doc_amount_expr(
+                func.coalesce(SaleInvoice.credited_amount, 0),
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("credited_amount"),
             outstanding_out.label("balance"),
+            SaleInvoice.branch_name.label("branch"),
         )
         .select_from(SaleInvoice)
         .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
@@ -4390,6 +4409,8 @@ async def _sales_aging_detail_rows(
         balance = float(row.get("balance") or 0)
         row["transaction_type"] = "Invoice"
         row["original_amount"] = float(row.get("original_amount") or 0)
+        row["collected_amount"] = float(row.get("collected_amount") or 0)
+        row["credited_amount"] = float(row.get("credited_amount") or 0)
         row["balance"] = balance
         row["due_date"] = row.get("due_date") or row.get("invoice_date")
         row["aged_in_days"] = aged_days
@@ -4547,6 +4568,45 @@ async def sales_aging_detail(
         db=db,
     )
     rows = _sort_aging_rows(rows, sort_by, sort_order, "invoice_date")
+    return _paginate_rows(rows, skip, limit)
+
+
+@router.get("/credit-collection", dependencies=[Depends(require_perm("reports.view"))])
+async def credit_collection(
+    branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Open customer invoices with collected, credited, and overdue balances."""
+    rows, as_of = await _sales_aging_detail_rows(
+        branch_id=branch_id,
+        child_counter_id=child_counter_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=None,
+        gst_mode=gst_mode,
+        external_only=True,
+        db=db,
+    )
+    for row in rows:
+        due_date = _parse_iso_date(row.get("due_date"))
+        days_overdue = max(0, (as_of - due_date).days) if due_date else 0
+        row["days_overdue"] = days_overdue
+        row["collection_status"] = (
+            "Overdue" if days_overdue > 0 else
+            "Due Today" if due_date == as_of else
+            "Not Due"
+        )
+    rows = _sort_aging_rows(rows, sort_by, sort_order, "due_date")
     return _paginate_rows(rows, skip, limit)
 
 

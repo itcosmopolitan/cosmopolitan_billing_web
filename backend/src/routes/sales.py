@@ -1689,10 +1689,26 @@ async def update_invoice(
         inv.customer_name = data.customer_name
     if data.date:
         inv.date = data.date
+    customer_changed = inv.customer_id != prev_customer_id
+    if customer_changed:
+        updated_customer = None
+        if inv.customer_id:
+            updated_customer = (
+                await db.execute(select(Customer).where(Customer.id == inv.customer_id))
+            ).scalar_one_or_none()
+        inv.customer_credit_terms_snapshot = (
+            getattr(updated_customer, "credit_terms", None) if updated_customer else None
+        )
+    saved_credit_terms = inv.customer_credit_terms_snapshot
     if data.due_date is not None:
         inv.due_date = data.due_date
-    elif inv.status in (InvoiceStatus.pending, InvoiceStatus.partial, InvoiceStatus.overdue):
-        inv.due_date = compute_due_date(inv.date, None)
+    elif customer_changed or data.date:
+        inv.due_date = compute_due_date(inv.date, saved_credit_terms)
+    elif (
+        inv.status in (InvoiceStatus.pending, InvoiceStatus.partial, InvoiceStatus.overdue)
+        and not inv.due_date
+    ):
+        inv.due_date = compute_due_date(inv.date, saved_credit_terms)
     if data.payment_ref is not None:
         inv.payment_ref = data.payment_ref or None
     inv.subtotal = round(subtotal, 2)
@@ -1964,10 +1980,6 @@ async def create_invoice(
         # auto-applying account credit (store_credit_amount is not persisted).
         paid   = 0.0
         status = InvoiceStatus.draft.value
-    due_date = None
-    if status in ("pending", "partial"):
-        due_date = compute_due_date(invoice_date, None)
-
     if is_credit_sale and not data.allow_credit_over_limit:
         await _validate_unpaid_account_limit(db, data.customer_id, total)
 
@@ -2055,6 +2067,10 @@ async def create_invoice(
         invoice_customer = (await db.execute(
             select(Customer).where(Customer.id == data.customer_id)
         )).scalar_one_or_none()
+    due_date = compute_due_date(
+        invoice_date,
+        getattr(invoice_customer, "credit_terms", None),
+    )
     invoice_customer_snapshot = await _invoice_customer_snapshot(db, invoice_customer, data.branch_id)
     quotation_number_snapshot = None
     if data.quotation_id:
@@ -3135,7 +3151,10 @@ async def approve_invoice(
     new_status = "paid" if paid_amount >= total - 0.001 else ("partial" if paid_amount > 0.001 else "pending")
     inv.status = new_status
     if new_status in ("pending", "partial") and not inv.due_date:
-        inv.due_date = compute_due_date(inv.date, None)
+        inv.due_date = compute_due_date(
+            inv.date,
+            getattr(inv, "customer_credit_terms_snapshot", None),
+        )
 
     # Link to SO / quotation deferred from draft creation
     pending_order_id = getattr(inv, "pending_order_id", None)
@@ -6568,6 +6587,10 @@ async def convert_order_to_invoice(
         child_counter_name=so.child_counter_name,
         cashier=(user.name if user is not None else so.created_by) or "Staff",
         date=today,
+        due_date=compute_due_date(
+            today,
+            getattr(invoice_customer, "credit_terms", None),
+        ),
         subtotal=inv_subtotal,
         tax_total=inv_tax_total,
         discount=inv_discount,
@@ -6998,12 +7021,13 @@ async def convert_quote_to_invoice(
     paid = inv_total if data.payment_received else 0.0
     status = "paid" if paid >= inv_total else "pending"
     payment_mode = data.payment_mode if data.payment_received else None
-    due_date = None
-    if status in ("pending", "partial"):
-        due_date = compute_due_date(today, None)
     invoice_customer = (await db.execute(
         select(Customer).where(Customer.id == quote.customer_id)
     )).scalar_one_or_none() if quote.customer_id else None
+    due_date = compute_due_date(
+        today,
+        getattr(invoice_customer, "credit_terms", None),
+    )
 
     inv = SaleInvoice(
         id=str(uuid.uuid4()), number=inv_num,

@@ -61,6 +61,7 @@ REPORT_EXPORT_PATHS: dict[str, str] = {
     "quarterlyTax": "quarterly-tax",
     "gstSummary": "gst-summary",
     "outstandingReceivables": "outstanding-receivables",
+    "creditCollection": "credit-collection",
     "salesAging": "sales-aging",
     "salesAgingDetail": "sales-aging-detail",
     "outstandingPayables": "outstanding-payables",

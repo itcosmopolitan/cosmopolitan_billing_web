@@ -632,6 +632,7 @@ export const reportsAPI = {
   quarterlyTax:          (params) => api.get('/reports/quarterly-tax',     { params }),
   gstSummary:            (params) => api.get('/reports/gst-summary',       { params }),
   outstandingReceivables:(params) => api.get('/reports/outstanding-receivables',{ params }),
+  creditCollection:      (params) => api.get('/reports/credit-collection', { params }),
   salesAging:            (params) => api.get('/reports/sales-aging',        { params }),
   salesAgingDetail:      (params) => api.get('/reports/sales-aging-detail',  { params }),
   outstandingPayables:   (params) => api.get('/reports/outstanding-payables',{ params }),

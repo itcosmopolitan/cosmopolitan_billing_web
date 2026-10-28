@@ -1124,6 +1124,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     'cashierSales',
     'customerSales',
     'outstandingReceivables',
+    'creditCollection',
     'salesAging',
     'salesAgingDetail',
     'topCustomers',
