@@ -705,6 +705,7 @@ export const settingsAPI = {
 export const notificationsAPI = {
   list:    (params) => api.get('/notifications/', { params }),
   count:   (params) => api.get('/notifications/count', { params }),
+  approvalCounts: (params) => api.get('/notifications/approval-counts', { params }),
   read:    (id)     => api.post(`/notifications/${id}/read`),
   readAll: (params) => api.post('/notifications/read-all', null, { params }),
 }

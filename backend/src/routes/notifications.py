@@ -9,6 +9,7 @@ from src.database import get_db
 from src.models import User
 from src.notifications.scanner import run_notification_scan
 from src.notifications.store import (
+    approval_counts_for_user,
     list_for_user,
     mark_all_read,
     mark_read,
@@ -46,6 +47,16 @@ async def notification_count(
     ids = await unread_ids_for_user(db, user, branch_id=branch_id)
     total = await unread_count_for_user(db, user, branch_id=branch_id)
     return {"ids": ids, "total": total, "unread_count": total}
+
+
+@router.get("/approval-counts")
+async def approval_notification_counts(
+    branch_id: Optional[str] = Depends(enforce_branch_access_optional),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    counts = await approval_counts_for_user(db, user, branch_id=branch_id)
+    return {"counts": counts}
 
 
 @router.post("/{notification_id}/read")

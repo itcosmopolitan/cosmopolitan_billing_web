@@ -21,6 +21,7 @@ export function useNotificationSocket(onRefresh) {
       if (closed) return
       ws = new WebSocket(url)
       ws.onmessage = () => {
+        window.dispatchEvent(new Event('notifications:refresh'))
         callbackRef.current?.()
       }
       ws.onclose = () => {

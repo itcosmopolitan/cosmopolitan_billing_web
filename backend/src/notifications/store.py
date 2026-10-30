@@ -5,13 +5,13 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import Notification, NotificationRead, User
 from src.notifications.evaluator import NotificationCandidate, invalidate_notification_cache
 from src.notifications.hub import hub
-from src.notifications.kinds import SEVERITY_RANK, can_see_kind
+from src.notifications.kinds import KIND_PERMS, SEVERITY_RANK, can_see_kind
 from src.routes._approval import user_grants
 from src.routes._serializers import get_user_branch_ids
 
@@ -206,6 +206,46 @@ async def unread_ids_for_user(
 ) -> list[str]:
     items = await list_for_user(db, user, branch_id=branch_id)
     return [i["id"] for i in items if not i.get("read")]
+
+
+async def approval_counts_for_user(
+    db: AsyncSession,
+    user: User,
+    *,
+    branch_id: Optional[str] = None,
+) -> dict[str, int]:
+    """Count active approval notifications visible to this user."""
+    kinds = tuple(kind for kind in KIND_PERMS if kind.startswith("approval."))
+    counts = {kind: 0 for kind in kinds}
+    branch_ids = await _accessible_branch_ids(db, user, branch_id)
+    if branch_id and not branch_ids:
+        return counts
+
+    grants = await user_grants(user, db)
+    visible_kinds = [kind for kind in kinds if can_see_kind(grants, kind)]
+    if not visible_kinds:
+        return counts
+
+    conds = [
+        Notification.resolved_at.is_(None),
+        Notification.kind.in_(visible_kinds),
+    ]
+    if branch_id:
+        conds.append(or_(Notification.branch_id.is_(None), Notification.branch_id == branch_id))
+    elif branch_ids:
+        conds.append(or_(Notification.branch_id.is_(None), Notification.branch_id.in_(branch_ids)))
+    if user.name:
+        conds.append(
+            or_(Notification.exclude_user_name.is_(None), Notification.exclude_user_name != user.name)
+        )
+
+    rows = await db.execute(
+        select(Notification.kind, func.count(Notification.id))
+        .where(and_(*conds))
+        .group_by(Notification.kind)
+    )
+    counts.update({kind: count for kind, count in rows.all()})
+    return counts
 
 
 async def mark_read(db: AsyncSession, user: User, notification_id: str) -> bool:

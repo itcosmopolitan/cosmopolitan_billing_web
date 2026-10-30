@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAppStore } from '@/store'
-import { authAPI } from '@/api'
+import { authAPI, notificationsAPI } from '@/api'
 import { useCan } from '@/auth/permissions'
 import { Avatar } from '@/components/ui'
 import BrandLogo from '@/components/BrandLogo'
@@ -20,15 +20,20 @@ import { NOT_SET } from '@/utils/emptyValue'
 const navItems = [
   { section: 'Main',      path: '/dashboard',  Icon: Icon.Dashboard,   label: 'Dashboard',       perm: 'dashboard.view' },
   { section: null,        path: '/pos',        Icon: Icon.Receipt,     label: 'POS Billing',     perm: 'pos.use' },
-  { section: 'Inventory', path: '/item-master', Icon: Icon.List,     label: 'Item Master',     perm: 'item_master.view' },
+  { section: 'Inventory', path: '/item-master', Icon: Icon.List,     label: 'Item Master',     perm: 'item_master.view', approvalKinds: ['approval.item_master_pending'] },
   { section: null,        path: '/items',      Icon: Icon.Package,  label: 'Items & Stock',   perm: 'items.view' },
-  { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view' },
-  { section: null,        path: '/adjustments', Icon: Icon.Scale,     label: 'Stock Adjustments', perm: 'adjustments.view' },
+  { section: null,        path: '/transfers',  Icon: Icon.Transfer,    label: 'Stock Transfers', perm: 'transfers.view', approvalKinds: ['approval.transfer_pending'] },
+  { section: null,        path: '/adjustments', Icon: Icon.Scale,     label: 'Stock Adjustments', perm: 'adjustments.view', approvalKinds: ['approval.adjustment_pending'] },
   {
     section: 'Commerce',
     path: '/sales',
     Icon: Icon.ShoppingBag,
     label: 'Sales',
+    approvalKinds: [
+      'approval.sales_order_pending',
+      'approval.invoice_pending',
+      'approval.complimentary_pending',
+    ],
     perms: ['invoices.view', 'quotations.view', 'sales_orders.view'],
     defaultTab: 'quotes',
     defaultChild: '/sales?tab=invoices',
@@ -42,9 +47,9 @@ const navItems = [
     ],
     children: [
       { path: '/sales?tab=quotes', label: 'Quotations', tab: 'quotes', perms: ['quotations.view', 'invoices.view'] },
-      { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders', perms: ['sales_orders.view', 'invoices.view'] },
-      { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices', perm: 'invoices.view' },
-      { path: '/sales?tab=complimentary', label: 'Complimentary', tab: 'complimentary', perm: 'invoices.view' },
+      { path: '/sales?tab=orders', label: 'Sales Orders', tab: 'orders', perms: ['sales_orders.view', 'invoices.view'], approvalKinds: ['approval.sales_order_pending'] },
+      { path: '/sales?tab=invoices', label: 'Invoices', tab: 'invoices', perm: 'invoices.view', approvalKinds: ['approval.invoice_pending'] },
+      { path: '/sales?tab=complimentary', label: 'Complimentary', tab: 'complimentary', perm: 'invoices.view', approvalKinds: ['approval.complimentary_pending'] },
       { path: '/sales?tab=payments', label: 'Payments Received', tab: 'payments', perm: 'invoices.view' },
       { path: '/sales?tab=returns', label: 'Credit Notes', tab: 'returns', perm: 'invoices.view' },
     ],
@@ -54,6 +59,11 @@ const navItems = [
     path: '/purchases',
     Icon: Icon.Clipboard,
     label: 'Purchases',
+    approvalKinds: [
+      'approval.purchase_order_pending',
+      'approval.grn_pending',
+      'approval.bill_pending',
+    ],
     perms: ['purchases.view', 'bills.view', 'grns.view'],
     defaultTab: 'bills',
     defaultChild: '/purchases?tab=bills',
@@ -65,9 +75,9 @@ const navItems = [
       { prefix: '/purchases/payments', tab: 'payments' }
     ],
     children: [
-      { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders', perm: 'purchases.view' },
-      { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns', perms: ['grns.view', 'purchases.view'] },
-      { path: '/purchases?tab=bills', label: 'Bills', tab: 'bills', perms: ['bills.view', 'purchases.view'] },
+      { path: '/purchases?tab=orders', label: 'Purchase Orders', tab: 'orders', perm: 'purchases.view', approvalKinds: ['approval.purchase_order_pending'] },
+      { path: '/purchases?tab=grns', label: 'GRN (Receipts)', tab: 'grns', perms: ['grns.view', 'purchases.view'], approvalKinds: ['approval.grn_pending'] },
+      { path: '/purchases?tab=bills', label: 'Bills', tab: 'bills', perms: ['bills.view', 'purchases.view'], approvalKinds: ['approval.bill_pending'] },
       { path: '/purchases?tab=payments', label: 'Payments Made', tab: 'payments', perm: 'purchases.view' },
       { path: '/purchases?tab=returns', label: 'Vendor Returns', tab: 'returns', perm: 'purchases.view' }
     ],
@@ -83,6 +93,38 @@ const navItems = [
 
 const SIDEBAR_W          = 220
 const SIDEBAR_W_COLLAPSED = 68
+const APPROVAL_COUNT_POLL_MS = 60_000
+
+function ApprovalCountBadge({ count, collapsed = false }) {
+  if (!count) return null
+  const label = `${count} pending approval${count === 1 ? '' : 's'}`
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      style={{
+        position: collapsed ? 'absolute' : 'static',
+        top: collapsed ? 2 : undefined,
+        right: collapsed ? 2 : undefined,
+        minWidth: 18,
+        height: 18,
+        padding: '0 5px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        borderRadius: 9,
+        background: 'var(--red)',
+        color: 'var(--text-on-accent, #fff)',
+        fontSize: 10,
+        lineHeight: 1,
+        fontWeight: 700,
+      }}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
 
 function resolveGroupTab(item, pathname, search) {
   if (!pathname.startsWith(item.path)) return null
@@ -165,14 +207,51 @@ export default function Sidebar() {
     }
     return initial
   })
-  const { user, sidebarCollapsed, toggleSidebar, roles, clearSession } = useAppStore()
+  const { user, activeBranch, sidebarCollapsed, toggleSidebar, roles, clearSession } = useAppStore()
   const can = useCan()
+  const [approvalCounts, setApprovalCounts] = useState({})
+  const tabVisibleRef = useRef(typeof document !== 'undefined' ? !document.hidden : true)
 
   // Resolve the role label dynamically. Prefer the live `roles` list (covers
   // custom roles) and fall back to the static `roleLabels` map for the system
   // roles that ship with the app, then to the raw role string.
   const userRole = roles.find((r) => r.id === user?.role_id) || roles.find((r) => r.key === user?.role)
   const userRoleLabel = userRole?.label || roleLabels[user?.role] || user?.role || ''
+  const branchParams = useMemo(
+    () => (activeBranch?.id ? { branch_id: activeBranch.id } : undefined),
+    [activeBranch?.id],
+  )
+
+  const fetchApprovalCounts = useCallback(async () => {
+    if (!user?.id || !tabVisibleRef.current) return
+    try {
+      const res = await notificationsAPI.approvalCounts(branchParams)
+      setApprovalCounts(res?.counts || {})
+    } catch (error) {
+      console.error('Failed to load approval counts for navigation:', error)
+    }
+  }, [user?.id, branchParams])
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      tabVisibleRef.current = !document.hidden
+      if (tabVisibleRef.current) fetchApprovalCounts()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('notifications:refresh', fetchApprovalCounts)
+    fetchApprovalCounts()
+    const timer = setInterval(fetchApprovalCounts, APPROVAL_COUNT_POLL_MS)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('notifications:refresh', fetchApprovalCounts)
+      clearInterval(timer)
+    }
+  }, [fetchApprovalCounts])
+
+  const getApprovalCount = (kinds = []) => kinds.reduce(
+    (total, kind) => total + Number(approvalCounts[kind] || 0),
+    0,
+  )
 
   // Phase 2: hide nav items the current user can't access. Items without a
   // `perm` are always visible.
@@ -281,6 +360,9 @@ export default function Sidebar() {
           const hasChildren = children.length > 0
           const groupActive = hasChildren && isGroupActive(item, location)
           const groupOpen = Boolean(openGroups[item.path])
+          const approvalCount = hasChildren
+            ? children.reduce((total, child) => total + getApprovalCount(child.approvalKinds), 0)
+            : getApprovalCount(item.approvalKinds)
 
           return (
             <div key={item.path}>
@@ -334,6 +416,9 @@ export default function Sidebar() {
                         {item.label}
                       </span>
                     )}
+                    {(!groupOpen || sidebarCollapsed) && (
+                      <ApprovalCountBadge count={approvalCount} collapsed={sidebarCollapsed} />
+                    )}
                     {!sidebarCollapsed && (
                       <span
                         className={`sidebar-nav-chevron${groupOpen ? ' is-open' : ''}`}
@@ -380,6 +465,7 @@ export default function Sidebar() {
                               }}>
                                 {child.label}
                               </span>
+                              <ApprovalCountBadge count={getApprovalCount(child.approvalKinds)} />
                             </NavLink>
                           )
                         })}
@@ -410,6 +496,7 @@ export default function Sidebar() {
                           {item.label}
                         </span>
                       )}
+                      <ApprovalCountBadge count={approvalCount} collapsed={sidebarCollapsed} />
                     </>
                   )}
                 </NavLink>
