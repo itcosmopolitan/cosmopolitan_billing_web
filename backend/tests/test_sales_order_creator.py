@@ -7,10 +7,26 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import selectinload, sessionmaker
 
 from src.database import Base
-from src.models import Branch, Item, SalesOrder, SalesOrderLineItem, SalesOrderStatus, User
+from src.models import (
+    Branch,
+    Item,
+    SaleInvoice,
+    SaleLineItem,
+    SalesOrder,
+    SalesOrderLineItem,
+    SalesOrderStatus,
+    User,
+)
 from src.notifications import store as notification_store
 from src.routes import sales as sales_routes
-from src.routes.sales import SalesOrderCreate, SalesOrderLineIn, _so_dict, create_order, submit_sales_order
+from src.routes.sales import (
+    SalesOrderCreate,
+    SalesOrderLineIn,
+    _converted_order_invoice_map,
+    _so_dict,
+    create_order,
+    submit_sales_order,
+)
 
 
 async def _build_session() -> AsyncSession:
@@ -135,6 +151,67 @@ def test_sales_order_response_includes_inventory_packing_and_unit():
             result = _so_dict(loaded_order, loaded_order.line_items)
             assert result["items"][0]["packing"] == "1x15KG"
             assert result["items"][0]["unit"] == "KG"
+        finally:
+            await db.close()
+
+    asyncio.run(run_test())
+
+
+def test_converted_sales_order_response_uses_linked_invoice_snapshot():
+    async def run_test():
+        db = await _build_session()
+        try:
+            db.add(Branch(id="b1", name="Main", code="MAIN"))
+            order = SalesOrder(
+                id="so-1",
+                number="SO-0001",
+                branch_id="b1",
+                date="2026-10-06",
+                subtotal=0,
+                tax_total=0,
+                total=0,
+                status=SalesOrderStatus.converted,
+                converted_invoice_id="inv-1",
+            )
+            db.add_all([
+                order,
+                SaleInvoice(
+                    id="inv-1",
+                    number="INV-0001",
+                    branch_id="b1",
+                    date="2026-10-06",
+                    subtotal=100,
+                    tax_total=5,
+                    total=105,
+                ),
+                SaleLineItem(
+                    id="line-1",
+                    invoice_id="inv-1",
+                    name="Test item",
+                    qty=2,
+                    price=50,
+                    tax_rate=5,
+                    line_total=105,
+                ),
+            ])
+            await db.commit()
+
+            saved_order = (await db.execute(
+                select(SalesOrder)
+                .options(selectinload(SalesOrder.line_items))
+                .where(SalesOrder.id == "so-1")
+            )).scalar_one()
+            invoices = await _converted_order_invoice_map(db, [saved_order])
+            result = _so_dict(
+                saved_order,
+                saved_order.line_items,
+                converted_invoice=invoices[saved_order.converted_invoice_id],
+            )
+            assert result["total"] == 105
+            assert result["subtotal"] == 100
+            assert len(result["items"]) == 1
+            assert result["items"][0]["qty"] == 2
+            assert result["items"][0]["name"] == "Test item"
         finally:
             await db.close()
 

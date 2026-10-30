@@ -5241,7 +5241,15 @@ class SalesReturnCreate(BaseModel):
 
 
 # ─── Sales Order helpers ─────────────────────────────────────────────────────
-def _so_dict(so, items=None, classification=None, *, converted_invoice_number=None, customer_key_account_manager=None):
+def _so_dict(
+    so,
+    items=None,
+    classification=None,
+    *,
+    converted_invoice_number=None,
+    converted_invoice=None,
+    customer_key_account_manager=None,
+):
     customer = _loaded_rel(so, "customer")
     d = {
         "id": so.id, "number": so.number,
@@ -5282,7 +5290,35 @@ def _so_dict(so, items=None, classification=None, *, converted_invoice_number=No
             "packaging": i.packaging if i.packaging is not None else (i.item.packaging if i.item else ""),
             "packing": i.item.packaging if i.item else "",
         } for i in items]
+    if converted_invoice is not None and not d.get("items"):
+        invoice_data = _inv_dict(converted_invoice, converted_invoice.line_items)
+        d.update({
+            "subtotal": invoice_data["subtotal"],
+            "taxTotal": invoice_data["taxTotal"],
+            "discount": invoice_data["discount"],
+            "total": invoice_data["total"],
+            "items": invoice_data.get("items", []),
+        })
     return d
+
+
+async def _converted_order_invoice_map(db: AsyncSession, orders: list[SalesOrder]) -> dict[str, SaleInvoice]:
+    invoice_ids = {
+        so.converted_invoice_id
+        for so in orders
+        if so.converted_invoice_id
+        and (so.status.value if hasattr(so.status, "value") else str(so.status))
+        == SalesOrderStatus.converted.value
+        and not so.line_items
+    }
+    if not invoice_ids:
+        return {}
+    rows = await db.execute(
+        select(SaleInvoice)
+        .options(selectinload(SaleInvoice.line_items).selectinload(SaleLineItem.item))
+        .where(SaleInvoice.id.in_(invoice_ids))
+    )
+    return {invoice.id: invoice for invoice in rows.unique().scalars().all()}
 
 
 async def _get_org_tax_mode(db: AsyncSession) -> str:
@@ -5974,6 +6010,7 @@ async def list_orders(
     total = int((await db.execute(q_count)).scalar() or 0)
     rows = (await db.execute(q.order_by(sort_expr).offset(sk).limit(lim))).unique().scalars().all()
     await _attach_customer_kam_names(db, [_loaded_rel(so, "customer") for so in rows])
+    converted_invoices = await _converted_order_invoice_map(db, rows)
     inv_nums = await _sales_doc_number_map(
         db, SaleInvoice, {so.converted_invoice_id for so in rows if so.converted_invoice_id},
     )
@@ -5982,6 +6019,7 @@ async def list_orders(
             so,
             so.line_items,
             converted_invoice_number=inv_nums.get(so.converted_invoice_id),
+            converted_invoice=converted_invoices.get(so.converted_invoice_id),
         )
         for so in rows
     ]
@@ -6014,11 +6052,13 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db), user: Use
     inv_nums = await _sales_doc_number_map(
         db, SaleInvoice, {so.converted_invoice_id} if so.converted_invoice_id else set(),
     )
+    converted_invoices = await _converted_order_invoice_map(db, [so])
     return _so_dict(
         so,
         so.line_items,
         classification=classification,
         converted_invoice_number=inv_nums.get(so.converted_invoice_id),
+        converted_invoice=converted_invoices.get(so.converted_invoice_id),
         customer_key_account_manager=customer_kam,
     )
 
