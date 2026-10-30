@@ -26,6 +26,8 @@ export default function DocumentTotalsStrip({
   entityDiscountType = '%',
   onEntityDiscountChange,
   onEntityDiscountTypeChange,
+  /** Keep the document discount visible but not editable. */
+  discountLocked = false,
   readOnly = false,
   lineGross,
   showWhenEmpty = false,
@@ -46,7 +48,7 @@ export default function DocumentTotalsStrip({
 
   const hasLineDiscount = hasLineLevelDiscount(items)
   const hasEntityDiscount = hasEntityLevelDiscount(entityDiscount)
-  const disableEntity = readOnly || hasLineDiscount
+  const disableEntity = readOnly || hasLineDiscount || discountLocked
 
   const totals = computeDocumentTotals(items, {
     entityDiscount,

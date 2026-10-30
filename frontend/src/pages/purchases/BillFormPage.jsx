@@ -59,8 +59,11 @@ export default function BillFormPage({ mode = 'bill' }) {
   const can = useCan()
   const activeBranchId = useAppStore((s) => s.activeBranch?.id) || 'br-001'
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const lockPurchaseOrderBillItems = useAppStore((s) => s.lockPurchaseOrderBillItems)
 
   const [form, setForm] = useState(() => emptyBillForm(activeBranchId))
+  const [grnFromPurchaseOrder, setGrnFromPurchaseOrder] = useState(false)
+  const lockOrderItems = lockPurchaseOrderBillItems && (Boolean(fromPoId) || grnFromPurchaseOrder)
   const pbf = (k, v) => setForm((b) => ({ ...b, [k]: v }))
   const [conversionLabel, setConversionLabel] = useState(null)
   const [loading, setLoading] = useState(!!fromPoId || !!fromGrnId)
@@ -70,9 +73,15 @@ export default function BillFormPage({ mode = 'bill' }) {
   useTransactionBranchGuard({
     hasLines: documentHasSelectedLines(form.items),
     activeBranchId,
-    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
-      emptyItems: () => [emptyPurchaseLine()],
-    }),
+    onConfirm: (branch) => {
+      if ((fromPoId || grnFromPurchaseOrder) && lockPurchaseOrderBillItems) {
+        toast.error('This document keeps the purchase order branch and items')
+        return
+      }
+      applyDocumentBranch(setForm, branch.id, {
+        emptyItems: () => [emptyPurchaseLine()],
+      })
+    },
     onSync: (branchId) => applyDocumentBranch(setForm, branchId),
   })
 
@@ -104,6 +113,8 @@ export default function BillFormPage({ mode = 'bill' }) {
             vendorId: mapped.vendorId,
             vendorName: mapped.vendorName,
             items,
+            discount: mapped.discount,
+            discountType: mapped.discountType || 'MVR',
             notes: mapped.notes,
           })
           setConversionLabel(po.number)
@@ -112,6 +123,7 @@ export default function BillFormPage({ mode = 'bill' }) {
           if (cancelled) return
           const mapped = billFromRow(grn, activeBranchIdRef.current)
           const items = await enrichLinesWithBatchFlags(mapped.items, mapped.branchId)
+          setGrnFromPurchaseOrder(Boolean(grn.purchaseOrderId))
           setForm({ ...mapped, items })
           setConversionLabel(grn.number)
         }
@@ -246,6 +258,7 @@ export default function BillFormPage({ mode = 'bill' }) {
         pbf={pbf}
         mode={isGrn ? 'grn' : 'bill'}
         conversionLabel={conversionLabel}
+        lockOrderItems={lockOrderItems}
       />
     </DocumentFormShell>
   )

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import uuid
 from datetime import datetime
@@ -51,6 +52,7 @@ from src.models import (
     User,
 )
 from src.pagination import normalize_limit, normalize_skip, paged, resolve_sort
+from src.decimal_precision import org_precision
 from src.qty import as_qty, qty_eq
 from src.routes._lifecycle import (
     compute_due_date,
@@ -1663,6 +1665,7 @@ async def update_invoice(
     for i in data.items:
         if not i.name or i.qty <= 0:
             raise HTTPException(400, "Each item must have a name and positive quantity")
+    so_items_locked = await _enforce_locked_sales_order_on_edit(db, inv, data)
     inv.child_counter_id, inv.child_counter_name = await _validate_child_counter(
         db,
         inv.branch_id,
@@ -1675,9 +1678,10 @@ async def update_invoice(
         next_customer_id = data.customer_id
     elif data.customer_name is not None:
         next_customer_id = None
-    await _apply_internal_customer_gst(
-        db, next_customer_id, data.items, inv.branch_id,
-    )
+    if not so_items_locked:
+        await _apply_internal_customer_gst(
+            db, next_customer_id, data.items, inv.branch_id,
+        )
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
 
     prev_customer_id = inv.customer_id
@@ -1899,6 +1903,7 @@ async def create_invoice(
             raise HTTPException(400, "Each item must have a name and positive quantity")
     today = datetime.now().strftime("%Y-%m-%d")
     inv_origin_early = (data.origin or "invoice").strip().lower() or "invoice"
+    so_items_locked = False
     if data.quotation_id:
         inv_origin_early = "quotation"
         await _require_quotation_items_listed_at_branch(
@@ -1908,6 +1913,7 @@ async def create_invoice(
         inv_origin_early = "sales_order"
         if not data.source_order_lines:
             raise HTTPException(400, "source_order_lines required when sales_order_id is set")
+        so_items_locked = await _enforce_locked_sales_order_on_create(db, data)
     invoice_date = (
         today
         if data.quotation_id or data.sales_order_id
@@ -1965,7 +1971,9 @@ async def create_invoice(
             raise HTTPException(409, detail={"code": "branch_not_in_active_pool"})
     # Line amount after line discount; document discount is applied next,
     # then GST is extracted from the remaining inclusive amount.
-    await _apply_internal_customer_gst(db, data.customer_id, data.items, data.branch_id)
+    # A locked sales-order conversion keeps the order's item amounts as sent.
+    if not so_items_locked:
+        await _apply_internal_customer_gst(db, data.customer_id, data.items, data.branch_id)
     line_rows, subtotal, tax_total, total = _invoice_line_rollups(data.items, data.discount)
     is_credit_sale = data.payment_mode == "credit"
     is_paid_at_create = (
@@ -5793,6 +5801,197 @@ async def _link_quotation_to_invoice(db: AsyncSession, quote_id: str, inv: SaleI
     )
 
 
+_LOCKED_SO_ITEMS = (
+    "Sales order items are locked on the invoice. "
+    "Item, quantity, rate, and discount cannot be changed."
+)
+
+
+def _norm_text(value) -> str:
+    return (value or "").strip()
+
+
+def _half_up(value, places: int) -> float:
+    """Round half away from zero, matching the invoice form's display rounding."""
+    places = max(0, min(6, int(places)))
+    factor = 10 ** places
+    n = float(value or 0)
+    shifted = n * factor
+    if n >= 0:
+        return math.floor(shifted + 0.5 + 1e-8) / factor
+    return math.ceil(shifted - 0.5 - 1e-8) / factor
+
+
+def _scaled_close(left, right, places: int) -> bool:
+    places = max(0, min(6, int(places)))
+    return abs(_half_up(left, places) - _half_up(right, places)) <= (0.51 * (10 ** (-places)))
+
+
+def _header_discount_allowed(submitted, stored, lines_have_discount: bool, amount_prec: int) -> bool:
+    if _scaled_close(submitted, stored, amount_prec):
+        return True
+    # The invoice form clears a header discount when any line already has one.
+    return lines_have_discount and _scaled_close(submitted, 0, amount_prec)
+
+
+def _incoming_matches_stored_line(item, stored, amount_prec: int, qty_prec: int) -> bool:
+    item_id = getattr(item, "item_id", None) or None
+    stored_id = getattr(stored, "item_id", None) or None
+    if item_id != stored_id:
+        return False
+    # Catalog lines are identified by item id. The form may refresh a renamed
+    # item's label; free-text lines still have to keep the same name.
+    if not item_id and _norm_text(getattr(item, "name", None)) != _norm_text(getattr(stored, "name", None)):
+        return False
+    if not _scaled_close(getattr(item, "qty", 0), getattr(stored, "qty", 0), qty_prec):
+        return False
+    if not _scaled_close(getattr(item, "price", 0), getattr(stored, "price", 0), amount_prec):
+        return False
+    if not _scaled_close(getattr(item, "tax_rate", 0), getattr(stored, "tax_rate", 0), 4):
+        return False
+    if not _scaled_close(_stored_line_discount_pct(item), getattr(stored, "discount", 0), 4):
+        return False
+    stored_unit = _norm_text(getattr(stored, "unit", None))
+    if stored_unit and stored_unit != _norm_text(getattr(item, "unit", None)):
+        return False
+    stored_packaging = _norm_text(getattr(stored, "packaging", None))
+    if stored_packaging and stored_packaging != _norm_text(getattr(item, "packaging", None)):
+        return False
+    return True
+
+
+def _match_incoming_lines(incoming, stored_lines, amount_prec: int, qty_prec: int) -> None:
+    if len(incoming) != len(stored_lines):
+        raise HTTPException(400, _LOCKED_SO_ITEMS)
+    used: set[int] = set()
+    for item in incoming:
+        match = None
+        for idx, stored in enumerate(stored_lines):
+            if idx in used:
+                continue
+            if _incoming_matches_stored_line(item, stored, amount_prec, qty_prec):
+                match = idx
+                break
+        if match is None:
+            name = _norm_text(getattr(item, "name", None)) or "An item"
+            raise HTTPException(400, f"{name} does not match the sales order. {_LOCKED_SO_ITEMS}")
+        used.add(match)
+
+
+async def _org_sales_order_item_lock(db: AsyncSession):
+    org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    locked = bool(getattr(org, "lock_sales_order_invoice_items", False))
+    amount_prec, qty_prec = org_precision(org)
+    return locked, amount_prec, qty_prec
+
+
+async def _customers_match(db: AsyncSession, left, right) -> bool:
+    async def _norm(ref):
+        text = (ref or "").strip()
+        if not text:
+            return None
+        return await _resolve_customer_id(db, text)
+
+    return await _norm(left) == await _norm(right)
+
+
+async def _load_sales_order_for_invoice(db: AsyncSession, order_id: str) -> SalesOrder:
+    so = (await db.execute(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.line_items))
+        .where(SalesOrder.id == order_id)
+    )).unique().scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, "Sales order not found")
+    return so
+
+
+async def _enforce_locked_sales_order_on_create(db: AsyncSession, data: SaleCreate) -> bool:
+    """When the org lock is on, the invoice must copy the sales order lines."""
+    locked, amount_prec, qty_prec = await _org_sales_order_item_lock(db)
+    if not locked or not data.sales_order_id:
+        return False
+    so = await _load_sales_order_for_invoice(db, data.sales_order_id)
+    if (data.branch_id or "") != (so.branch_id or ""):
+        raise HTTPException(400, "Branch cannot be changed when sales order items are locked.")
+    if not await _customers_match(db, data.customer_id, so.customer_id):
+        raise HTTPException(400, "Customer cannot be changed when sales order items are locked.")
+    so_lines = [li for li in so.line_items if as_qty(li.qty) > 0]
+    if not _header_discount_allowed(
+        data.discount,
+        so.discount,
+        any(float(li.discount or 0) > 0 for li in so_lines),
+        amount_prec,
+    ):
+        raise HTTPException(400, "Invoice discount must match the sales order.")
+    _match_incoming_lines(data.items, so_lines, amount_prec, qty_prec)
+
+    if not data.source_order_lines or len(data.source_order_lines) != len(so_lines):
+        raise HTTPException(400, "Invoice must include every sales order line at its full quantity.")
+    by_id = {li.id: li for li in so_lines}
+    seen: set[str] = set()
+    for entry in data.source_order_lines:
+        if entry.order_line_id in seen or entry.order_line_id not in by_id:
+            raise HTTPException(400, "Invoice must include every sales order line at its full quantity.")
+        seen.add(entry.order_line_id)
+        so_line = by_id[entry.order_line_id]
+        if not _scaled_close(entry.qty, so_line.qty, qty_prec):
+            raise HTTPException(
+                400,
+                f"Quantity for {so_line.name} must match the sales order.",
+            )
+    return True
+
+
+async def _enforce_locked_sales_order_on_edit(db: AsyncSession, inv: SaleInvoice, data: InvoiceUpdate) -> bool:
+    """Keep item data fixed on invoices that were created from a sales order."""
+    origin = (getattr(inv, "origin", None) or "").strip().lower()
+    if origin != "sales_order":
+        return False
+    locked, amount_prec, qty_prec = await _org_sales_order_item_lock(db)
+    if not locked:
+        return False
+    next_customer = inv.customer_id
+    if data.customer_id:
+        next_customer = data.customer_id
+    elif data.customer_name is not None:
+        next_customer = None
+    if not await _customers_match(db, next_customer, inv.customer_id):
+        raise HTTPException(400, "Customer cannot be changed when sales order items are locked.")
+    existing = list(inv.line_items or [])
+    if not _header_discount_allowed(
+        data.discount,
+        inv.discount,
+        any(float(li.discount or 0) > 0 for li in existing),
+        amount_prec,
+    ):
+        raise HTTPException(400, "Invoice discount cannot be changed for a sales order invoice.")
+    _match_incoming_lines(data.items, existing, amount_prec, qty_prec)
+    return True
+
+
+async def _enforce_locked_sales_order_full_convert(db: AsyncSession, so: SalesOrder, lines) -> None:
+    """Direct convert may not invoice a partial quantity while the lock is on."""
+    locked, _amount_prec, qty_prec = await _org_sales_order_item_lock(db)
+    if not locked or not lines:
+        return
+    so_lines = [li for li in so.line_items if as_qty(li.qty) > 0]
+    if len(lines) != len(so_lines):
+        raise HTTPException(400, "Sales order items are locked. Invoice every line at its full quantity.")
+    by_id = {li.id: li for li in so_lines}
+    seen: set[str] = set()
+    for entry in lines:
+        so_line = by_id.get(entry.order_line_id)
+        if entry.order_line_id in seen or so_line is None:
+            raise HTTPException(400, "Sales order items are locked. Invoice every line at its full quantity.")
+        seen.add(entry.order_line_id)
+        if not _scaled_close(entry.qty, so_line.qty, qty_prec):
+            raise HTTPException(
+                400,
+                f"Quantity for {so_line.name} cannot be changed while sales order items are locked.",
+            )
+
+
 async def _link_sales_order_to_invoice(
     db: AsyncSession,
     order_id: str,
@@ -6525,6 +6724,7 @@ async def convert_order_to_invoice(
         raise HTTPException(400, "Sales order must be approved before converting to an invoice")
     if not so.line_items:
         raise HTTPException(400, "Sales order has no line items")
+    await _enforce_locked_sales_order_full_convert(db, so, data.lines)
 
     await _resolve_branch_scope(user, db, so.branch_id)
     # Convert posts stock + AR immediately — create-only users create a draft invoice instead.

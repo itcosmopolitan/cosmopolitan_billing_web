@@ -85,6 +85,8 @@ export default function InvoiceFormPage() {
   const navigate = useNavigate()
   const can = useCan()
   const activeBranch = useAppStore((s) => s.activeBranch)
+  const lockSalesOrderInvoiceItems = useAppStore((s) => s.lockSalesOrderInvoiceItems)
+  const lockOrderItems = Boolean(fromOrderId) && lockSalesOrderInvoiceItems
   const activeBranchId = activeBranch?.id || 'br-001'
   const branches = useAppStore((s) => s.branches)
   const selectedChildCounter = usePOSStore((s) => s.selectedChildCounter)
@@ -106,10 +108,16 @@ export default function InvoiceFormPage() {
   useTransactionBranchGuard({
     hasLines: documentHasSelectedLines(form.items),
     activeBranchId,
-    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
-      resetCounter: true,
-      emptyItems: () => [emptySaleLine()],
-    }),
+    onConfirm: (branch) => {
+      if (fromOrderId && lockSalesOrderInvoiceItems) {
+        toast.error('This invoice keeps the sales order branch and items')
+        return
+      }
+      applyDocumentBranch(setForm, branch.id, {
+        resetCounter: true,
+        emptyItems: () => [emptySaleLine()],
+      })
+    },
     onSync: (branchId) => applyDocumentBranch(setForm, branchId, { resetCounter: true }),
   })
 
@@ -398,6 +406,7 @@ export default function InvoiceFormPage() {
         invoiceForm={form}
         pif={pif}
         conversionLabel={conversionLabel}
+        lockOrderItems={lockOrderItems}
       />
       <ConfirmDialog
         open={showCreditWarning}

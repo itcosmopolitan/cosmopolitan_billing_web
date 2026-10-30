@@ -23,6 +23,8 @@ const EMPTY_ORG_FORM = {
   state_code: '33',
   financial_year: 'Apr-Mar',
   allow_price_editing: false,
+  lock_sales_order_invoice_items: false,
+  lock_purchase_order_bill_items: false,
   amount_decimal_precision: 2,
   quantity_decimal_precision: 2,
 }
@@ -444,6 +446,8 @@ export default function SettingsPage() {
             state_code: data.state_code || '33',
             financial_year: data.financial_year || 'Apr-Mar',
             allow_price_editing: data.allowPriceEditing === true,
+            lock_sales_order_invoice_items: data.lockSalesOrderInvoiceItems === true,
+            lock_purchase_order_bill_items: data.lockPurchaseOrderBillItems === true,
             amount_decimal_precision: data.amountDecimalPrecision ?? 2,
             quantity_decimal_precision: data.quantityDecimalPrecision ?? 2,
           })
@@ -477,6 +481,8 @@ export default function SettingsPage() {
         state_code: orgForm.state_code?.trim() || '33',
         financial_year: orgForm.financial_year || 'Apr-Mar',
         allow_price_editing: orgForm.allow_price_editing,
+        lock_sales_order_invoice_items: orgForm.lock_sales_order_invoice_items,
+        lock_purchase_order_bill_items: orgForm.lock_purchase_order_bill_items,
         amount_decimal_precision: Number(orgForm.amount_decimal_precision),
         quantity_decimal_precision: Number(orgForm.quantity_decimal_precision),
       })
@@ -493,6 +499,8 @@ export default function SettingsPage() {
         state_code: saved?.state_code ?? prev.state_code,
         financial_year: saved?.financial_year ?? prev.financial_year,
         allow_price_editing: saved?.allowPriceEditing === true,
+        lock_sales_order_invoice_items: saved?.lockSalesOrderInvoiceItems === true,
+        lock_purchase_order_bill_items: saved?.lockPurchaseOrderBillItems === true,
         amount_decimal_precision: saved?.amountDecimalPrecision ?? prev.amount_decimal_precision,
         quantity_decimal_precision: saved?.quantityDecimalPrecision ?? prev.quantity_decimal_precision,
       }))
@@ -859,6 +867,34 @@ export default function SettingsPage() {
               </label>
               <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
                 When on, POS operators can change the rate before completing a sale.
+              </div>
+            </FormGroup>
+            <FormGroup label="Sales orders">
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                <input
+                  type="checkbox"
+                  checked={orgForm.lock_sales_order_invoice_items}
+                  onChange={e => pof('lock_sales_order_invoice_items', e.target.checked)}
+                  disabled={!can('settings.edit')}
+                />
+                Lock items when converting a sales order to an invoice
+              </label>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                When on, customer, items, quantities, rates, and discounts copied from the sales order cannot be changed. Lot splits can still be adjusted.
+              </div>
+            </FormGroup>
+            <FormGroup label="Purchase orders">
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                <input
+                  type="checkbox"
+                  checked={orgForm.lock_purchase_order_bill_items}
+                  onChange={e => pof('lock_purchase_order_bill_items', e.target.checked)}
+                  disabled={!can('settings.edit')}
+                />
+                Lock items when converting a purchase order to a bill
+              </label>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                When on, vendor, items, quantities, costs, and discounts copied from the purchase order cannot be changed on the bill or goods receipt. Batch details can still be adjusted.
               </div>
             </FormGroup>
             <FormRow>

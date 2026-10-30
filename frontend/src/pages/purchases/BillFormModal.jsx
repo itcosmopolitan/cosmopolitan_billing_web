@@ -78,8 +78,11 @@ export default function BillFormModal({
   embedded = false,
   /** When true, hide payment fields (editing an existing bill — payment is handled separately). */
   editMode = false,
+  /** Purchase order → bill / goods receipt: item, qty, cost, and discount stay as copied. */
+  lockOrderItems = false,
 }) {
   const isGrn = mode === 'grn'
+  const lineColumnCount = lockOrderItems ? 7 : 8
   const pickedIds = billForm.items.map((it) => it.item_id).filter(Boolean)
   const { footerAction: addVendorAction, modal: addVendorModal } = useQuickVendor({
     onCreated: (v) => {
@@ -92,11 +95,12 @@ export default function BillFormModal({
   const internalVendor = isInternalTransferByGstin({ gstin: vendorGstin }, organisationGstin)
 
   useEffect(() => {
+    if (lockOrderItems) return
     const next = applyVendorTransferPricingToPurchaseLines(billForm.items, internalVendor)
     if (next !== billForm.items) pbf('items', next)
     // Re-run only when the vendor's internal status flips.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [internalVendor])
+  }, [internalVendor, lockOrderItems])
 
   const title = conversionLabel
     ? (isGrn ? `Receive Stock — from ${conversionLabel}` : `Create Bill — from ${conversionLabel}`)
@@ -199,7 +203,9 @@ export default function BillFormModal({
           <FormGroup label="Vendor" required>
             <AutocompleteDropdown
               value={billForm.vendorId || ''}
+              disabled={lockOrderItems}
               onSelectOption={(opt) => {
+                if (lockOrderItems) return
                 if (!opt) {
                   pbf('vendorId', '')
                   pbf('vendorName', '')
@@ -214,9 +220,14 @@ export default function BillFormModal({
               placeholder="Search vendors…"
               searchPlaceholder="Search vendors…"
               emptyLabel="No vendors found"
-              footerAction={addVendorAction}
+              footerAction={lockOrderItems ? null : addVendorAction}
               style={{ width: '100%' }}
             />
+            {lockOrderItems && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Vendor is taken from the purchase order and cannot be changed.
+              </div>
+            )}
             {internalVendor ? (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
                 Same GSTIN as organisation — internal transfer, GST 0%, no line discount
@@ -293,6 +304,11 @@ export default function BillFormModal({
 
       <div className="bill-form-panel">
         <div className="bill-form-panel__head">Line items</div>
+        {lockOrderItems && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Copied from the purchase order. Item, quantity, cost, and discount cannot be changed. Batch details can still be adjusted.
+          </div>
+        )}
         <FormGroup label="Items" required>
         {hasTrackedItems && (
           <>
@@ -314,7 +330,7 @@ export default function BillFormModal({
               <th style={{ width: 90, textAlign: 'right' }}>Tax (MVR)</th>
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.) (MVR)</th>
-              <th style={{ width: 60 }} />
+              {!lockOrderItems && <th style={{ width: 60 }} />}
             </tr>
           </thead>
           <tbody>
@@ -337,6 +353,7 @@ export default function BillFormModal({
                         listedOnly={false}
                         showAvailableStock
                         value={pickerValue}
+                        disabled={lockOrderItems}
                         onPick={(inv) => handlePick(i, inv)}
                         onClear={() => handleClear(i)}
                         excludeIds={otherPickedIds}
@@ -348,7 +365,8 @@ export default function BillFormModal({
                         step={entryInputStep()}
                         style={numInputStyle}
                         value={qtyInputValue(it.qty)}
-                        title="Type any decimals; rounded to settings on blur"
+                        title={lockOrderItems ? 'Quantity is copied from the purchase order' : 'Type any decimals; rounded to settings on blur'}
+                        disabled={lockOrderItems}
                         onChange={(e) => { const n = [...billForm.items]; n[i].qty = e.target.value; pbf('items', n) }}
                         onBlur={(e) => {
                           const n = [...billForm.items]
@@ -362,7 +380,8 @@ export default function BillFormModal({
                         step={entryInputStep()}
                         style={numInputStyle}
                         value={it._rateText ?? exclRateInputValue(it.cost, it.taxRate)}
-                        title="Cost excl. GST — type any decimals; rounded to settings on blur"
+                        title={lockOrderItems ? 'Cost is copied from the purchase order' : 'Cost excl. GST — type any decimals; rounded to settings on blur'}
+                        disabled={lockOrderItems}
                         onChange={(e) => {
                           const n = [...billForm.items]
                           n[i]._rateText = e.target.value
@@ -401,8 +420,8 @@ export default function BillFormModal({
                       )}
                     </td>
                     <td>
-                      <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>
-                        <input className="form-input" type="number" disabled={disableLineDiscount}
+                      <div className="line-discount-field" style={{ opacity: (disableLineDiscount || lockOrderItems) ? 0.6 : 1 }}>
+                        <input className="form-input" type="number" disabled={disableLineDiscount || lockOrderItems}
                           min="0"
                           max={type === '%' ? 100 : undefined}
                           step={type === 'MVR' ? amountInputStep() : '0.01'}
@@ -411,7 +430,7 @@ export default function BillFormModal({
                           onChange={(e) => { const n = [...billForm.items]; n[i].lineDiscount = e.target.value; pbf('items', n) }} />
                         <button
                           type="button"
-                          disabled={disableLineDiscount}
+                          disabled={disableLineDiscount || lockOrderItems}
                           onClick={() => toggleDiscountType(i)}
                           title={type === '%' ? 'Switch to amount (MVR)' : 'Switch to percent (%)'}
                           style={discountToggleStyle}
@@ -429,23 +448,25 @@ export default function BillFormModal({
                     <td className="text-right mono" style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                       {fmt(lineTotal)}
                     </td>
-                    <td>
-                      {billForm.items.length > 1 && (
-                        <button
-                          type="button"
-                          className="btn btn-danger btn-xs"
-                          onClick={() => pbf('items', billForm.items.filter((_, j) => j !== i))}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </td>
+                    {!lockOrderItems && (
+                      <td>
+                        {billForm.items.length > 1 && (
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-xs"
+                            onClick={() => pbf('items', billForm.items.filter((_, j) => j !== i))}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                   {it.batchTracking && (
                     <tr>
                       {/* Batch capture row spans all line-item columns. Compact
                           inputs for lot # / mfg / expiry. */}
-                      <td colSpan={8} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
+                      <td colSpan={lineColumnCount} style={{ padding: '6px 10px 12px', background: 'var(--bg-raised)' }}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', fontSize: 12 }}>
                           <span style={{ color: 'var(--text-muted)', fontWeight: 500, minWidth: 90, paddingBottom: 8 }}>
                             🧴 Batch capture:
@@ -484,10 +505,12 @@ export default function BillFormModal({
           </tbody>
         </table>
         </div>
-        <button className="btn btn-secondary btn-sm"
-          onClick={() => pbf('items', [...billForm.items, emptyPurchaseLine()])}>
-          + Add Item
-        </button>
+        {!lockOrderItems && (
+          <button className="btn btn-secondary btn-sm"
+            onClick={() => pbf('items', [...billForm.items, emptyPurchaseLine()])}>
+            + Add Item
+          </button>
+        )}
         </FormGroup>
       </div>
 
@@ -498,6 +521,7 @@ export default function BillFormModal({
           entityDiscountType={billForm.discountType || '%'}
           onEntityDiscountChange={(v) => pbf('discount', v)}
           onEntityDiscountTypeChange={(t) => pbf('discountType', t)}
+          discountLocked={lockOrderItems}
           lineGross={purchaseLineGross}
           showWhenEmpty
           marginOverride={purchaseMargin}

@@ -1,4 +1,5 @@
 import json
+import math
 import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -11,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from src.batch_dates import validate_batch_dates
 from src.database import get_db
+from src.decimal_precision import org_precision
 from src.document_numbering import allocate_number, next_free_prefixed_number, resolve_number
 from src.tax_calc import line_tax_amount, line_taxable_amount, restore_zero_rate, rollup_inclusive_lines
 from src.models import (
@@ -779,7 +781,10 @@ async def create_bill(
 
     # Per-line net = gross × (1 − pct/100). Document discount is applied
     # next, then GST is extracted from the remaining inclusive amount.
-    await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
+    # A locked purchase-order conversion keeps the order's item amounts as sent.
+    po_items_locked = await _enforce_locked_purchase_order_on_create(db, data)
+    if not po_items_locked:
+        await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total, 2)
@@ -1733,13 +1738,15 @@ async def update_bill(
     if not data.items:
         raise HTTPException(400, "Bill must have at least one line item")
 
+    po_items_locked = await _enforce_locked_purchase_bill_edit(db, bill, data)
     prev_total = float(bill.total or 0)
     prev_due_date = bill.due_date
     item_changes = _summarize_purchase_bill_item_changes(list(bill.line_items or []), data.items)
 
-    await _apply_internal_vendor_pricing(
-        db, data.vendor_id or bill.vendor_id, data.items, bill.branch_id,
-    )
+    if not po_items_locked:
+        await _apply_internal_vendor_pricing(
+            db, data.vendor_id or bill.vendor_id, data.items, bill.branch_id,
+        )
     tax_mode = await _get_org_tax_mode(db)
     line_rows, subtotal, tax_total_val = _calc_po_lines(data.items, tax_mode, data.discount or 0)
     total = round(subtotal + tax_total_val, 2)
@@ -3559,6 +3566,184 @@ async def _load_item_tax_rates(db: AsyncSession, item_ids) -> dict:
     return {row[0]: row[1] for row in rows}
 
 
+_LOCKED_PO_ITEMS = (
+    "Purchase order items are locked. "
+    "Item, quantity, cost, and discount cannot be changed."
+)
+
+
+def _po_norm_text(value) -> str:
+    return (value or "").strip()
+
+
+def _po_half_up(value, places: int) -> float:
+    """Round half away from zero, matching the purchase form display rounding."""
+    places = max(0, min(6, int(places)))
+    factor = 10 ** places
+    n = float(value or 0)
+    shifted = n * factor
+    if n >= 0:
+        return math.floor(shifted + 0.5 + 1e-8) / factor
+    return math.ceil(shifted - 0.5 - 1e-8) / factor
+
+
+def _po_scaled_close(left, right, places: int) -> bool:
+    places = max(0, min(6, int(places)))
+    return abs(_po_half_up(left, places) - _po_half_up(right, places)) <= (0.51 * (10 ** (-places)))
+
+
+def _po_header_discount_allowed(submitted, stored, lines_have_discount: bool, amount_prec: int) -> bool:
+    if _po_scaled_close(submitted, stored, amount_prec):
+        return True
+    return lines_have_discount and _po_scaled_close(submitted, 0, amount_prec)
+
+
+def _stored_purchase_qty(line) -> float:
+    if isinstance(line, GRNLineItem):
+        return line.received_qty
+    return getattr(line, "qty", 0)
+
+
+def _incoming_matches_purchase_line(item, stored, amount_prec: int, qty_prec: int) -> bool:
+    item_id = getattr(item, "item_id", None) or None
+    stored_id = getattr(stored, "item_id", None) or None
+    if item_id != stored_id:
+        return False
+    if not item_id and _po_norm_text(getattr(item, "name", None)) != _po_norm_text(getattr(stored, "name", None)):
+        return False
+    if not _po_scaled_close(getattr(item, "qty", 0), _stored_purchase_qty(stored), qty_prec):
+        return False
+    if not _po_scaled_close(getattr(item, "cost", 0), getattr(stored, "cost", 0), amount_prec):
+        return False
+    if not _po_scaled_close(getattr(item, "tax_rate", 0), getattr(stored, "tax_rate", 0), 4):
+        return False
+    if not _po_scaled_close(getattr(item, "discount", 0), getattr(stored, "discount", 0), 4):
+        return False
+    return True
+
+
+def _match_purchase_lines(incoming, stored_lines, amount_prec: int, qty_prec: int) -> None:
+    if len(incoming) != len(stored_lines):
+        raise HTTPException(400, _LOCKED_PO_ITEMS)
+    used: set[int] = set()
+    for item in incoming:
+        match = None
+        for idx, stored in enumerate(stored_lines):
+            if idx in used:
+                continue
+            if _incoming_matches_purchase_line(item, stored, amount_prec, qty_prec):
+                match = idx
+                break
+        if match is None:
+            name = _po_norm_text(getattr(item, "name", None)) or "An item"
+            raise HTTPException(400, f"{name} does not match the purchase order. {_LOCKED_PO_ITEMS}")
+        used.add(match)
+
+
+async def _org_purchase_order_item_lock(db: AsyncSession):
+    org = (await db.execute(select(Organisation).limit(1))).scalar_one_or_none()
+    locked = bool(getattr(org, "lock_purchase_order_bill_items", False))
+    amount_prec, qty_prec = org_precision(org)
+    return locked, amount_prec, qty_prec
+
+
+def _assert_purchase_source_match(data, *, vendor_id, branch_id, discount, stored_lines, amount_prec, qty_prec) -> None:
+    if (getattr(data, "branch_id", None) or "") != (branch_id or ""):
+        raise HTTPException(400, "Branch cannot be changed when purchase order items are locked.")
+    if (getattr(data, "vendor_id", None) or "") != (vendor_id or ""):
+        raise HTTPException(400, "Vendor cannot be changed when purchase order items are locked.")
+    if not _po_header_discount_allowed(
+        getattr(data, "discount", 0),
+        discount,
+        any(float(getattr(li, "discount", 0) or 0) > 0 for li in stored_lines),
+        amount_prec,
+    ):
+        raise HTTPException(400, "Discount must match the purchase order.")
+    _match_purchase_lines(data.items, stored_lines, amount_prec, qty_prec)
+
+
+async def _enforce_locked_purchase_order_on_create(db: AsyncSession, data) -> bool:
+    """When the org lock is on, a bill or GRN must copy the purchase order lines."""
+    locked, amount_prec, qty_prec = await _org_purchase_order_item_lock(db)
+    if not locked:
+        return False
+    po_id = getattr(data, "purchase_order_id", None)
+    if po_id:
+        po = (await db.execute(
+            select(PurchaseOrder)
+            .options(selectinload(PurchaseOrder.line_items))
+            .where(PurchaseOrder.id == po_id)
+        )).unique().scalar_one_or_none()
+        if not po:
+            raise HTTPException(404, "Purchase order not found")
+        stored = [li for li in po.line_items if as_qty(li.qty) > 0]
+        _assert_purchase_source_match(
+            data,
+            vendor_id=po.vendor_id,
+            branch_id=po.branch_id,
+            discount=po.discount,
+            stored_lines=stored,
+            amount_prec=amount_prec,
+            qty_prec=qty_prec,
+        )
+        return True
+    grn_id = getattr(data, "grn_id", None)
+    if not grn_id:
+        return False
+    grn = (await db.execute(
+        select(GoodsReceiptNote)
+        .options(selectinload(GoodsReceiptNote.line_items))
+        .where(GoodsReceiptNote.id == grn_id)
+    )).unique().scalar_one_or_none()
+    if not grn or not grn.purchase_order_id:
+        return False
+    stored = [li for li in grn.line_items if as_qty(li.received_qty) > 0]
+    _assert_purchase_source_match(
+        data,
+        vendor_id=grn.vendor_id,
+        branch_id=grn.branch_id,
+        discount=grn.discount,
+        stored_lines=stored,
+        amount_prec=amount_prec,
+        qty_prec=qty_prec,
+    )
+    return True
+
+
+async def _bill_linked_purchase_order_id(db: AsyncSession, bill: PurchaseBill) -> Optional[str]:
+    if bill.grn_id:
+        po_id = (await db.execute(
+            select(GoodsReceiptNote.purchase_order_id).where(GoodsReceiptNote.id == bill.grn_id)
+        )).scalar_one_or_none()
+        if po_id:
+            return po_id
+    return (await db.execute(
+        select(PurchaseOrder.id).where(PurchaseOrder.converted_bill_id == bill.id)
+    )).scalar_one_or_none()
+
+
+async def _enforce_locked_purchase_bill_edit(db: AsyncSession, bill: PurchaseBill, data: BillUpdate) -> bool:
+    """Keep item data fixed on bills that were created from a purchase order."""
+    locked, amount_prec, qty_prec = await _org_purchase_order_item_lock(db)
+    if not locked:
+        return False
+    if not await _bill_linked_purchase_order_id(db, bill):
+        return False
+    next_vendor = data.vendor_id or bill.vendor_id
+    if (next_vendor or "") != (bill.vendor_id or ""):
+        raise HTTPException(400, "Vendor cannot be changed when purchase order items are locked.")
+    existing = list(bill.line_items or [])
+    if not _po_header_discount_allowed(
+        data.discount,
+        bill.discount,
+        any(float(li.discount or 0) > 0 for li in existing),
+        amount_prec,
+    ):
+        raise HTTPException(400, "Bill discount cannot be changed for a purchase order bill.")
+    _match_purchase_lines(data.items, existing, amount_prec, qty_prec)
+    return True
+
+
 async def _apply_internal_vendor_pricing(
     db: AsyncSession, vendor_id: Optional[str], lines, branch_id: Optional[str],
 ) -> None:
@@ -4394,8 +4579,9 @@ async def convert_order_to_bill(
             receipts_by_item[r.item_id] = r
 
     tax_mode = await _get_org_tax_mode(db)
+    po_items_locked, _, _ = await _org_purchase_order_item_lock(db)
     line_rows = []
-    po_taxable = not await _vendor_gstin_matches_org(db, po.vendor_id)
+    po_taxable = (not po_items_locked) and not await _vendor_gstin_matches_org(db, po.vendor_id)
     po_master_rates = (
         await _load_item_tax_rates(db, (ln.item_id for ln in po.line_items)) if po_taxable else {}
     )
@@ -4739,7 +4925,9 @@ async def create_grn(data: GRNCreate, db: AsyncSession = Depends(get_db), user: 
                 "PO already has a pending goods receipt — bill the existing GRN or cancel the PO",
             )
 
-    await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
+    po_items_locked = await _enforce_locked_purchase_order_on_create(db, data)
+    if not po_items_locked:
+        await _apply_internal_vendor_pricing(db, data.vendor_id, data.items, data.branch_id)
     tax_mode = await _get_org_tax_mode(db)
     line_rows, _, _ = _calc_po_lines(data.items, tax_mode)
 

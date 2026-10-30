@@ -134,6 +134,10 @@ export const useAppStore = create(
       quantityDecimalPrecision: DEFAULT_QTY_DECIMALS,
       /** Organisation profile GSTIN — used to detect same-GSTIN internal transfers. */
       organisationGstin: '',
+      /** When true, sales-order → invoice keeps item lines read-only. */
+      lockSalesOrderInvoiceItems: false,
+      /** When true, purchase-order → bill / goods receipt keeps item lines read-only. */
+      lockPurchaseOrderBillItems: false,
 
       // Per-user Customize Columns: tableKey → { columns, order, hidden }.
       // Hydrated at boot via GET /settings/column-prefs (server owns column defs).
@@ -202,10 +206,14 @@ export const useAppStore = create(
         if (!payload || typeof payload !== 'object') return
         const next = parsePrecisionPayload(payload)
         setDecimalPrecision(next)
+        const salesLock = payload.lockSalesOrderInvoiceItems ?? payload.lock_sales_order_invoice_items
+        const purchaseLock = payload.lockPurchaseOrderBillItems ?? payload.lock_purchase_order_bill_items
         set({
           amountDecimalPrecision: next.amountDecimalPrecision,
           quantityDecimalPrecision: next.quantityDecimalPrecision,
           organisationGstin: String(payload.gstin || payload.gstIn || '').trim(),
+          ...(salesLock !== undefined ? { lockSalesOrderInvoiceItems: salesLock === true } : {}),
+          ...(purchaseLock !== undefined ? { lockPurchaseOrderBillItems: purchaseLock === true } : {}),
         })
       },
       setColumnTables: (columnTables) => set({
