@@ -60,6 +60,8 @@ export default function InvoiceFormModal({
   saving = false,
   conversionLabel = null,
   editMode = false,
+  /** Sales order → invoice: item, qty, rate, and discount stay as copied. */
+  lockOrderItems = false,
   /** When true, render only the form body (for full-page DocumentFormShell). */
   embedded = false,
 }) {
@@ -91,7 +93,9 @@ export default function InvoiceFormModal({
       pif('customerCreditLimit', Number(c.credit_limit || 0))
       pif('customerOutstanding', Number(c.outstanding || 0))
       pif('customerCreditEligible', Boolean(c.is_credit_eligible ?? c.isCreditEligible))
-      pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c, organisationGstin))
+      if (!lockOrderItems) {
+        pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c, organisationGstin))
+      }
     },
   })
 
@@ -222,7 +226,9 @@ export default function InvoiceFormModal({
           <FormGroup label="Customer" required>
             <AutocompleteDropdown
               value={invoiceForm.customerId || ''}
+              disabled={lockOrderItems}
               onSelectOption={async (opt) => {
+                if (lockOrderItems) return
                 selectedCustomerRef.current = opt?.id || ''
                 if (!opt?.id) {
                   pif('customerId', '')
@@ -234,7 +240,9 @@ export default function InvoiceFormModal({
                   pif('customerCreditLimit', 0)
                   pif('customerOutstanding', 0)
                   pif('customerCreditEligible', false)
-                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail', organisationGstin))
+                  if (!lockOrderItems) {
+                    pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, 'retail', organisationGstin))
+                  }
                   return
                 }
                 const type = customerPricingType(opt.raw?.customer_type || 'retail')
@@ -247,7 +255,9 @@ export default function InvoiceFormModal({
                 pif('customerClassification', cls)
                 pif('customerGstin', gst)
                 pif('customerCreditEligible', Boolean(opt.raw?.is_credit_eligible))
-                pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, ctx, organisationGstin))
+                if (!lockOrderItems) {
+                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, ctx, organisationGstin))
+                }
                 try {
                   const c = await customersAPI.get(opt.id)
                   if (selectedCustomerRef.current !== opt.id) return
@@ -258,7 +268,9 @@ export default function InvoiceFormModal({
                   pif('customerType', customerPricingType(c.customer_type || c.type || type))
                   pif('customerClassification', customerClassification(c))
                   pif('customerGstin', customerGstin(c))
-                  pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c, organisationGstin))
+                  if (!lockOrderItems) {
+                    pif('items', applyCustomerPricingToSaleLines(invoiceForm.items, c, organisationGstin))
+                  }
                 } catch {
                   pif('customerCreditBalance', Number(opt.raw?.credit_balance || 0))
                   pif('customerCreditLimit', Number(opt.raw?.credit_limit || 0))
@@ -271,9 +283,14 @@ export default function InvoiceFormModal({
               prependOptions={[WALK_IN_CUSTOMER_OPTION]}
               selectedLabel={invoiceForm.customerName || WALK_IN_CUSTOMER_OPTION.label}
               placeholder="Walk-in Customer"
-              footerAction={addCustomerAction}
+              footerAction={lockOrderItems ? null : addCustomerAction}
               style={{ width: '100%' }}
             />
+            {lockOrderItems && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                Customer is taken from the sales order and cannot be changed.
+              </div>
+            )}
             {internalTransfer ? (
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
                 Same GSTIN as organisation — internal transfer, GST 0%, no line discount
@@ -393,7 +410,11 @@ export default function InvoiceFormModal({
 
       <div className="invoice-form-panel">
         <div className="invoice-form-panel__head">Line items</div>
-        <div className="invoice-form-panel__sub">Add inventory lines, then adjust discount and lot split where needed.</div>
+        <div className="invoice-form-panel__sub">
+          {lockOrderItems
+            ? 'Copied from the sales order. Item, quantity, rate, and discount cannot be changed. Lot splits can still be adjusted.'
+            : 'Add inventory lines, then adjust discount and lot split where needed.'}
+        </div>
         <div className="invoice-form-table-wrap">
         <table className="data-table invoice-form-table" style={{ marginBottom: 12 }} onKeyDown={handleGridArrowKeyDown}>
           <thead>
@@ -408,7 +429,7 @@ export default function InvoiceFormModal({
               <th style={{ width: 90, textAlign: 'right' }}>Margin</th>
               <th style={{ width: 110, textAlign: 'right' }}>Total (Excl.) (MVR)</th>
               {hasBatchLines && <th style={{ minWidth: 160 }}>Lots</th>}
-              <th style={{ width: 60 }} />
+              {!lockOrderItems && <th style={{ width: 60 }} />}
             </tr>
           </thead>
           <tbody>
@@ -428,6 +449,7 @@ export default function InvoiceFormModal({
                       branchId={invoiceForm.branchId}
                       showAvailableStock
                       value={pickerValue}
+                      disabled={lockOrderItems}
                       onPick={(inv) => handlePick(i, inv)}
                       onClear={() => handleClear(i)}
                       excludeIds={otherPickedIds}
@@ -436,18 +458,21 @@ export default function InvoiceFormModal({
                   <td>
                     <input className="form-input" type="text"
                       value={it.packaging ?? ''}
+                      disabled={lockOrderItems}
                       onChange={(e) => patchLine(i, { packaging: e.target.value })} />
                   </td>
                   <td>
                     <input className="form-input" type="text"
                       value={it.unit ?? ''}
+                      disabled={lockOrderItems}
                       onChange={(e) => patchLine(i, { unit: e.target.value })} />
                   </td>
                   <td>
                     <input className="form-input" type="text" inputMode="decimal"
                       style={numInputStyle}
                       value={qtyInputValue(it.qty)}
-                      title="Type any decimals; rounded to settings on blur"
+                      title={lockOrderItems ? 'Quantity is copied from the sales order' : 'Type any decimals; rounded to settings on blur'}
+                      disabled={lockOrderItems}
                       onChange={(e) => {
                         patchLine(i, {
                           qty: e.target.value,
@@ -465,7 +490,8 @@ export default function InvoiceFormModal({
                     <input className="form-input" type="text" inputMode="decimal"
                       style={numInputStyle}
                       value={it._rateText ?? exclRateInputValue(it.price, it.taxRate)}
-                      title="Rate excl. GST — type any decimals; rounded to settings on blur"
+                      title={lockOrderItems ? 'Rate is copied from the sales order' : 'Rate excl. GST — type any decimals; rounded to settings on blur'}
+                      disabled={lockOrderItems}
                       onChange={(e) => {
                         const n = [...invoiceForm.items]
                         n[i]._rateText = e.target.value
@@ -484,12 +510,12 @@ export default function InvoiceFormModal({
                       }} />
                   </td>
                   <td>
-                    <div className="line-discount-field" style={{ opacity: disableLineDiscount ? 0.6 : 1 }}>
-                      <input className="form-input" type="text" inputMode="decimal" disabled={disableLineDiscount}
+                    <div className="line-discount-field" style={{ opacity: (disableLineDiscount || lockOrderItems) ? 0.6 : 1 }}>
+                      <input className="form-input" type="text" inputMode="decimal" disabled={disableLineDiscount || lockOrderItems}
                         style={{ ...numInputStyle, flex: 1, minWidth: 0 }}
                         value={it.lineDiscount || 0}
                         onChange={(e) => { const n = [...invoiceForm.items]; n[i].lineDiscount = e.target.value; pif('items', n) }} />
-                      <button type="button" disabled={disableLineDiscount} onClick={() => toggleDiscountType(i)} style={discountToggleStyle}>
+                      <button type="button" disabled={disableLineDiscount || lockOrderItems} onClick={() => toggleDiscountType(i)} style={discountToggleStyle}>
                         {type}
                       </button>
                     </div>
@@ -525,27 +551,31 @@ export default function InvoiceFormModal({
                       />
                     </td>
                   )}
-                  <td>
-                    {invoiceForm.items.length > 1 && (
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-xs"
-                        onClick={() => pif('items', invoiceForm.items.filter((_, j) => j !== i))}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </td>
+                  {!lockOrderItems && (
+                    <td>
+                      {invoiceForm.items.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-xs"
+                          onClick={() => pif('items', invoiceForm.items.filter((_, j) => j !== i))}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               )
             })}
           </tbody>
         </table>
         </div>
-        <button className="btn btn-secondary btn-sm"
-          onClick={() => pif('items', [...invoiceForm.items, emptySaleLine()])}>
-          + Add Item
-        </button>
+        {!lockOrderItems && (
+          <button className="btn btn-secondary btn-sm"
+            onClick={() => pif('items', [...invoiceForm.items, emptySaleLine()])}>
+            + Add Item
+          </button>
+        )}
       </div>
 
       {allocEditor != null && invoiceForm.items[allocEditor.index] && (
@@ -583,6 +613,7 @@ export default function InvoiceFormModal({
           entityDiscountType={invoiceForm.discountType || '%'}
           onEntityDiscountChange={(v) => pif('discount', v)}
           onEntityDiscountTypeChange={(t) => pif('discountType', t)}
+          discountLocked={lockOrderItems}
           lineGross={saleLineGross}
           showWhenEmpty
           notes={invoiceForm.notes}

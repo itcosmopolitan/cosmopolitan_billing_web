@@ -240,6 +240,10 @@ class Organisation(Base):
     allow_overselling = Column(Boolean, default=True, nullable=False)
     # When True, POS operators may override the catalog rate on a cart line.
     allow_price_editing = Column(Boolean, default=False, nullable=False)
+    # When True, invoices created from a sales order cannot change item lines.
+    lock_sales_order_invoice_items = Column(Boolean, default=False, nullable=False)
+    # When True, bills and goods receipts created from a purchase order cannot change item lines.
+    lock_purchase_order_bill_items = Column(Boolean, default=False, nullable=False)
     # Display precision for money and qty throughout the app (default 2).
     amount_decimal_precision = Column(Integer, default=2, nullable=False)
     quantity_decimal_precision = Column(Integer, default=2, nullable=False)

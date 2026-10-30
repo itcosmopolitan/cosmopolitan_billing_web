@@ -453,6 +453,9 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # Phase 0 (2026-06-09): org inventory policy + document return tracking.
     ("organisations", "allow_overselling", "BOOLEAN DEFAULT 1 NOT NULL"),
     ("organisations", "allow_price_editing", "BOOLEAN DEFAULT 0 NOT NULL"),
+    # Lock item, qty, rate, and discount when converting a sales order to an invoice.
+    ("organisations", "lock_sales_order_invoice_items", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("organisations", "lock_purchase_order_bill_items", "BOOLEAN DEFAULT 0 NOT NULL"),
     # Display precision for amounts and quantities (default 2).
     ("organisations", "amount_decimal_precision", "INTEGER DEFAULT 2 NOT NULL"),
     ("organisations", "quantity_decimal_precision", "INTEGER DEFAULT 2 NOT NULL"),

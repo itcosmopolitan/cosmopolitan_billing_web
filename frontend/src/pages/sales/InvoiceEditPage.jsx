@@ -59,18 +59,27 @@ export default function InvoiceEditPage() {
   const setChildCounterBranchId = usePOSStore((s) => s.setChildCounterBranchId)
 
   const [form, setForm] = useState(null)
+  const [fromSalesOrder, setFromSalesOrder] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const lockSalesOrderInvoiceItems = useAppStore((s) => s.lockSalesOrderInvoiceItems)
+  const lockOrderItems = fromSalesOrder && lockSalesOrderInvoiceItems
 
   const pif = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   useTransactionBranchGuard({
     enabled: !loading && !!form,
     hasLines: documentHasSelectedLines(form?.items),
     activeBranchId: activeBranch?.id,
-    onConfirm: (branch) => applyDocumentBranch(setForm, branch.id, {
-      resetCounter: true,
-      emptyItems: () => [emptySaleLine()],
-    }),
+    onConfirm: (branch) => {
+      if (fromSalesOrder && lockSalesOrderInvoiceItems) {
+        toast.error('This invoice keeps the sales order branch and items')
+        return
+      }
+      applyDocumentBranch(setForm, branch.id, {
+        resetCounter: true,
+        emptyItems: () => [emptySaleLine()],
+      })
+    },
     onSync: (branchId) => applyDocumentBranch(setForm, branchId, { resetCounter: true }),
   })
 
@@ -119,6 +128,7 @@ export default function InvoiceEditPage() {
         }
         if (cancelled) return
         setForm({ ...base, items, ...creditMeta })
+        setFromSalesOrder(String(inv.origin || '').toLowerCase() === 'sales_order')
         setSelectedChildCounter(base.childCounterId || '')
       } catch {
         if (!cancelled) {
@@ -233,6 +243,7 @@ export default function InvoiceEditPage() {
         embedded
         open
         editMode
+        lockOrderItems={lockOrderItems}
         invoiceForm={form}
         pif={pif}
       />

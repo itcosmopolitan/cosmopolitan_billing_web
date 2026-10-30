@@ -78,6 +78,8 @@ class OrganisationUpdate(BaseModel):
     financial_year: Optional[str] = Field(None, max_length=16, alias="financialYear")
     logo_url: Optional[str] = Field(None, max_length=500, alias="logoUrl")
     allow_price_editing: Optional[bool] = Field(None, alias="allowPriceEditing")
+    lock_sales_order_invoice_items: Optional[bool] = Field(None, alias="lockSalesOrderInvoiceItems")
+    lock_purchase_order_bill_items: Optional[bool] = Field(None, alias="lockPurchaseOrderBillItems")
     numbering_config: Optional[NumberingConfig] = Field(None, alias="numberingConfig")
     amount_decimal_precision: Optional[int] = Field(None, ge=0, le=6, alias="amountDecimalPrecision")
     quantity_decimal_precision: Optional[int] = Field(None, ge=0, le=6, alias="quantityDecimalPrecision")
@@ -106,6 +108,8 @@ def _serialize_organisation(org: Organisation) -> dict:
         "financial_year": org.financial_year or "Apr-Mar",
         "logo_url": org.logo_url or "",
         "allowPriceEditing": bool(getattr(org, "allow_price_editing", False)),
+        "lockSalesOrderInvoiceItems": bool(getattr(org, "lock_sales_order_invoice_items", False)),
+        "lockPurchaseOrderBillItems": bool(getattr(org, "lock_purchase_order_bill_items", False)),
         "numberingConfig": _numbering_out(getattr(org, "numbering_config", None)),
         "amountDecimalPrecision": amount_prec,
         "quantityDecimalPrecision": qty_prec,
@@ -133,6 +137,8 @@ async def get_organisation(db: AsyncSession = Depends(get_db)):
             "financial_year": "Apr-Mar",
             "logo_url": "",
             "allowPriceEditing": False,
+            "lockSalesOrderInvoiceItems": False,
+            "lockPurchaseOrderBillItems": False,
             "numberingConfig": _numbering_out(None),
             "amountDecimalPrecision": 2,
             "quantityDecimalPrecision": 2,
@@ -174,6 +180,8 @@ async def update_organisation(
         if key in (
             "allow_overselling",
             "allow_price_editing",
+            "lock_sales_order_invoice_items",
+            "lock_purchase_order_bill_items",
             "numbering_config",
             "amount_decimal_precision",
             "quantity_decimal_precision",
@@ -220,6 +228,10 @@ async def _apply_organisation_update(org: Organisation, data: OrganisationUpdate
         org.logo_url = data.logo_url
     if data.allow_price_editing is not None:
         org.allow_price_editing = data.allow_price_editing
+    if data.lock_sales_order_invoice_items is not None:
+        org.lock_sales_order_invoice_items = data.lock_sales_order_invoice_items
+    if data.lock_purchase_order_bill_items is not None:
+        org.lock_purchase_order_bill_items = data.lock_purchase_order_bill_items
     if data.amount_decimal_precision is not None:
         org.amount_decimal_precision = clamp_precision(data.amount_decimal_precision)
     if data.quantity_decimal_precision is not None:

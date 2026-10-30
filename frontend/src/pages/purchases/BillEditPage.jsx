@@ -17,8 +17,11 @@ export default function BillEditPage() {
   const activeBranch = useAppStore((s) => s.activeBranch)
 
   const [form, setForm] = useState(null)
+  const [fromPurchaseOrder, setFromPurchaseOrder] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const lockPurchaseOrderBillItems = useAppStore((s) => s.lockPurchaseOrderBillItems)
+  const lockOrderItems = fromPurchaseOrder && lockPurchaseOrderBillItems
 
   const pbf = (k, v) => setForm((b) => ({ ...b, [k]: v }))
 
@@ -59,6 +62,7 @@ export default function BillEditPage() {
         const items = await enrichPurchaseLinesWithSellPrice(base.items)
         if (cancelled) return
         setForm({ ...base, items })
+        setFromPurchaseOrder(Boolean(bill.purchaseOrderId))
       } catch {
         toast.error('Bill not found')
         navigate('/purchases?tab=bills', { replace: true })
@@ -134,6 +138,7 @@ export default function BillEditPage() {
         pbf={pbf}
         mode="bill"
         editMode
+        lockOrderItems={lockOrderItems}
       />
     </DocumentFormShell>
   )
