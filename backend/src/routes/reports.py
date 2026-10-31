@@ -4769,6 +4769,157 @@ async def credit_collection(
     return _paginate_rows(rows, skip, limit)
 
 
+@router.get(
+    "/credit-collection-register",
+    dependencies=[Depends(require_perm("reports.view"))],
+)
+async def credit_collection_register(
+    branch_id: Optional[str] = None,
+    child_counter_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "asc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    gst_mode: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Individual customer payment allocations on credit invoices by payment date."""
+    date_from_obj, date_to_obj = _normalize_date_range(date_from, date_to)
+    date_from = date_from_obj.isoformat()
+    date_to = date_to_obj.isoformat()
+    exclusive = is_exclusive(gst_mode)
+    invoice_total = doc_amount_expr(
+        SaleInvoice.total, SaleInvoice.total, SaleInvoice.tax_total, exclusive
+    )
+    credited_amount = doc_amount_expr(
+        func.coalesce(SaleInvoice.credited_amount, 0),
+        SaleInvoice.total,
+        SaleInvoice.tax_total,
+        exclusive,
+    )
+    cumulative_amount = func.sum(CustomerPaymentAllocation.amount).over(
+        partition_by=CustomerPaymentAllocation.invoice_id,
+        order_by=(
+            CustomerPayment.date,
+            CustomerPayment.created_at,
+            CustomerPayment.id,
+            CustomerPaymentAllocation.id,
+        ),
+    )
+    not_voided = or_(
+        CustomerPayment.voided.is_(False),
+        CustomerPayment.voided.is_(None),
+    )
+    initial_settlement_notes = (
+        "POS sale",
+        "Invoice settlement",
+        "Invoice edit settlement",
+        "Account credit applied at sale",
+        "Account credit applied on approval",
+        "Invoice approved",
+        "Invoice paid at SO conversion",
+    )
+    conditions = [
+        CustomerPayment.date <= date_to,
+        not_voided,
+        SaleInvoice.customer_id.is_not(None),
+        func.lower(func.coalesce(Customer.classification, "external")) != "internal",
+        func.lower(func.coalesce(SaleInvoice.origin, "invoice")) != "pos",
+        func.coalesce(CustomerPayment.notes, "").not_in(initial_settlement_notes),
+    ]
+    branch_filter = _eq_or_in(SaleInvoice.branch_id, branch_id)
+    if branch_filter is not None:
+        conditions.append(branch_filter)
+    if child_counter_id:
+        conditions.append(SaleInvoice.child_counter_id == child_counter_id)
+
+    history = (
+        select(
+            CustomerPaymentAllocation.invoice_id.label("invoice_id"),
+            CustomerPaymentAllocation.id.label("allocation_id"),
+            CustomerPayment.id.label("payment_id"),
+            CustomerPayment.number.label("payment_number"),
+            CustomerPayment.date.label("payment_date"),
+            CustomerPayment.created_at.label("payment_created_at"),
+            SaleInvoice.customer_name.label("customer"),
+            SaleInvoice.branch_name.label("branch"),
+            SaleInvoice.number.label("invoice_number"),
+            SaleInvoice.date.label("invoice_date"),
+            SaleInvoice.due_date.label("due_date"),
+            invoice_total.label("original_amount"),
+            doc_amount_expr(
+                CustomerPaymentAllocation.amount,
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("collected_amount"),
+            doc_amount_expr(
+                cumulative_amount,
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("total_amount"),
+            credited_amount.label("credited_amount"),
+        )
+        .select_from(CustomerPaymentAllocation)
+        .join(
+            CustomerPayment,
+            CustomerPayment.id == CustomerPaymentAllocation.payment_id,
+        )
+        .join(SaleInvoice, SaleInvoice.id == CustomerPaymentAllocation.invoice_id)
+        .join(Customer, Customer.id == SaleInvoice.customer_id)
+        .where(and_(*conditions))
+        .subquery()
+    )
+    report_conditions = [
+        history.c.payment_date >= date_from,
+        history.c.payment_date <= date_to,
+    ]
+    if search:
+        like = f"%{search}%"
+        report_conditions.append(
+            history.c.payment_number.ilike(like)
+            | history.c.invoice_number.ilike(like)
+            | history.c.customer.ilike(like)
+        )
+    result = await db.execute(
+        select(history)
+        .where(and_(*report_conditions))
+        .order_by(
+            history.c.payment_date.asc(),
+            history.c.payment_created_at.asc(),
+            history.c.payment_id.asc(),
+            history.c.allocation_id.asc(),
+        )
+    )
+    rows: list[dict[str, Any]] = []
+    for record in result.fetchall():
+        row = dict(record._mapping)
+        payment_date = _parse_iso_date(row.get("payment_date"))
+        due_date = _parse_iso_date(row.get("due_date"))
+        original = float(row.get("original_amount") or 0)
+        total_collected = float(row.get("total_amount") or 0)
+        credited = float(row.get("credited_amount") or 0)
+        row["remaining_amount"] = max(0.0, original - total_collected - credited)
+        row["days_overdue"] = (
+            max(0, (payment_date - due_date).days)
+            if payment_date and due_date
+            else 0
+        )
+        row["collection_status"] = (
+            "Overdue" if row["days_overdue"] > 0 else
+            "Due Today" if due_date == payment_date else
+            "Not Due"
+        )
+        rows.append(row)
+
+    rows = _sort_aging_rows(rows, sort_by, sort_order, "payment_date")
+    return _paginate_rows(rows, skip, limit)
+
+
 @router.get("/sales-aging", dependencies=[Depends(require_perm("reports.view"))])
 async def sales_aging(
     branch_id: Optional[str] = None,

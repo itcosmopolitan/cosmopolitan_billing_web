@@ -35,6 +35,7 @@ def _report(
     list_hidden: bool = False,
     as_of_date: bool = False,
     date_filter: str = "range",
+    default_sort_order: str | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": id,
@@ -47,6 +48,8 @@ def _report(
         out["detailType"] = detail_type
     if list_hidden:
         out["listHidden"] = True
+    if default_sort_order:
+        out["defaultSortOrder"] = default_sort_order
     if as_of_date:
         out["asOfDate"] = True
         out["dateFilter"] = "asOf"
@@ -553,6 +556,29 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("branch", "Branch"),
                     _col("invoice_number", "Invoice Number"),
                     _col("invoice_date", "Invoice Date", format="date"),
+                    _col("due_date", "Due Date", format="date"),
+                    _col("original_amount", "Original Amount", align="right", format="currency"),
+                    _col("collected_amount", "Collected Amount", align="right", format="currency"),
+                    _col("total_amount", "Total Amount", align="right", format="currency"),
+                    _col("credited_amount", "Credited", align="right", format="currency"),
+                    _col("remaining_amount", "Remaining Amount", align="right", format="currency"),
+                    _col("days_overdue", "Days Overdue", align="right", format="number"),
+                    _col("collection_status", "Collection Status"),
+                ],
+            ),
+            _report(
+                "credit-collection-register",
+                "Credit Collection Register",
+                api="creditCollectionRegister",
+                default_sort="payment_date",
+                default_sort_order="asc",
+                detail_type="invoice",
+                columns=[
+                    _col("customer", "Customer"),
+                    _col("branch", "Branch"),
+                    _col("invoice_number", "Invoice Number"),
+                    _col("invoice_date", "Invoice Date", format="date"),
+                    _col("payment_date", "Payment Date", format="date"),
                     _col("due_date", "Due Date", format="date"),
                     _col("original_amount", "Original Amount", align="right", format="currency"),
                     _col("collected_amount", "Collected Amount", align="right", format="currency"),

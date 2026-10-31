@@ -89,6 +89,7 @@ const FOOTER_SUM_KEYS_BY_REPORT = {
   'product-sales-detail': new Set(['quantity', 'line_total']),
   'category-sales-detail': new Set(['quantity', 'line_total']),
   'product-purchases-detail': new Set(['quantity', 'line_total']),
+  'credit-collection-register': new Set(['collected_amount']),
 }
 
 function isSummableColumn(column, reportId) {
@@ -236,6 +237,7 @@ const GST_EXCL_SALES_LABELS = {
 /** Reports where the GST toggle is hidden. */
 const GST_TOGGLE_HIDDEN_REPORTS = new Set([
   'sales-register',
+  'credit-collection-register',
   'credit-collection',
   'tax-summary',
   'petty-cash',
@@ -1059,6 +1061,11 @@ function ReportsListPage({
                   >
                     <td>
                       <span style={{ color: 'var(--blue)', fontWeight: 500 }}>{report.label}</span>
+                      {report.id === 'credit-collection' && (
+                        <span style={{ marginLeft: 5, color: 'var(--text-muted)', fontSize: 12, fontWeight: 400 }}>
+                          (Invoice-based)
+                        </span>
+                      )}
                       {activeCategory?.isFavorites && report.categoryLabel && (
                         <span style={{ marginLeft: 8, color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>
                           {report.categoryLabel}
@@ -1126,6 +1133,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     'customerSales',
     'outstandingReceivables',
     'creditCollection',
+    'creditCollectionRegister',
     'salesAging',
     'salesAgingDetail',
     'topCustomers',
@@ -1157,7 +1165,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
   const [sortBy, setSortBy] = useState(
     () => searchParams.get('sort_by') || report.defaultSort || report.columns[0]?.key,
   )
-  const [sortOrder, setSortOrder] = useState(() => searchParams.get('sort_order') || 'desc')
+  const [sortOrder, setSortOrder] = useState(
+    () => searchParams.get('sort_order') || report.defaultSortOrder || 'desc',
+  )
   const [skip, setSkip] = useState(() => {
     const raw = Number(searchParams.get('skip') || 0)
     return Number.isFinite(raw) && raw > 0 ? raw : 0
@@ -1341,7 +1351,11 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       gstMode: urlFilters.gst_mode === 'inclusive' ? 'inclusive' : DEFAULT_GST_MODE,
     })
     setSortBy(urlFilters.sort_by || report.defaultSort || report.columns[0]?.key)
-    setSortOrder(urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc' ? urlFilters.sort_order : 'desc')
+    setSortOrder(
+      urlFilters.sort_order === 'asc' || urlFilters.sort_order === 'desc'
+        ? urlFilters.sort_order
+        : report.defaultSortOrder || 'desc',
+    )
     const nextSkip = Number(urlFilters.skip || 0)
     setSkip(Number.isFinite(nextSkip) && nextSkip > 0 ? nextSkip : 0)
     setLimit(report.id === 'current-stock' ? 500 : 200)
@@ -1351,7 +1365,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     // allBranchIds intentionally omitted: late branch hydration is handled below
     // so we don't wipe in-progress draft filter edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync from URL/report only
-  }, [report.id, report.defaultSort, report.asOfDate, report.dateFilter, urlFilterKey, defaultFrom, hasDateFilter, today])
+  }, [report.id, report.defaultSort, report.defaultSortOrder, report.asOfDate, report.dateFilter, urlFilterKey, defaultFrom, hasDateFilter, today])
 
   useEffect(() => {
     let cancelled = false
@@ -1714,7 +1728,14 @@ function ReportDetailPage({ report, reportMap, onBack }) {
           flex: 1,
           flexWrap: 'wrap',
         }}>
-          <h2 style={{ margin: 0, minWidth: 0, flex: '0 1 auto' }}>{report.label}</h2>
+          <h2 style={{ margin: 0, minWidth: 0, flex: '0 1 auto' }}>
+            {report.label}
+            {report.id === 'credit-collection' && (
+              <span style={{ marginLeft: 6, color: 'var(--text-muted)', fontSize: 13, fontWeight: 400 }}>
+                (Invoice-based)
+              </span>
+            )}
+          </h2>
           {report.categoryLabel && (
             <span style={{
               flexShrink: 0,

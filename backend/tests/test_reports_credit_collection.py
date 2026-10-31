@@ -23,7 +23,10 @@ from src.models import (  # noqa: E402
     InvoiceStatus,
     SaleInvoice,
 )
-from src.routes.reports import credit_collection  # noqa: E402
+from src.routes.reports import (  # noqa: E402
+    credit_collection,
+    credit_collection_register,
+)
 
 AS_OF = date(2026, 3, 31)
 
@@ -268,6 +271,26 @@ async def _run_credit_collection_report() -> None:
         assert range_rows["INV-DATE-RANGE"]["remaining_amount"] == 1000
         assert "INV-PAID-IN-RANGE" not in range_rows
         assert "INV-WALK-IN" not in range_rows
+
+        register = await credit_collection_register(
+            date_from="2026-10-02",
+            date_to="2026-10-05",
+            skip=0,
+            limit=50,
+            db=db,
+        )
+        installments = [
+            row
+            for row in register["items"]
+            if row["invoice_number"] == "INV-DATE-RANGE"
+        ]
+        assert [row["payment_date"] for row in installments] == [
+            "2026-10-02",
+            "2026-10-05",
+        ]
+        assert [row["collected_amount"] for row in installments] == [2000, 1000]
+        assert [row["total_amount"] for row in installments] == [7000, 8000]
+        assert [row["remaining_amount"] for row in installments] == [3000, 2000]
     finally:
         await db.close()
 
