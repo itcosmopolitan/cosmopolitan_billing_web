@@ -236,6 +236,7 @@ const GST_EXCL_SALES_LABELS = {
 /** Reports where the GST toggle is hidden. */
 const GST_TOGGLE_HIDDEN_REPORTS = new Set([
   'sales-register',
+  'credit-collection',
   'tax-summary',
   'petty-cash',
   'stock-movement',

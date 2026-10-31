@@ -1,4 +1,4 @@
-"""Credit collection report — open receivables and collection status."""
+"""Credit collection report date-range totals and collection status."""
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +15,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.database import Base  # noqa: E402
-from src.models import Branch, Customer, InvoiceStatus, SaleInvoice  # noqa: E402
+from src.models import (  # noqa: E402
+    Branch,
+    Customer,
+    CustomerPayment,
+    CustomerPaymentAllocation,
+    InvoiceStatus,
+    SaleInvoice,
+)
 from src.routes.reports import credit_collection  # noqa: E402
 
 AS_OF = date(2026, 3, 31)
@@ -105,10 +112,91 @@ async def _run_credit_collection_report() -> None:
                 paid_amount=0,
                 status=InvoiceStatus.pending,
             ),
+            SaleInvoice(
+                id="inv-date-range",
+                number="INV-DATE-RANGE",
+                customer_id="c-ext",
+                customer_name="External Customer",
+                branch_id="b1",
+                branch_name="Main",
+                date="2026-09-01",
+                due_date="2026-09-30",
+                total=10000,
+                paid_amount=9500,
+                credited_amount=0,
+                status=InvoiceStatus.partial,
+            ),
+            SaleInvoice(
+                id="inv-paid-in-range",
+                number="INV-PAID-IN-RANGE",
+                customer_id="c-ext",
+                customer_name="External Customer",
+                branch_id="b1",
+                branch_name="Main",
+                date="2026-09-01",
+                due_date="2026-09-30",
+                total=1000,
+                paid_amount=1000,
+                credited_amount=0,
+                status=InvoiceStatus.paid,
+            ),
+            *[
+                CustomerPayment(
+                    id=f"payment-{day}",
+                    number=f"PAY-{day}",
+                    customer_id="c-ext",
+                    customer_name="External Customer",
+                    branch_id="b1",
+                    date=f"2026-10-{day:02d}",
+                    total_amount=amount,
+                    payment_mode="cash",
+                    voided=False,
+                )
+                for day, amount in [
+                    (1, 5000),
+                    (2, 2000),
+                    (5, 1000),
+                    (10, 1000),
+                    (15, 500),
+                ]
+            ],
+            CustomerPayment(
+                id="payment-paid-in-range",
+                number="PAY-PAID-IN-RANGE",
+                customer_id="c-ext",
+                customer_name="External Customer",
+                branch_id="b1",
+                date="2026-10-07",
+                total_amount=1000,
+                payment_mode="cash",
+                voided=False,
+            ),
         ])
+        for day, amount in [
+            (1, 5000),
+            (2, 2000),
+            (5, 1000),
+            (10, 1000),
+            (15, 500),
+        ]:
+            db.add(CustomerPaymentAllocation(
+                id=f"allocation-{day}",
+                payment_id=f"payment-{day}",
+                invoice_id="inv-date-range",
+                invoice_number="INV-DATE-RANGE",
+                amount=amount,
+            ))
+        db.add(CustomerPaymentAllocation(
+            id="allocation-paid-in-range",
+            payment_id="payment-paid-in-range",
+            invoice_id="inv-paid-in-range",
+            invoice_number="INV-PAID-IN-RANGE",
+            amount=1000,
+        ))
         await db.commit()
 
         report = await credit_collection(
+            date_from="2026-03-01",
             date_to=AS_OF.isoformat(),
             skip=0,
             limit=50,
@@ -135,6 +223,7 @@ async def _run_credit_collection_report() -> None:
         assert not_due["collection_status"] == "Not Due"
 
         exclusive = await credit_collection(
+            date_from="2026-03-01",
             date_to=AS_OF.isoformat(),
             gst_mode="exclusive",
             skip=0,
@@ -148,6 +237,24 @@ async def _run_credit_collection_report() -> None:
         assert exclusive_overdue["collected_amount"] == pytest.approx(20 * 100 / 108)
         assert exclusive_overdue["credited_amount"] == pytest.approx(10 * 100 / 108)
         assert exclusive_overdue["balance"] == pytest.approx(78 * 100 / 108)
+
+        range_report = await credit_collection(
+            date_from="2026-10-05",
+            date_to="2026-10-10",
+            skip=0,
+            limit=50,
+            db=db,
+        )
+        range_rows = {
+            row["invoice_number"]: row for row in range_report["items"]
+        }
+        assert range_rows["INV-DATE-RANGE"]["original_amount"] == 10000
+        assert range_rows["INV-DATE-RANGE"]["collected_amount"] == 2000
+        assert range_rows["INV-DATE-RANGE"]["total_amount"] == 9000
+        assert range_rows["INV-DATE-RANGE"]["remaining_amount"] == 1000
+        assert range_rows["INV-PAID-IN-RANGE"]["collected_amount"] == 1000
+        assert range_rows["INV-PAID-IN-RANGE"]["total_amount"] == 1000
+        assert range_rows["INV-PAID-IN-RANGE"]["remaining_amount"] == 0
     finally:
         await db.close()
 

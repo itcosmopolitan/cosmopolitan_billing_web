@@ -30,6 +30,8 @@ from src.models import (
     ComplimentaryEntry,
     ComplimentaryLineItem,
     Customer,
+    CustomerPayment,
+    CustomerPaymentAllocation,
     DailySalesSummary,
     InventorySnapshot,
     InvoiceStatus,
@@ -4328,6 +4330,7 @@ async def _sales_aging_detail_rows(
     customer_id: Optional[str],
     gst_mode: Optional[str] = None,
     external_only: bool = False,
+    include_invoice_ids: Optional[set[str]] = None,
     db: AsyncSession,
 ) -> tuple[list[dict[str, Any]], date]:
     # Aging uses a single as-of cutoff (date_to). date_from is ignored so older
@@ -4342,11 +4345,16 @@ async def _sales_aging_detail_rows(
         SaleInvoice.total, SaleInvoice.total, SaleInvoice.tax_total, exclusive
     )
     conds = [
-        outstanding > 0.01,
         SaleInvoice.status != InvoiceStatus.cancelled,
         SaleInvoice.status != InvoiceStatus.draft,
         SaleInvoice.date <= as_of.isoformat(),
     ]
+    if include_invoice_ids:
+        conds.append(
+            or_(outstanding > 0.01, SaleInvoice.id.in_(include_invoice_ids))
+        )
+    else:
+        conds.append(outstanding > 0.01)
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
@@ -4585,7 +4593,47 @@ async def credit_collection(
     gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Open customer invoices with collected, credited, and overdue balances."""
+    """Customer invoice collections during a date range and balances as of its end."""
+    date_from_obj, as_of = _normalize_date_range(date_from, date_to)
+    date_from = date_from_obj.isoformat()
+    date_to = as_of.isoformat()
+    not_voided = or_(
+        CustomerPayment.voided.is_(False),
+        CustomerPayment.voided.is_(None),
+    )
+    active_as_of = or_(
+        not_voided,
+        and_(
+            CustomerPayment.voided.is_(True),
+            CustomerPayment.voided_at > date_to,
+        ),
+    )
+    collection_invoice_ids = set(
+        (
+            await db.execute(
+                select(CustomerPaymentAllocation.invoice_id)
+                .join(
+                    CustomerPayment,
+                    CustomerPayment.id == CustomerPaymentAllocation.payment_id,
+                )
+                .where(
+                    or_(
+                        and_(
+                            CustomerPayment.date >= date_from,
+                            CustomerPayment.date <= date_to,
+                            active_as_of,
+                        ),
+                        and_(
+                            CustomerPayment.date > date_to,
+                            CustomerPayment.date <= date.today().isoformat(),
+                            not_voided,
+                        ),
+                    ),
+                )
+                .distinct()
+            )
+        ).scalars().all()
+    )
     rows, as_of = await _sales_aging_detail_rows(
         branch_id=branch_id,
         child_counter_id=child_counter_id,
@@ -4595,9 +4643,113 @@ async def credit_collection(
         customer_id=None,
         gst_mode=gst_mode,
         external_only=True,
+        include_invoice_ids=collection_invoice_ids,
         db=db,
     )
+    invoice_ids = [row["invoice_id"] for row in rows]
+    allocation_totals: dict[str, tuple[float, float, float]] = {}
+    if invoice_ids:
+        in_range_amount = func.sum(
+            case(
+                (
+                    and_(
+                        CustomerPayment.date >= date_from,
+                        CustomerPayment.date <= date_to,
+                        active_as_of,
+                    ),
+                    CustomerPaymentAllocation.amount,
+                ),
+                else_=0,
+            )
+        )
+        through_as_of_amount = func.sum(
+            case(
+                (
+                    and_(CustomerPayment.date <= date_to, active_as_of),
+                    CustomerPaymentAllocation.amount,
+                ),
+                else_=0,
+            )
+        )
+        all_time_amount = func.sum(
+            case(
+                (not_voided, CustomerPaymentAllocation.amount),
+                else_=0,
+            )
+        )
+        payment_totals = await db.execute(
+            select(
+                CustomerPaymentAllocation.invoice_id,
+                doc_amount_expr(
+                    in_range_amount,
+                    SaleInvoice.total,
+                    SaleInvoice.tax_total,
+                    is_exclusive(gst_mode),
+                ).label("in_range"),
+                doc_amount_expr(
+                    through_as_of_amount,
+                    SaleInvoice.total,
+                    SaleInvoice.tax_total,
+                    is_exclusive(gst_mode),
+                ).label("through_as_of"),
+                doc_amount_expr(
+                    all_time_amount,
+                    SaleInvoice.total,
+                    SaleInvoice.tax_total,
+                    is_exclusive(gst_mode),
+                ).label("all_time"),
+            )
+            .join(
+                CustomerPayment,
+                CustomerPayment.id == CustomerPaymentAllocation.payment_id,
+            )
+            .join(SaleInvoice, SaleInvoice.id == CustomerPaymentAllocation.invoice_id)
+            .where(
+                CustomerPaymentAllocation.invoice_id.in_(invoice_ids),
+                or_(
+                    not_voided,
+                    and_(
+                        CustomerPayment.voided.is_(True),
+                        CustomerPayment.voided_at > date_to,
+                    ),
+                ),
+            )
+            .group_by(
+                CustomerPaymentAllocation.invoice_id,
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+            )
+        )
+        allocation_totals = {
+            row.invoice_id: (
+                float(row.in_range or 0),
+                float(row.through_as_of or 0),
+                float(row.all_time or 0),
+            )
+            for row in payment_totals
+        }
+
     for row in rows:
+        range_collected, collected_through_as_of, all_recorded_collections = (
+            allocation_totals.get(row["invoice_id"], (0.0, 0.0, 0.0))
+        )
+        legacy_collections = max(
+            0.0,
+            float(row.get("collected_amount") or 0) - all_recorded_collections,
+        )
+        invoice_date = _parse_iso_date(row.get("invoice_date"))
+        if invoice_date and invoice_date <= as_of:
+            collected_through_as_of += legacy_collections
+            if date_from_obj <= invoice_date <= as_of:
+                range_collected += legacy_collections
+        row["collected_amount"] = range_collected
+        row["total_amount"] = collected_through_as_of
+        row["remaining_amount"] = max(
+            0.0,
+            float(row.get("original_amount") or 0)
+            - collected_through_as_of
+            - float(row.get("credited_amount") or 0),
+        )
         due_date = _parse_iso_date(row.get("due_date"))
         days_overdue = max(0, (as_of - due_date).days) if due_date else 0
         row["days_overdue"] = days_overdue
@@ -4606,6 +4758,11 @@ async def credit_collection(
             "Due Today" if due_date == as_of else
             "Not Due"
         )
+    rows = [
+        row
+        for row in rows
+        if row["remaining_amount"] > 0.01 or row["collected_amount"] > 0.01
+    ]
     rows = _sort_aging_rows(rows, sort_by, sort_order, "due_date")
     return _paginate_rows(rows, skip, limit)
 
