@@ -4827,8 +4827,6 @@ async def credit_collection_register(
         not_voided,
         SaleInvoice.customer_id.is_not(None),
         func.lower(func.coalesce(Customer.classification, "external")) != "internal",
-        func.lower(func.coalesce(SaleInvoice.origin, "invoice")) != "pos",
-        func.coalesce(CustomerPayment.notes, "").not_in(initial_settlement_notes),
     ]
     branch_filter = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if branch_filter is not None:
@@ -4844,6 +4842,7 @@ async def credit_collection_register(
             CustomerPayment.number.label("payment_number"),
             CustomerPayment.date.label("payment_date"),
             CustomerPayment.created_at.label("payment_created_at"),
+            CustomerPayment.notes.label("payment_notes"),
             SaleInvoice.customer_name.label("customer"),
             SaleInvoice.branch_name.label("branch"),
             SaleInvoice.number.label("invoice_number"),
@@ -4877,6 +4876,7 @@ async def credit_collection_register(
     report_conditions = [
         history.c.payment_date >= date_from,
         history.c.payment_date <= date_to,
+        func.coalesce(history.c.payment_notes, "").not_in(initial_settlement_notes),
     ]
     if search:
         like = f"%{search}%"
