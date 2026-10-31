@@ -692,6 +692,7 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("invoice_date", "Invoice Date"),
         _col("due_date", "Due Date"),
         _col("outstanding_amount", "Outstanding Amount"),
+        _col("outstanding_amount_incl_gst", "Outstanding Amount (Incl. GST)"),
     ],
     "reports.credit-collection": [
         _col("customer", "Customer", locked=True),

@@ -4195,6 +4195,9 @@ async def outstanding_receivables(
     outstanding_out = doc_amount_expr(
         outstanding, SaleInvoice.total, SaleInvoice.tax_total, is_exclusive(gst_mode)
     )
+    outstanding_incl_gst = doc_amount_expr(
+        outstanding, SaleInvoice.total, SaleInvoice.tax_total, False
+    )
     conds = [
         outstanding > 0.01,
         SaleInvoice.status != InvoiceStatus.cancelled,
@@ -4218,6 +4221,7 @@ async def outstanding_receivables(
         "invoice_date": SaleInvoice.date,
         "due_date": SaleInvoice.date,
         "outstanding_amount": outstanding_out,
+        "outstanding_amount_incl_gst": outstanding_incl_gst,
     }
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "due_date", "asc")
     sk = normalize_skip(skip)
@@ -4230,6 +4234,7 @@ async def outstanding_receivables(
             SaleInvoice.date.label("invoice_date"),
             SaleInvoice.date.label("due_date"),
             outstanding_out.label("outstanding_amount"),
+            outstanding_incl_gst.label("outstanding_amount_incl_gst"),
         )
         .select_from(SaleInvoice)
         .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)

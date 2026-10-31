@@ -543,6 +543,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("invoice_date", "Invoice Date", format="date"),
                     _col("due_date", "Due Date", format="date"),
                     _col("outstanding_amount", "Outstanding Amount", align="right", format="currency"),
+                    _col("outstanding_amount_incl_gst", "Outstanding Amount (Incl. GST)", align="right", format="currency"),
                 ],
             ),
             _report(

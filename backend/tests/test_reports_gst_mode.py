@@ -153,7 +153,9 @@ async def _run_reports():
             gst_mode="exclusive", db=db,
         )
         assert ar_incl["items"][0]["outstanding_amount"] == 108.0
+        assert ar_incl["items"][0]["outstanding_amount_incl_gst"] == 108.0
         assert ar_excl["items"][0]["outstanding_amount"] == 100.0
+        assert ar_excl["items"][0]["outstanding_amount_incl_gst"] == 108.0
 
         # Payables: outstanding 200 inclusive; exclusive 200 * 200 / 216.
         ap_incl = await outstanding_payables(
