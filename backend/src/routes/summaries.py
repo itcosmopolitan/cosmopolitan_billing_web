@@ -14,16 +14,17 @@ from src.models import (
     Role,
     StockAdjustment,
     StockTransfer,
-    TransferStatus,
     User,
 )
 from src.permissions import MODULE_SUMMARY_READ, expand
-from src.routes.transfers import transfer_branch_scope
+from src.routes.transfers import transfer_branch_scope, transfer_status_filter
 from src.security import current_user, enforce_branch_access_optional, get_allowed_branch_ids
 
 router = APIRouter()
 
-TRANSFER_TAB_STATUSES = ("draft", "pending", "transit", "received", "rejected")
+TRANSFER_TAB_STATUSES = (
+    "draft", "pending", "dispatched", "transit", "delivered", "received", "rejected",
+)
 
 
 async def _user_grants(user: User, db: AsyncSession) -> set[str]:
@@ -58,7 +59,7 @@ async def _transfer_summary(
     async def _count(status_key: str) -> int:
         q = base
         if status_key != "all":
-            q = q.where(StockTransfer.status == TransferStatus(status_key))
+            q = q.where(transfer_status_filter(status_key))
         if branch_id:
             q = q.where(transfer_branch_scope(branch_id, status_key))
         return int((await db.execute(q)).scalar() or 0)

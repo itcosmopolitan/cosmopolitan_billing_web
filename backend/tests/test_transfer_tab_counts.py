@@ -30,7 +30,9 @@ ROWS = [
     ("TR-12", TransferStatus.draft, A, B, None),
 ]
 
-TABS = [None, "draft", "pending", "transit", "received", "rejected"]
+TABS = [
+    None, "draft", "pending", "dispatched", "transit", "delivered", "received", "rejected",
+]
 
 
 async def _build_session() -> AsyncSession:
@@ -139,14 +141,65 @@ async def _run_expected_counts() -> None:
     db = await _build_session()
     try:
         summary = await _transfer_summary(db, branch_id=A, child_counter_id=CC)
-        # Alpha is source for draft/pending/rejected and destination for transit.
+        # Alpha sees source-side dispatch/delivery and destination-side transit/receipt.
         assert summary == {
             "draft": 1,
             "pending": 1,
+            "dispatched": 1,
             "transit": 1,
-            "received": 1,
+            "delivered": 1,
+            "received": 0,
             "rejected": 1,
             "total": 10,
         }
     finally:
         await db.close()
+
+
+def test_transfer_list_projects_status_by_branch(passthrough_branch_access):
+    async def _run():
+        db = await _build_session()
+        try:
+            source_rows = await transfers_routes.list_transfers(
+                status=None,
+                branch_id=A,
+                child_counter_id=CC,
+                from_branch=None,
+                to_branch=None,
+                sort_by=None,
+                sort_order="desc",
+                skip=0,
+                limit=500,
+                db=db,
+                user=SimpleNamespace(all_branches=True),
+            )
+            source_statuses = {
+                row["ref_number"]: row["status"]
+                for row in source_rows["items"]
+            }
+            assert source_statuses["TR-5"] == "dispatched"
+            assert source_statuses["TR-7"] == "delivered"
+
+            destination_rows = await transfers_routes.list_transfers(
+                status=None,
+                branch_id=B,
+                child_counter_id=CC,
+                from_branch=None,
+                to_branch=None,
+                sort_by=None,
+                sort_order="desc",
+                skip=0,
+                limit=500,
+                db=db,
+                user=SimpleNamespace(all_branches=True),
+            )
+            destination_statuses = {
+                row["ref_number"]: row["status"]
+                for row in destination_rows["items"]
+            }
+            assert destination_statuses["TR-5"] == "transit"
+            assert destination_statuses["TR-7"] == "received"
+        finally:
+            await db.close()
+
+    asyncio.run(_run())

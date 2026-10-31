@@ -12,6 +12,8 @@ import { NOT_SET } from '@/utils/emptyValue'
 function transferStatusChip(status) {
   if (status === 'received') return { status: 'received', label: 'Received' }
   if (status === 'transit') return { status: 'transit', label: 'In Transit' }
+  if (status === 'dispatched') return { status: 'transit', label: 'Dispatched' }
+  if (status === 'delivered') return { status: 'received', label: 'Delivered' }
   if (status === 'pending') return { status: 'pending', label: 'Pending' }
   if (status === 'rejected') return { status: 'draft', label: 'Rejected' }
   if (status === 'draft') return { status: 'draft', label: 'Draft' }
@@ -62,7 +64,7 @@ export default function TransferDetailPanel({
     ;(async () => {
       setLoading(true)
       try {
-        const full = await transfersAPI.get(transfer.id)
+        const full = await transfersAPI.get(transfer.id, { branch_id: activeBranchId || undefined })
         if (!cancelled) setDetail({ ...transfer, ...full })
       } catch {
         /* list row may already include lines */
@@ -71,7 +73,7 @@ export default function TransferDetailPanel({
       }
     })()
     return () => { cancelled = true }
-  }, [open, transfer?.id])
+  }, [open, transfer, activeBranchId])
 
   const chip = transferStatusChip(detail?.status)
   const lineCount = detail?.items?.length || 0
@@ -147,6 +149,10 @@ export default function TransferDetailPanel({
           ? (activeBranchId && detail?.from_branch_id !== activeBranchId
             ? 'Switch to the source branch to approve and dispatch this transfer.'
             : 'This transfer is awaiting approval.')
+          : detail?.status === 'dispatched'
+            ? 'Stock has left the source branch and is awaiting receipt at the destination.'
+            : detail?.status === 'delivered'
+              ? 'The destination branch has received this transfer.'
           : detail?.status === 'transit'
             ? (activeBranchId && detail?.to_branch_id !== activeBranchId
               ? 'Switch to the destination branch to receive this transfer.'

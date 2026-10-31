@@ -557,7 +557,7 @@ export const summariesAPI = {
 // ─── Transfers ────────────────────────────────────────────────────────────────
 export const transfersAPI = {
   list:    (params) => api.get('/transfers/',          { params }),
-  get:     (id)     => api.get(`/transfers/${id}`),
+  get:     (id, params) => api.get(`/transfers/${id}`, { params }),
   create:  (data)   => api.post('/transfers/', data),
   update:  (id, data) => api.put(`/transfers/${id}`, data),
   approve: (id, data) => api.post(`/transfers/${id}/approve`, data),

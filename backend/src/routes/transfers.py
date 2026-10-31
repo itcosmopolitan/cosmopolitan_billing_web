@@ -133,18 +133,38 @@ async def _lock_transfer(
 def transfer_branch_scope(branch_id: str, status_key: str):
     """Branch filter for a transfer list tab. Shared with the tab summary counts.
 
-    draft/pending/rejected → source (from) owns approve/edit
-    transit → destination (to) owns receive
-    anything else (received / all) → either side of the route
+    draft/pending/rejected/dispatched/delivered → source branch
+    transit/received → destination branch
+    all other statuses → either side of the route
     """
-    if status_key in {"draft", "pending", "rejected"}:
+    if status_key in {"draft", "pending", "rejected", "dispatched", "delivered"}:
         return StockTransfer.from_branch_id == branch_id
-    if status_key == "transit":
+    if status_key in {"transit", "received"}:
         return StockTransfer.to_branch_id == branch_id
     return or_(
         StockTransfer.from_branch_id == branch_id,
         StockTransfer.to_branch_id == branch_id,
     )
+
+
+def transfer_status_filter(status_key: str):
+    """Map branch-facing status filters to the persisted transfer lifecycle."""
+    if status_key == "dispatched":
+        return StockTransfer.status == TransferStatus.transit
+    if status_key == "delivered":
+        return StockTransfer.status == TransferStatus.received
+    return StockTransfer.status == status_key
+
+
+def transfer_status_for_branch(t: StockTransfer, branch_id: Optional[str]) -> str:
+    """Return the status label appropriate to one side of the transfer route."""
+    status = t.status.value if hasattr(t.status, "value") else str(t.status)
+    if branch_id == t.from_branch_id:
+        if status == TransferStatus.transit.value:
+            return "dispatched"
+        if status == TransferStatus.received.value:
+            return "delivered"
+    return status
 
 
 @router.get("/", dependencies=[Depends(require_perm(*TRANSFER_DOCUMENT_READ))])
@@ -216,8 +236,9 @@ async def list_transfers(
         q = q.where(transfer_date <= date_to)
         cq = cq.where(transfer_date <= date_to)
     if status:
-        q = q.where(StockTransfer.status == status)
-        cq = cq.where(StockTransfer.status == status)
+        status_filter = transfer_status_filter(status.strip().lower())
+        q = q.where(status_filter)
+        cq = cq.where(status_filter)
     if child_counter_id:
         q = q.where(StockTransfer.child_counter_id == child_counter_id)
         cq = cq.where(StockTransfer.child_counter_id == child_counter_id)
@@ -256,6 +277,8 @@ async def list_transfers(
     for t in transfers:
         lines = t.items or []
         d = serialize_transfer(t)
+        d["workflow_status"] = d["status"]
+        d["status"] = transfer_status_for_branch(t, branch_id)
         d["from_branch_name"] = branch_map.get(t.from_branch_id, t.from_branch_id)
         d["to_branch_name"] = branch_map.get(t.to_branch_id, t.to_branch_id)
         d["items"] = [_line_dict(ln) for ln in lines]
@@ -571,12 +594,14 @@ def _summarize_transfer_item_changes(old_lines: list[TransferLineItem], new_item
 
 
 async def _serialize_transfer_detail(
-    db: AsyncSession, t: StockTransfer
+    db: AsyncSession, t: StockTransfer, *, branch_id: Optional[str] = None,
 ) -> dict:
     br_result = await db.execute(select(Branch))
     branch_map = {b.id: b.name for b in br_result.scalars().all()}
     lines = t.items or []
     d = serialize_transfer(t)
+    d["workflow_status"] = d["status"]
+    d["status"] = transfer_status_for_branch(t, branch_id)
     d["from_branch_name"] = branch_map.get(t.from_branch_id, t.from_branch_name or t.from_branch_id)
     d["to_branch_name"] = branch_map.get(t.to_branch_id, t.to_branch_name or t.to_branch_id)
     d["expected_date"] = t.request_date
@@ -602,7 +627,12 @@ async def _serialize_transfer_detail(
 
 
 @router.get("/{transfer_id}", dependencies=[Depends(require_perm(*TRANSFER_DOCUMENT_READ))])
-async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)):
+async def get_transfer(
+    transfer_id: str,
+    branch_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+):
     result = await db.execute(
         select(StockTransfer)
         .where(StockTransfer.id == transfer_id)
@@ -612,7 +642,11 @@ async def get_transfer(transfer_id: str, db: AsyncSession = Depends(get_db), use
     if not t:
         raise HTTPException(404, "Transfer not found")
     await _ensure_user_can_view_transfer(user, db, t)
-    return await _serialize_transfer_detail(db, t)
+    if branch_id:
+        await enforce_branch_access(branch_id, user=user, db=db)
+        if branch_id not in {t.from_branch_id, t.to_branch_id}:
+            raise HTTPException(400, "Branch is not part of this transfer")
+    return await _serialize_transfer_detail(db, t, branch_id=branch_id)
 
 
 async def _ensure_user_can_view_transfer(user: User, db: AsyncSession, t: StockTransfer) -> None:

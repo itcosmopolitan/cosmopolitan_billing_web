@@ -71,7 +71,7 @@ const INVOICE_STATUS_FILTER_OPTIONS = statusOptions(['paid', 'pending', 'partial
 const RETURN_STATUS_FILTER_OPTIONS = statusOptions(['pending', 'processed', 'void'])
 const ORDER_STATUS_FILTER_OPTIONS = ['draft', 'pending_approval', 'confirmed', 'partially_invoiced', 'converted', 'cancelled'].map((s) => ({
   id: s,
-  label: formatLabel(s),
+  label: s === 'converted' ? 'Invoiced' : formatLabel(s),
 }))
 
 const VALID_TABS = new Set(TABS.map((t) => t.id))

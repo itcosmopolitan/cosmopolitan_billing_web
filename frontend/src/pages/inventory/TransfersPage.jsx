@@ -27,7 +27,9 @@ const TAB_DEFS = [
   { id: 'all',      label: 'All Transfers' },
   { id: 'draft',    label: 'Draft' },
   { id: 'pending',  label: 'Pending Approval' },
+  { id: 'dispatched', label: 'Dispatched' },
   { id: 'transit',  label: 'In Transit' },
+  { id: 'delivered', label: 'Delivered' },
   { id: 'received', label: 'Received' },
   { id: 'rejected', label: 'Rejected' },
 ]
@@ -47,6 +49,8 @@ function tabFromSearchParams(searchParams) {
 function transferStatusChip(status) {
   if (status === 'received') return { status: 'received', label: 'Received' }
   if (status === 'transit') return { status: 'transit', label: 'In Transit' }
+  if (status === 'dispatched') return { status: 'transit', label: 'Dispatched' }
+  if (status === 'delivered') return { status: 'received', label: 'Delivered' }
   if (status === 'pending') return { status: 'pending', label: 'Pending' }
   if (status === 'rejected') return { status: 'draft', label: 'Rejected' }
   return { status: 'draft', label: formatLabel(status) }
