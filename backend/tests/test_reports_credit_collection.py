@@ -157,6 +157,21 @@ async def _run_credit_collection_report() -> None:
                 credited_amount=0,
                 status=InvoiceStatus.pending,
             ),
+            SaleInvoice(
+                id="inv-pos-credit",
+                number="POS-CREDIT-001",
+                customer_id="c-ext",
+                customer_name="External Customer",
+                branch_id="b1",
+                branch_name="Main",
+                date="2026-09-01",
+                due_date="2026-09-30",
+                total=8000,
+                paid_amount=7000,
+                credited_amount=0,
+                status=InvoiceStatus.partial,
+                origin="pos",
+            ),
             *[
                 CustomerPayment(
                     id=f"payment-{day}",
@@ -188,6 +203,33 @@ async def _run_credit_collection_report() -> None:
                 payment_mode="cash",
                 voided=False,
             ),
+            CustomerPayment(
+                id="payment-pos-initial",
+                number="PAY-POS-INITIAL",
+                customer_id="c-ext",
+                customer_name="External Customer",
+                branch_id="b1",
+                date="2026-10-01",
+                total_amount=1000,
+                payment_mode="cash",
+                notes="POS sale",
+                voided=False,
+            ),
+            *[
+                CustomerPayment(
+                    id=f"payment-pos-{day}",
+                    number=f"PAY-POS-{day}",
+                    customer_id="c-ext",
+                    customer_name="External Customer",
+                    branch_id="b1",
+                    date=f"2026-10-{day:02d}",
+                    total_amount=2000,
+                    payment_mode="bank_transfer",
+                    notes="Invoice payment",
+                    voided=False,
+                )
+                for day in (2, 5, 10)
+            ],
         ])
         for day, amount in [
             (1, 5000),
@@ -210,6 +252,21 @@ async def _run_credit_collection_report() -> None:
             invoice_number="INV-PAID-IN-RANGE",
             amount=1000,
         ))
+        db.add(CustomerPaymentAllocation(
+            id="allocation-pos-initial",
+            payment_id="payment-pos-initial",
+            invoice_id="inv-pos-credit",
+            invoice_number="POS-CREDIT-001",
+            amount=1000,
+        ))
+        for day in (2, 5, 10):
+            db.add(CustomerPaymentAllocation(
+                id=f"allocation-pos-{day}",
+                payment_id=f"payment-pos-{day}",
+                invoice_id="inv-pos-credit",
+                invoice_number="POS-CREDIT-001",
+                amount=2000,
+            ))
         await db.commit()
 
         report = await credit_collection(
@@ -291,6 +348,18 @@ async def _run_credit_collection_report() -> None:
         assert [row["collected_amount"] for row in installments] == [2000, 1000]
         assert [row["total_amount"] for row in installments] == [7000, 8000]
         assert [row["remaining_amount"] for row in installments] == [3000, 2000]
+        pos_installments = [
+            row
+            for row in register["items"]
+            if row["invoice_number"] == "POS-CREDIT-001"
+        ]
+        assert [row["payment_date"] for row in pos_installments] == [
+            "2026-10-02",
+            "2026-10-05",
+        ]
+        assert [row["collected_amount"] for row in pos_installments] == [2000, 2000]
+        assert [row["total_amount"] for row in pos_installments] == [3000, 5000]
+        assert [row["remaining_amount"] for row in pos_installments] == [5000, 3000]
     finally:
         await db.close()
 
