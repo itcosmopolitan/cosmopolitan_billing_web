@@ -4,8 +4,9 @@ import json
 import csv
 import io
 import uuid
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -19,6 +20,7 @@ from src.security import current_user, enforce_branch_access, enforce_branch_acc
 from src.services.audit_service import build_audit_entry
 
 router = APIRouter()
+BUSINESS_TIMEZONE = ZoneInfo("Indian/Maldives")
 
 
 def _as_read_model(log: AuditLog) -> AuditLogRead:
@@ -49,7 +51,7 @@ def _as_read_model(log: AuditLog) -> AuditLogRead:
 
 
 def _this_month_date_bounds() -> Tuple[date, date]:
-    today = date.today()
+    today = datetime.now(BUSINESS_TIMEZONE).date()
     start = today.replace(day=1)
     if today.month == 12:
         end = date(today.year, 12, 31)
@@ -59,15 +61,15 @@ def _this_month_date_bounds() -> Tuple[date, date]:
 
 
 def _to_datetime_bounds(date_from: Optional[date], date_to: Optional[date]) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """Unbounded queries scan the full audit log — default to this calendar month."""
+    """Convert business-local date filters to the UTC-naive audit timestamp format."""
     if date_from is None and date_to is None:
         date_from, date_to = _this_month_date_bounds()
     start_dt = None
     end_dt = None
     if date_from:
-        start_dt = datetime.combine(date_from, time.min)
+        start_dt = datetime.combine(date_from, time.min, tzinfo=BUSINESS_TIMEZONE).astimezone(timezone.utc).replace(tzinfo=None)
     if date_to:
-        end_dt = datetime.combine(date_to + timedelta(days=1), time.min)
+        end_dt = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=BUSINESS_TIMEZONE).astimezone(timezone.utc).replace(tzinfo=None)
     return start_dt, end_dt
 
 
