@@ -4730,6 +4730,8 @@ async def credit_collection(
         }
 
     for row in rows:
+        if not row.get("customer_id"):
+            continue
         range_collected, collected_through_as_of, all_recorded_collections = (
             allocation_totals.get(row["invoice_id"], (0.0, 0.0, 0.0))
         )
@@ -4761,7 +4763,7 @@ async def credit_collection(
     rows = [
         row
         for row in rows
-        if row["remaining_amount"] > 0.01 or row["collected_amount"] > 0.01
+        if row.get("customer_id") and row.get("remaining_amount", 0) > 0.01
     ]
     rows = _sort_aging_rows(rows, sort_by, sort_order, "due_date")
     return _paginate_rows(rows, skip, limit)

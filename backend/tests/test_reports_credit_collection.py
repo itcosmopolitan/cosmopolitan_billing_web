@@ -140,6 +140,20 @@ async def _run_credit_collection_report() -> None:
                 credited_amount=0,
                 status=InvoiceStatus.paid,
             ),
+            SaleInvoice(
+                id="inv-walk-in",
+                number="INV-WALK-IN",
+                customer_id=None,
+                customer_name="Walk-in",
+                branch_id="b1",
+                branch_name="Main",
+                date="2026-09-01",
+                due_date="2026-09-30",
+                total=500,
+                paid_amount=0,
+                credited_amount=0,
+                status=InvoiceStatus.pending,
+            ),
             *[
                 CustomerPayment(
                     id=f"payment-{day}",
@@ -252,9 +266,8 @@ async def _run_credit_collection_report() -> None:
         assert range_rows["INV-DATE-RANGE"]["collected_amount"] == 2000
         assert range_rows["INV-DATE-RANGE"]["total_amount"] == 9000
         assert range_rows["INV-DATE-RANGE"]["remaining_amount"] == 1000
-        assert range_rows["INV-PAID-IN-RANGE"]["collected_amount"] == 1000
-        assert range_rows["INV-PAID-IN-RANGE"]["total_amount"] == 1000
-        assert range_rows["INV-PAID-IN-RANGE"]["remaining_amount"] == 0
+        assert "INV-PAID-IN-RANGE" not in range_rows
+        assert "INV-WALK-IN" not in range_rows
     finally:
         await db.close()
 
