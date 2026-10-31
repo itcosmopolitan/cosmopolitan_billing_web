@@ -486,6 +486,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("branches", "child_counters", "JSON DEFAULT '[]' NOT NULL"),
     # Overselling moved from org scope to per-branch (one-time backfill below).
     ("branches", "allow_overselling", "BOOLEAN DEFAULT 0 NOT NULL"),
+    # Monthly branch sales target used by the sales dashboard.
+    ("branches", "monthly_sales_target", "FLOAT DEFAULT 0 NOT NULL"),
     # Oversold placeholder batch marker (negative stock under overselling).
     ("item_batches", "is_overdraw", "BOOLEAN DEFAULT 0 NOT NULL"),
     # Cash Control (2026-06-14): per-branch petty cash settings.

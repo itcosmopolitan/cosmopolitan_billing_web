@@ -271,6 +271,7 @@ class Branch(Base):
     has_child_counters = Column(Boolean, default=False, nullable=False)
     child_counters  = Column(JSON, default=list, nullable=False)
     allow_overselling = Column(Boolean, default=False, nullable=False)
+    monthly_sales_target = Column(Float, default=0, server_default="0", nullable=False)
     gstin      = Column(String)
     active     = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

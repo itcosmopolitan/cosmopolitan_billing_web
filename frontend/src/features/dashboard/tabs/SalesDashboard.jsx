@@ -74,12 +74,13 @@ function TargetAchievementPanel({ data = {} }) {
   const target = Number(data?.target || 0)
   const achieved = Number(data?.achieved || 0)
   const pct = Number(data?.achievement_pct || 0)
+  const hasTarget = target > 0
   const cappedPct = Math.min(100, Math.max(0, pct))
   const remaining = Math.max(0, target - achieved)
   const overTarget = Math.max(0, achieved - target)
-  const tone = pct >= 100 ? 'var(--green)' : pct >= 80 ? 'var(--blue)' : 'var(--amber)'
-  const toneBg = pct >= 100 ? 'var(--green-bg)' : pct >= 80 ? 'var(--blue-bg)' : 'var(--amber-bg)'
-  const status = pct >= 100 ? 'Target met' : pct >= 80 ? 'On track' : 'Needs focus'
+  const tone = !hasTarget ? 'var(--text-muted)' : pct >= 100 ? 'var(--green)' : pct >= 80 ? 'var(--blue)' : 'var(--amber)'
+  const toneBg = !hasTarget ? 'var(--bg-raised)' : pct >= 100 ? 'var(--green-bg)' : pct >= 80 ? 'var(--blue-bg)' : 'var(--amber-bg)'
+  const status = !hasTarget ? 'No target set' : pct >= 100 ? 'Target met' : pct >= 80 ? 'On track' : 'Needs focus'
 
   return (
     <div className="card">

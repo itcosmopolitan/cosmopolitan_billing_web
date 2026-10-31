@@ -30,7 +30,8 @@ const EMPTY_ORG_FORM = {
 }
 
 const TABS = [
-  { id: 'org',      label: '🏢 Organisation' },
+  { id: 'general',  label: '🏢 General' },
+  { id: 'orgPreferences', label: '⚙️ Organization Preferences' },
   { id: 'branches', label: '🏪 Branches' },
   { id: 'users',    label: '👥 Users & Roles' },
   { id: 'tax',      label: '🧾 Tax Config' },
@@ -41,7 +42,7 @@ const TABS = [
 
 export default function SettingsPage() {
   const can = useCan()
-  const [tab, setTab]         = useState('org')
+  const [tab, setTab]         = useState('general')
   // Bumped on every main-tab switch so active-tab fetchers always refetch.
   const [tabVisit, setTabVisit] = useState(0)
   // Sub-toggle inside the "Users & Roles" parent tab — picks between the
@@ -97,7 +98,7 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [credentialsAcknowledged, setCredentialsAcknowledged] = useState(false)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', email:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', email:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false, monthlySalesTarget:0 })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -425,9 +426,9 @@ export default function SettingsPage() {
   const [orgSaving, setOrgSaving] = useState(false)
   const pof = (k,v) => setOrgForm(f=>({...f,[k]:v}))
 
-  // Organisation tab — load profile from DB when active (default tab).
+  // Load organisation settings when either organisation tab becomes active.
   useEffect(() => {
-    if (tab !== 'org') return
+    if (tab !== 'general' && tab !== 'orgPreferences') return
     const controller = new AbortController()
     ;(async () => {
       try {
@@ -455,7 +456,7 @@ export default function SettingsPage() {
       } catch (err) {
         if (err?.code === 'ERR_CANCELED') return
         console.error(err)
-        toast.error('Failed to load organisation profile')
+        toast.error('Failed to load organisation settings')
       } finally {
         if (!controller.signal.aborted) setLoading(false)
       }
@@ -505,7 +506,7 @@ export default function SettingsPage() {
         quantity_decimal_precision: saved?.quantityDecimalPrecision ?? prev.quantity_decimal_precision,
       }))
       setOrganisationProfile(saved)
-      toast.success('Organisation profile saved')
+      toast.success('Organisation settings saved')
     } catch (err) {
       console.error(err)
       // Toast already fired by global axios interceptor on non-2xx
@@ -760,6 +761,7 @@ export default function SettingsPage() {
         has_child_counters: branchForm.hasChildCounters,
         child_counters: childCounters,
         allow_overselling: Boolean(branchForm.allowOverselling),
+        monthly_sales_target: Number(branchForm.monthlySalesTarget) || 0,
         gstin: '',
         active: true,
       })
@@ -806,6 +808,7 @@ export default function SettingsPage() {
         postal_code: editBranchForm.postal_code,
         has_child_counters: Boolean(editBranchForm.has_child_counters),
         allow_overselling: Boolean(editBranchForm.allow_overselling),
+        monthly_sales_target: Number(editBranchForm.monthly_sales_target) || 0,
         child_counters: editBranchForm.has_child_counters
           ? childCounters.map(counter => ({
             ...counter,
@@ -840,8 +843,8 @@ export default function SettingsPage() {
 
       <Tabs tabs={TABS} active={tab} onChange={handleTabChange} />
 
-      {/* ── ORGANISATION ──────────────────────────────────────────── */}
-      {tab === 'org' && (loading ? (
+      {/* ── GENERAL ───────────────────────────────────────────────── */}
+      {tab === 'general' && (loading ? (
         <TableLoadingPanel label="Loading organisation profile…" />
       ) : (
         <div style={{alignItems:'start'}}>
@@ -853,76 +856,7 @@ export default function SettingsPage() {
             <FormGroup label="Registered Address"><textarea className="form-input" value={orgForm.address} onChange={e=>pof('address',e.target.value)} style={{height:72}} disabled={!can('settings.edit')} /></FormGroup>
             <FormRow><FormGroup label="Phone"><input className="form-input" value={orgForm.phone} onChange={e=>pof('phone',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             <FormGroup label="Email"><input className="form-input" type="email" value={orgForm.email} onChange={e=>pof('email',e.target.value)} disabled={!can('settings.edit')} /></FormGroup></FormRow>
-            <FormRow><FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
-            <FormGroup label="Financial Year"><AutocompleteDropdown value={orgForm.financial_year} onChange={(v) => pof('financial_year', v)} options={FINANCIAL_YEAR_OPTIONS} isSearchFieldRequired={false} disabled={!can('settings.edit')} /></FormGroup></FormRow>
-            <FormGroup label="POS pricing">
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
-                <input
-                  type="checkbox"
-                  checked={orgForm.allow_price_editing}
-                  onChange={e => pof('allow_price_editing', e.target.checked)}
-                  disabled={!can('settings.edit')}
-                />
-                Allow editing item rates in POS
-              </label>
-              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                When on, POS operators can change the rate before completing a sale.
-              </div>
-            </FormGroup>
-            <FormGroup label="Sales orders">
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
-                <input
-                  type="checkbox"
-                  checked={orgForm.lock_sales_order_invoice_items}
-                  onChange={e => pof('lock_sales_order_invoice_items', e.target.checked)}
-                  disabled={!can('settings.edit')}
-                />
-                Lock items when converting a sales order to an invoice
-              </label>
-              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                When on, customer, items, quantities, rates, and discounts copied from the sales order cannot be changed. Lot splits can still be adjusted.
-              </div>
-            </FormGroup>
-            <FormGroup label="Purchase orders">
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
-                <input
-                  type="checkbox"
-                  checked={orgForm.lock_purchase_order_bill_items}
-                  onChange={e => pof('lock_purchase_order_bill_items', e.target.checked)}
-                  disabled={!can('settings.edit')}
-                />
-                Lock items when converting a purchase order to a bill
-              </label>
-              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                When on, vendor, items, quantities, costs, and discounts copied from the purchase order cannot be changed on the bill or goods receipt. Batch details can still be adjusted.
-              </div>
-            </FormGroup>
-            <FormRow>
-              <FormGroup label="Amount decimal precision">
-                <AutocompleteDropdown
-                  value={String(orgForm.amount_decimal_precision ?? 2)}
-                  onChange={(v) => pof('amount_decimal_precision', Number(v))}
-                  options={DECIMAL_PRECISION_OPTIONS}
-                  isSearchFieldRequired={false}
-                  disabled={!can('settings.edit')}
-                />
-                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                  Decimal places for prices, totals, and payments — display and entry. Default is 2.
-                </div>
-              </FormGroup>
-              <FormGroup label="Quantity decimal precision">
-                <AutocompleteDropdown
-                  value={String(orgForm.quantity_decimal_precision ?? 2)}
-                  onChange={(v) => pof('quantity_decimal_precision', Number(v))}
-                  options={DECIMAL_PRECISION_OPTIONS}
-                  isSearchFieldRequired={false}
-                  disabled={!can('settings.edit')}
-                />
-                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                  Decimal places for quantities and stock — display and entry. Default is 2.
-                </div>
-              </FormGroup>
-            </FormRow>
+            <FormGroup label="Website"><input className="form-input" value={orgForm.website} onChange={e=>pof('website',e.target.value)} disabled={!can('settings.edit')} /></FormGroup>
             {can('settings.edit') && (
               <div style={{marginTop:6}}>
                 <button className="btn btn-primary btn-sm" onClick={saveOrg} disabled={orgSaving || loading}>
@@ -956,6 +890,94 @@ export default function SettingsPage() {
             </Card>
           </div>
           )}
+        </div>
+      ))}
+
+      {/* ── ORGANIZATION PREFERENCES ──────────────────────────────── */}
+      {tab === 'orgPreferences' && (loading ? (
+        <TableLoadingPanel label="Loading organisation preferences…" />
+      ) : (
+        <div style={{alignItems:'start'}}>
+          <Card title="Organization Preferences">
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',gap:'0 12px'}}>
+              <FormGroup label="Financial Year"><AutocompleteDropdown value={orgForm.financial_year} onChange={(v) => pof('financial_year', v)} options={FINANCIAL_YEAR_OPTIONS} isSearchFieldRequired={false} disabled={!can('settings.edit')} /></FormGroup>
+              <FormGroup label="Amount decimal precision">
+                <AutocompleteDropdown
+                  value={String(orgForm.amount_decimal_precision ?? 2)}
+                  onChange={(v) => pof('amount_decimal_precision', Number(v))}
+                  options={DECIMAL_PRECISION_OPTIONS}
+                  isSearchFieldRequired={false}
+                  disabled={!can('settings.edit')}
+                />
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  Decimal places for prices, totals, and payments — display and entry. Default is 2.
+                </div>
+              </FormGroup>
+              <FormGroup label="Quantity decimal precision">
+                <AutocompleteDropdown
+                  value={String(orgForm.quantity_decimal_precision ?? 2)}
+                  onChange={(v) => pof('quantity_decimal_precision', Number(v))}
+                  options={DECIMAL_PRECISION_OPTIONS}
+                  isSearchFieldRequired={false}
+                  disabled={!can('settings.edit')}
+                />
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  Decimal places for quantities and stock — display and entry. Default is 2.
+                </div>
+              </FormGroup>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 280px), 1fr))',gap:'0 12px'}}>
+              <FormGroup label="POS pricing">
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                  <input
+                    type="checkbox"
+                    checked={orgForm.allow_price_editing}
+                    onChange={e => pof('allow_price_editing', e.target.checked)}
+                    disabled={!can('settings.edit')}
+                  />
+                  Allow editing item rates in POS
+                </label>
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  When on, POS operators can change the rate before completing a sale.
+                </div>
+              </FormGroup>
+              <FormGroup label="Sales orders">
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                  <input
+                    type="checkbox"
+                    checked={orgForm.lock_sales_order_invoice_items}
+                    onChange={e => pof('lock_sales_order_invoice_items', e.target.checked)}
+                    disabled={!can('settings.edit')}
+                  />
+                  Lock items when converting a sales order to an invoice
+                </label>
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  When on, customer, items, quantities, rates, and discounts copied from the sales order cannot be changed. Lot splits can still be adjusted.
+                </div>
+              </FormGroup>
+              <FormGroup label="Purchase orders">
+                <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                  <input
+                    type="checkbox"
+                    checked={orgForm.lock_purchase_order_bill_items}
+                    onChange={e => pof('lock_purchase_order_bill_items', e.target.checked)}
+                    disabled={!can('settings.edit')}
+                  />
+                  Lock items when converting a purchase order to a bill
+                </label>
+                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                  When on, vendor, items, quantities, costs, and discounts copied from the purchase order cannot be changed on the bill or goods receipt. Batch details can still be adjusted.
+                </div>
+              </FormGroup>
+            </div>
+            {can('settings.edit') && (
+              <div style={{marginTop:6}}>
+                <button className="btn btn-primary btn-sm" onClick={saveOrg} disabled={orgSaving || loading}>
+                  {orgSaving ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            )}
+          </Card>
         </div>
       ))}
 
@@ -1158,90 +1180,135 @@ export default function SettingsPage() {
               })}
             </section>
           )}
-          <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="lg"
+          <Modal open={showBranch} onClose={()=>setShowBranch(false)} title="Add Branch" icon="🏪" size="xl"
             footer={<><button className="btn btn-secondary" onClick={()=>setShowBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={saveBranch}>Save Branch</button></>}>
-            <FormRow>
-              <FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)} placeholder="Branch name"/></FormGroup>
-              <FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)} placeholder="Phone number"/></FormGroup>
-            </FormRow>
-            <FormGroup label="Email"><input className="form-input" type="email" value={branchForm.email} onChange={e=>pbf('email',e.target.value)} placeholder="Branch email"/></FormGroup>
-            {!branchForm.hasChildCounters && renderBranchAddressFields(branchForm, pbf, {
-              street1: 'street1',
-              street2: 'street2',
-              street3: 'street3',
-              city: 'city',
-              state_province: 'stateProvince',
-              country: 'country',
-              postal_code: 'postalCode',
-            })}
-            {renderChildCounterFields({
-              enabled: branchForm.hasChildCounters,
-              counters: branchForm.childCounters,
-              onToggle: e => setBranchForm(form => ({
-                ...form,
-                hasChildCounters: e.target.checked,
-                childCounters: e.target.checked && !form.childCounters.length ? [{ name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] : form.childCounters,
-              })),
-              onChange: (index, key, value) => setBranchForm(form => ({
-                ...form,
-                childCounters: form.childCounters.map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
-              })),
-              onAdd: () => setBranchForm(form => ({ ...form, childCounters: [...form.childCounters, { name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
-              onRemove: index => setBranchForm(form => ({ ...form, childCounters: form.childCounters.filter((_, i) => i !== index) })),
-            })}
-            <FormGroup label="Inventory">
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(branchForm.allowOverselling)}
-                  onChange={e => pbf('allowOverselling', e.target.checked)}
-                />
-                Allow overselling at this branch (sell below zero stock)
-              </label>
-              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
-              </div>
-            </FormGroup>
-          </Modal>
-          <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="lg"
-              footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
-              <FormRow>
-                <FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)} placeholder="Branch name"/></FormGroup>
-                <FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)} placeholder="Phone number"/></FormGroup>
-              </FormRow>
-              <FormGroup label="Email"><input className="form-input" type="email" value={editBranchForm.email || ""} onChange={e => pbfEdit('email', e.target.value)} placeholder="Branch email"/></FormGroup>
-              {!editBranchForm.has_child_counters && renderBranchAddressFields(editBranchForm, pbfEdit)}
-              {renderChildCounterFields({
-                enabled: Boolean(editBranchForm.has_child_counters),
-                counters: editBranchForm.child_counters || [],
-                onToggle: e => setEditBranchForm(form => ({
-                  ...form,
-                  has_child_counters: e.target.checked,
-                  child_counters: e.target.checked && !(form.child_counters || []).length
-                    ? [{ name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }]
-                    : (form.child_counters || []),
-                })),
-                onChange: (index, key, value) => setEditBranchForm(form => ({
-                  ...form,
-                  child_counters: (form.child_counters || []).map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
-                })),
-                onAdd: () => setEditBranchForm(form => ({ ...form, child_counters: [...(form.child_counters || []), { name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
-                onRemove: index => setEditBranchForm(form => ({ ...form, child_counters: (form.child_counters || []).filter((_, i) => i !== index) })),
-              })}
-              <FormGroup label="Inventory">
-                <label style={{display:'flex',alignItems:'center',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+            <div className="branch-modal-layout">
+              <section className="branch-modal-details">
+                <h4 className="branch-modal-section-title">Branch Details</h4>
+                <FormRow>
+                  <FormGroup label="Branch Name" required><input className="form-input" value={branchForm.name} onChange={e=>pbf('name',e.target.value)} placeholder="Branch name"/></FormGroup>
+                  <FormGroup label="Phone"><input className="form-input" value={branchForm.phone} onChange={e=>pbf('phone',e.target.value)} placeholder="Phone number"/></FormGroup>
+                </FormRow>
+                <FormGroup label="Email"><input className="form-input" type="email" value={branchForm.email} onChange={e=>pbf('email',e.target.value)} placeholder="Branch email"/></FormGroup>
+                {!branchForm.hasChildCounters && renderBranchAddressFields(branchForm, pbf, {
+                  street1: 'street1',
+                  street2: 'street2',
+                  street3: 'street3',
+                  city: 'city',
+                  state_province: 'stateProvince',
+                  country: 'country',
+                  postal_code: 'postalCode',
+                })}
+                {renderChildCounterFields({
+                  enabled: branchForm.hasChildCounters,
+                  counters: branchForm.childCounters,
+                  onToggle: e => setBranchForm(form => ({
+                    ...form,
+                    hasChildCounters: e.target.checked,
+                    childCounters: e.target.checked && !form.childCounters.length ? [{ name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] : form.childCounters,
+                  })),
+                  onChange: (index, key, value) => setBranchForm(form => ({
+                    ...form,
+                    childCounters: form.childCounters.map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
+                  })),
+                  onAdd: () => setBranchForm(form => ({ ...form, childCounters: [...form.childCounters, { name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
+                  onRemove: index => setBranchForm(form => ({ ...form, childCounters: form.childCounters.filter((_, i) => i !== index) })),
+                })}
+              </section>
+              <aside className="branch-modal-settings">
+                <h4 className="branch-modal-section-title">Branch Settings</h4>
+                <FormGroup label="Monthly Sales Target (MVR)">
                   <input
-                    type="checkbox"
-                    checked={Boolean(editBranchForm.allow_overselling)}
-                    onChange={e => pbfEdit('allow_overselling', e.target.checked)}
-                    disabled={!can('settings.edit')}
+                    className="form-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={branchForm.monthlySalesTarget}
+                    onChange={e => pbf('monthlySalesTarget', e.target.value)}
+                    placeholder="0.00"
                   />
-                  Allow overselling at this branch (sell below zero stock)
-                </label>
-                <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
-                  When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
-                </div>
-              </FormGroup>
+                  <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                    Monthly target used to compare branch sales against achievement.
+                  </div>
+                </FormGroup>
+                <FormGroup label="Inventory">
+                  <label style={{display:'flex',alignItems:'flex-start',gap:8,cursor:'pointer'}}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(branchForm.allowOverselling)}
+                      onChange={e => pbf('allowOverselling', e.target.checked)}
+                    />
+                    Allow overselling at this branch (sell below zero stock)
+                  </label>
+                  <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                    When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
+                  </div>
+                </FormGroup>
+              </aside>
+            </div>
+          </Modal>
+          <Modal open={showEditBranch} onClose={() => setShowEditBranch(false)} title="Edit Branch" size="xl"
+              footer={<><button className="btn btn-secondary" onClick={() => setShowEditBranch(false)}>Cancel</button><button className="btn btn-primary" onClick={updateBranch}>Update Branch</button></>}>
+              <div className="branch-modal-layout">
+                <section className="branch-modal-details">
+                  <h4 className="branch-modal-section-title">Branch Details</h4>
+                  <FormRow>
+                    <FormGroup label="Branch Name" required><input className="form-input" value={editBranchForm.name || ""} onChange={e => pbfEdit('name', e.target.value)} placeholder="Branch name"/></FormGroup>
+                    <FormGroup label="Phone"><input className="form-input" value={editBranchForm.phone || ""} onChange={e => pbfEdit('phone', e.target.value)} placeholder="Phone number"/></FormGroup>
+                  </FormRow>
+                  <FormGroup label="Email"><input className="form-input" type="email" value={editBranchForm.email || ""} onChange={e => pbfEdit('email', e.target.value)} placeholder="Branch email"/></FormGroup>
+                  {!editBranchForm.has_child_counters && renderBranchAddressFields(editBranchForm, pbfEdit)}
+                  {renderChildCounterFields({
+                    enabled: Boolean(editBranchForm.has_child_counters),
+                    counters: editBranchForm.child_counters || [],
+                    onToggle: e => setEditBranchForm(form => ({
+                      ...form,
+                      has_child_counters: e.target.checked,
+                      child_counters: e.target.checked && !(form.child_counters || []).length
+                        ? [{ name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }]
+                        : (form.child_counters || []),
+                    })),
+                    onChange: (index, key, value) => setEditBranchForm(form => ({
+                      ...form,
+                      child_counters: (form.child_counters || []).map((counter, i) => i === index ? { ...counter, [key]: value } : counter),
+                    })),
+                    onAdd: () => setEditBranchForm(form => ({ ...form, child_counters: [...(form.child_counters || []), { name:'', phone:'', email:'', street1:'', street2:'', street3:'', city:'', state_province:'', country:'', postal_code:'' }] })),
+                    onRemove: index => setEditBranchForm(form => ({ ...form, child_counters: (form.child_counters || []).filter((_, i) => i !== index) })),
+                  })}
+                </section>
+                <aside className="branch-modal-settings">
+                  <h4 className="branch-modal-section-title">Branch Settings</h4>
+                  <FormGroup label="Monthly Sales Target (MVR)">
+                    <input
+                      className="form-input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editBranchForm.monthly_sales_target ?? 0}
+                      onChange={e => pbfEdit('monthly_sales_target', e.target.value)}
+                      placeholder="0.00"
+                      disabled={!can('settings.edit')}
+                    />
+                    <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                      Monthly target used to compare branch sales against achievement.
+                    </div>
+                  </FormGroup>
+                  <FormGroup label="Inventory">
+                    <label style={{display:'flex',alignItems:'flex-start',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default'}}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(editBranchForm.allow_overselling)}
+                        onChange={e => pbfEdit('allow_overselling', e.target.checked)}
+                        disabled={!can('settings.edit')}
+                      />
+                      Allow overselling at this branch (sell below zero stock)
+                    </label>
+                    <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                      When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
+                    </div>
+                  </FormGroup>
+                </aside>
+              </div>
           </Modal>
         </>
       )}

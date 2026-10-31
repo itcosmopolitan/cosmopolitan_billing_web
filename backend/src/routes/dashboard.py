@@ -819,6 +819,21 @@ async def _period_sales_totals(
     return float(row.daily_sales or 0), float(row.weekly_sales or 0), float(row.monthly_sales or 0)
 
 
+async def _sales_target_for_branches(
+    db: AsyncSession,
+    filters: DashboardFilters,
+    allowed_branch_ids: Optional[list[str]],
+) -> float:
+    conditions = [Branch.active.is_(True)]
+    branch_condition = _branch_condition(Branch.id, filters, allowed_branch_ids)
+    if branch_condition is not None:
+        conditions.append(branch_condition)
+    result = await db.execute(
+        select(func.coalesce(func.sum(Branch.monthly_sales_target), 0)).where(and_(*conditions))
+    )
+    return float(result.scalar() or 0)
+
+
 async def _sales_dashboard_payload(
     db: AsyncSession,
     filters: DashboardFilters,
@@ -840,7 +855,7 @@ async def _sales_dashboard_payload(
     top_customers_data = await _top_customers(db, filters, allowed, period)
     recent_sales_data = await _recent_sales(db, filters, allowed, period)
 
-    target = max(invoice_summary["revenue"] * 1.12, previous_invoice_summary["revenue"] * 1.1, 1)
+    target = await _sales_target_for_branches(db, filters, allowed)
 
     return {
         "filters": _filters_dict(filters, period),
