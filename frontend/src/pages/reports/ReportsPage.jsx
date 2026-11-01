@@ -1655,7 +1655,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         format: col.format || null,
         summable: isSummableColumn(col, report.id),
         ...(['currency', 'currency_blank'].includes(col.format)
-          ? { decimal_places: getAmountDecimals() }
+          ? { decimal_places: report.api === 'currentStock' ? null : getAmountDecimals() }
           : {}),
       })),
       title: report.label || 'Report',

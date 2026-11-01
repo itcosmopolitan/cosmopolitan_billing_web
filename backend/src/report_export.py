@@ -84,6 +84,12 @@ NUMERIC_EXPORT_FORMATS = {"currency", "currency_blank", "qty", "number", "pct"}
 
 EXPORT_LABEL_OVERRIDES = {"profit": "Margin"}
 
+MARGIN_PCT_TOTAL_SOURCES = {
+    "productSales": ("taxable_sales", "profit", None),
+    "categorySales": ("taxable_sales", "profit", None),
+    "customerSales": ("taxable_sales", None, "cost_of_sales"),
+}
+
 LABEL_ACRONYM_EXCEPTIONS = {
     "ACH", "API", "BIC", "CN", "GST", "HSN", "IBAN", "ID", "IFSC", "MVR", "NEFT", "OTP",
     "PAN", "PO", "QR", "RTGS", "SKU", "SO", "UPI", "URL", "UUID", "VAT",
@@ -132,7 +138,7 @@ class ReportExportColumn(BaseModel):
     label: str = Field(default="", max_length=200)
     format: Optional[str] = Field(default=None, max_length=30)
     summable: bool = False
-    decimal_places: int = Field(default=2, ge=0, le=6)
+    decimal_places: Optional[int] = Field(default=2, ge=0, le=6)
 
 
 class ReportExportRequest(BaseModel):
@@ -278,10 +284,12 @@ def export_column_label(column: ReportExportColumn) -> str:
     return label
 
 
-def _round_currency(value: Any, decimal_places: int) -> Optional[Decimal]:
+def _round_currency(value: Any, decimal_places: Optional[int]) -> Optional[Decimal]:
     number = _to_js_number(value)
     if number is None:
         return None
+    if decimal_places is None:
+        return Decimal(str(number))
     quantum = Decimal(1).scaleb(-decimal_places)
     return Decimal(str(number)).quantize(quantum, rounding=ROUND_HALF_UP)
 
@@ -336,7 +344,11 @@ def apply_search(rows: list[dict[str, Any]], query: Optional[str]) -> list[dict[
     return matched
 
 
-def compute_totals(rows: list[dict[str, Any]], columns: list[ReportExportColumn]) -> dict[str, float]:
+def compute_totals(
+    rows: list[dict[str, Any]],
+    columns: list[ReportExportColumn],
+    report_api: Optional[str] = None,
+) -> dict[str, float]:
     totals: dict[str, float] = {}
     for column in columns:
         if not column.summable:
@@ -369,6 +381,14 @@ def compute_totals(rows: list[dict[str, Any]], columns: list[ReportExportColumn]
             counted += 1
         if counted:
             totals[column.key] = total
+
+    margin_source = MARGIN_PCT_TOTAL_SOURCES.get(report_api)
+    if margin_source and any(column.key == "margin_pct" for column in columns):
+        taxable_key, margin_key, cost_key = margin_source
+        sum_of = lambda key: sum(_to_js_number(row.get(key)) or 0 for row in rows)
+        taxable = sum_of(taxable_key)
+        margin = sum_of(margin_key) if margin_key else taxable - sum_of(cost_key)
+        totals["margin_pct"] = round((margin * 100) / taxable, 2) if taxable else 0.0
     return totals
 
 
@@ -376,12 +396,13 @@ def build_export_table(
     rows: list[dict[str, Any]],
     columns: list[ReportExportColumn],
     search: Optional[str] = None,
+    report_api: Optional[str] = None,
 ) -> tuple[list[str], list[list[Any]]]:
     """Return (headers, body rows) with a trailing totals row when any column is summable."""
     filtered = apply_search(rows, search)
     headers = [export_column_label(column) for column in columns]
     body = [[export_cell_value(column, row) for column in columns] for row in filtered]
-    totals = compute_totals(filtered, columns)
+    totals = compute_totals(filtered, columns, report_api)
     if totals:
         label_key = next((c.key for c in columns if c.key not in totals), columns[0].key)
         total_row: list[Any] = []

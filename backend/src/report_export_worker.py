@@ -256,7 +256,7 @@ async def run_job(job_id: str) -> None:
     if not matched:
         raise ReportExportError("No data available to export.")
 
-    headers, body = build_export_table(matched, request.columns)
+    headers, body = build_export_table(matched, request.columns, report_api=request.report_api)
     payload = await asyncio.to_thread(build_workbook, headers, body, request.title, request.subtitle)
 
     completed_at = datetime.utcnow()

@@ -96,6 +96,38 @@ def test_export_table_adds_total_row_with_label_column():
     assert body[-1] == ["Total", None, 12.5]
 
 
+def test_export_table_calculates_total_margin_percentage():
+    columns = [
+        _col("product_name", "Product"),
+        _col("sales_value", "Sales Value", "currency", summable=True),
+        _col("profit", "Margin", "currency", summable=True),
+        _col("margin_pct", "Margin %", "pct"),
+    ]
+    rows = [
+        {"product_name": "A", "sales_value": 100, "taxable_sales": 100, "profit": 40, "margin_pct": 40},
+        {"product_name": "B", "sales_value": 300, "taxable_sales": 300, "profit": 90, "margin_pct": 30},
+    ]
+
+    _, body = build_export_table(rows, columns, report_api="productSales")
+
+    assert body[-1] == ["Total", 400.0, 130.0, 32.5]
+
+
+def test_customer_sales_export_calculates_weighted_margin_percentage():
+    columns = [
+        _col("customer", "Customer"),
+        _col("margin_pct", "Margin %", "pct"),
+    ]
+    rows = [
+        {"customer": "A", "taxable_sales": 100, "cost_of_sales": 60, "margin_pct": 40},
+        {"customer": "B", "taxable_sales": 300, "cost_of_sales": 210, "margin_pct": 30},
+    ]
+
+    _, body = build_export_table(rows, columns, report_api="customerSales")
+
+    assert body[-1] == ["Total", 32.5]
+
+
 def test_currency_rows_and_totals_use_configured_precision():
     columns = [
         _col("label", "Label"),
@@ -115,6 +147,31 @@ def test_currency_rows_and_totals_use_configured_precision():
     _, body = build_export_table(rows, columns)
 
     assert body == [["A", 0.3], ["B", 0.3], ["Total", 0.6]]
+
+
+def test_currency_rows_and_totals_preserve_precision_when_unrounded():
+    columns = [
+        _col("label", "Label"),
+        ReportExportColumn(
+            key="amount",
+            label="Amount",
+            format="currency",
+            summable=True,
+            decimal_places=None,
+        ),
+    ]
+    rows = [
+        {"label": "A", "amount": 1.234567},
+        {"label": "B", "amount": 0.000009},
+    ]
+
+    _, body = build_export_table(rows, columns)
+
+    assert body == [
+        ["A", 1.234567],
+        ["B", 0.000009],
+        ["Total", 1.234576],
+    ]
 
 
 def test_export_table_without_summable_columns_has_no_total_row():
