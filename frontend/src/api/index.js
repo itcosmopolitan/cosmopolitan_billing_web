@@ -604,6 +604,7 @@ export const reportsAPI = {
   taxSummary:      (params) => api.get('/reports/tax-summary',      { params }),
   taxSummaryDetail:(params) => api.get('/reports/tax-summary-detail', { params }),
   stockMovement:   (params) => api.get('/reports/stock-movement',   { params }),
+  grnReceipts:     (params) => api.get('/reports/grn-receipts',     { params }),
   poolIssues:      (params) => api.get('/reports/pool-issues',       { params }),
   salesRegister:         (params) => api.get('/reports/sales-register',     { params }),
   salesLines:            (params) => api.get('/reports/sales-lines',        { params }),

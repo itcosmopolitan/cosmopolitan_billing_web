@@ -409,6 +409,25 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                     _col("branch", "Branch"),
                 ],
             ),
+            _report(
+                "grn-receipts",
+                "GRN Receipts",
+                api="grnReceipts",
+                default_sort="date",
+                columns=[
+                    _col("date", "Receipt Date", format="date"),
+                    _col("grn_number", "GRN Number"),
+                    _col("purchase_order_number", "Purchase Order"),
+                    _col("vendor", "Vendor"),
+                    _col("branch", "Branch"),
+                    _col("product_code", "Product Code"),
+                    _col("product", "Product"),
+                    _col("quantity", "Received Quantity", align="right", format="qty"),
+                    _col("unit_cost", "Unit Cost", align="right", format="currency"),
+                    _col("line_total", "Line Total", align="right", format="currency"),
+                    _col("status", "Status"),
+                ],
+            ),
             # _report(
             #     "pool-issues",
             #     "Pool Issues",
@@ -537,6 +556,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 api="outstandingReceivables",
                 default_sort="due_date",
                 detail_type="invoice",
+                as_of_date=True,
                 columns=[
                     _col("customer", "Customer"),
                     _col("invoice_number", "Invoice Number"),
@@ -755,6 +775,7 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 "Customer Outstanding",
                 api="topCustomers",
                 default_sort="outstanding_amount",
+                as_of_date=True,
                 columns=[
                     _col("customer", "Customer"),
                     _col("invoice_count", "Invoice Count", align="right", format="number"),

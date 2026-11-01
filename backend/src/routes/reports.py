@@ -33,6 +33,9 @@ from src.models import (
     CustomerPayment,
     CustomerPaymentAllocation,
     DailySalesSummary,
+    GoodsReceiptNote,
+    GRNLineItem,
+    GRNStatus,
     InventorySnapshot,
     InvoiceStatus,
     Item,
@@ -4193,69 +4196,55 @@ async def outstanding_receivables(
     gst_mode: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    start, end = _normalize_date_range(date_from, date_to)
-    outstanding = _invoice_outstanding_expr()
-    outstanding_out = doc_amount_expr(
-        outstanding, SaleInvoice.total, SaleInvoice.tax_total, is_exclusive(gst_mode)
+    rows, _as_of = await _sales_ar_as_of_rows(
+        branch_id=branch_id,
+        child_counter_id=child_counter_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=None,
+        gst_mode=gst_mode,
+        db=db,
     )
-    outstanding_incl_gst = doc_amount_expr(
-        outstanding, SaleInvoice.total, SaleInvoice.tax_total, False
-    )
-    conds = [
-        outstanding > 0.01,
-        SaleInvoice.status != InvoiceStatus.cancelled,
-        _external_customer_condition(),
-    ]
-    sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
-    if sale_branch is not None:
-        conds.append(sale_branch)
-    if child_counter_id:
-        conds.append(SaleInvoice.child_counter_id == child_counter_id)
-    if search:
-        conds.append(
-            SaleInvoice.number.ilike(f"%{search}%")
-            | SaleInvoice.customer_name.ilike(f"%{search}%")
+    if is_exclusive(gst_mode):
+        inclusive_rows, _ = await _sales_ar_as_of_rows(
+            branch_id=branch_id,
+            child_counter_id=child_counter_id,
+            search=search,
+            date_from=date_from,
+            date_to=date_to,
+            customer_id=None,
+            gst_mode="inclusive",
+            db=db,
         )
-    conds.append(SaleInvoice.date >= start.isoformat())
-    conds.append(SaleInvoice.date <= end.isoformat())
-    sort_map = {
-        "customer": SaleInvoice.customer_name,
-        "invoice_number": SaleInvoice.number,
-        "invoice_date": SaleInvoice.date,
-        "due_date": SaleInvoice.date,
-        "outstanding_amount": outstanding_out,
-        "outstanding_amount_incl_gst": outstanding_incl_gst,
-    }
-    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "due_date", "asc")
+        inclusive_balances = {
+            row["invoice_id"]: float(row["balance"] or 0)
+            for row in inclusive_rows
+        }
+    else:
+        inclusive_balances = {
+            row["invoice_id"]: float(row["balance"] or 0) for row in rows
+        }
+    for row in rows:
+        row["outstanding_amount"] = float(row.get("balance") or 0)
+        row["outstanding_amount_incl_gst"] = inclusive_balances.get(
+            row["invoice_id"], 0.0
+        )
+    sort_key = {
+        "customer": "customer",
+        "invoice_number": "invoice_number",
+        "invoice_date": "invoice_date",
+        "due_date": "due_date",
+        "outstanding_amount": "outstanding_amount",
+        "outstanding_amount_incl_gst": "outstanding_amount_incl_gst",
+    }.get(sort_by or "", "due_date")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    query = (
-        select(
-            SaleInvoice.id.label("invoice_id"),
-            SaleInvoice.customer_name.label("customer"),
-            SaleInvoice.number.label("invoice_number"),
-            SaleInvoice.date.label("invoice_date"),
-            SaleInvoice.date.label("due_date"),
-            outstanding_out.label("outstanding_amount"),
-            outstanding_incl_gst.label("outstanding_amount_incl_gst"),
-        )
-        .select_from(SaleInvoice)
-        .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
-        .where(and_(*conds))
-        .order_by(order_by_expr)
-        .offset(sk)
-        .limit(lim)
+    rows.sort(
+        key=lambda row: (row.get(sort_key) is None, row.get(sort_key)),
+        reverse=(sort_order or "desc").lower() == "desc",
     )
-    total_q = (
-        select(func.count())
-        .select_from(SaleInvoice)
-        .outerjoin(Customer, Customer.id == SaleInvoice.customer_id)
-        .where(and_(*conds))
-    )
-    total = int((await db.execute(total_q)).scalar() or 0)
-    result = await db.execute(query)
-    rows = [dict(r._mapping) for r in result.fetchall()]
-    return paged(rows, total, sk, lim)
+    return paged(rows[sk:sk + lim], len(rows), sk, lim)
 
 
 @router.get("/outstanding-payables", dependencies=[Depends(require_perm("reports.view"))])
@@ -4339,6 +4328,7 @@ async def _sales_aging_detail_rows(
     gst_mode: Optional[str] = None,
     external_only: bool = False,
     include_invoice_ids: Optional[set[str]] = None,
+    include_closed: bool = False,
     db: AsyncSession,
 ) -> tuple[list[dict[str, Any]], date]:
     # Aging uses a single as-of cutoff (date_to). date_from is ignored so older
@@ -4357,12 +4347,13 @@ async def _sales_aging_detail_rows(
         SaleInvoice.status != InvoiceStatus.draft,
         SaleInvoice.date <= as_of.isoformat(),
     ]
-    if include_invoice_ids:
-        conds.append(
-            or_(outstanding > 0.01, SaleInvoice.id.in_(include_invoice_ids))
-        )
-    else:
-        conds.append(outstanding > 0.01)
+    if not include_closed:
+        if include_invoice_ids:
+            conds.append(
+                or_(outstanding > 0.01, SaleInvoice.id.in_(include_invoice_ids))
+            )
+        else:
+            conds.append(outstanding > 0.01)
     sale_branch = _eq_or_in(SaleInvoice.branch_id, branch_id)
     if sale_branch is not None:
         conds.append(sale_branch)
@@ -4433,6 +4424,178 @@ async def _sales_aging_detail_rows(
         row.update(_apply_aging_buckets(balance, aged_days))
         rows.append(row)
     return rows, as_of
+
+
+async def _sales_ar_as_of_rows(
+    *,
+    branch_id: Optional[str],
+    child_counter_id: Optional[str],
+    search: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    customer_id: Optional[str],
+    gst_mode: Optional[str],
+    db: AsyncSession,
+) -> tuple[list[dict[str, Any]], date]:
+    """Return external-customer AR balances reconstructed through date_to."""
+    as_of = _normalize_as_of_date(date_to)
+    date_to_s = as_of.isoformat()
+    not_voided = or_(
+        CustomerPayment.voided.is_(False),
+        CustomerPayment.voided.is_(None),
+    )
+    active_as_of = or_(
+        not_voided,
+        and_(
+            CustomerPayment.voided.is_(True),
+            CustomerPayment.voided_at > date_to_s,
+        ),
+    )
+    rows, as_of = await _sales_aging_detail_rows(
+        branch_id=branch_id,
+        child_counter_id=child_counter_id,
+        search=search,
+        date_from=date_from,
+        date_to=date_to_s,
+        customer_id=customer_id,
+        gst_mode=gst_mode,
+        external_only=True,
+        include_closed=True,
+        db=db,
+    )
+    invoice_ids = [row["invoice_id"] for row in rows]
+    if not invoice_ids:
+        return [], as_of
+
+    exclusive = is_exclusive(gst_mode)
+    payment_sums = await db.execute(
+        select(
+            CustomerPaymentAllocation.invoice_id,
+            doc_amount_expr(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                CustomerPayment.date <= date_to_s,
+                                active_as_of,
+                            ),
+                            CustomerPaymentAllocation.amount,
+                        ),
+                        else_=0,
+                    )
+                ),
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("as_of_amount"),
+            doc_amount_expr(
+                func.sum(
+                    case(
+                        (not_voided, CustomerPaymentAllocation.amount),
+                        else_=0,
+                    )
+                ),
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("all_time_amount"),
+        )
+        .join(
+            CustomerPayment,
+            CustomerPayment.id == CustomerPaymentAllocation.payment_id,
+        )
+        .join(SaleInvoice, SaleInvoice.id == CustomerPaymentAllocation.invoice_id)
+        .where(CustomerPaymentAllocation.invoice_id.in_(invoice_ids))
+        .group_by(
+            CustomerPaymentAllocation.invoice_id,
+            SaleInvoice.total,
+            SaleInvoice.tax_total,
+        )
+    )
+    payment_totals = {
+        row.invoice_id: (
+            float(row.as_of_amount or 0),
+            float(row.all_time_amount or 0),
+        )
+        for row in payment_sums
+    }
+
+    credit_sums = await db.execute(
+        select(
+            SalesReturn.invoice_id,
+            doc_amount_expr(
+                func.sum(
+                    case(
+                        (
+                            SalesReturn.date <= date_to_s,
+                            func.coalesce(SalesReturn.credited_amount, 0),
+                        ),
+                        else_=0,
+                    )
+                ),
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("as_of_amount"),
+            doc_amount_expr(
+                func.sum(func.coalesce(SalesReturn.credited_amount, 0)),
+                SaleInvoice.total,
+                SaleInvoice.tax_total,
+                exclusive,
+            ).label("all_time_amount"),
+        )
+        .join(SaleInvoice, SaleInvoice.id == SalesReturn.invoice_id)
+        .where(
+            SalesReturn.invoice_id.in_(invoice_ids),
+            SalesReturn.status != SalesReturnStatus.void,
+        )
+        .group_by(
+            SalesReturn.invoice_id,
+            SaleInvoice.total,
+            SaleInvoice.tax_total,
+        )
+    )
+    credit_totals = {
+        row.invoice_id: (
+            float(row.as_of_amount or 0),
+            float(row.all_time_amount or 0),
+        )
+        for row in credit_sums
+    }
+
+    open_rows = []
+    for row in rows:
+        as_of_collected, all_time_collected = payment_totals.get(
+            row["invoice_id"], (0.0, 0.0)
+        )
+        as_of_credited, all_time_credited = credit_totals.get(
+            row["invoice_id"], (0.0, 0.0)
+        )
+        invoice_date = _parse_iso_date(row.get("invoice_date"))
+        if invoice_date and invoice_date <= as_of:
+            as_of_collected += max(
+                0.0,
+                float(row.get("collected_amount") or 0) - all_time_collected,
+            )
+            as_of_credited += max(
+                0.0,
+                float(row.get("credited_amount") or 0) - all_time_credited,
+            )
+        balance = max(
+            0.0,
+            float(row.get("original_amount") or 0)
+            - as_of_collected
+            - as_of_credited,
+        )
+        row["balance"] = balance
+        row["collected_amount"] = as_of_collected
+        row["credited_amount"] = as_of_credited
+        aged_days = max(0, (as_of - invoice_date).days) if invoice_date else 0
+        row["aged_in_days"] = aged_days
+        row.update(_apply_aging_buckets(balance, aged_days))
+        if balance > 0.01:
+            open_rows.append(row)
+    return open_rows, as_of
 
 
 async def _purchase_aging_detail_rows(
@@ -4573,7 +4736,7 @@ async def sales_aging_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Open AR invoices aged by invoice date as of date_to."""
-    rows, _aged_as_of = await _sales_aging_detail_rows(
+    rows, _aged_as_of = await _sales_ar_as_of_rows(
         branch_id=branch_id,
         child_counter_id=child_counter_id,
         search=search,
@@ -4944,7 +5107,7 @@ async def sales_aging(
     db: AsyncSession = Depends(get_db),
 ):
     """Customer-level AR aging totals. Row drill-down opens sales-aging-detail."""
-    detail_rows, _aged_as_of = await _sales_aging_detail_rows(
+    detail_rows, _aged_as_of = await _sales_ar_as_of_rows(
         branch_id=branch_id,
         child_counter_id=child_counter_id,
         search=search,
@@ -5087,16 +5250,18 @@ async def top_customers(
     user: Optional[object] = Depends(current_user),
 ):
     branch_scope = await _resolve_branch_scope(user, db, branch_id)
-    start, end = _normalize_date_range(date_from, date_to)
-    start_s = _iso_date(start)
+    if branch_scope == []:
+        sk = normalize_skip(skip)
+        lim = normalize_limit(limit)
+        return paged([], 0, sk, lim)
+    _, end = _normalize_date_range(date_from, date_to)
     end_s = _iso_date(end)
     inv_conds = [
-        SaleInvoice.date >= start_s,
         SaleInvoice.date <= end_s,
         SaleInvoice.status != InvoiceStatus.cancelled,
+        SaleInvoice.status != InvoiceStatus.draft,
     ]
     cn_conds = [
-        SalesReturn.date >= start_s,
         SalesReturn.date <= end_s,
         SalesReturn.status != SalesReturnStatus.void,
     ]
@@ -5120,16 +5285,7 @@ async def top_customers(
                 docs.c.outstanding, docs.c.total, docs.c.tax_total, True
             ).label("outstanding"),
         ).subquery()
-    outstanding_amount = func.coalesce(func.sum(docs.c.outstanding), 0)
     quantity_sold = func.coalesce(func.sum(docs.c.quantity_sold), 0)
-    sort_map = {
-        "customer": docs.c.customer,
-        "invoice_count": func.count(docs.c.doc_id),
-        "quantity_sold": quantity_sold,
-        "purchase_amount": func.coalesce(func.sum(docs.c.total), 0),
-        "outstanding_amount": outstanding_amount,
-    }
-    order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "outstanding_amount", "desc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
     base = (
@@ -5139,17 +5295,79 @@ async def top_customers(
             func.count(docs.c.doc_id).label("invoice_count"),
             quantity_sold.label("quantity_sold"),
             func.coalesce(func.sum(docs.c.total), 0).label("purchase_amount"),
-            outstanding_amount.label("outstanding_amount"),
         )
         .select_from(docs)
         .group_by(docs.c.customer_id, docs.c.customer)
-        .having(outstanding_amount != 0)
     )
-    total_q = select(func.count()).select_from(base.subquery())
-    total = int((await db.execute(total_q)).scalar() or 0)
-    result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
-    rows = [dict(r._mapping) for r in result.fetchall()]
-    return paged(rows, total, sk, lim)
+    sales_result = await db.execute(base)
+    sales_by_customer = {}
+    for result_row in sales_result.fetchall():
+        sale_row = dict(result_row._mapping)
+        key = (
+            ("id", sale_row["customer_id"])
+            if sale_row["customer_id"]
+            else ("name", sale_row["customer"] or "")
+        )
+        sales_by_customer[key] = sale_row
+
+    ar_branch_id = branch_id or (
+        ",".join(branch_scope) if branch_scope is not None else None
+    )
+    ar_rows, _as_of = await _sales_ar_as_of_rows(
+        branch_id=ar_branch_id,
+        child_counter_id=child_counter_id,
+        search=None,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=None,
+        gst_mode=gst_mode,
+        db=db,
+    )
+    grouped_ar = _summarize_sales_aging(ar_rows)
+    combined = {}
+    for row in sales_by_customer.values():
+        key = (
+            ("id", row["customer_id"])
+            if row["customer_id"]
+            else ("name", row["customer"] or "")
+        )
+        combined[key] = {
+            **row,
+            "outstanding_amount": 0.0,
+        }
+    for ar_row in grouped_ar:
+        key = (
+            ("id", ar_row["customer_id"])
+            if ar_row["customer_id"]
+            else ("name", ar_row["customer"] or "")
+        )
+        combined.setdefault(
+            key,
+            {
+                "customer_id": ar_row["customer_id"],
+                "customer": ar_row["customer"],
+                "invoice_count": 0,
+                "quantity_sold": 0,
+                "purchase_amount": 0.0,
+                "outstanding_amount": 0.0,
+            },
+        )["outstanding_amount"] = float(ar_row.get("balance") or 0)
+    rows = [
+        row for row in combined.values()
+        if row["outstanding_amount"] > 0.01
+    ]
+    sort_key = {
+        "customer": "customer",
+        "invoice_count": "invoice_count",
+        "quantity_sold": "quantity_sold",
+        "purchase_amount": "purchase_amount",
+        "outstanding_amount": "outstanding_amount",
+    }.get(sort_by or "", "outstanding_amount")
+    rows.sort(
+        key=lambda row: (row.get(sort_key) is None, row.get(sort_key)),
+        reverse=(sort_order or "desc").lower() == "desc",
+    )
+    return paged(rows[sk:sk + lim], len(rows), sk, lim)
 
 
 @router.get("/vendor-outstanding", dependencies=[Depends(require_perm("reports.view"))])
@@ -5408,6 +5626,101 @@ async def stock_movement(
     result = await db.execute(select(union_query).order_by(ordered).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
+
+
+@router.get("/grn-receipts", dependencies=[Depends(require_perm("reports.view"))])
+async def grn_receipts(
+    branch_id: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = "desc",
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[object] = Depends(current_user),
+):
+    """Received inventory by GRN line, filtered by receipt date."""
+    branch_scope = await _resolve_branch_scope(user, db, branch_id)
+    start, end = _normalize_date_range(date_from, date_to)
+    conditions = [
+        GoodsReceiptNote.date >= start.isoformat(),
+        GoodsReceiptNote.date <= end.isoformat(),
+        GoodsReceiptNote.status == GRNStatus.received,
+    ]
+    branch_condition = _branch_condition(
+        GoodsReceiptNote.branch_id, branch_id, branch_scope
+    )
+    if branch_condition is not None:
+        conditions.append(branch_condition)
+    if search:
+        needle = f"%{search}%"
+        conditions.append(
+            GoodsReceiptNote.number.ilike(needle)
+            | GoodsReceiptNote.vendor_name.ilike(needle)
+            | GRNLineItem.name.ilike(needle)
+        )
+
+    sort_map = {
+        "date": GoodsReceiptNote.date,
+        "grn_number": GoodsReceiptNote.number,
+        "vendor": GoodsReceiptNote.vendor_name,
+        "branch": GoodsReceiptNote.branch_name,
+        "product": GRNLineItem.name,
+        "quantity": GRNLineItem.received_qty,
+        "status": GoodsReceiptNote.status,
+    }
+    order_by = resolve_sort(sort_by, sort_order, sort_map, "date", "desc")
+    skip_value = normalize_skip(skip)
+    limit_value = normalize_limit(limit)
+    source = (
+        select(
+            GoodsReceiptNote.date.label("date"),
+            GoodsReceiptNote.number.label("grn_number"),
+            GoodsReceiptNote.po_number.label("purchase_order_number"),
+            GoodsReceiptNote.vendor_name.label("vendor"),
+            GoodsReceiptNote.branch_name.label("branch"),
+            Item.sku.label("product_code"),
+            GRNLineItem.name.label("product"),
+            GRNLineItem.received_qty.label("quantity"),
+            GRNLineItem.cost.label("unit_cost"),
+            GRNLineItem.line_total.label("line_total"),
+            GoodsReceiptNote.status.label("status"),
+            GoodsReceiptNote.id.label("_grn_id"),
+            GRNLineItem.id.label("_line_id"),
+        )
+        .select_from(GoodsReceiptNote)
+        .join(GRNLineItem, GRNLineItem.grn_id == GoodsReceiptNote.id)
+        .outerjoin(Item, Item.id == GRNLineItem.item_id)
+        .where(and_(*conditions))
+    )
+    count_query = (
+        select(func.count())
+        .select_from(GoodsReceiptNote)
+        .join(GRNLineItem, GRNLineItem.grn_id == GoodsReceiptNote.id)
+        .where(and_(*conditions))
+    )
+    total = int((await db.execute(count_query)).scalar() or 0)
+    rows = [
+        dict(row._mapping)
+        for row in (
+            await db.execute(
+                source.order_by(order_by, GoodsReceiptNote.id, GRNLineItem.id)
+                .offset(skip_value)
+                .limit(limit_value)
+            )
+        ).fetchall()
+    ]
+    for row in rows:
+        row["status"] = (
+            row["status"].value
+            if hasattr(row["status"], "value")
+            else str(row["status"])
+        )
+        row.pop("_grn_id", None)
+        row.pop("_line_id", None)
+    return paged(rows, total, skip_value, limit_value)
 
 
 @router.get("/pool-issues", dependencies=[Depends(require_perm("reports.view"))])
