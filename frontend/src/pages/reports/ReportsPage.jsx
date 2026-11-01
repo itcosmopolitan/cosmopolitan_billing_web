@@ -101,7 +101,6 @@ const FOOTER_SUM_KEYS_BY_REPORT = {
   'product-sales-detail': new Set(['quantity', 'line_total']),
   'category-sales-detail': new Set(['quantity', 'line_total']),
   'product-purchases-detail': new Set(['quantity', 'line_total']),
-  'credit-collection-register': new Set(['collected_amount']),
 }
 
 function isSummableColumn(column, reportId) {

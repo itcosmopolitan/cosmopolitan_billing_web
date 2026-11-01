@@ -128,6 +128,42 @@ def test_customer_sales_export_calculates_weighted_margin_percentage():
     assert body[-1] == ["Total", 32.5]
 
 
+def test_credit_collection_register_export_totals_all_summable_columns():
+    columns = [
+        _col("customer", "Customer"),
+        _col("original_amount", "Original Amount", "currency", summable=True),
+        _col("collected_amount", "Collected Amount", "currency", summable=True),
+        _col("total_amount", "Total Amount", "currency", summable=True),
+        _col("credited_amount", "Credited", "currency", summable=True),
+        _col("remaining_amount", "Remaining Amount", "currency", summable=True),
+        _col("days_overdue", "Days Overdue", "number", summable=True),
+    ]
+    rows = [
+        {
+            "customer": "A",
+            "original_amount": 100,
+            "collected_amount": 25,
+            "total_amount": 25,
+            "credited_amount": 10,
+            "remaining_amount": 65,
+            "days_overdue": 2,
+        },
+        {
+            "customer": "B",
+            "original_amount": 200,
+            "collected_amount": 50,
+            "total_amount": 50,
+            "credited_amount": 20,
+            "remaining_amount": 130,
+            "days_overdue": 3,
+        },
+    ]
+
+    _, body = build_export_table(rows, columns, report_api="creditCollectionRegister")
+
+    assert body[-1] == ["Total", 300.0, 75.0, 75.0, 30.0, 195.0, 5]
+
+
 def test_currency_rows_and_totals_use_configured_precision():
     columns = [
         _col("label", "Label"),
