@@ -5242,6 +5242,7 @@ async def sales_aging(
     sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    summary_only: bool = False,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     customer_id: Optional[str] = None,
@@ -5261,6 +5262,20 @@ async def sales_aging(
     )
     rows = _summarize_sales_aging(detail_rows)
     rows = _sort_aging_rows(rows, sort_by, sort_order, "customer")
+    if summary_only:
+        summary = {
+            "customer": "TOTAL",
+            "invoice_count": sum(row["invoice_count"] for row in rows),
+            "balance": round(sum(float(row.get("balance") or 0) for row in rows), 2),
+        }
+        for bucket in _AGING_BUCKET_KEYS:
+            values = [row[bucket] for row in rows if row.get(bucket) is not None]
+            summary[bucket] = (
+                round(sum(float(value) for value in values), 2)
+                if values
+                else None
+            )
+        return paged([summary], len(rows), 0, 1, summary_only=True)
     return _paginate_rows(rows, skip, limit)
 
 

@@ -148,6 +148,7 @@ async def _run_ar_reports_as_of_proof() -> None:
         db.add_all([
             Branch(id="b1", name="Main", code="MAIN"),
             Customer(id="c-ext", name="External Customer", classification="external"),
+            Customer(id="c-ext-2", name="Second External Customer", classification="external"),
             Customer(id="c-int", name="Internal Company", classification="internal"),
             SaleInvoice(
                 id="inv-paid-later",
@@ -172,6 +173,18 @@ async def _run_ar_reports_as_of_proof() -> None:
                 paid_amount=0,
                 credited_amount=10,
                 status=InvoiceStatus.partial,
+            ),
+            SaleInvoice(
+                id="inv-second-customer",
+                number="INV-SECOND-CUSTOMER",
+                customer_id="c-ext-2",
+                customer_name="Second External Customer",
+                branch_id="b1",
+                date="2026-09-25",
+                total=50,
+                paid_amount=0,
+                credited_amount=0,
+                status=InvoiceStatus.pending,
             ),
             SaleInvoice(
                 id="inv-internal",
@@ -232,12 +245,24 @@ async def _run_ar_reports_as_of_proof() -> None:
         customer_total = sum(
             row["outstanding_amount"] for row in customer_outstanding["items"]
         )
-        assert receivable_total == aging_total == customer_total == 160
+        purchase_total = sum(
+            row["purchase_amount"] for row in customer_outstanding["items"]
+        )
+        assert receivable_total == aging_total == customer_total == 210
+        assert purchase_total == 210
         assert {row["invoice_number"] for row in receivables["items"]} == {
             "INV-PAID-LATER",
             "INV-CREDITED-LATER",
+            "INV-SECOND-CUSTOMER",
         }
-        assert customer_outstanding["total"] == 1
+        assert customer_outstanding["total"] == 2
+        customer_rows = {
+            row["customer"]: row for row in customer_outstanding["items"]
+        }
+        assert customer_rows["External Customer"]["outstanding_amount"] == 160
+        assert customer_rows["External Customer"]["purchase_amount"] == 160
+        assert customer_rows["External Customer"]["invoice_count"] == 2
+        assert customer_rows["Second External Customer"]["outstanding_amount"] == 50
     finally:
         await db.close()
 

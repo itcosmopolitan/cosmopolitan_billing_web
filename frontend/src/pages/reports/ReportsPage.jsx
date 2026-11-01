@@ -84,6 +84,15 @@ const MARGIN_PCT_TOTAL_SOURCES = {
 /** Reports that already encode their own totals / structure. */
 const NO_FOOTER_TOTALS_REPORTS = new Set(['profit-loss'])
 
+/** Reports with a backend summary_only implementation for the totals footer. */
+const SUMMARY_ONLY_FOOTER_REPORTS = new Set([
+  'current-stock',
+  'low-stock',
+  'out-of-stock',
+  'expiry-batches',
+  'sales-aging',
+])
+
 /** When set, footer only sums these keys (taxable is duplicated across CGST/SGST). */
 const FOOTER_SUM_KEYS_BY_REPORT = {
   'tax-summary': new Set(['taxable_amount', 'tax_amount']),
@@ -1434,7 +1443,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setFooterRows(null)
     const fetchFooterRows = async () => {
       try {
-        const footerParams = { ...reportFilterParams, summary_only: true }
+        const footerParams = { ...reportFilterParams }
+        if (SUMMARY_ONLY_FOOTER_REPORTS.has(report.id)) {
+          footerParams.summary_only = true
+        }
         const allRows = await fetchAllReportRows(reportsAPI[report.api], footerParams)
         if (!cancelled) setFooterRows(allRows)
       } catch (error) {

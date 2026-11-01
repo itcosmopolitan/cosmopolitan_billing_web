@@ -235,6 +235,36 @@ async def _run():
         assert silver["bucket_32_62"] == 1500.00
         assert by_cust["Other Customer"]["balance"] == 400.0
 
+        summary_total = await sales_aging(
+            date_to=date_to,
+            summary_only=True,
+            db=db,
+        )
+        summary_row = summary_total["items"][0]
+        assert summary_total["total"] == summary["total"] == 2
+        assert summary_row["invoice_count"] == sum(
+            row["invoice_count"] for row in summary["items"]
+        ) == 3
+        assert summary_row["balance"] == sum(
+            row["balance"] for row in summary["items"]
+        ) == 5108.80
+        for bucket in (
+            "bucket_1_31",
+            "bucket_32_62",
+            "bucket_63_93",
+            "bucket_94_124",
+            "bucket_over_124",
+        ):
+            bucket_values = [
+                row[bucket] for row in summary["items"] if row[bucket] is not None
+            ]
+            expected_bucket_total = (
+                round(sum(float(value) for value in bucket_values), 2)
+                if bucket_values
+                else None
+            )
+            assert summary_row[bucket] == expected_bucket_total
+
         # Drill-down: one customer's open invoices only
         drilled = await sales_aging_detail(
             date_to=date_to,
