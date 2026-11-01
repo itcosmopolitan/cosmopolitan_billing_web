@@ -15,7 +15,9 @@ import useColumnPrefs from '@/hooks/useColumnPrefs'
 import { useAppStore } from '@/store'
 import { unwrapPaged } from '@/utils/pagination'
 import { runExportJob } from '@/utils/exportJob'
+import { getAmountDecimals } from '@/utils/decimalPrecision'
 import { searchReportRows } from './reportSearch'
+import { sumCurrencyValues } from './reportTotals'
 import { NOT_SET, NOT_APPLICABLE } from '@/utils/emptyValue'
 
 const FAVORITES_GROUP_ID = 'favorites'
@@ -106,6 +108,14 @@ function computeColumnTotals(rows, columns, reportId) {
   let hasAny = false
   columns.forEach((column) => {
     if (!isSummableColumn(column, reportId)) return
+    if (column.format === 'currency' || column.format === 'currency_blank') {
+      const sum = sumCurrencyValues(rows, column.key, getAmountDecimals())
+      if (sum !== null) {
+        totals[column.key] = sum
+        hasAny = true
+      }
+      return
+    }
     let sum = 0
     let counted = 0
     rows.forEach((row) => {
@@ -1593,6 +1603,9 @@ function ReportDetailPage({ report, reportMap, onBack }) {
         label: col.label || '',
         format: col.format || null,
         summable: isSummableColumn(col, report.id),
+        ...(['currency', 'currency_blank'].includes(col.format)
+          ? { decimal_places: getAmountDecimals() }
+          : {}),
       })),
       title: report.label || 'Report',
       subtitle: !hasDateFilter ? 'Current snapshot' : (isAsOfDate ? `As of: ${dateRangeLabel}` : `Date range: ${dateRangeLabel}`),

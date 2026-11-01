@@ -1760,12 +1760,15 @@ async def sales_register(
     }
 
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "invoice_date", "desc")
+    stable_id = func.coalesce(docs.c.invoice_id, docs.c.document_id)
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
 
     query = _restrict_transaction_types(select(docs), docs.c.transaction_type, transaction_type)
     total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0)
-    result = await db.execute(query.order_by(order_by_expr).offset(sk).limit(lim))
+    result = await db.execute(
+        query.order_by(order_by_expr, stable_id.asc()).offset(sk).limit(lim)
+    )
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
 

@@ -96,6 +96,27 @@ def test_export_table_adds_total_row_with_label_column():
     assert body[-1] == ["Total", None, 12.5]
 
 
+def test_currency_rows_and_totals_use_configured_precision():
+    columns = [
+        _col("label", "Label"),
+        ReportExportColumn(
+            key="amount",
+            label="Amount",
+            format="currency",
+            summable=True,
+            decimal_places=2,
+        ),
+    ]
+    rows = [
+        {"label": "A", "amount": 0.1 + 0.2},
+        {"label": "B", "amount": 0.3},
+    ]
+
+    _, body = build_export_table(rows, columns)
+
+    assert body == [["A", 0.3], ["B", 0.3], ["Total", 0.6]]
+
+
 def test_export_table_without_summable_columns_has_no_total_row():
     columns = [_col("name", "Name")]
     headers, body = build_export_table([{"name": "A"}], columns)

@@ -13,6 +13,7 @@ import json
 import math
 import re
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Literal, Optional, Union
 
 from openpyxl import Workbook
@@ -128,6 +129,7 @@ class ReportExportColumn(BaseModel):
     label: str = Field(default="", max_length=200)
     format: Optional[str] = Field(default=None, max_length=30)
     summable: bool = False
+    decimal_places: int = Field(default=2, ge=0, le=6)
 
 
 class ReportExportRequest(BaseModel):
@@ -273,11 +275,22 @@ def export_column_label(column: ReportExportColumn) -> str:
     return label
 
 
+def _round_currency(value: Any, decimal_places: int) -> Optional[Decimal]:
+    number = _to_js_number(value)
+    if number is None:
+        return None
+    quantum = Decimal(1).scaleb(-decimal_places)
+    return Decimal(str(number)).quantize(quantum, rounding=ROUND_HALF_UP)
+
+
 def export_cell_value(column: ReportExportColumn, row: dict[str, Any]) -> Any:
     value = row.get(column.key)
     if column.format in NUMERIC_EXPORT_FORMATS:
         if value is None or value == "":
             return None
+        if column.format in ("currency", "currency_blank"):
+            rounded = _round_currency(value, column.decimal_places)
+            return float(rounded) if rounded is not None else None
         return _to_js_number(value)
     if column.key in VALUE_FORMATTERS:
         formatted = VALUE_FORMATTERS[column.key](value)
@@ -324,6 +337,21 @@ def compute_totals(rows: list[dict[str, Any]], columns: list[ReportExportColumn]
     totals: dict[str, float] = {}
     for column in columns:
         if not column.summable:
+            continue
+        if column.format in ("currency", "currency_blank"):
+            total = Decimal(0)
+            counted = False
+            for row in rows:
+                raw = row.get(column.key)
+                if raw is None or raw == "":
+                    continue
+                rounded = _round_currency(raw, column.decimal_places)
+                if rounded is None:
+                    continue
+                total += rounded
+                counted = True
+            if counted:
+                totals[column.key] = float(total)
             continue
         total = 0.0
         counted = 0

@@ -320,6 +320,44 @@ async def _run() -> None:
             user=actor,
         )
         assert other_counter_returns["total"] == 0
+
+        page_invoices = [
+            SaleInvoice(
+                id=f"page-{index:03d}",
+                number=f"INV-PAGE-{index:03d}",
+                customer_name="Paging Test",
+                branch_id="b1",
+                branch_name="Main",
+                date=today,
+                subtotal=100,
+                tax_total=index,
+                discount=0,
+                total=100 + index,
+                paid_amount=100 + index,
+                payment_mode="cash",
+                status=InvoiceStatus.paid,
+            )
+            for index in reversed(range(105))
+        ]
+        db.add_all(page_invoices)
+        await db.commit()
+
+        paged_ids = []
+        for offset in range(0, 107, 50):
+            page = await sales_register(
+                date_from=today,
+                date_to=today,
+                skip=offset,
+                limit=50,
+                db=db,
+                user=actor,
+            )
+            assert page["total"] == 107
+            paged_ids.extend(
+                row["invoice_id"] or row["document_id"]
+                for row in page["items"]
+            )
+        assert paged_ids == ["cn-1", "inv-1", *[f"page-{index:03d}" for index in range(105)]]
     finally:
         await db.close()
 
