@@ -211,15 +211,16 @@ async def _run_reports():
         assert tc_excl["items"][0]["purchase_amount"] == 100.0
         assert tc_excl["items"][0]["outstanding_amount"] == 100.0
 
-        # Sales register drilldown: net amount restated, taxable amount unchanged.
+        # Sales register amounts remain GST-inclusive even when other reports use exclusive mode.
         sr_excl = await sales_register(
             date_from=INVOICE_DATE, date_to=AS_OF, skip=0, limit=50,
             gst_mode="exclusive", db=db, user=user,
         )
         sale_row = next(r for r in sr_excl["items"] if r["invoice_number"] == "INV-1")
-        assert sale_row["net_amount"] == 100.0
+        assert sale_row["net_amount"] == 108.0
         assert sale_row["taxable_amount"] == 100.0
         assert sale_row["tax_amount"] == 8.0
+        assert sale_row["remaining_amount"] == 108.0
 
         sr_incl = await sales_register(
             date_from=INVOICE_DATE, date_to=AS_OF, skip=0, limit=50, db=db, user=user,

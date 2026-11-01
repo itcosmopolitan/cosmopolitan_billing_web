@@ -1738,18 +1738,6 @@ async def sales_register(
     inv_conds = _sale_filters(**filter_kwargs)
     cn_conds = _cn_filters(**filter_kwargs)
     docs = _sales_register_union_query(inv_conds, cn_conds)
-    if is_exclusive(gst_mode):
-        doc_amount_cols = {"discount", "net_amount", "paid_amount", "remaining_amount"}
-        docs = select(
-            *[
-                (
-                    doc_amount_expr(docs.c[name], docs.c.net_amount, docs.c.tax_amount, True)
-                    if name in doc_amount_cols
-                    else docs.c[name]
-                ).label(name)
-                for name in docs.c.keys()
-            ]
-        ).subquery()
 
     sort_map = {
         "invoice_number": docs.c.invoice_number,
