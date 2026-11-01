@@ -183,6 +183,66 @@ def test_pool_draw_description_is_clear_and_reusable_for_audit_and_activity() ->
     )
 
 
+async def _verify_stock_movement_date_filters_and_stable_pagination() -> None:
+    db = await _build_session()
+    try:
+        db.add(Branch(id="branch-a", name="Branch A", code="A"))
+        for index in range(51):
+            invoice_id = f"invoice-{index:02}"
+            db.add(SaleInvoice(
+                id=invoice_id,
+                number=f"INV-{invoice_id}",
+                branch_id="branch-a",
+                branch_name="Branch A",
+                date="2026-10-01",
+            ))
+            db.add(SaleLineItem(
+                id=f"line-{invoice_id}",
+                invoice_id=invoice_id,
+                name=f"Item {invoice_id}",
+                qty=0.25,
+            ))
+        db.add(SaleInvoice(
+            id="invoice-nov",
+            number="INV-invoice-nov",
+            branch_id="branch-a",
+            branch_name="Branch A",
+            date="2026-11-01",
+        ))
+        db.add(SaleLineItem(
+            id="line-invoice-nov",
+            invoice_id="invoice-nov",
+            name="Item invoice-nov",
+            qty=100.0,
+        ))
+        await db.commit()
+
+        pages = []
+        for skip in (0, 50):
+            page = await stock_movement(
+                date_from="2026-10-01",
+                date_to="2026-10-31",
+                sort_by="date",
+                sort_order="asc",
+                skip=skip,
+                limit=50,
+                db=db,
+            )
+            assert page["total"] == 51
+            pages.extend(page["items"])
+
+        assert [row["reference_number"] for row in pages] == [
+            f"INV-invoice-{index:02}" for index in range(51)
+        ]
+        assert sum(row["quantity"] for row in pages) == 12.75
+    finally:
+        await db.close()
+
+
+def test_stock_movement_date_filters_and_stable_pagination() -> None:
+    asyncio.run(_verify_stock_movement_date_filters_and_stable_pagination())
+
+
 async def _verify_untracked_draw_uses_branch_first_then_largest_owner() -> None:
     db = await _build_session()
     try:

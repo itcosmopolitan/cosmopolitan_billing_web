@@ -5612,6 +5612,8 @@ async def vendor_outstanding(
 async def stock_movement(
     branch_id: Optional[str] = None,
     search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
@@ -5638,6 +5640,14 @@ async def stock_movement(
         sale_conds.append(SaleLineItem.name.ilike(f"%{search}%"))
         purchase_conds.append(PurchaseLineItem.name.ilike(f"%{search}%"))
         transfer_conds.append(TransferLineItem.item_name.ilike(f"%{search}%"))
+    if date_from:
+        sale_conds.append(SaleInvoice.date >= date_from)
+        purchase_conds.append(PurchaseBill.date >= date_from)
+        transfer_conds.append(StockTransfer.request_date >= date_from)
+    if date_to:
+        sale_conds.append(SaleInvoice.date <= date_to)
+        purchase_conds.append(PurchaseBill.date <= date_to)
+        transfer_conds.append(StockTransfer.request_date <= date_to)
 
     sale_q = select(
         SaleInvoice.date.label("date"),
@@ -5646,6 +5656,8 @@ async def stock_movement(
         SaleLineItem.qty.label("quantity"),
         SaleInvoice.number.label("reference_number"),
         SaleInvoice.branch_name.label("branch"),
+        literal("sale").label("_sort_source"),
+        cast(SaleLineItem.id, String).label("_sort_id"),
     ).select_from(SaleLineItem).join(SaleInvoice, SaleInvoice.id == SaleLineItem.invoice_id)
     if sale_conds:
         sale_q = sale_q.where(and_(*sale_conds))
@@ -5657,6 +5669,8 @@ async def stock_movement(
         PurchaseLineItem.qty.label("quantity"),
         PurchaseBill.number.label("reference_number"),
         PurchaseBill.branch_name.label("branch"),
+        literal("purchase").label("_sort_source"),
+        cast(PurchaseLineItem.id, String).label("_sort_id"),
     ).select_from(PurchaseLineItem).join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
     if purchase_conds:
         purchase_q = purchase_q.where(and_(*purchase_conds))
@@ -5668,6 +5682,8 @@ async def stock_movement(
         TransferLineItem.qty.label("quantity"),
         StockTransfer.ref_number.label("reference_number"),
         func.concat(StockTransfer.from_branch_name, " → ", StockTransfer.to_branch_name).label("branch"),
+        literal("transfer").label("_sort_source"),
+        cast(TransferLineItem.id, String).label("_sort_id"),
     ).select_from(TransferLineItem).join(StockTransfer, StockTransfer.id == TransferLineItem.transfer_id)
     if transfer_conds:
         transfer_q = transfer_q.where(and_(*transfer_conds))
@@ -5682,6 +5698,17 @@ async def stock_movement(
     pool_search_filter = None
     if search:
         pool_search_filter = SaleLineItem.name.ilike(f"%{search}%")
+    pool_date_filters = []
+    if date_from:
+        pool_date_filters.append(SaleInvoice.date >= date_from)
+    if date_to:
+        pool_date_filters.append(SaleInvoice.date <= date_to)
+    reversal_date = cast(func.date(PoolSaleAllocationReversal.created_at), String)
+    reversal_date_filters = []
+    if date_from:
+        reversal_date_filters.append(reversal_date >= date_from)
+    if date_to:
+        reversal_date_filters.append(reversal_date <= date_to)
     pool_issue_q = (
         select(
             SaleInvoice.date.label("date"),
@@ -5690,6 +5717,8 @@ async def stock_movement(
             (-PoolSaleAllocation.qty).label("quantity"),
             SaleInvoice.number.label("reference_number"),
             Branch.name.label("branch"),
+            literal("pool_issue").label("_sort_source"),
+            cast(PoolSaleAllocation.id, String).label("_sort_id"),
         )
         .select_from(PoolSaleAllocation)
         .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)
@@ -5704,6 +5733,8 @@ async def stock_movement(
             PoolSaleAllocation.qty.label("quantity"),
             SaleInvoice.number.label("reference_number"),
             Branch.name.label("branch"),
+            literal("pool_receipt").label("_sort_source"),
+            cast(PoolSaleAllocation.id, String).label("_sort_id"),
         )
         .select_from(PoolSaleAllocation)
         .join(SaleInvoice, SaleInvoice.id == PoolSaleAllocation.invoice_id)
@@ -5712,12 +5743,14 @@ async def stock_movement(
     )
     pool_reversal_out_q = (
         select(
-            cast(func.date(PoolSaleAllocationReversal.created_at), String).label("date"),
+            reversal_date.label("date"),
             SaleLineItem.name.label("product"),
             literal("Pool reversal out").label("movement_type"),
             (-PoolSaleAllocationReversal.qty_delta).label("quantity"),
             SaleInvoice.number.label("reference_number"),
             Branch.name.label("branch"),
+            literal("pool_reversal_out").label("_sort_source"),
+            cast(PoolSaleAllocationReversal.id, String).label("_sort_id"),
         )
         .select_from(PoolSaleAllocationReversal)
         .join(PoolSaleAllocation, PoolSaleAllocation.id == PoolSaleAllocationReversal.allocation_id)
@@ -5727,12 +5760,14 @@ async def stock_movement(
     )
     pool_reversal_in_q = (
         select(
-            cast(func.date(PoolSaleAllocationReversal.created_at), String).label("date"),
+            reversal_date.label("date"),
             SaleLineItem.name.label("product"),
             literal("Pool reversal in").label("movement_type"),
             PoolSaleAllocationReversal.qty_delta.label("quantity"),
             SaleInvoice.number.label("reference_number"),
             Branch.name.label("branch"),
+            literal("pool_reversal_in").label("_sort_source"),
+            cast(PoolSaleAllocationReversal.id, String).label("_sort_id"),
         )
         .select_from(PoolSaleAllocationReversal)
         .join(PoolSaleAllocation, PoolSaleAllocation.id == PoolSaleAllocationReversal.allocation_id)
@@ -5750,6 +5785,12 @@ async def stock_movement(
         pool_receipt_q = pool_receipt_q.where(pool_search_filter)
         pool_reversal_out_q = pool_reversal_out_q.where(pool_search_filter)
         pool_reversal_in_q = pool_reversal_in_q.where(pool_search_filter)
+    if pool_date_filters:
+        pool_issue_q = pool_issue_q.where(and_(*pool_date_filters))
+        pool_receipt_q = pool_receipt_q.where(and_(*pool_date_filters))
+    if reversal_date_filters:
+        pool_reversal_out_q = pool_reversal_out_q.where(and_(*reversal_date_filters))
+        pool_reversal_in_q = pool_reversal_in_q.where(and_(*reversal_date_filters))
 
     union_query = sale_q.union_all(
         purchase_q,
@@ -5776,7 +5817,16 @@ async def stock_movement(
 
     total_q = select(func.count()).select_from(union_query)
     total = int((await db.execute(total_q)).scalar() or 0)
-    result = await db.execute(select(union_query).order_by(ordered).offset(sk).limit(lim))
+    selected_columns = [
+        union_query.c[name]
+        for name in ("date", "product", "movement_type", "quantity", "reference_number", "branch")
+    ]
+    result = await db.execute(
+        select(*selected_columns)
+        .order_by(ordered, union_query.c["_sort_source"], union_query.c["_sort_id"])
+        .offset(sk)
+        .limit(lim)
+    )
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
 
