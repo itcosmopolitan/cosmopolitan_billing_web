@@ -24,6 +24,7 @@ from src.models import (  # noqa: E402
     InvoiceStatus,
     Item,
     PurchaseBill,
+    PurchaseLineItem,
     SaleInvoice,
     SaleLineItem,
     SalesReturn,
@@ -44,6 +45,7 @@ from src.routes.reports import (  # noqa: E402
     sales_aging_detail,
     sales_lines,
     sales_register,
+    tax_summary,
     tax_summary_detail,
     top_customers,
     vendor_outstanding,
@@ -409,10 +411,40 @@ async def _run_tax_summary_detail():
     try:
         user = await _seed(db)
         await _seed_sales_activity(db)
+        db.add(PurchaseLineItem(
+            id="pli-1",
+            bill_id="bill-1",
+            item_id="it-1",
+            name="Widget",
+            qty=1.0,
+            cost=216.0,
+            tax_rate=8.0,
+            discount=0.0,
+            line_total=216.0,
+        ))
+        await db.commit()
         common = dict(
             date_from=INVOICE_DATE, date_to=AS_OF, full_rate=8.0,
             skip=0, limit=50, db=db, user=user,
         )
+
+        output = await tax_summary(
+            date_from=INVOICE_DATE, date_to=AS_OF, tax_scope="output",
+            skip=0, limit=50, db=db, user=user,
+        )
+        input_tax = await tax_summary(
+            date_from=INVOICE_DATE, date_to=AS_OF, tax_scope="input",
+            skip=0, limit=50, db=db, user=user,
+        )
+        assert output["items"][0]["taxable_amount"] == 50.0
+        assert output["items"][0]["tax_amount"] == 4.0
+        assert input_tax["items"][0]["taxable_amount"] == 200.0
+        assert input_tax["items"][0]["tax_amount"] == 16.0
+
+        output_detail = await tax_summary_detail(tax_scope="output", **common)
+        input_detail = await tax_summary_detail(tax_scope="input", **common)
+        assert {row["transaction_type"] for row in output_detail["items"]} == {"Invoice", "Credit Note"}
+        assert {row["transaction_type"] for row in input_detail["items"]} == {"Bill"}
 
         # Default is gross: invoice 108 incl. 8 tax; credit note reverses 54 incl. 4 tax.
         gross = await tax_summary_detail(**common)

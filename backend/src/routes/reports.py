@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import date, datetime, time, timedelta
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from urllib.parse import quote
 
@@ -1336,6 +1336,7 @@ async def tax_summary(
     branch_id: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    tax_scope: Optional[Literal["input", "output"]] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "asc",
     skip: int = Query(0, ge=0),
@@ -1460,10 +1461,12 @@ async def tax_summary(
             by_rate[rate]["taxable_amount"] += sign * float(raw.get("taxable_amount") or 0)
             by_rate[rate]["tax_amount"] += sign * float(raw.get("tax_amount") or 0)
 
-    _accumulate(sales_rows)
-    _accumulate(purchase_rows)
-    _accumulate(cn_rows, -1.0)
-    _accumulate(dn_rows, -1.0)
+    if tax_scope != "input":
+        _accumulate(sales_rows)
+        _accumulate(cn_rows, -1.0)
+    if tax_scope != "output":
+        _accumulate(purchase_rows)
+        _accumulate(dn_rows, -1.0)
 
     def _is_available_rate(rate: float) -> bool:
         if not available_rates:
@@ -1511,6 +1514,7 @@ async def tax_summary_detail(
     full_rate: Optional[float] = None,
     tax_percentage: Optional[float] = None,
     transaction_type: Optional[str] = None,
+    tax_scope: Optional[Literal["input", "output"]] = None,
     gst_mode: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = "desc",
@@ -1650,6 +1654,10 @@ async def tax_summary_detail(
         (cn_q, -1, "Credit Note"),
         (dn_q, -1, "Debit Note"),
     ):
+        if tax_scope == "input" and txn_label not in {"Bill", "Debit Note"}:
+            continue
+        if tax_scope == "output" and txn_label not in {"Invoice", "Credit Note"}:
+            continue
         if not _wants_transaction_type(transaction_type, txn_label):
             continue
         for raw in (await db.execute(query)).fetchall():

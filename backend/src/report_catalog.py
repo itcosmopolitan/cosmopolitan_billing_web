@@ -738,9 +738,21 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
         "label": "Taxes",
         "reports": [
             _report(
-                "tax-summary",
-                "Tax Summary",
-                api="taxSummary",
+                "input-tax-summary",
+                "Input Tax Summary",
+                api="inputTaxSummary",
+                default_sort="tax_name",
+                columns=[
+                    _col("tax_name", "Tax Name"),
+                    _col("tax_percentage", "Tax Percentage", align="right", format="number"),
+                    _col("taxable_amount", "Taxable Amount", align="right", format="currency"),
+                    _col("tax_amount", "Tax Amount", align="right", format="currency"),
+                ],
+            ),
+            _report(
+                "output-tax-summary",
+                "Output Tax Summary",
+                api="outputTaxSummary",
                 default_sort="tax_name",
                 columns=[
                     _col("tax_name", "Tax Name"),

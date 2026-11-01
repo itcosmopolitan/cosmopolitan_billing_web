@@ -95,7 +95,8 @@ const SUMMARY_ONLY_FOOTER_REPORTS = new Set([
 
 /** When set, footer only sums these keys (taxable is duplicated across CGST/SGST). */
 const FOOTER_SUM_KEYS_BY_REPORT = {
-  'tax-summary': new Set(['taxable_amount', 'tax_amount']),
+  'input-tax-summary': new Set(['taxable_amount', 'tax_amount']),
+  'output-tax-summary': new Set(['taxable_amount', 'tax_amount']),
   'tax-summary-detail': new Set(['transaction_amount', 'tax_amount']),
   'product-sales-detail': new Set(['quantity', 'line_total']),
   'category-sales-detail': new Set(['quantity', 'line_total']),
@@ -200,6 +201,7 @@ const DRILLDOWN_PARAM_KEYS = [
   'drill_from',
   'drill_label',
   'gst_mode',
+  'tax_scope',
 ]
 
 /** Parent filter snapshot carried on child URLs so Back restores parent, not child. */
@@ -264,7 +266,8 @@ const GST_EXCL_SALES_LABELS = {
 const GST_TOGGLE_HIDDEN_REPORTS = new Set([
   'credit-collection-register',
   'credit-collection',
-  'tax-summary',
+  'input-tax-summary',
+  'output-tax-summary',
   'petty-cash',
   'stock-movement',
   'low-stock',
@@ -321,6 +324,8 @@ const PURCHASE_TXN_TYPE_OPTIONS = [
   { id: 'bill', label: 'Bill' },
   { id: 'debit_note', label: 'Debit Note' },
 ]
+const OUTPUT_TAX_TXN_TYPE_OPTIONS = SALES_TXN_TYPE_OPTIONS
+const INPUT_TAX_TXN_TYPE_OPTIONS = PURCHASE_TXN_TYPE_OPTIONS
 const TAX_TXN_TYPE_OPTIONS = [
   { id: 'invoice', label: 'Invoice' },
   { id: 'credit_note', label: 'Credit Note' },
@@ -641,11 +646,25 @@ const DRILLDOWN_HANDLERS = {
     },
     label: row.vendor,
   } : null),
-  'tax-summary': (row, ctx) => (row.tax_name || row.tax_percentage != null ? {
+  'input-tax-summary': (row, ctx) => (row.tax_name || row.tax_percentage != null ? {
     reportId: 'tax-summary-detail',
     filters: {
       date_from: ctx.dateFrom,
       date_to: ctx.dateTo,
+      tax_scope: 'input',
+      tax_name: row.tax_name || '',
+      full_rate: row.full_rate ?? row.tax_percentage ?? '',
+      tax_percentage: row.tax_percentage ?? '',
+      ...(ctx.branchId ? { branch_id: ctx.branchId } : {}),
+    },
+    label: row.tax_name || `GST ${row.tax_percentage}%`,
+  } : null),
+  'output-tax-summary': (row, ctx) => (row.tax_name || row.tax_percentage != null ? {
+    reportId: 'tax-summary-detail',
+    filters: {
+      date_from: ctx.dateFrom,
+      date_to: ctx.dateTo,
+      tax_scope: 'output',
       tax_name: row.tax_name || '',
       full_rate: row.full_rate ?? row.tax_percentage ?? '',
       tax_percentage: row.tax_percentage ?? '',
@@ -1164,10 +1183,13 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     'topCustomers',
   ].includes(report.api)
 
-  const txnTypeOptions = useMemo(
-    () => TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS,
-    [report.api],
-  )
+  const txnTypeOptions = useMemo(() => {
+    if (report.api === 'taxSummaryDetail') {
+      if (urlFilters.tax_scope === 'input') return INPUT_TAX_TXN_TYPE_OPTIONS
+      if (urlFilters.tax_scope === 'output') return OUTPUT_TAX_TXN_TYPE_OPTIONS
+    }
+    return TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS
+  }, [report.api, urlFilters.tax_scope])
   const gstToggleVisible = !GST_TOGGLE_HIDDEN_REPORTS.has(report.id)
   const [appliedFilters, setAppliedFilters] = useState(() => ({
     dateFrom: initialFrom,
@@ -1592,6 +1614,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       sort_order: sortOrder,
       ...drillFilters,
       ...gstParamForApi(gstMode),
+      ...(report.api === 'inputTaxSummary' ? { tax_scope: 'input' } : {}),
+      ...(report.api === 'outputTaxSummary' ? { tax_scope: 'output' } : {}),
       ...(appliedTxnParam ? { transaction_type: appliedTxnParam } : {}),
       ...(supportsChildCounterFilter && appliedFilters.childCounterId
         ? { child_counter_id: appliedFilters.childCounterId }

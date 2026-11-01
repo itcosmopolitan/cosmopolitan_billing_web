@@ -31,6 +31,8 @@ REPORT_EXPORT_PATHS: dict[str, str] = {
     "salesSummary": "sales-summary",
     "purchaseSummary": "purchase-summary",
     "taxSummary": "tax-summary",
+    "outputTaxSummary": "tax-summary",
+    "inputTaxSummary": "tax-summary",
     "taxSummaryDetail": "tax-summary-detail",
     "stockMovement": "stock-movement",
     "grnReceipts": "grn-receipts",

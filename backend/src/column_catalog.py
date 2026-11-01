@@ -777,7 +777,13 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
         _col("amount", "Amount"),
         _col("branch", "Branch"),
     ],
-    "reports.tax-summary": [
+    "reports.output-tax-summary": [
+        _col("tax_name", "Tax Name", locked=True),
+        _col("tax_percentage", "Tax Percentage"),
+        _col("taxable_amount", "Taxable Amount"),
+        _col("tax_amount", "Tax Amount"),
+    ],
+    "reports.input-tax-summary": [
         _col("tax_name", "Tax Name", locked=True),
         _col("tax_percentage", "Tax Percentage"),
         _col("taxable_amount", "Taxable Amount"),
