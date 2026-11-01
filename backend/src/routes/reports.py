@@ -36,7 +36,6 @@ from src.models import (
     GoodsReceiptNote,
     GRNLineItem,
     GRNStatus,
-    InventorySnapshot,
     InvoiceStatus,
     Item,
     ItemBatch,
@@ -3399,8 +3398,15 @@ async def current_stock(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    summary_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
+    as_of = None
+    if date_to or date_from:
+        as_of = _normalize_as_of_date(date_to or date_from)
+
     conds = []
     stock_branch = _eq_or_in(ItemStock.branch_id, branch_id)
     if stock_branch is not None:
@@ -3419,21 +3425,105 @@ async def current_stock(
         .subquery()
     )
     reserved_expr = func.coalesce(reserved_sq.c.reserved_qty, 0)
-    # Oversold (negative) quantity is shown as-is, but valued at zero.
-    stock_value_expr = case(
-        (ItemStock.quantity > 0, ItemStock.quantity * func.coalesce(Item.cost_price, 0)),
-        else_=literal(0.0),
-    )
 
-    # Same stock / reserved / available split as the Items & Stock page.
-    available_expr = ItemStock.quantity - reserved_expr
+    if as_of is not None and as_of < date.today():
+        movements_after_as_of_sq = (
+            select(
+                StockMovement.item_id.label("item_id"),
+                StockMovement.branch_id.label("branch_id"),
+                func.sum(StockMovement.delta).label("quantity_change"),
+            )
+            .where(
+                StockMovement.created_at
+                > datetime.combine(as_of, time.max)
+            )
+            .group_by(StockMovement.item_id, StockMovement.branch_id)
+            .subquery()
+        )
+        stock_expr = (
+            ItemStock.quantity
+            - func.coalesce(movements_after_as_of_sq.c.quantity_change, 0)
+        )
+        stock_value_expr = case(
+            (
+                stock_expr > 0,
+                stock_expr * func.coalesce(Item.cost_price, 0),
+            ),
+            else_=literal(0.0),
+        )
+        available_expr = stock_expr - reserved_expr
+        base = (
+            select(
+                Item.id.label("item_id"),
+                Item.sku.label("product_code"),
+                Item.name.label("product_name"),
+                Category.name.label("category"),
+                Branch.name.label("branch"),
+                stock_expr.label("stock"),
+                reserved_expr.label("reserved_stock"),
+                available_expr.label("available_qty"),
+                stock_value_expr.label("stock_value"),
+            )
+            .select_from(ItemStock)
+            .join(Item, Item.id == ItemStock.item_id)
+            .join(Branch, Branch.id == ItemStock.branch_id)
+            .join(Category, Category.id == Item.category_id, isouter=True)
+            .outerjoin(
+                movements_after_as_of_sq,
+                and_(
+                    movements_after_as_of_sq.c.item_id == ItemStock.item_id,
+                    movements_after_as_of_sq.c.branch_id == ItemStock.branch_id,
+                ),
+            )
+            .join(
+                reserved_sq,
+                and_(
+                    reserved_sq.c.item_id == ItemStock.item_id,
+                    reserved_sq.c.branch_id == ItemStock.branch_id,
+                ),
+                isouter=True,
+            )
+            .where(and_(*conds) if conds else True)
+        )
+    else:
+        # Oversold (negative) quantity is shown as-is, but valued at zero.
+        stock_value_expr = case(
+            (ItemStock.quantity > 0, ItemStock.quantity * func.coalesce(Item.cost_price, 0)),
+            else_=literal(0.0),
+        )
+        stock_expr = ItemStock.quantity
+        available_expr = ItemStock.quantity - reserved_expr
+        base = (
+            select(
+                Item.sku.label("product_code"),
+                Item.name.label("product_name"),
+                Category.name.label("category"),
+                Branch.name.label("branch"),
+                stock_expr.label("stock"),
+                reserved_expr.label("reserved_stock"),
+                available_expr.label("available_qty"),
+                stock_value_expr.label("stock_value"),
+            )
+            .join(Item, Item.id == ItemStock.item_id)
+            .join(Branch, Branch.id == ItemStock.branch_id)
+            .join(Category, Category.id == Item.category_id, isouter=True)
+            .join(
+                reserved_sq,
+                and_(
+                    reserved_sq.c.item_id == ItemStock.item_id,
+                    reserved_sq.c.branch_id == ItemStock.branch_id,
+                ),
+                isouter=True,
+            )
+            .where(and_(*conds) if conds else True)
+        )
 
     sort_map = {
         "product_code": Item.sku,
         "product_name": Item.name,
         "category": Category.name,
         "branch": Branch.name,
-        "stock": ItemStock.quantity,
+        "stock": stock_expr,
         "reserved_stock": reserved_expr,
         "available_qty": available_expr,
         "stock_value": stock_value_expr,
@@ -3442,34 +3532,33 @@ async def current_stock(
     order_by_expr = resolve_sort(sort_by, sort_order, sort_map, "product_name", "asc")
     sk = normalize_skip(skip)
     lim = normalize_limit(limit)
-    base = (
-        select(
-            Item.id.label("item_id"),
-            Item.sku.label("product_code"),
-            Item.name.label("product_name"),
-            Category.name.label("category"),
-            Branch.id.label("branch_id"),
-            Branch.name.label("branch"),
-            ItemStock.quantity.label("stock"),
-            reserved_expr.label("reserved_stock"),
-            available_expr.label("available_qty"),
-            stock_value_expr.label("stock_value"),
-        )
-        .join(Item, Item.id == ItemStock.item_id)
-        .join(Branch, Branch.id == ItemStock.branch_id)
-        .join(Category, Category.id == Item.category_id, isouter=True)
-        .join(
-            reserved_sq,
-            and_(
-                reserved_sq.c.item_id == ItemStock.item_id,
-                reserved_sq.c.branch_id == ItemStock.branch_id,
-            ),
-            isouter=True,
-        )
-        .where(and_(*conds) if conds else True)
-    )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
+    if summary_only:
+        base_subq = base.subquery()
+        summary_q = select(
+            func.coalesce(func.sum(base_subq.c.stock), 0).label("stock"),
+            func.coalesce(func.sum(base_subq.c.reserved_stock), 0).label("reserved_stock"),
+            func.coalesce(func.sum(base_subq.c.available_qty), 0).label("available_qty"),
+            func.coalesce(func.sum(base_subq.c.stock_value), 0).label("stock_value"),
+        ).select_from(base_subq)
+        summary_row = (await db.execute(summary_q)).one()
+        return paged(
+            [{
+                "product_code": "TOTAL",
+                "product_name": "TOTAL",
+                "category": "",
+                "branch": "",
+                "stock": float(summary_row.stock or 0),
+                "reserved_stock": float(summary_row.reserved_stock or 0),
+                "available_qty": float(summary_row.available_qty or 0),
+                "stock_value": float(summary_row.stock_value or 0),
+            }],
+            total,
+            0,
+            1,
+            summary_only=True,
+        )
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -3554,6 +3643,7 @@ async def low_stock(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    summary_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     conds = [ItemStock.quantity <= Item.reorder_level]
@@ -3586,6 +3676,24 @@ async def low_stock(
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
+    if summary_only:
+        summary_q = select(
+            func.coalesce(func.sum(ItemStock.quantity), 0).label("available_quantity"),
+            func.coalesce(func.sum(Item.reorder_level), 0).label("reorder_level"),
+        ).select_from(ItemStock).join(Item, Item.id == ItemStock.item_id).where(and_(*conds))
+        summary_row = (await db.execute(summary_q)).one()
+        return paged(
+            [{
+                "product": "TOTAL",
+                "available_quantity": float(summary_row.available_quantity or 0),
+                "reorder_level": float(summary_row.reorder_level or 0),
+                "branch": "",
+            }],
+            total,
+            0,
+            1,
+            summary_only=True,
+        )
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -3599,6 +3707,7 @@ async def out_of_stock(
     sort_order: Optional[str] = "desc",
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    summary_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     conds = [ItemStock.quantity <= 0]
@@ -3631,6 +3740,18 @@ async def out_of_stock(
     )
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
+    if summary_only:
+        return paged(
+            [{
+                "product": "TOTAL",
+                "category": "",
+                "branch": "",
+            }],
+            total,
+            0,
+            1,
+            summary_only=True,
+        )
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = [dict(r._mapping) for r in result.fetchall()]
     return paged(rows, total, sk, lim)
@@ -3880,6 +4001,7 @@ async def expiry_batches(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     within_days: int = Query(30, ge=1, le=365),
+    summary_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
     """Active batches that are expired or due to expire within `within_days`."""
@@ -3940,6 +4062,26 @@ async def expiry_batches(
 
     total_q = select(func.count()).select_from(base.subquery())
     total = int((await db.execute(total_q)).scalar() or 0)
+    if summary_only:
+        summary_q = select(
+            func.coalesce(func.sum(ItemBatch.quantity), 0).label("quantity"),
+            func.coalesce(func.sum(ItemBatch.quantity * func.coalesce(ItemBatch.cost_price, Item.cost_price, 0)), 0).label("stock_value"),
+        ).select_from(base.subquery())
+        summary_row = (await db.execute(summary_q)).one()
+        return paged([
+            {
+                "product_code": "TOTAL",
+                "product": "TOTAL",
+                "batch_number": "",
+                "branch": "",
+                "mfg_date": None,
+                "expiry_date": None,
+                "days_to_expiry": None,
+                "status": "",
+                "quantity": float(summary_row.quantity or 0),
+                "stock_value": float(summary_row.stock_value or 0),
+            }
+        ], total, 0, 1, summary_only=True)
     result = await db.execute(base.order_by(order_by_expr).offset(sk).limit(lim))
     rows = []
     for r in result.fetchall():

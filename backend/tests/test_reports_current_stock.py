@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime, time
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -12,6 +13,7 @@ from src.models import (
     Category,
     Item,
     ItemStock,
+    StockMovement,
     SalesOrder,
     SalesOrderStatus,
     StockReservation,
@@ -97,11 +99,13 @@ def test_inventory_snapshot_reports_hide_date_range_filter():
         for category in REPORT_CATEGORIES
         for report in category["reports"]
     }
-    no_date_reports = {"current-stock", "low-stock", "out-of-stock", "expiry-batches"}
+    no_date_reports = {"low-stock", "out-of-stock", "expiry-batches"}
     for report_id in sorted(no_date_reports):
         report = next(report for category in REPORT_CATEGORIES for report in category["reports"] if report["id"] == report_id)
         assert report.get("dateFilter") == "none", f"{report_id} should not show a date range"
-    assert report_ids.issuperset(no_date_reports)
+    current_stock_report = next(report for category in REPORT_CATEGORIES for report in category["reports"] if report["id"] == "current-stock")
+    assert current_stock_report.get("dateFilter") == "asOf", "current-stock should use an as-of valuation date"
+    assert report_ids.issuperset(no_date_reports | {"current-stock"})
 
 
 def test_current_stock_splits_stock_reserved_available():
@@ -128,6 +132,81 @@ def test_current_stock_splits_stock_reserved_available():
     assert beta["stock_value"] == 0  # negative stock valued at zero
 
 
+def test_current_stock_today_uses_live_inventory_without_snapshot():
+    async def scenario():
+        db = await _build_session()
+        try:
+            page = await current_stock(
+                branch_id=None,
+                search=None,
+                sort_by="product_code",
+                sort_order="asc",
+                skip=0,
+                limit=50,
+                date_to=date.today().isoformat(),
+                db=db,
+            )
+            return page["items"]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(scenario())
+    assert {row["product_code"] for row in rows} == {"SKU-A", "SKU-B"}
+    assert {row["product_code"]: row["stock"] for row in rows} == {
+        "SKU-A": 20,
+        "SKU-B": -18,
+    }
+
+
+def test_current_stock_past_date_reconstructs_quantity_from_movements():
+    async def scenario():
+        db = await _build_session()
+        try:
+            today = date.today()
+            db.add_all([
+                StockMovement(
+                    id="move-a-after-cutoff",
+                    item_id="i1",
+                    branch_id="b1",
+                    delta=5,
+                    before_qty=15,
+                    after_qty=20,
+                    movement_type="receipt",
+                    created_at=datetime.combine(today, time(hour=12)),
+                ),
+                StockMovement(
+                    id="move-b-after-cutoff",
+                    item_id="i2",
+                    branch_id="b1",
+                    delta=-3,
+                    before_qty=-15,
+                    after_qty=-18,
+                    movement_type="sale",
+                    created_at=datetime.combine(today, time(hour=12)),
+                ),
+            ])
+            await db.commit()
+            page = await current_stock(
+                branch_id=None,
+                search=None,
+                sort_by="product_code",
+                sort_order="asc",
+                skip=0,
+                limit=50,
+                date_to=(today - date.resolution).isoformat(),
+                db=db,
+            )
+            return page["items"]
+        finally:
+            await db.close()
+
+    rows = asyncio.run(scenario())
+    assert {row["product_code"]: row["stock"] for row in rows} == {
+        "SKU-A": 15,
+        "SKU-B": -15,
+    }
+
+
 def test_current_stock_rows_cover_catalog_columns():
     async def scenario():
         db = await _build_session()
@@ -146,16 +225,35 @@ def test_current_stock_rows_cover_catalog_columns():
         assert expected <= set(row.keys())
 
 
-def test_current_stock_sorts_by_available():
+def test_current_stock_summary_only_returns_single_total_row():
     async def scenario():
         db = await _build_session()
         try:
-            return await _rows(db, sort_by="available_qty", sort_order="asc")
+            return await current_stock(
+                branch_id=None,
+                search=None,
+                sort_by="product_name",
+                sort_order="asc",
+                skip=0,
+                limit=1,
+                summary_only=True,
+                db=db,
+            )
         finally:
             await db.close()
 
-    rows = asyncio.run(scenario())
-    assert [row["product_code"] for row in rows] == ["SKU-B", "SKU-A"]
+    page = asyncio.run(scenario())
+    assert page["total"] == 2
+    assert page["skip"] == 0
+    assert page["limit"] == 1
+    assert len(page["items"]) == 1
+    row = page["items"][0]
+    assert row["product_code"] == "TOTAL"
+    assert row["product_name"] == "TOTAL"
+    assert row["stock"] == 2
+    assert row["reserved_stock"] == 5
+    assert row["available_qty"] == -3
+    assert row["stock_value"] == 200
 
 
 def test_current_stock_reservations_lists_active_sales_orders_for_item():

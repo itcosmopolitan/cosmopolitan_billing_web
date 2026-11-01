@@ -143,6 +143,13 @@ function computeColumnTotals(rows, columns, reportId) {
 }
 
 async function fetchAllReportRows(reportApi, params) {
+  const summaryOnly = Boolean(params?.summary_only)
+  if (summaryOnly) {
+    const response = await reportApi({ ...params, skip: 0, limit: 1 })
+    const payload = response?.data ?? response
+    const items = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : [])
+    return items.slice(0, 1)
+  }
   const pageSize = 500
   const concurrency = 4
   const firstResponse = await reportApi({ ...params, skip: 0, limit: pageSize })
@@ -1427,7 +1434,8 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     setFooterRows(null)
     const fetchFooterRows = async () => {
       try {
-        const allRows = await fetchAllReportRows(reportsAPI[report.api], reportFilterParams)
+        const footerParams = { ...reportFilterParams, summary_only: true }
+        const allRows = await fetchAllReportRows(reportsAPI[report.api], footerParams)
         if (!cancelled) setFooterRows(allRows)
       } catch (error) {
         console.error(error)
