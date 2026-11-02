@@ -74,6 +74,43 @@ describe('invoice template', () => {
     expect(window.document.getElementById('document').textContent).toContain('Rice 25kg premium long grain')
   })
 
+  it('shows per-line GST rate and amount without a blended GST percentage', async () => {
+    const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
+    postMessage(window, {
+      type: 'renderInvoice',
+      payload: {
+        documentType: 'Tax Invoice',
+        branch: {},
+        sale: {
+          id: 'sale-gst',
+          number: 'INV-GST',
+          taxPercent: 5,
+          items: [
+            { name: 'Taxed item', qty: 1, price: 108, tax_rate: 8 },
+            { name: 'Zero-rated item', qty: 1, price: 20, tax_rate: 0 },
+          ],
+        },
+      },
+    })
+    await settle()
+
+    const document = window.document.getElementById('document')
+    const headers = [...document.querySelectorAll('.items thead th')].map((cell) => cell.textContent.trim())
+    const rows = [...document.querySelectorAll('.items tbody tr')].map((row) =>
+      [...row.querySelectorAll('td')].map((cell) => cell.textContent.trim()),
+    )
+
+    expect(headers).toContain('GST Rate')
+    expect(headers).toContain('GST Amount')
+    expect(headers).toContain('Taxable Amount')
+    expect(rows[0][7]).toBe('8%')
+    expect(rows[0][8]).toBe('8.00')
+    expect(rows[1][7]).toBe('0%')
+    expect(rows[1][8]).toBe('0.00')
+    expect(document.textContent).toContain('Total GST')
+    expect(document.textContent).not.toContain('5% GST')
+  })
+
   it('renders a Stock Transfer in the same document frame', async () => {
     const window = loadTemplate(invoiceHtml, '/document-templates/invoice.html')
     postMessage(window, {
@@ -232,6 +269,41 @@ describe('quotation template', () => {
 
     expect(window.document.title).toBe('Quote QT-0001')
     expect(window.document.getElementById('document').textContent).toContain('Sugar 1kg')
+  })
+
+  it('shows each quote line GST rate and amount without a blended GST percentage', async () => {
+    const window = loadTemplate(quoteHtml, '/document-templates/quotation.html')
+    postMessage(window, {
+      type: 'renderQuote',
+      payload: {
+        quote: {
+          id: 'quote-gst',
+          number: 'QT-GST',
+          taxPercent: 5,
+          items: [
+            { name: 'Taxed item', qty: 1, price: 108, taxRate: 8 },
+            { name: 'Zero-rated item', qty: 1, price: 20, tax_rate: 0 },
+          ],
+        },
+        branch: {},
+      },
+    })
+    await settle()
+
+    const document = window.document.getElementById('document')
+    const headers = [...document.querySelectorAll('.items thead th')].map((cell) => cell.textContent.trim())
+    const rows = [...document.querySelectorAll('.items tbody tr')].map((row) =>
+      [...row.querySelectorAll('td')].map((cell) => cell.textContent.trim()),
+    )
+
+    expect(headers).toContain('GST Rate')
+    expect(headers).toContain('GST Amount')
+    expect(rows[0][7]).toBe('8.00%')
+    expect(rows[0][8]).toBe('8.00')
+    expect(rows[1][7]).toBe('0.00%')
+    expect(rows[1][8]).toBe('0.00')
+    expect(document.textContent).toContain('Total GST')
+    expect(document.textContent).not.toContain('5% GST')
   })
 
   it('renders the branch email in the company header', async () => {

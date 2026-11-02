@@ -199,7 +199,7 @@
     const gst = gstRate > 0 ? roundNumber(inclusiveNet * gstRate / (100 + gstRate)) : 0
     const net = roundNumber(inclusiveNet - gst)
     const discount = roundNumber(Math.max(0, gross - net))
-    return { qty, rate, discountPct, gross, net, gst, discount, inclusiveAfterLineDiscount }
+    return { qty, rate, discountPct, gstRate, gross, net, gst, discount, inclusiveAfterLineDiscount }
   }
 
   function allocateFlatAmount(amounts, flat) {
@@ -297,13 +297,14 @@
           <td class="num">${formatNumber(amounts.qty, { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</td>
           <td class="num">${formatNumber(amounts.rate)}</td>
           <td class="num">${amounts.discountPct ? `${formatNumber(amounts.discountPct, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : ''}</td>
+          <td class="num">${formatNumber(amounts.gstRate, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%</td>
           <td class="num">${formatNumber(amounts.gst)}</td>
           <td class="num">${formatNumber(amounts.net)}</td>
         </tr>`
     }).join('')
   }
 
-  const ITEM_COLUMN_WIDTHS = ['5%', '27%', '10%', '7%', '7%', '11%', '7%', '11%', '15%']
+  const ITEM_COLUMN_WIDTHS = ['5%', '23%', '9%', '6%', '6%', '9%', '6%', '7%', '10%', '19%']
   const TRANSFER_COLUMN_WIDTHS = ['5%', '30%', '13%', '8%', '8%', '18%', '18%']
 
   function colgroup(widths) {
@@ -431,8 +432,9 @@
             <th class="num">Qty</th>
             <th class="num">Rate (Excl. GST)</th>
             <th class="num">Disc %</th>
-            <th class="num">GST</th>
-            <th class="num">Amount</th>
+            <th class="num">GST Rate</th>
+            <th class="num">GST Amount</th>
+            <th class="num">Taxable Amount</th>
           </tr>
         </thead>
         <tbody>
@@ -449,7 +451,7 @@
             <td class="tval">${formatNumber(netAmount)}</td>
           </tr>
           <tr>
-            <td class="tlabel">GST</td>
+            <td class="tlabel">Total GST</td>
             <td class="tval">${formatNumber(taxTotal)}</td>
           </tr>
           <tr class="grand-row">

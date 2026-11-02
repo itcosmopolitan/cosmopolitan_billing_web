@@ -200,6 +200,10 @@
     return roundNumber(amount * rate / (100 + rate))
   }
 
+  function quoteLineTaxRate(line) {
+    return Number(line.taxRate ?? line.tax_rate ?? 0)
+  }
+
   function quoteLineTaxable(line) {
     return roundNumber(quoteLineAmount(line) - quoteLineVatAmount(line))
   }
@@ -258,7 +262,7 @@
       </table>`
   }
 
-  const ITEM_COLUMN_WIDTHS = ['5%', '27%', '10%', '7%', '7%', '11%', '7%', '11%', '15%']
+  const ITEM_COLUMN_WIDTHS = ['5%', '24%', '9%', '6%', '7%', '11%', '6%', '7%', '10%', '15%']
 
   function renderQuoteDocument(quote, branch, totals) {
     const branchMobile = branchMobileNumber(branch)
@@ -328,7 +332,8 @@
             <th class="num">Qty</th>
             <th class="num">Rate (Excl. GST)</th>
             <th class="num">Disc %</th>
-            <th class="num">GST</th>
+            <th class="num">GST Rate</th>
+            <th class="num">GST Amount</th>
             <th class="num">Amount</th>
           </tr>
         </thead>
@@ -342,6 +347,7 @@
               <td class="num">${escapeHtml(Number(line.qty || 0).toLocaleString('en-MV'))}</td>
               <td class="num">${formatNumber(quoteExclusiveRate(line))}</td>
               <td class="num">${quoteLineDiscountPct(line) ? `${formatNumber(quoteLineDiscountPct(line), { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%` : ''}</td>
+              <td class="num">${formatNumber(quoteLineTaxRate(line))}%</td>
               <td class="num">${formatNumber(quoteLineVatAmount(line, true))}</td>
               <td class="num">${formatNumber(quoteLineTaxable(line))}</td>
             </tr>
@@ -353,7 +359,7 @@
         <table class="totals">
           <colgroup><col style="width:46%;" /><col style="width:32%;" /><col style="width:22%;" /></colgroup>
           <tr><td></td><td class="tlabel">Subtotal</td><td class="tval">${formatNumber(totals.subtotal)}</td></tr>
-          <tr><td></td><td class="tlabel">${escapeHtml(totals.taxLabel)}</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
+          <tr><td></td><td class="tlabel">Total GST</td><td class="tval">${formatNumber(totals.taxTotal)}</td></tr>
           ${paymentDiscountOnVat > 0 ? `<tr><td></td><td class="tlabel">Payment Discount on GST</td><td class="tval">${formatNumber(paymentDiscountOnVat)}</td></tr>` : ''}
           <tr class="grand-row"><td></td><td class="tlabel grand">Total Payable (Inc. GST)</td><td class="tval grand">${formatNumber(totals.total)}</td></tr>
         </table>
@@ -405,13 +411,11 @@
     const total = roundNumber(payable)
     const exclGross = roundNumber(items.reduce((sum, line) => sum + Number(line.qty || 0) * quoteExclusiveRate(line), 0))
     const discountAmount = roundNumber(Math.max(0, exclGross - subtotal))
-    const taxPercent = quote.taxPercent ?? quote.tax_percent ?? (subtotal ? Math.round((taxTotal / subtotal) * 100) : 0)
     const totals = {
       subtotal,
       taxTotal,
       total,
       discountAmount,
-      taxLabel: `${taxPercent}% GST`,
     }
 
     document.getElementById('document').innerHTML = renderQuoteDocument(quote, branch, totals)

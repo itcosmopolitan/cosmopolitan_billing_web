@@ -15,6 +15,7 @@ export interface InvoiceLineItem {
   qty: number
   rate: number
   discountPct?: number
+  gstRatePercent: number
   gstAmount: number
   lineTotal: number
 }
@@ -39,7 +40,6 @@ export interface Invoice {
   salesperson?: string
   paymentDueDate?: string
   lineItems: InvoiceLineItem[]
-  gstRatePercent: number
   totalExclGst: number
   totalGst: number
   totalInclGst: number
@@ -83,8 +83,6 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
   const totalInclGst = summary.total
   const discountAmount = summary.discountAmount
   const discountPct = subtotal > 0 && discountAmount > 0 ? Math.round((discountAmount / (subtotal + totalGst)) * 100) : 0
-  const gstRatePercent = parseNumber(sale?.gstRatePercent ?? sale?.tax_rate_percent ?? sale?.taxRate ?? sale?.tax_rate ?? sale?.taxPercent ?? sale?.tax_percent ?? 0)
-
   const lineItems = rawItems.map((item: any, index: number) => {
     const qty = parseNumber(item?.qty ?? item?.quantity ?? 0)
     const inclusiveRate = parseNumber(item?.price ?? item?.rate ?? 0)
@@ -102,6 +100,7 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
       qty,
       rate: exclusiveFromInclusive(inclusiveRate, lineTaxRate),
       discountPct: discountPctLine || undefined,
+      gstRatePercent: lineTaxRate,
       gstAmount: detail.gst,
       lineTotal: detail.taxable,
     }
@@ -140,7 +139,6 @@ export function mapSaleToInvoice(sale: any, branch: any): Invoice {
     salesperson: sale?.salesperson || sale?.cashier || sale?.cashierName || sale?.salesperson_name || sale?.salesPerson || '',
     paymentDueDate: sale?.dueDate || sale?.due_date || '',
     lineItems,
-    gstRatePercent: gstRatePercent || (subtotal ? Math.round((totalGst / subtotal) * 100) : 0),
     totalExclGst: subtotal,
     totalGst: totalGst,
     totalInclGst,
@@ -322,8 +320,9 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   <th className="num">Qty</th>
                   <th className="num">Rate (Excl. GST) (MVR)</th>
                   <th className="num">Disc %</th>
-                  <th className="num">GST (MVR)</th>
-                  <th className="num">Amount (MVR)</th>
+                  <th className="num">GST Rate</th>
+                  <th className="num">GST Amount (MVR)</th>
+                  <th className="num">Taxable Amount (MVR)</th>
                 </tr>
               </thead>
               <tbody>
@@ -331,6 +330,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                   const qty = Number(item.qty || 0)
                   const rate = Number(item.rate || 0)
                   const discountPct = Number(item.discountPct ?? 0)
+                  const gstRatePercent = Number(item.gstRatePercent || 0)
                   const gstAmount = Number(item.gstAmount || 0)
                   const amount = Number(item.lineTotal || 0)
 
@@ -344,6 +344,7 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
                       <td className="num">{formatQtyNumber(qty)}</td>
                       <td className="num">{formatNumber(rate)}</td>
                       <td className="num">{discountPct ? `${formatNumber(discountPct, 2)}%` : ''}</td>
+                      <td className="num">{formatNumber(gstRatePercent, 2)}%</td>
                       <td className="num">{formatNumber(gstAmount)}</td>
                       <td className="num">{formatNumber(amount)}</td>
                     </tr>
@@ -356,17 +357,17 @@ export default function SalesTaxInvoice({ invoice, branch }: { invoice: Invoice,
               <>
                 <table className="totals">
                   <tr>
-                    <td colSpan={6}></td>
+                    <td colSpan={9}></td>
                     <td className="tlabel">Subtotal (MVR)</td>
                     <td className="tval">{formatNumber(invoice.totalExclGst)}</td>
                   </tr>
                   <tr>
-                    <td colSpan={6}></td>
-                    <td className="tlabel">{invoice.gstRatePercent}% GST</td>
+                    <td colSpan={9}></td>
+                    <td className="tlabel">Total GST</td>
                     <td className="tval">{formatNumber(invoice.totalGst)}</td>
                   </tr>
                   <tr className="grand">
-                    <td colSpan={6}></td>
+                    <td colSpan={9}></td>
                     <td className="tlabel grand">Total Payable (Inc. GST) (MVR)</td>
                     <td className="tval grand">{formatNumber(invoice.totalInclGst)}</td>
                   </tr>

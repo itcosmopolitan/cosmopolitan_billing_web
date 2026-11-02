@@ -34,3 +34,24 @@ describe('SalesTaxInvoice bank details', () => {
     expect(output).not.toContain('VIBER')
   })
 })
+
+describe('SalesTaxInvoice GST display', () => {
+  it('shows each line rate and amount without a blended GST percentage', () => {
+    const invoice = mapSaleToInvoice({
+      number: 'INV-GST',
+      taxPercent: 5,
+      items: [
+        { name: 'Taxed item', qty: 1, price: 108, tax_rate: 8 },
+        { name: 'Zero-rated item', qty: 1, price: 20, tax_rate: 0 },
+      ],
+    }, {})
+    const output = renderToStaticMarkup(createElement(SalesTaxInvoice, { invoice }))
+
+    expect(output).toContain('GST Rate')
+    expect(output).toContain('GST Amount (MVR)')
+    expect(output).toContain('8.00%')
+    expect(output).toContain('0.00%')
+    expect(output).toContain('Total GST')
+    expect(output).not.toContain('5% GST')
+  })
+})
