@@ -2,6 +2,7 @@ import { useRef, forwardRef, useImperativeHandle, useEffect } from 'react'
 import { fmt, fmtDate, fmtDateTime } from '@/utils/helpers'
 import { useInvoiceConfig } from '@/utils/invoiceConfig'
 import { formatSettlementLabel } from '@/utils/storeCredit'
+import { formatDocumentGeneratedAt } from '@/utils/documentPdf'
 import { childCounterForDocument, childCounterInvoiceAddress } from '@/utils/address'
 import {
   calcInvoiceSummary,
@@ -78,6 +79,7 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
 
   // ─── Print (popup window) ───────────────────────────────────────────────
   const printReceipt = () => {
+    const printedAt = formatDocumentGeneratedAt()
     const html = `
       <!DOCTYPE html>
       <html>
@@ -217,6 +219,9 @@ export const ThermalReceipt = forwardRef(function ThermalReceipt({ sale, branch 
         <div class="center" style="margin-top:8px;">
           <svg id="print-barcode"></svg>
           <div class="subtle">${docNo}</div>
+        </div>
+        <div style="margin-top:8px;padding-top:4px;border-top:1px dashed #000;text-align:right;font-size:8px;">
+          Printed/Exported: ${printedAt}
         </div>
 
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>

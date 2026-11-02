@@ -6,6 +6,7 @@ import {
   PAGE_PRESETS,
   buildFileName,
   downloadDocumentPdf,
+  downloadElementPdf,
   downloadInvoiceListPdf,
   downloadListPdf,
   printDocumentPdf,
@@ -174,6 +175,8 @@ describe('downloadDocumentPdf', () => {
     expect(body.mode).toBe('export')
     expect(body.file_name).toBe('Tax_Invoice_INV-0001.pdf')
     expect(body.html).toContain('Rice 25kg')
+    expect(body.html).toContain('Printed/Exported:')
+    expect(body.html).toContain('class="document-timestamp"')
     expect(fetchMock.mock.calls.map(([url]) => url)).toContain(`/document-templates/invoice.html?v=${DOCUMENT_TEMPLATE_VERSION}`)
     expect(clicks).toEqual(['Tax_Invoice_INV-0001.pdf'])
     expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull()
@@ -202,6 +205,51 @@ describe('downloadDocumentPdf', () => {
 
     await expect(job).rejects.toThrow('PDF generation timed out.')
     expect(clicks).toEqual([])
+  })
+
+  it.each([
+    ['Tax Invoice', 'invoiceRendered', { sale: { number: 'INV-1' } }],
+    ['Quote', 'quoteRendered', { quote: { number: 'QT-1' } }],
+    ['Sales Order', 'invoiceRendered', { sale: { number: 'SO-1' } }],
+    ['Purchase Order', 'invoiceRendered', { sale: { number: 'PO-1' } }],
+    ['Purchase Bill', 'invoiceRendered', { sale: { number: 'BILL-1' } }],
+    ['GRN Receipt', 'invoiceRendered', { sale: { number: 'GRN-1' } }],
+    ['Stock Transfer', 'invoiceRendered', { sale: { number: 'TR-1' } }],
+  ])('adds a generated timestamp footer to %s PDFs', async (documentType, renderedType, payload) => {
+    const job = downloadDocumentPdf(documentType, { ...payload, branch: {} })
+    await completeRender(renderedType, '<div>Document</div>')
+    await job
+
+    expect(lastRequestBody(fetchMock).html).toMatch(/class="document-timestamp"[^>]*>Printed\/Exported: /)
+  })
+})
+
+describe('downloadElementPdf', () => {
+  let fetchMock
+
+  beforeEach(() => {
+    vi.stubGlobal('URL', Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:export'),
+      revokeObjectURL: vi.fn(),
+    }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+  })
+
+  it('adds a generated timestamp footer to thermal receipt exports', async () => {
+    const element = document.createElement('div')
+    element.textContent = 'Thermal receipt'
+    const job = downloadElementPdf(element, 'Tax Invoice', { sale: { number: 'INV-THERMAL' } })
+    await job
+
+    expect(lastRequestBody(fetchMock).html).toMatch(/class="document-timestamp"[^>]*>Printed\/Exported: /)
   })
 })
 
@@ -373,6 +421,9 @@ describe('printDocumentPdf', () => {
     printFrame.dispatchEvent(new Event('load'))
     await job
 
-    expect(lastRequestBody(fetchMock).mode).toBe('print')
+    expect(lastRequestBody(fetchMock)).toMatchObject({
+      mode: 'print',
+      html: expect.stringContaining('Printed/Exported:'),
+    })
   })
 })

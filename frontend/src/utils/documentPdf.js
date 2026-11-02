@@ -49,6 +49,25 @@ const BRANCH_IMAGE_KEYS = ['logo', 'logo_url', 'badge', 'badge_url', 'badgeImage
 
 const inFlight = new Map()
 
+export function formatDocumentGeneratedAt(date = new Date()) {
+  return date.toLocaleString('en-GB')
+}
+
+function appendDocumentTimestamp(doc) {
+  const footer = doc.createElement('footer')
+  footer.className = 'document-timestamp'
+  footer.textContent = `Printed/Exported: ${formatDocumentGeneratedAt()}`
+  Object.assign(footer.style, {
+    marginTop: '12px',
+    paddingTop: '4px',
+    borderTop: '1px solid #ccc',
+    textAlign: 'right',
+    fontSize: '7px',
+    color: '#555',
+  })
+  ;(doc.getElementById('document') || doc.body).appendChild(footer)
+}
+
 function templateKeyFor(documentType) {
   return documentType === DOCUMENT_TYPES.QUOTATION ? 'quotation' : 'invoice'
 }
@@ -295,6 +314,7 @@ export async function renderDocumentHtml(documentType, data) {
 
     const doc = frame.contentDocument
     if (!doc?.documentElement) throw new Error('The document template is not available.')
+    if (!data.listExport) appendDocumentTimestamp(doc)
     await inlineImages(doc)
     return serializeDocument(doc)
   } finally {
@@ -428,6 +448,7 @@ export function downloadElementPdf(element, documentType, data) {
     )
     doc.body.appendChild(doc.importNode(element, true))
     doc.querySelectorAll('iframe').forEach((node) => node.remove())
+    appendDocumentTimestamp(doc)
     await inlineImages(doc)
     const html = serializeDocument(doc)
     const blob = await requestDocumentPdf({ html, fileName, mode: 'export' })
