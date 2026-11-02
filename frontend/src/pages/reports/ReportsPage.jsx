@@ -98,6 +98,7 @@ const FOOTER_SUM_KEYS_BY_REPORT = {
   'input-tax-summary': new Set(['taxable_amount', 'tax_amount']),
   'output-tax-summary': new Set(['taxable_amount', 'tax_amount']),
   'tax-summary-detail': new Set(['transaction_amount', 'tax_amount']),
+  'grn-receipts': new Set(['quantity', 'unit_cost', 'line_total']),
   'product-sales-detail': new Set(['quantity', 'line_total']),
   'category-sales-detail': new Set(['quantity', 'line_total']),
   'product-purchases-detail': new Set(['quantity', 'line_total']),
@@ -105,8 +106,8 @@ const FOOTER_SUM_KEYS_BY_REPORT = {
 
 function isSummableColumn(column, reportId) {
   if (!column?.format || !SUMMABLE_FORMATS.has(column.format)) return false
-  if (NON_SUMMABLE_KEYS.has(column.key)) return false
   const allowed = FOOTER_SUM_KEYS_BY_REPORT[reportId]
+  if (NON_SUMMABLE_KEYS.has(column.key) && !allowed?.has(column.key)) return false
   if (allowed && !allowed.has(column.key)) return false
   return true
 }
@@ -2000,7 +2001,10 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                             : column.formatter ? column.formatter(value, row) : value
                           const alignClass =
                             column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : ''
-                          const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+                          const isNameCol = ['invoice_number', 'bill_number', 'transfer_number', 'entry_number', 'grn_number', 'purchase_order_number', 'tax_name', 'date', 'product_code', 'product_name', 'product', 'category', 'branch', 'cashier', 'payment_method', 'vendor', 'customer'].includes(column.key)
+                          const isGrnReceiptDrillCell = report.id === 'grn-receipts'
+                            && ((column.key === 'grn_number' && row.grn_id)
+                              || (column.key === 'purchase_order_number' && row.purchase_order_id))
                           const isReservedDrillCell = report.id === 'current-stock'
                             && column.key === 'reserved_stock'
                             && row.item_id
@@ -2019,13 +2023,23 @@ function ReportDetailPage({ report, reportMap, onBack }) {
                               style={{
                                 ...(isPnL && column.key === 'account' && row.row_type === 'detail' ? { paddingLeft: 28 } : {}),
                                 ...(isReservedDrillCell ? { color: 'var(--blue)', fontWeight: 600, cursor: 'pointer' } : {}),
+                                ...(isGrnReceiptDrillCell ? { color: 'var(--blue)', fontWeight: 500, cursor: 'pointer' } : {}),
                                 ...(clickable && isNameCol && !isReservedDrillCell ? { color: 'var(--blue)', fontWeight: 500 } : {}),
                                 ...(isNegativeAmount ? { color: 'var(--red)' } : {}),
                               }}
                               title={isReservedDrillCell ? 'Click to view reserved sales orders' : undefined}
                               onClick={() => {
-                                if (!isReservedDrillCell) return
-                                if (report.id === 'current-stock') openDrilldown(row)
+                                if (isReservedDrillCell) {
+                                  if (report.id === 'current-stock') openDrilldown(row)
+                                  return
+                                }
+                                if (report.id === 'grn-receipts') {
+                                  if (column.key === 'grn_number' && row.grn_id) {
+                                    navigate(`/purchases?tab=grns&view=${encodeURIComponent(row.grn_id)}`)
+                                  } else if (column.key === 'purchase_order_number' && row.purchase_order_id) {
+                                    navigate(`/purchases?tab=orders&view=${encodeURIComponent(row.purchase_order_id)}`)
+                                  }
+                                }
                               }}
                             >
                               {rendered !== null && rendered !== undefined && rendered !== ''

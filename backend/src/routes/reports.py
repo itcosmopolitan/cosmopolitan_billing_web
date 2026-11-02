@@ -5906,10 +5906,15 @@ async def grn_receipts(
             Item.sku.label("product_code"),
             GRNLineItem.name.label("product"),
             GRNLineItem.received_qty.label("quantity"),
-            GRNLineItem.cost.label("unit_cost"),
-            GRNLineItem.line_total.label("line_total"),
+            func.round(
+                cast(line_amount_expr(GRNLineItem.cost, GRNLineItem.tax_rate, True), Numeric), 2,
+            ).label("unit_cost"),
+            func.round(
+                cast(line_amount_expr(GRNLineItem.line_total, GRNLineItem.tax_rate, True), Numeric), 2,
+            ).label("line_total"),
             GoodsReceiptNote.status.label("status"),
-            GoodsReceiptNote.id.label("_grn_id"),
+            GoodsReceiptNote.id.label("grn_id"),
+            GoodsReceiptNote.purchase_order_id.label("purchase_order_id"),
             GRNLineItem.id.label("_line_id"),
         )
         .select_from(GoodsReceiptNote)
@@ -5940,7 +5945,6 @@ async def grn_receipts(
             if hasattr(row["status"], "value")
             else str(row["status"])
         )
-        row.pop("_grn_id", None)
         row.pop("_line_id", None)
     return paged(rows, total, skip_value, limit_value)
 

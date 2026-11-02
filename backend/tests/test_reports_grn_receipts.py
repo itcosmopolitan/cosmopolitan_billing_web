@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.database import Base  # noqa: E402
+from src.column_catalog import COLUMN_CATALOG  # noqa: E402
 from src.models import Branch, GoodsReceiptNote, GRNLineItem, GRNStatus, Vendor  # noqa: E402
 from src.report_catalog import REPORT_CATEGORIES  # noqa: E402
 from src.report_export import REPORT_EXPORT_PATHS, resolve_report_handler  # noqa: E402
@@ -70,6 +71,7 @@ async def _run_grn_receipts_report() -> None:
                 name="Rice",
                 received_qty=10,
                 cost=5,
+                tax_rate=10,
                 line_total=50,
             ),
             GRNLineItem(
@@ -117,6 +119,11 @@ async def _run_grn_receipts_report() -> None:
         assert first_page["total"] == second_page["total"] == 2
         rows = first_page["items"] + second_page["items"]
         assert {row["product"] for row in rows} == {"Rice", "Lentils"}
+        rice = next(row for row in rows if row["product"] == "Rice")
+        assert rice["unit_cost"] == 4.55
+        assert rice["line_total"] == 45.45
+        assert rice["grn_id"] == "grn-1"
+        assert rice["purchase_order_id"] == "po-1"
         assert all(row["grn_number"] == "GRN-001" for row in rows)
         assert all(row["status"] == "received" for row in rows)
         assert REPORT_EXPORT_PATHS["grnReceipts"] == "grn-receipts"
@@ -138,6 +145,14 @@ async def _run_grn_receipts_report() -> None:
             "product",
             "quantity",
         }
+        assert {
+            column["label"]
+            for column in report["columns"]
+            if column["key"] in {"unit_cost", "line_total"}
+        } == {"Unit Cost (Excl. GST)", "Line Total (Excl. GST)"}
+        assert [column["id"] for column in COLUMN_CATALOG["reports.grn-receipts"]] == [
+            column["key"] for column in report["columns"]
+        ]
     finally:
         await db.close()
 
