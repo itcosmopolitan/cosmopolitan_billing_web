@@ -771,6 +771,8 @@ REPORT_CATEGORIES: list[dict[str, Any]] = [
                 columns=[
                     _col("date", "Date", format="date"),
                     _col("entry_number", "Entry#"),
+                    _col("customer", "Customer"),
+                    _col("vendor", "Vendor"),
                     _col("transaction_type", "Transaction Type"),
                     _col("transaction_amount", "Transaction Amount", align="right", format="currency"),
                     _col("tax_amount", "Tax Amount", align="right", format="currency"),

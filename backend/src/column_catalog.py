@@ -792,6 +792,8 @@ COLUMN_CATALOG: dict[str, list[dict[str, Any]]] = {
     "reports.tax-summary-detail": [
         _col("date", "Date", locked=True),
         _col("entry_number", "Entry#"),
+        _col("customer", "Customer"),
+        _col("vendor", "Vendor"),
         _col("transaction_type", "Transaction Type"),
         _col("transaction_amount", "Transaction Amount"),
         _col("tax_amount", "Tax Amount"),

@@ -1591,6 +1591,7 @@ async def tax_summary_detail(
             SaleInvoice.id.label("document_id"),
             SaleInvoice.number.label("entry_number"),
             SaleInvoice.date.label("date"),
+            SaleInvoice.customer_name.label("customer"),
             literal("Invoice").label("transaction_type"),
             sale_rate.label("rate"),
             func.coalesce(func.sum(sale_taxable), 0).label("taxable_amount"),
@@ -1599,13 +1600,17 @@ async def tax_summary_detail(
         .select_from(SaleLineItem)
         .join(SaleInvoice, SaleInvoice.id == SaleLineItem.invoice_id)
         .where(and_(*sale_conds))
-        .group_by(SaleInvoice.id, SaleInvoice.number, SaleInvoice.date, sale_rate)
+        .group_by(
+            SaleInvoice.id, SaleInvoice.number, SaleInvoice.date,
+            SaleInvoice.customer_name, sale_rate,
+        )
     )
     bill_q = (
         select(
             PurchaseBill.id.label("document_id"),
             PurchaseBill.number.label("entry_number"),
             PurchaseBill.date.label("date"),
+            PurchaseBill.vendor_name.label("vendor"),
             literal("Bill").label("transaction_type"),
             purchase_rate.label("rate"),
             func.coalesce(func.sum(purchase_taxable), 0).label("taxable_amount"),
@@ -1614,13 +1619,17 @@ async def tax_summary_detail(
         .select_from(PurchaseLineItem)
         .join(PurchaseBill, PurchaseBill.id == PurchaseLineItem.bill_id)
         .where(and_(*purchase_conds))
-        .group_by(PurchaseBill.id, PurchaseBill.number, PurchaseBill.date, purchase_rate)
+        .group_by(
+            PurchaseBill.id, PurchaseBill.number, PurchaseBill.date,
+            PurchaseBill.vendor_name, purchase_rate,
+        )
     )
     cn_q = (
         select(
             SalesReturn.id.label("document_id"),
             SalesReturn.number.label("entry_number"),
             SalesReturn.date.label("date"),
+            SalesReturn.customer_name.label("customer"),
             literal("Credit Note").label("transaction_type"),
             cn_rate.label("rate"),
             func.coalesce(func.sum(cn_taxable), 0).label("taxable_amount"),
@@ -1629,13 +1638,17 @@ async def tax_summary_detail(
         .select_from(SalesReturnLineItem)
         .join(SalesReturn, SalesReturn.id == SalesReturnLineItem.return_id)
         .where(and_(*cn_conds))
-        .group_by(SalesReturn.id, SalesReturn.number, SalesReturn.date, cn_rate)
+        .group_by(
+            SalesReturn.id, SalesReturn.number, SalesReturn.date,
+            SalesReturn.customer_name, cn_rate,
+        )
     )
     dn_q = (
         select(
             VendorReturn.id.label("document_id"),
             VendorReturn.number.label("entry_number"),
             VendorReturn.date.label("date"),
+            VendorReturn.vendor_name.label("vendor"),
             literal("Debit Note").label("transaction_type"),
             dn_rate.label("rate"),
             func.coalesce(func.sum(dn_taxable), 0).label("taxable_amount"),
@@ -1644,7 +1657,10 @@ async def tax_summary_detail(
         .select_from(ReturnLineItem)
         .join(VendorReturn, VendorReturn.id == ReturnLineItem.return_id)
         .where(and_(*dn_conds))
-        .group_by(VendorReturn.id, VendorReturn.number, VendorReturn.date, dn_rate)
+        .group_by(
+            VendorReturn.id, VendorReturn.number, VendorReturn.date,
+            VendorReturn.vendor_name, dn_rate,
+        )
     )
 
     rows: list[dict[str, Any]] = []
@@ -1670,6 +1686,8 @@ async def tax_summary_detail(
             rows.append({
                 "date": mapping.get("date"),
                 "entry_number": mapping.get("entry_number") or "",
+                "customer": mapping.get("customer") or "",
+                "vendor": mapping.get("vendor") or "",
                 "transaction_type": mapping.get("transaction_type") or "",
                 "transaction_amount": round(transaction_amount, 2),
                 "tax_amount": round(tax_amt, 2),
@@ -1684,7 +1702,8 @@ async def tax_summary_detail(
             })
 
     sort_key = sort_by if sort_by in {
-        "date", "entry_number", "transaction_type", "transaction_amount", "tax_amount",
+        "date", "entry_number", "customer", "vendor", "transaction_type",
+        "transaction_amount", "tax_amount",
     } else "date"
     reverse = (sort_order or "desc").lower() != "asc"
     rows.sort(key=lambda r: (r.get("date") or "", r.get("entry_number") or ""))

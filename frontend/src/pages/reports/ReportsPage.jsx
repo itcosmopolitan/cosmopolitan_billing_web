@@ -1197,6 +1197,17 @@ function ReportDetailPage({ report, reportMap, onBack }) {
     }
     return TRANSACTION_TYPE_OPTIONS_BY_API[report.api] || EMPTY_TXN_TYPE_OPTIONS
   }, [report.api, urlFilters.tax_scope])
+  const reportColumns = useMemo(() => {
+    if (report.api !== 'taxSummaryDetail') return report.columns
+    const partyColumn = urlFilters.tax_scope === 'input'
+      ? 'vendor'
+      : urlFilters.tax_scope === 'output'
+        ? 'customer'
+        : null
+    return partyColumn
+      ? report.columns.filter((column) => !['customer', 'vendor'].includes(column.key) || column.key === partyColumn)
+      : report.columns
+  }, [report.api, report.columns, urlFilters.tax_scope])
   const gstToggleVisible = !GST_TOGGLE_HIDDEN_REPORTS.has(report.id)
   const [appliedFilters, setAppliedFilters] = useState(() => ({
     dateFrom: initialFrom,
@@ -1243,15 +1254,15 @@ function ReportDetailPage({ report, reportMap, onBack }) {
 
   const columnByKey = useMemo(() => {
     const map = new Map()
-    report.columns.forEach((col) => map.set(col.key, col))
+    reportColumns.forEach((col) => map.set(col.key, col))
     return map
-  }, [report.columns])
+  }, [reportColumns])
 
   /** Prefs drive order/hidden; report catalog is source of truth for which columns exist. */
   const visibleColumns = useMemo(() => {
-    if (!columnPrefs.ready) return report.columns
+    if (!columnPrefs.ready) return reportColumns
     const hidden = new Set(columnPrefs.prefs?.hidden || [])
-    const reportKeys = report.columns.map((col) => col.key)
+    const reportKeys = reportColumns.map((col) => col.key)
     const reportKeySet = new Set(reportKeys)
     let order = (columnPrefs.prefs?.order || []).filter((id) => reportKeySet.has(id))
     // Insert newly added report columns at their catalog position (not only at the end).
@@ -1281,7 +1292,7 @@ function ReportDetailPage({ report, reportMap, onBack }) {
       .filter((id) => !hidden.has(id))
       .map((id) => columnByKey.get(id))
       .filter(Boolean)
-  }, [columnPrefs.ready, columnPrefs.prefs, columnByKey, report.columns])
+  }, [columnPrefs.ready, columnPrefs.prefs, columnByKey, reportColumns])
 
   const headerColumns = useMemo(() => visibleColumns.map((col) => {
     if (gstMode !== 'exclusive' || !GST_EXCL_SALES_LABEL_KEYS.has(col.key)) return col

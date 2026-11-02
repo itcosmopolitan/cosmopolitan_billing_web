@@ -451,10 +451,16 @@ async def _run_tax_summary_detail():
         gross = await tax_summary_detail(**common)
         inv = _row_by(gross["items"], "transaction_type", "Invoice")
         cn = _row_by(gross["items"], "transaction_type", "Credit Note")
+        bill = _row_by(gross["items"], "transaction_type", "Bill")
         assert inv["transaction_amount"] == 108.0
+        assert inv["customer"] == "Cust One"
+        assert inv["vendor"] == ""
         assert inv["tax_amount"] == 8.0
         assert cn["transaction_amount"] == -54.0
+        assert cn["customer"] == "Cust One"
+        assert cn["vendor"] == ""
         assert cn["tax_amount"] == -4.0
+        assert bill["vendor"] == "Acme Supplies"
 
         # Exclusive shows taxable only; tax is unchanged.
         net = await tax_summary_detail(gst_mode="exclusive", **common)
