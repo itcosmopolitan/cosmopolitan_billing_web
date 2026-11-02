@@ -42,6 +42,7 @@ async def _run_grn_receipts_report() -> None:
                 branch_name="Main",
                 purchase_order_id="po-1",
                 po_number="PO-001",
+                notes="Handle with care",
                 date="2026-10-10",
                 status=GRNStatus.received,
             ),
@@ -122,6 +123,7 @@ async def _run_grn_receipts_report() -> None:
         rice = next(row for row in rows if row["product"] == "Rice")
         assert rice["unit_cost"] == 4.55
         assert rice["line_total"] == 45.45
+        assert rice["grn_notes"] == "Handle with care"
         assert rice["grn_id"] == "grn-1"
         assert rice["purchase_order_id"] == "po-1"
         assert all(row["grn_number"] == "GRN-001" for row in rows)
@@ -139,6 +141,7 @@ async def _run_grn_receipts_report() -> None:
         assert {column["key"] for column in report["columns"]} >= {
             "date",
             "grn_number",
+            "grn_notes",
             "vendor",
             "branch",
             "product_code",

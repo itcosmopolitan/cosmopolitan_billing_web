@@ -5901,6 +5901,7 @@ async def grn_receipts(
             GoodsReceiptNote.date.label("date"),
             GoodsReceiptNote.number.label("grn_number"),
             GoodsReceiptNote.po_number.label("purchase_order_number"),
+            GoodsReceiptNote.notes.label("grn_notes"),
             GoodsReceiptNote.vendor_name.label("vendor"),
             GoodsReceiptNote.branch_name.label("branch"),
             Item.sku.label("product_code"),
