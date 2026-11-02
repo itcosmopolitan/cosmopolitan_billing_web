@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { reportsAPI } from '@/api'
 import {
+  DOCUMENT_TEMPLATE_VERSION,
   PAGE_PRESETS,
   buildFileName,
   downloadDocumentPdf,
@@ -173,6 +174,7 @@ describe('downloadDocumentPdf', () => {
     expect(body.mode).toBe('export')
     expect(body.file_name).toBe('Tax_Invoice_INV-0001.pdf')
     expect(body.html).toContain('Rice 25kg')
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain(`/document-templates/invoice.html?v=${DOCUMENT_TEMPLATE_VERSION}`)
     expect(clicks).toEqual(['Tax_Invoice_INV-0001.pdf'])
     expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull()
   })

@@ -4,7 +4,13 @@ import { fmtDate } from '@/utils/helpers'
 import { getColumnDefinitions, getColumnStructure, useInvoiceConfig } from '@/utils/invoiceConfig'
 import { ThermalReceipt } from '@/components/ThermalReceipt'
 import { prepareDocumentPayload } from '@/utils/printInvoice'
-import { downloadDocumentPdf, downloadElementPdf, printDocumentPdf, warmDocumentPdf } from '@/utils/documentPdf'
+import {
+  DOCUMENT_TEMPLATE_VERSION,
+  downloadDocumentPdf,
+  downloadElementPdf,
+  printDocumentPdf,
+  warmDocumentPdf,
+} from '@/utils/documentPdf'
 import { settingsAPI } from '@/api'
 import { formatSettlementLabel } from '@/utils/storeCredit'
 import { calcInvoiceSummary, lineTaxableFromInclusive } from '@/utils/taxCalc'
@@ -206,7 +212,7 @@ export const Receipt = forwardRef(function Receipt({ sale, branch, documentType 
         <iframe
           ref={standardPreviewRef}
           title={documentType === 'Quote' ? 'Quote preview' : 'Standard invoice preview'}
-          src={documentType === 'Quote' ? '/document-templates/quotation.html' : '/document-templates/invoice.html'}
+          src={`${documentType === 'Quote' ? '/document-templates/quotation.html' : '/document-templates/invoice.html'}?v=${DOCUMENT_TEMPLATE_VERSION}`}
           style={{
             width: '100%',
             height: 900,

@@ -2,6 +2,7 @@ import { reportsAPI } from '@/api'
 import { runExportJob } from '@/utils/exportJob'
 
 export const PDF_ENDPOINT = '/api/v1/documents/invoice-pdf'
+export const DOCUMENT_TEMPLATE_VERSION = '20261102-gst-breakdown'
 
 // Mirrors PAGE_PRESETS in backend/src/pdf_renderer.py. The server owns paper size and margins;
 // the client only sends `mode`.
@@ -24,12 +25,12 @@ const LIST_EXPORT_DOCUMENT_TYPE = 'List Export'
 
 const TEMPLATES = {
   invoice: {
-    url: '/document-templates/invoice.html',
+    url: `/document-templates/invoice.html?v=${DOCUMENT_TEMPLATE_VERSION}`,
     renderMessage: 'renderInvoice',
     renderedMessage: 'invoiceRendered',
   },
   quotation: {
-    url: '/document-templates/quotation.html',
+    url: `/document-templates/quotation.html?v=${DOCUMENT_TEMPLATE_VERSION}`,
     renderMessage: 'renderQuote',
     renderedMessage: 'quoteRendered',
   },
@@ -156,7 +157,7 @@ function memoize(key, load) {
 
 async function fetchOk(url, ms) {
   const response = await withTimeout(
-    fetch(url, { credentials: 'same-origin' }),
+    fetch(url, { credentials: 'same-origin', cache: 'no-store' }),
     ms,
     `Request timed out: ${url}`,
   )
