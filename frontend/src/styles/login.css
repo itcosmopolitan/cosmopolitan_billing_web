@@ -27,6 +27,7 @@
   overflow: hidden;
   background:
     radial-gradient(ellipse at 18% 20%, rgba(83, 171, 133, 0.3), transparent 38%),
+    radial-gradient(ellipse at 90% 12%, rgba(214, 143, 105, 0.18), transparent 36%),
     radial-gradient(ellipse at 84% 78%, rgba(45, 122, 111, 0.28), transparent 42%),
     linear-gradient(135deg, #456c62 0%, #61796f 48%, #758579 100%);
 }
@@ -37,7 +38,8 @@
   inset: 0;
   background:
     radial-gradient(ellipse 900px 420px at 78% 18%, rgba(255, 255, 255, 0.16), transparent 62%),
-    radial-gradient(ellipse 760px 420px at 12% 100%, rgba(119, 190, 149, 0.16), transparent 64%);
+    radial-gradient(ellipse 760px 420px at 12% 100%, rgba(119, 190, 149, 0.16), transparent 64%),
+    radial-gradient(ellipse 650px 380px at 100% 100%, rgba(255, 140, 97, 0.1), transparent 68%);
   pointer-events: none;
 }
 
