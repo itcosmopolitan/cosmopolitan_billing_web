@@ -56,7 +56,12 @@ export function formFromTransfer(transfer) {
   }
 }
 
-export function validateTransferForm(form, items, batchOptions) {
+export function validateTransferForm(
+  form,
+  items,
+  batchOptions,
+  { allowTransferOverselling = false } = {},
+) {
   if (!form.from_branch_id || !form.to_branch_id) {
     return { ok: false, error: 'Select source and destination branches' }
   }
@@ -86,15 +91,19 @@ export function validateTransferForm(form, items, batchOptions) {
     }
     const picked = items.find((x) => x.id === row.item_id)
     if (!picked?.batch_tracking) continue
-    if (!isAllocationValid(row.batchAllocation || [], qty)) {
+    if (!allowTransferOverselling && !isAllocationValid(row.batchAllocation || [], qty)) {
       return {
         ok: false,
         error: `Fix batch split for ${picked.name} — ${allocationSum(row.batchAllocation || [])}/${qty} allocated`,
       }
     }
     const key = `${row.item_id}|${form.from_branch_id}`
-    const known = new Set((batchOptions[key] || []).map((b) => b.id))
-    if (known.size === 0) {
+    const availableBatches = batchOptions[key]
+    if (availableBatches === undefined) {
+      return { ok: false, error: `Loading batches for ${picked.name}, please retry in a moment` }
+    }
+    const known = new Set(availableBatches.map((b) => b.id))
+    if (known.size === 0 && !allowTransferOverselling) {
       return { ok: false, error: `Loading batches for ${picked.name}, please retry in a moment` }
     }
     for (const entry of row.batchAllocation || []) {

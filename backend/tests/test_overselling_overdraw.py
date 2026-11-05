@@ -35,8 +35,21 @@ async def _build_session() -> AsyncSession:
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
 
 
-async def _seed(db: AsyncSession, *, tracked: bool, on_hand: float = 0.0) -> None:
-    db.add(Branch(id=BRANCH, name="Main", code="MAIN", allow_overselling=True))
+async def _seed(
+    db: AsyncSession,
+    *,
+    tracked: bool,
+    on_hand: float = 0.0,
+    allow_overselling: bool = True,
+    allow_transfer_overselling: bool = False,
+) -> None:
+    db.add(Branch(
+        id=BRANCH,
+        name="Main",
+        code="MAIN",
+        allow_overselling=allow_overselling,
+        allow_transfer_overselling=allow_transfer_overselling,
+    ))
     db.add(Item(id=ITEM, name="Widget", batch_tracking=tracked))
     db.add(ItemStock(id="stock-1", item_id=ITEM, branch_id=BRANCH, quantity=on_hand))
     await db.commit()
@@ -50,6 +63,14 @@ async def _batch_sum(db: AsyncSession) -> float:
     return float((await db.execute(
         select(func.coalesce(func.sum(ItemBatch.quantity), 0)).where(
             ItemBatch.item_id == ITEM, ItemBatch.branch_id == BRANCH,
+        )
+    )).scalar() or 0)
+
+
+async def _branch_batch_sum(db: AsyncSession, branch_id: str) -> float:
+    return float((await db.execute(
+        select(func.coalesce(func.sum(ItemBatch.quantity), 0)).where(
+            ItemBatch.item_id == ITEM, ItemBatch.branch_id == branch_id,
         )
     )).scalar() or 0)
 
@@ -237,5 +258,98 @@ async def _run_transfer_dispatch_blocked() -> None:
         await db.refresh(transfer)
         assert transfer.status == TransferStatus.pending
         assert await _stock(db) == 2
+    finally:
+        await db.close()
+
+
+def test_transfer_overselling_dispatches_and_receives_untracked_shortage(monkeypatch):
+    asyncio.run(_run_transfer_oversell(monkeypatch, tracked=False))
+
+
+def test_transfer_overselling_dispatches_and_receives_tracked_shortage(monkeypatch):
+    asyncio.run(_run_transfer_oversell(monkeypatch, tracked=True))
+
+
+async def _run_transfer_oversell(monkeypatch, *, tracked: bool) -> None:
+    from src.routes.transfers import TransferReceive, _dispatch_transfer, receive_transfer
+
+    async def no_op(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("src.notifications.store.resolve_notification", no_op)
+    monkeypatch.setattr("src.notifications.store.emit_transfer_in_transit", no_op)
+    monkeypatch.setattr("src.notifications.store.notify_refresh", no_op)
+    monkeypatch.setattr("src.routes.transfers._write_post_commit_audit", no_op)
+    monkeypatch.setattr("src.routes.transfers.enforce_branch_access", no_op)
+
+    db = await _build_session()
+    try:
+        await _seed(
+            db,
+            tracked=tracked,
+            on_hand=0 if tracked else 2,
+            allow_overselling=False,
+            allow_transfer_overselling=True,
+        )
+        db.add(Branch(id="br-2", name="Dest", code="DEST"))
+        if tracked:
+            await add_batch_atomic(
+                db,
+                item_id=ITEM,
+                branch_id=BRANCH,
+                qty=2,
+                batch_number="B-1",
+                cost_price=8,
+            )
+        transfer = StockTransfer(
+            id="tr-oversell",
+            ref_number="TR-OVERSELL",
+            from_branch_id=BRANCH,
+            to_branch_id="br-2",
+            from_branch_name="Main",
+            to_branch_name="Dest",
+            status=TransferStatus.pending,
+        )
+        db.add(transfer)
+        db.add(TransferLineItem(
+            id="tl-oversell",
+            transfer_id=transfer.id,
+            item_id=ITEM,
+            item_name="Widget",
+            qty=5,
+            cost_price=8,
+        ))
+        await db.commit()
+
+        user = SimpleNamespace(id="u-1", name="Tester")
+        result = await _dispatch_transfer(
+            db, transfer, transfer.id, user=user, approved_by="Tester", request=None,
+        )
+        assert result["status"] == "transit"
+        assert await _stock(db) == -3
+        if tracked:
+            assert await _batch_sum(db) == -3
+            source_placeholder = (await db.execute(
+                select(ItemBatch).where(ItemBatch.branch_id == BRANCH, ItemBatch.is_overdraw == True)  # noqa: E712
+            )).scalar_one()
+            assert source_placeholder.quantity == -3
+
+        receive_result = await receive_transfer(
+            transfer.id,
+            TransferReceive(ref_number=transfer.ref_number),
+            db=db,
+            user=user,
+        )
+        assert receive_result["status"] == "received"
+        assert await get_physical_qty(db, item_id=ITEM, branch_id="br-2") == 5
+        if tracked:
+            assert await _branch_batch_sum(db, "br-2") == 5
+            destination_overdraw = (await db.execute(
+                select(ItemBatch).where(
+                    ItemBatch.branch_id == "br-2",
+                    ItemBatch.is_overdraw == True,  # noqa: E712
+                )
+            )).scalars().all()
+            assert destination_overdraw == []
     finally:
         await db.close()

@@ -99,6 +99,8 @@ export function AuditDetailPanel({ log, onClose }: Props) {
         return "Tax Pricing Label";
       case "allow_overselling":
         return "Allow Overselling";
+      case "allow_transfer_overselling":
+        return "Allow Transfer Overselling";
       case "is_active":
         return "Active";
       case "branch_id":

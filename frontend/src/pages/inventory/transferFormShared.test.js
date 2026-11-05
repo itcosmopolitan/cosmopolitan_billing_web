@@ -76,6 +76,28 @@ describe('transfer cost price', () => {
     expect(validateTransferForm({ ...form, recorded_date: '2026-10-17' }, items, {})).toEqual({ ok: true })
   })
 
+  it('allows tracked shortage transfers when the source branch setting is enabled', () => {
+    const form = {
+      from_branch_id: 'source',
+      to_branch_id: 'destination',
+      recorded_date: '2026-10-17',
+      expected_date: '2026-10-20',
+      items: [{
+        item_id: 'item-1',
+        qty: '5',
+        cost_price: '12.5',
+        batchAllocation: [{ id: 'batch-1', qty: 2 }],
+      }],
+    }
+    const items = [{ id: 'item-1', name: 'Tracked item', batch_tracking: true }]
+    const batchOptions = { 'item-1|source': [{ id: 'batch-1' }] }
+
+    expect(validateTransferForm(form, items, batchOptions)).toMatchObject({ ok: false })
+    expect(validateTransferForm(form, items, batchOptions, {
+      allowTransferOverselling: true,
+    })).toEqual({ ok: true })
+  })
+
   it('loads and sends the recorded date separately from the expected dispatch date', () => {
     const form = formFromTransfer({
       from_branch_id: 'source',

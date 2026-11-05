@@ -98,7 +98,7 @@ export default function SettingsPage() {
   // isn't open.
   const [createdUser, setCreatedUser] = useState(null)
   const [credentialsAcknowledged, setCredentialsAcknowledged] = useState(false)
-  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', email:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false, monthlySalesTarget:0 })
+  const [branchForm, setBranchForm] = useState({ name:'', code:'', phone:'', email:'', address:'', street1:'', street2:'', street3:'', city:'', stateProvince:'', country:'', postalCode:'', hasChildCounters:false, childCounters:[], allowOverselling:false, allowTransferOverselling:false, monthlySalesTarget:0 })
   const [loading, setLoading] = useState(true)
 
   const handleTabChange = (newTab) => {
@@ -761,6 +761,7 @@ export default function SettingsPage() {
         has_child_counters: branchForm.hasChildCounters,
         child_counters: childCounters,
         allow_overselling: Boolean(branchForm.allowOverselling),
+        allow_transfer_overselling: Boolean(branchForm.allowTransferOverselling),
         monthly_sales_target: Number(branchForm.monthlySalesTarget) || 0,
         gstin: '',
         active: true,
@@ -808,6 +809,7 @@ export default function SettingsPage() {
         postal_code: editBranchForm.postal_code,
         has_child_counters: Boolean(editBranchForm.has_child_counters),
         allow_overselling: Boolean(editBranchForm.allow_overselling),
+        allow_transfer_overselling: Boolean(editBranchForm.allow_transfer_overselling),
         monthly_sales_target: Number(editBranchForm.monthly_sales_target) || 0,
         child_counters: editBranchForm.has_child_counters
           ? childCounters.map(counter => ({
@@ -1243,6 +1245,17 @@ export default function SettingsPage() {
                   <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
                     When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
                   </div>
+                  <label style={{display:'flex',alignItems:'flex-start',gap:8,cursor:'pointer',marginTop:12}}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(branchForm.allowTransferOverselling)}
+                      onChange={e => pbf('allowTransferOverselling', e.target.checked)}
+                    />
+                    Allow transfers beyond available stock at this branch
+                  </label>
+                  <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                    When enabled, transfers from this branch can be dispatched even when the requested quantity exceeds available stock.
+                  </div>
                 </FormGroup>
               </aside>
             </div>
@@ -1305,6 +1318,18 @@ export default function SettingsPage() {
                     </label>
                     <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
                       When off, POS, invoices, and sales orders at this branch block sales that exceed available stock.
+                    </div>
+                    <label style={{display:'flex',alignItems:'flex-start',gap:8,cursor: can('settings.edit') ? 'pointer' : 'default',marginTop:12}}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(editBranchForm.allow_transfer_overselling)}
+                        onChange={e => pbfEdit('allow_transfer_overselling', e.target.checked)}
+                        disabled={!can('settings.edit')}
+                      />
+                      Allow transfers beyond available stock at this branch
+                    </label>
+                    <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>
+                      When enabled, transfers from this branch can be dispatched even when the requested quantity exceeds available stock.
                     </div>
                   </FormGroup>
                 </aside>

@@ -25,6 +25,7 @@ export default function TransferFormFields({
   removeItemRow,
   disabled = false,
   refNumber = null,
+  allowTransferOverselling = false,
 }) {
   const fromLabel = branchLabels.get(form.from_branch_id)?.name
   const toLabel = branchLabels.get(form.to_branch_id)?.name
@@ -129,7 +130,9 @@ export default function TransferFormFields({
           <div>
             <div className="transfer-form__section-label">Items to transfer</div>
             <div className="transfer-form__section-subtitle">
-              Tracked items auto-split by FIFO or FEFO. Edit the split only when lot control matters.
+              {allowTransferOverselling
+                ? 'Tracked items auto-split by FIFO or FEFO. This source branch allows dispatching transfers beyond available stock.'
+                : 'Tracked items auto-split by FIFO or FEFO. Edit the split only when lot control matters.'}
             </div>
           </div>
         </div>
@@ -160,7 +163,7 @@ export default function TransferFormFields({
                 const allocation = row.batchAllocation || []
                 const need = Number(row.qty) || 0
                 const costPrice = Number(row.cost_price ?? picked?.cost_price ?? picked?.default_cost_price ?? 0)
-                const valid = isAllocationValid(allocation, need)
+                const valid = allowTransferOverselling || isAllocationValid(allocation, need)
                 return (
                   <tr key={i} style={{ verticalAlign: 'top' }}>
                     <td>

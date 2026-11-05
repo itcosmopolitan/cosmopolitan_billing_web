@@ -18,6 +18,13 @@ async def get_allow_overselling(db: AsyncSession, branch_id: str) -> bool:
     return bool(row)
 
 
+async def get_allow_transfer_overselling(db: AsyncSession, branch_id: str) -> bool:
+    row = (await db.execute(
+        select(Branch.allow_transfer_overselling).where(Branch.id == branch_id)
+    )).scalar_one_or_none()
+    return bool(row)
+
+
 async def get_physical_qty(db: AsyncSession, *, item_id: str, branch_id: str) -> float:
     q = (await db.execute(
         select(ItemStock.quantity).where(

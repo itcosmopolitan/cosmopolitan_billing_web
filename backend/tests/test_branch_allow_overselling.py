@@ -9,7 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from src.database import Base, _backfill_branch_allow_overselling
 from src.models import Branch
 from src.routes._serializers import serialize_branch
-from src.routes._stock_ledger import get_allow_overselling
+from src.routes.branches import BranchCreate, BranchUpdate
+from src.routes._stock_ledger import get_allow_overselling, get_allow_transfer_overselling
 
 
 async def _build_session() -> AsyncSession:
@@ -50,6 +51,31 @@ async def _run_get_allow_overselling_unknown_branch() -> None:
         await db.close()
 
 
+def test_get_allow_transfer_overselling_reads_branch_setting_and_defaults_off():
+    asyncio.run(_run_get_allow_transfer_overselling())
+
+
+async def _run_get_allow_transfer_overselling() -> None:
+    db = await _build_session()
+    try:
+        db.add_all([
+            Branch(
+                id="br-transfer-on",
+                name="Transfer On",
+                code="TRON",
+                allow_overselling=False,
+                allow_transfer_overselling=True,
+            ),
+            Branch(id="br-transfer-off", name="Transfer Off", code="TROFF"),
+        ])
+        await db.commit()
+        assert await get_allow_transfer_overselling(db, "br-transfer-on") is True
+        assert await get_allow_transfer_overselling(db, "br-transfer-off") is False
+        assert await get_allow_transfer_overselling(db, "missing") is False
+    finally:
+        await db.close()
+
+
 def test_new_branch_defaults_to_overselling_disabled():
     asyncio.run(_run_new_branch_default())
 
@@ -61,6 +87,7 @@ async def _run_new_branch_default() -> None:
         await db.commit()
         branch = await db.get(Branch, "br-new")
         assert branch.allow_overselling is False
+        assert branch.allow_transfer_overselling is False
     finally:
         await db.close()
 
@@ -70,6 +97,22 @@ def test_serialize_branch_emits_allow_overselling():
     assert serialize_branch(branch)["allow_overselling"] is True
     branch.allow_overselling = False
     assert serialize_branch(branch)["allow_overselling"] is False
+    branch.allow_transfer_overselling = True
+    assert serialize_branch(branch)["allow_transfer_overselling"] is True
+    branch.allow_transfer_overselling = False
+    assert serialize_branch(branch)["allow_transfer_overselling"] is False
+
+
+def test_branch_schemas_accept_transfer_overselling_setting():
+    created = BranchCreate(
+        name="Main",
+        code="MAIN",
+        allow_transfer_overselling=True,
+    )
+    updated = BranchUpdate(allow_transfer_overselling=True)
+
+    assert created.allow_transfer_overselling is True
+    assert updated.allow_transfer_overselling is True
 
 
 def test_backfill_copies_org_value_to_all_branches_when_column_added():

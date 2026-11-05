@@ -46,6 +46,8 @@ export default function TransferFormPage({ mode = 'create' }) {
   const branchById = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches])
 
   const [form, setForm] = useState(() => emptyTransfer('', ''))
+  const allowTransferOverselling =
+    branchById.get(form.from_branch_id)?.allow_transfer_overselling === true
   const [refNumber, setRefNumber] = useState(null)
   const [items, setItems] = useState([])
   const [itemsLoading, setItemsLoading] = useState(false)
@@ -269,7 +271,9 @@ export default function TransferFormPage({ mode = 'create' }) {
   const goBack = () => navigate('/transfers')
 
   const saveTransfer = async () => {
-    const validation = validateTransferForm(form, items, batchOptions)
+    const validation = validateTransferForm(form, items, batchOptions, {
+      allowTransferOverselling,
+    })
     if (!validation.ok) {
       toast.error(validation.error)
       return
@@ -368,6 +372,7 @@ export default function TransferFormPage({ mode = 'create' }) {
                 removeItemRow={removeItemRow}
                 disabled={saving}
                 refNumber={isEdit ? refNumber : null}
+                allowTransferOverselling={allowTransferOverselling}
               />
             </Card>
           </div>

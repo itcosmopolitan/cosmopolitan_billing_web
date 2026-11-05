@@ -19,8 +19,9 @@ from src.routes._atomic import (
     adjust_stock_atomic,
     consume_batches_atomic,
     is_tracked,
+    overdraw_stock_atomic,
 )
-from src.routes._stock_ledger import get_available_qty
+from src.routes._stock_ledger import get_allow_transfer_overselling, get_available_qty
 from src.routes.items import _upsert_branch_config
 from src.routes._serializers import get_user_branch_ids, serialize_transfer
 from src.routes._child_counters import validate_child_counter
@@ -944,10 +945,9 @@ async def _dispatch_transfer(
 ) -> dict:
     """Approve & dispatch a transfer — consume source stock and mark in transit.
 
-    Dispatch never takes the source below zero: every line is checked against
-    the source's available stock (physical minus active reservations) before
-    anything is mutated. Receive credits the destination with the full qty, so
-    letting a transfer go negative at the source would create stock.
+    Dispatch normally checks the source's available stock (physical minus
+    active reservations). Branches may explicitly allow transfers to overdraw
+    their source stock; receive credits the destination with the full qty.
     """
     import json
 
@@ -963,6 +963,7 @@ async def _dispatch_transfer(
 
     lines_result = await db.execute(select(TransferLineItem).where(TransferLineItem.transfer_id == transfer_id))
     transfer_lines = lines_result.scalars().all()
+    allow_transfer_overselling = await get_allow_transfer_overselling(db, t.from_branch_id)
     requested_by_item: dict[str, float] = {}
     item_names: dict[str, Optional[str]] = {}
     for line in transfer_lines:
@@ -970,7 +971,7 @@ async def _dispatch_transfer(
         item_names.setdefault(line.item_id, line.item_name)
     for item_id, requested in requested_by_item.items():
         available = await get_available_qty(db, item_id=item_id, branch_id=t.from_branch_id)
-        if requested > available:
+        if not allow_transfer_overselling and requested > available:
             raise HTTPException(
                 409,
                 detail=_insufficient_stock_detail(
@@ -1001,6 +1002,49 @@ async def _dispatch_transfer(
                         explicit = parsed
                 except Exception:
                     explicit = None
+            if allow_transfer_overselling:
+                consumed = []
+                explicit_qty = 0.0
+                if explicit:
+                    try:
+                        explicit_qty = as_qty(sum(as_qty(entry.get("qty") or 0) for entry in explicit))
+                    except (AttributeError, TypeError, ValueError):
+                        explicit_qty = 0.0
+                available = await get_available_qty(
+                    db, item_id=line.item_id, branch_id=t.from_branch_id,
+                )
+                if 0 < explicit_qty <= as_qty(line.qty) and explicit_qty <= available:
+                    try:
+                        consumed = await consume_batches_atomic(
+                            db,
+                            item_id=line.item_id,
+                            branch_id=t.from_branch_id,
+                            qty=explicit_qty,
+                            strategy=strategy,
+                            explicit_allocation=explicit,
+                            movement_type="transfer",
+                            source_type="transfer",
+                            source_ref=transfer_id,
+                        )
+                    except ValueError:
+                        explicit_qty = 0.0
+                else:
+                    explicit_qty = 0.0
+                remaining = as_qty(line.qty - explicit_qty)
+                if remaining > 0:
+                    consumed.extend(await overdraw_stock_atomic(
+                        db,
+                        item_id=line.item_id,
+                        branch_id=t.from_branch_id,
+                        qty=remaining,
+                        tracked=True,
+                        strategy=strategy,
+                        movement_type="transfer",
+                        source_type="transfer",
+                        source_ref=transfer_id,
+                    ))
+                line.batch_allocation = json.dumps(consumed)
+                continue
             try:
                 consumed = await consume_batches_atomic(
                     db,
@@ -1053,6 +1097,7 @@ async def _dispatch_transfer(
                     movement_type="transfer",
                     source_type="transfer",
                     source_ref=transfer_id,
+                    allow_negative=allow_transfer_overselling,
                 )
             except ValueError:
                 raise HTTPException(
@@ -1243,19 +1288,34 @@ async def receive_transfer(
                     select(ItemBatch).where(ItemBatch.id == entry["batch_id"])
                 )
                 src = src_res.scalar_one_or_none()
+                is_overdraw_entry = bool(src and src.is_overdraw)
+                if is_overdraw_entry:
+                    batch_number = None
+                    mfg_date = None
+                    expiry_date = None
+                    cost_price = line.cost_price or 0
+                    vendor_id = None
+                    received_date = None
+                else:
+                    batch_number = src.batch_number if src else entry.get("batch_number")
+                    mfg_date = src.mfg_date if src else None
+                    expiry_date = src.expiry_date if src else entry.get("expiry_date")
+                    cost_price = src.cost_price if src else 0
+                    vendor_id = src.vendor_id if src else None
+                    received_date = src.received_date if src else None
                 await add_batch_atomic(
                     db,
                     item_id=line.item_id,
                     branch_id=t.to_branch_id,
                     qty=as_qty(entry.get("consumed") or 0),
-                    batch_number=(src.batch_number if src else entry.get("batch_number")),
-                    mfg_date=(src.mfg_date if src else None),
-                    expiry_date=(src.expiry_date if src else entry.get("expiry_date")),
-                    cost_price=(src.cost_price if src else 0),
-                    vendor_id=(src.vendor_id if src else None),
+                    batch_number=batch_number,
+                    mfg_date=mfg_date,
+                    expiry_date=expiry_date,
+                    cost_price=cost_price,
+                    vendor_id=vendor_id,
                     source_type="transfer",
                     source_ref=transfer_id,
-                    received_date=(src.received_date if src else None),
+                    received_date=received_date,
                 )
             # Ensure destination branch is listed for this item after receive
             await _upsert_branch_config(db, item_id=line.item_id, branch_id=t.to_branch_id, is_available=True)    
